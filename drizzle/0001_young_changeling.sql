@@ -1,0 +1,3 @@
+ALTER TABLE "availability_rule" ADD COLUMN "event_type_id" text;--> statement-breakpoint
+ALTER TABLE "availability_rule" ADD CONSTRAINT "availability_rule_event_type_id_event_type_id_fk" FOREIGN KEY ("event_type_id") REFERENCES "public"."event_type"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "availability_event_type_idx" ON "availability_rule" USING btree ("event_type_id");

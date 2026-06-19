@@ -165,6 +165,10 @@ export const availabilityRule = pgTable(
     professionalId: text("professional_id")
       .notNull()
       .references(() => professional.id, { onDelete: "cascade" }),
+    // null = pro's global schedule; set = override schedule for this event type
+    eventTypeId: text("event_type_id").references(() => eventType.id, {
+      onDelete: "cascade",
+    }),
     // 0 = Sunday … 6 = Saturday
     dayOfWeek: integer("day_of_week").notNull(),
     // minutes from midnight (e.g. 540 = 09:00, 1020 = 17:00)
@@ -172,7 +176,10 @@ export const availabilityRule = pgTable(
     endMinute: integer("end_minute").notNull(),
     ...timestamps,
   },
-  (t) => [index("availability_pro_idx").on(t.professionalId)],
+  (t) => [
+    index("availability_pro_idx").on(t.professionalId),
+    index("availability_event_type_idx").on(t.eventTypeId),
+  ],
 );
 
 /** A prepaid pack of credits sold by a professional. */
@@ -306,7 +313,22 @@ export const eventTypeRelations = relations(eventType, ({ one, many }) => ({
     references: [professional.id],
   }),
   bookings: many(booking),
+  availabilityRules: many(availabilityRule),
 }));
+
+export const availabilityRuleRelations = relations(
+  availabilityRule,
+  ({ one }) => ({
+    professional: one(professional, {
+      fields: [availabilityRule.professionalId],
+      references: [professional.id],
+    }),
+    eventType: one(eventType, {
+      fields: [availabilityRule.eventTypeId],
+      references: [eventType.id],
+    }),
+  }),
+);
 
 export const packRelations = relations(pack, ({ one, many }) => ({
   professional: one(professional, {
