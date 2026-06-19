@@ -123,7 +123,12 @@ export const professional = pgTable(
     headline: text("headline"),
     bio: text("bio"),
     avatarUrl: text("avatar_url"),
+    avatarKind: text("avatar_kind"),
+    avatarStyle: text("avatar_style"),
+    avatarSeed: text("avatar_seed"),
+    bannerUrl: text("banner_url"),
     brandColor: text("brand_color").default("#6366f1").notNull(),
+    headerLayout: text("header_layout").default("profil").notNull(),
     timezone: text("timezone").default("Europe/Paris").notNull(),
     currency: text("currency").default("eur").notNull(),
     stripeAccountId: text("stripe_account_id"),
@@ -165,6 +170,10 @@ export const availabilityRule = pgTable(
     professionalId: text("professional_id")
       .notNull()
       .references(() => professional.id, { onDelete: "cascade" }),
+    // null = pro's global schedule; set = override schedule for this event type
+    eventTypeId: text("event_type_id").references(() => eventType.id, {
+      onDelete: "cascade",
+    }),
     // 0 = Sunday … 6 = Saturday
     dayOfWeek: integer("day_of_week").notNull(),
     // minutes from midnight (e.g. 540 = 09:00, 1020 = 17:00)
@@ -172,7 +181,10 @@ export const availabilityRule = pgTable(
     endMinute: integer("end_minute").notNull(),
     ...timestamps,
   },
-  (t) => [index("availability_pro_idx").on(t.professionalId)],
+  (t) => [
+    index("availability_pro_idx").on(t.professionalId),
+    index("availability_event_type_idx").on(t.eventTypeId),
+  ],
 );
 
 /** A prepaid pack of credits sold by a professional. */
@@ -282,6 +294,24 @@ export const booking = pgTable(
   ],
 );
 
+/** A one-off block of unavailability (time off) for a professional. */
+export const timeOff = pgTable(
+  "time_off",
+  {
+    id: id(),
+    professionalId: text("professional_id")
+      .notNull()
+      .references(() => professional.id, { onDelete: "cascade" }),
+    // instant range; endAt is an EXCLUSIVE bound
+    startAt: timestamp("start_at", { withTimezone: true }).notNull(),
+    endAt: timestamp("end_at", { withTimezone: true }).notNull(),
+    allDay: boolean("all_day").default(true).notNull(),
+    reason: text("reason"),
+    ...timestamps,
+  },
+  (t) => [index("time_off_pro_idx").on(t.professionalId, t.startAt)],
+);
+
 /* ───────────────────────────── Relations ───────────────────────── */
 
 export const userRelations = relations(user, ({ one }) => ({
@@ -298,6 +328,7 @@ export const professionalRelations = relations(professional, ({ one, many }) => 
   packs: many(pack),
   customers: many(customer),
   bookings: many(booking),
+  timeOff: many(timeOff),
 }));
 
 export const eventTypeRelations = relations(eventType, ({ one, many }) => ({
@@ -306,7 +337,22 @@ export const eventTypeRelations = relations(eventType, ({ one, many }) => ({
     references: [professional.id],
   }),
   bookings: many(booking),
+  availabilityRules: many(availabilityRule),
 }));
+
+export const availabilityRuleRelations = relations(
+  availabilityRule,
+  ({ one }) => ({
+    professional: one(professional, {
+      fields: [availabilityRule.professionalId],
+      references: [professional.id],
+    }),
+    eventType: one(eventType, {
+      fields: [availabilityRule.eventTypeId],
+      references: [eventType.id],
+    }),
+  }),
+);
 
 export const packRelations = relations(pack, ({ one, many }) => ({
   professional: one(professional, {
@@ -359,5 +405,12 @@ export const bookingRelations = relations(booking, ({ one }) => ({
   packPurchase: one(packPurchase, {
     fields: [booking.packPurchaseId],
     references: [packPurchase.id],
+  }),
+}));
+
+export const timeOffRelations = relations(timeOff, ({ one }) => ({
+  professional: one(professional, {
+    fields: [timeOff.professionalId],
+    references: [professional.id],
   }),
 }));
