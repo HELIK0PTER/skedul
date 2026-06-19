@@ -59,7 +59,9 @@ Nouvelles colonnes sur la table `professional`
 | `avatarSeed`     | text   | null       | si `generated` : graine déterministe de l'avatar. |
 | `headerLayout`   | text   | `'profil'` | `'profil' \| 'vitrine'`. |
 | `avatarUrl`      | text   | null *(existe déjà)* | si `pack` (chemin d'asset) ou `upload` (URL Blob). |
-| `brandColor`     | text   | `#6366f1` *(existe déjà)* | couleur de marque. |
+| `brandColor`     | text   | `#6366f1` *(existe déjà)* | couleur active résolue (depuis le preset ou le custom). |
+| `themePreset`    | text   | `'violet'` | preset actif : `violet\|blue\|teal\|green\|amber\|red\|pink\|slate\|custom`. |
+| `customColor`    | text   | null       | preset personnalisé du pro (persiste même si un preset nommé est actif). |
 
 > On valide les valeurs énumérées au niveau de l'action serveur (Zod ou garde
 > manuelle), pas via un type enum Postgres, pour rester souple (cohérent avec le
@@ -101,22 +103,32 @@ Un composant `BrandAvatar` encapsule ce switch et remplace l'usage direct de
 
 ---
 
-## 3. Reteinte par la couleur de marque
+## 3. Thème couleur : presets + preset personnalisé
 
-Mécanisme : **surcharge de variables CSS Tailwind v4**. Les utilitaires `bg-primary`
-/ `text-primary` compilent vers `var(--color-primary)` (cf.
-[globals.css:17-19](../../../src/app/globals.css#L17-L19)), donc surcharger la variable
-sur un wrapper suffit à reteinter tout ce qui est à l'intérieur — **sans toucher au
+> **Évolution (post-brainstorm) :** on ne se limite pas à teinter les boutons. Le pro
+> choisit parmi des **presets nommés** (violet, bleu, turquoise, vert, ambre, rouge,
+> rose, ardoise) **ou** définit **un preset personnalisé** (1 par pro, éditable). Le
+> thème teinte boutons, liens, badges et surfaces d'accent — pas seulement les boutons.
+
+Mécanisme : **surcharge de variables CSS Tailwind v4**. Les utilitaires `bg-primary`,
+`text-primary`, `bg-accent`, `text-accent-foreground` compilent vers
+`var(--color-*)` (cf. [globals.css](../../../src/app/globals.css)), donc surcharger ces
+variables sur le shell public suffit à reteinter tout l'intérieur — **sans toucher au
 composant `Button`**.
 
-- Nouveau helper `src/lib/color.ts` : `brandTheme(hex) → { primary, primaryForeground, primaryMuted }`
-  - `primaryForeground` calculé selon la **luminance relative (WCAG)** du brand :
-    texte blanc si fond foncé, texte quasi-noir si fond clair → garantit le contraste.
-  - `primaryMuted` = brand éclairci (mix ~12 % avec blanc) pour les fonds doux.
-  - garde anti-couleur invalide (fallback sur le défaut si hex non parsable).
-- Le layout/shell public enveloppe le contenu dans un élément portant en `style`
-  inline : `--color-primary`, `--color-primary-foreground`, `--color-primary-muted`.
-- Le dégradé du header réutilise la même variable (cohérence).
+- `src/lib/color.ts` :
+  - `THEME_PRESETS` : liste `{ id, label, color }` des presets nommés ; `presetColor(id)`.
+  - `brandTheme(hex) → { primary, primaryForeground, primaryMuted, accent, accentForeground, ring }` —
+    dérive un thème cohérent depuis **une** couleur :
+    - `primaryForeground` / `accentForeground` calculés par **contraste WCAG** (texte
+      lisible garanti sur le bouton et sur la surface d'accent claire) ;
+    - `accent` = teinte très claire (mix 90 % blanc) pour badges / fonds doux ;
+    - garde anti-couleur invalide (fallback violet).
+  - `brandThemeVars(hex)` pose `--color-primary*`, `--color-accent*`, `--color-ring`.
+- **Résolution** : `updateBranding` calcule `brandColor` actif = couleur du preset
+  choisi, ou `customColor` si `themePreset === 'custom'`. La page publique lit
+  `brandColor` → `brandThemeVars(brandColor)` (aucun changement de shell nécessaire).
+- Le dégradé du header réutilise la couleur active.
 
 ---
 
