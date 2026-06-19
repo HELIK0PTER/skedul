@@ -73,13 +73,7 @@ export default async function MerciPage({ params, searchParams }: Props) {
   }
 
   return (
-    <PublicShell
-      businessName={pro.businessName}
-      headline={pro.headline}
-      avatarUrl={pro.avatarUrl}
-      brandColor={pro.brandColor}
-      backHref={`/${slug}`}
-    >
+    <PublicShell branding={pro} backHref={`/${slug}`}>
       <Card>
         <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
           <CheckCircle2 className="size-14 text-success" />
