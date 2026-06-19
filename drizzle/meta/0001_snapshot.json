@@ -1,5 +1,5 @@
 {
-  "id": "db921dda-c90e-4c53-ac7d-0c35ad01783e",
+  "id": "7260f2e7-4e75-4f61-a74a-c72a0cd43371",
   "prevId": "c3db3cd3-2375-4369-80c5-040739a38cfc",
   "version": "7",
   "dialect": "postgresql",
@@ -143,12 +143,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "event_type_id": {
-          "name": "event_type_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "day_of_week": {
           "name": "day_of_week",
           "type": "integer",
@@ -197,21 +191,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "availability_event_type_idx": {
-          "name": "availability_event_type_idx",
-          "columns": [
-            {
-              "expression": "event_type_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -221,19 +200,6 @@
           "tableTo": "professional",
           "columnsFrom": [
             "professional_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "availability_rule_event_type_id_event_type_id_fk": {
-          "name": "availability_rule_event_type_id_event_type_id_fk",
-          "tableFrom": "availability_rule",
-          "tableTo": "event_type",
-          "columnsFrom": [
-            "event_type_id"
           ],
           "columnsTo": [
             "id"
@@ -1227,6 +1193,106 @@
           ]
         }
       },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.time_off": {
+      "name": "time_off",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "professional_id": {
+          "name": "professional_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "start_at": {
+          "name": "start_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "end_at": {
+          "name": "end_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "all_day": {
+          "name": "all_day",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "time_off_pro_idx": {
+          "name": "time_off_pro_idx",
+          "columns": [
+            {
+              "expression": "professional_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "start_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "time_off_professional_id_professional_id_fk": {
+          "name": "time_off_professional_id_professional_id_fk",
+          "tableFrom": "time_off",
+          "tableTo": "professional",
+          "columnsFrom": [
+            "professional_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false

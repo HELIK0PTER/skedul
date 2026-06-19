@@ -10,9 +10,11 @@ import {
   eventType,
   pack,
   professional,
+  timeOff,
   user as userTable,
 } from "@/lib/db/schema";
 import { getCurrentProfessional, getCurrentUser } from "@/lib/session";
+import { buildTimeOffInterval } from "@/lib/timeoff";
 import { slugify } from "@/lib/utils";
 
 async function requirePro() {
@@ -292,5 +294,49 @@ export async function deletePack(id: string) {
     .delete(pack)
     .where(and(eq(pack.id, id), eq(pack.professionalId, pro.id)));
   revalidatePath("/dashboard/packs");
+  revalidatePath(`/${pro.slug}`);
+}
+
+/* ─────────────────────────── Indisponibilités ──────────────────── */
+
+export async function createTimeOff(input: {
+  startDate: string;
+  endDate: string;
+  allDay: boolean;
+  startMinute?: number;
+  endMinute?: number;
+  reason?: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const pro = await requirePro();
+
+  let interval;
+  try {
+    interval = buildTimeOffInterval(input, pro.timezone);
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : "Entrée invalide.",
+    };
+  }
+
+  await db.insert(timeOff).values({
+    professionalId: pro.id,
+    startAt: interval.startAt,
+    endAt: interval.endAt,
+    allDay: input.allDay,
+    reason: input.reason?.trim() || null,
+  });
+
+  revalidatePath("/dashboard/unavailability");
+  revalidatePath(`/${pro.slug}`);
+  return { ok: true };
+}
+
+export async function deleteTimeOff(id: string) {
+  const pro = await requirePro();
+  await db
+    .delete(timeOff)
+    .where(and(eq(timeOff.id, id), eq(timeOff.professionalId, pro.id)));
+  revalidatePath("/dashboard/unavailability");
   revalidatePath(`/${pro.slug}`);
 }

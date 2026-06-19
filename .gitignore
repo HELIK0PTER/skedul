@@ -38,8 +38,11 @@ yarn-error.log*
 # vercel
 .vercel
 
-# claude worktrees
+# claude code (git worktrees & local session state)
 .claude/worktrees/
+
+# superpowers (brainstorm session state)
+.superpowers/
 
 # typescript
 *.tsbuildinfo

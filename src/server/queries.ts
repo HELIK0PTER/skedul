@@ -21,6 +21,7 @@ import {
   pack,
   packPurchase,
   professional,
+  timeOff,
 } from "@/lib/db/schema";
 
 export async function getProDashboardData(proId: string) {
@@ -135,6 +136,14 @@ export function getProEventTypeRules(proId: string) {
       ),
     )
     .orderBy(asc(availabilityRule.dayOfWeek), asc(availabilityRule.startMinute));
+}
+
+export function getProTimeOff(proId: string) {
+  return db
+    .select()
+    .from(timeOff)
+    .where(and(eq(timeOff.professionalId, proId), gte(timeOff.endAt, new Date())))
+    .orderBy(asc(timeOff.startAt));
 }
 
 export async function getProPacks(proId: string) {

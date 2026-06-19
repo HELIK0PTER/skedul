@@ -2,7 +2,7 @@ import "server-only";
 import { and, eq, gte, inArray, isNull, or } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { availabilityRule, booking } from "@/lib/db/schema";
+import { availabilityRule, booking, timeOff } from "@/lib/db/schema";
 import { computeSlots, type Slot } from "@/lib/availability";
 
 interface EventTypeLike {
@@ -21,7 +21,7 @@ export async function loadBookableSlots(
 ): Promise<Slot[]> {
   const now = new Date();
 
-  const [allRules, busy] = await Promise.all([
+  const [allRules, busyBookings, busyTimeOff] = await Promise.all([
     db
       .select({
         eventTypeId: availabilityRule.eventTypeId,
@@ -49,6 +49,12 @@ export async function loadBookableSlots(
           inArray(booking.status, ["pending", "confirmed"]),
         ),
       ),
+    db
+      .select({ startAt: timeOff.startAt, endAt: timeOff.endAt })
+      .from(timeOff)
+      .where(
+        and(eq(timeOff.professionalId, professionalId), gte(timeOff.endAt, now)),
+      ),
   ]);
 
   // Full replacement: if the event type has its own rules, ignore the global ones.
@@ -58,7 +64,7 @@ export async function loadBookableSlots(
 
   return computeSlots({
     rules,
-    busy,
+    busy: [...busyBookings, ...busyTimeOff],
     durationMinutes: evt.durationMinutes,
     bufferBeforeMinutes: evt.bufferBeforeMinutes,
     bufferAfterMinutes: evt.bufferAfterMinutes,
