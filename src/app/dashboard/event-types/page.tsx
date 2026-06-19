@@ -6,13 +6,31 @@ import {
   type EventTypeItem,
 } from "@/components/dashboard/event-types-manager";
 import { getCurrentProfessional } from "@/lib/session";
-import { getProEventTypes } from "@/server/queries";
+import { getProEventTypes, getProEventTypeRules } from "@/server/queries";
 
 export const metadata: Metadata = { title: "Prestations" };
 
 export default async function EventTypesPage() {
   const pro = (await getCurrentProfessional())!;
-  const rows = await getProEventTypes(pro.id);
+  const [rows, rules] = await Promise.all([
+    getProEventTypes(pro.id),
+    getProEventTypeRules(pro.id),
+  ]);
+
+  const byEvent = new Map<
+    string,
+    { dayOfWeek: number; startMinute: number; endMinute: number }[]
+  >();
+  for (const r of rules) {
+    if (!r.eventTypeId) continue;
+    const arr = byEvent.get(r.eventTypeId) ?? [];
+    arr.push({
+      dayOfWeek: r.dayOfWeek,
+      startMinute: r.startMinute,
+      endMinute: r.endMinute,
+    });
+    byEvent.set(r.eventTypeId, arr);
+  }
 
   const items: EventTypeItem[] = rows.map((r) => ({
     id: r.id,
@@ -24,6 +42,7 @@ export default async function EventTypesPage() {
     bufferBeforeMinutes: r.bufferBeforeMinutes,
     bufferAfterMinutes: r.bufferAfterMinutes,
     isActive: r.isActive,
+    availability: byEvent.get(r.id) ?? [],
   }));
 
   return (
