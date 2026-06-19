@@ -116,13 +116,31 @@ fuseau horaire, durée, marges (buffers) et collisions avec les réservations.
    (événement `checkout.session.completed`) et coller le `whsec_…` dans
    `STRIPE_WEBHOOK_SECRET`.
 
-## Déploiement Vercel
+## Déploiement Vercel — manuel, depuis le CLI uniquement
+
+⚠️ **Aucun déploiement automatique sur `git push`.** [vercel.ts](vercel.ts) fixe
+`git.deploymentEnabled: false` : Vercel ne déploiera jamais tout seul sur push/PR.
+C'est **toi** qui déclenches chaque déploiement, depuis le CLI.
+
+**Mise en place (une fois) :**
 
 ```bash
-vercel link
-node scripts/setup-vercel-env.mjs
-vercel --prod
+vercel link                          # relie le dossier au projet Vercel
+node scripts/setup-vercel-env.mjs    # pousse les variables des 2 environnements
 ```
+
+**Déployer ensuite :**
+
+```bash
+pnpm deploy:preview   # → environnement PREVIEW  (Neon "preview", clés test)
+pnpm deploy:prod      # → environnement PRODUCTION (Neon "main", clés live)
+```
+
+Les deux environnements sont **distincts** : `vercel deploy` cible *Preview* et
+utilise les variables Preview ; `vercel deploy --prod` cible *Production* et
+utilise les variables Production. Le découpage est garanti par les variables
+poussées par `setup-vercel-env.mjs` (sections `[preview]` / `[production]` de
+`.env.vercel-reference`).
 
 ## Structure
 
