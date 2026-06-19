@@ -1,5 +1,16 @@
 import "server-only";
-import { and, asc, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  sql,
+} from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
@@ -99,7 +110,30 @@ export function getProAvailability(proId: string) {
   return db
     .select()
     .from(availabilityRule)
-    .where(eq(availabilityRule.professionalId, proId))
+    .where(
+      and(
+        eq(availabilityRule.professionalId, proId),
+        isNull(availabilityRule.eventTypeId),
+      ),
+    )
+    .orderBy(asc(availabilityRule.dayOfWeek), asc(availabilityRule.startMinute));
+}
+
+export function getProEventTypeRules(proId: string) {
+  return db
+    .select({
+      eventTypeId: availabilityRule.eventTypeId,
+      dayOfWeek: availabilityRule.dayOfWeek,
+      startMinute: availabilityRule.startMinute,
+      endMinute: availabilityRule.endMinute,
+    })
+    .from(availabilityRule)
+    .where(
+      and(
+        eq(availabilityRule.professionalId, proId),
+        isNotNull(availabilityRule.eventTypeId),
+      ),
+    )
     .orderBy(asc(availabilityRule.dayOfWeek), asc(availabilityRule.startMinute));
 }
 

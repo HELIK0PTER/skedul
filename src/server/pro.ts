@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -117,11 +117,16 @@ export async function saveEventType(input: {
   bufferBeforeMinutes?: number;
   bufferAfterMinutes?: number;
   isActive?: boolean;
+  availability?: {
+    customized: boolean;
+    rules: { dayOfWeek: number; startMinute: number; endMinute: number }[];
+  };
 }) {
   const pro = await requirePro();
+  let eventTypeId: string | undefined;
 
   if (input.id) {
-    await db
+    const updated = await db
       .update(eventType)
       .set({
         title: input.title,
@@ -135,7 +140,10 @@ export async function saveEventType(input: {
       })
       .where(
         and(eq(eventType.id, input.id), eq(eventType.professionalId, pro.id)),
-      );
+      )
+      .returning({ id: eventType.id });
+    if (updated.length === 0) return; // not this pro's event type
+    eventTypeId = updated[0].id;
   } else {
     let slug = slugify(input.title) || "rdv";
     // ensure unique slug within this pro
@@ -156,19 +164,50 @@ export async function saveEventType(input: {
     ) {
       slug = `${slugify(input.title)}-${++n}`;
     }
-    await db.insert(eventType).values({
-      professionalId: pro.id,
-      title: input.title,
-      slug,
-      description: input.description || null,
-      durationMinutes: input.durationMinutes,
-      priceCents: input.priceCents,
-      color: input.color || "#6d5cf6",
-      bufferBeforeMinutes: input.bufferBeforeMinutes ?? 0,
-      bufferAfterMinutes: input.bufferAfterMinutes ?? 0,
-      isActive: input.isActive ?? true,
-    });
+    const [created] = await db
+      .insert(eventType)
+      .values({
+        professionalId: pro.id,
+        title: input.title,
+        slug,
+        description: input.description || null,
+        durationMinutes: input.durationMinutes,
+        priceCents: input.priceCents,
+        color: input.color || "#6d5cf6",
+        bufferBeforeMinutes: input.bufferBeforeMinutes ?? 0,
+        bufferAfterMinutes: input.bufferAfterMinutes ?? 0,
+        isActive: input.isActive ?? true,
+      })
+      .returning({ id: eventType.id });
+    eventTypeId = created.id;
   }
+
+  // per-event custom availability: replace this event type's own rules
+  if (input.availability && eventTypeId) {
+    await db
+      .delete(availabilityRule)
+      .where(
+        and(
+          eq(availabilityRule.eventTypeId, eventTypeId),
+          eq(availabilityRule.professionalId, pro.id),
+        ),
+      );
+    const valid = input.availability.customized
+      ? input.availability.rules.filter((r) => r.endMinute > r.startMinute)
+      : [];
+    if (valid.length > 0) {
+      await db.insert(availabilityRule).values(
+        valid.map((r) => ({
+          professionalId: pro.id,
+          eventTypeId,
+          dayOfWeek: r.dayOfWeek,
+          startMinute: r.startMinute,
+          endMinute: r.endMinute,
+        })),
+      );
+    }
+  }
+
   revalidatePath("/dashboard/event-types");
   revalidatePath(`/${pro.slug}`);
 }
@@ -190,7 +229,12 @@ export async function saveAvailability(
   const pro = await requirePro();
   await db
     .delete(availabilityRule)
-    .where(eq(availabilityRule.professionalId, pro.id));
+    .where(
+      and(
+        eq(availabilityRule.professionalId, pro.id),
+        isNull(availabilityRule.eventTypeId),
+      ),
+    );
   const valid = rules.filter((r) => r.endMinute > r.startMinute);
   if (valid.length > 0) {
     await db
