@@ -8,6 +8,13 @@
       "when": 1781878516379,
       "tag": "0000_charming_hardball",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1781889452624,
+      "tag": "0001_long_anthem",
+      "breakpoints": true
     }
   ]
 }
