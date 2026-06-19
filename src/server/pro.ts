@@ -105,6 +105,40 @@ export async function updateProfile(input: {
   revalidatePath(`/${pro.slug}`);
 }
 
+export async function updateBranding(input: {
+  brandColor?: string;
+  bannerUrl?: string | null;
+  headerLayout?: string;
+  avatarKind?: string | null;
+  avatarStyle?: string | null;
+  avatarSeed?: string | null;
+  avatarUrl?: string | null;
+}) {
+  const pro = await requirePro();
+  const layout = input.headerLayout === "vitrine" ? "vitrine" : "profil";
+  const kind =
+    input.avatarKind === "generated" ||
+    input.avatarKind === "pack" ||
+    input.avatarKind === "upload"
+      ? input.avatarKind
+      : null;
+  await db
+    .update(professional)
+    .set({
+      brandColor: input.brandColor || pro.brandColor,
+      bannerUrl: input.bannerUrl ?? null,
+      headerLayout: layout,
+      avatarKind: kind,
+      avatarStyle: kind === "generated" ? (input.avatarStyle ?? null) : null,
+      avatarSeed: kind === "generated" ? (input.avatarSeed ?? null) : null,
+      avatarUrl:
+        kind === "pack" || kind === "upload" ? (input.avatarUrl ?? null) : null,
+    })
+    .where(eq(professional.id, pro.id));
+  revalidatePath("/dashboard/settings");
+  revalidatePath(`/${pro.slug}`);
+}
+
 /* ─────────────────────────── Event types ───────────────────────── */
 
 export async function saveEventType(input: {
