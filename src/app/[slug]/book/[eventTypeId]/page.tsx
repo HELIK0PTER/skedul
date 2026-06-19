@@ -45,13 +45,7 @@ export default async function BookEventPage({ params }: Params) {
   });
 
   return (
-    <PublicShell
-      businessName={professional.businessName}
-      headline={professional.headline}
-      avatarUrl={professional.avatarUrl}
-      brandColor={professional.brandColor}
-      backHref={`/${slug}`}
-    >
+    <PublicShell branding={professional} backHref={`/${slug}`}>
       <div className="mb-6">
         <h1 className="text-2xl font-bold tracking-tight">
           {eventType.title}

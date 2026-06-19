@@ -24,7 +24,6 @@ export interface ProfileValues {
   businessName: string;
   headline: string | null;
   bio: string | null;
-  brandColor: string;
   timezone: string;
 }
 
@@ -41,7 +40,6 @@ export function ProfileForm({ values }: { values: ProfileValues }) {
         businessName: String(f.get("businessName")),
         headline: String(f.get("headline") ?? ""),
         bio: String(f.get("bio") ?? ""),
-        brandColor: String(f.get("brandColor")),
         timezone: String(f.get("timezone")),
       });
       setSaved(true);
@@ -72,31 +70,15 @@ export function ProfileForm({ values }: { values: ProfileValues }) {
         <Label htmlFor="bio">Présentation</Label>
         <Textarea id="bio" name="bio" rows={4} defaultValue={values.bio ?? ""} />
       </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="brandColor">Couleur de marque</Label>
-          <input
-            id="brandColor"
-            name="brandColor"
-            type="color"
-            defaultValue={values.brandColor}
-            className="h-10 w-full cursor-pointer rounded-xl border border-input bg-card p-1"
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="timezone">Fuseau horaire</Label>
-          <Select
-            id="timezone"
-            name="timezone"
-            defaultValue={values.timezone}
-          >
-            {TIMEZONES.map((tz) => (
-              <option key={tz} value={tz}>
-                {tz}
-              </option>
-            ))}
-          </Select>
-        </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="timezone">Fuseau horaire</Label>
+        <Select id="timezone" name="timezone" defaultValue={values.timezone}>
+          {TIMEZONES.map((tz) => (
+            <option key={tz} value={tz}>
+              {tz}
+            </option>
+          ))}
+        </Select>
       </div>
 
       <div className="flex items-center gap-3 pt-2">

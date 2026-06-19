@@ -27,13 +27,7 @@ export default async function BuyPackPage({ params }: Params) {
   const perCredit = Math.round(pack.priceCents / pack.credits);
 
   return (
-    <PublicShell
-      businessName={professional.businessName}
-      headline={professional.headline}
-      avatarUrl={professional.avatarUrl}
-      brandColor={professional.brandColor}
-      backHref={`/${slug}`}
-    >
+    <PublicShell branding={professional} backHref={`/${slug}`}>
       <Card className="mb-6">
         <CardContent className="p-6">
           <span className="grid size-12 place-items-center rounded-xl bg-accent text-accent-foreground">

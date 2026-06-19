@@ -31,12 +31,7 @@ export default async function PublicProfilePage({ params }: Params) {
   const { pro, eventTypes, packs } = data;
 
   return (
-    <PublicShell
-      businessName={pro.businessName}
-      headline={pro.headline}
-      avatarUrl={pro.avatarUrl}
-      brandColor={pro.brandColor}
-    >
+    <PublicShell branding={pro}>
       {pro.bio && (
         <p className="mb-8 text-muted-foreground">{pro.bio}</p>
       )}

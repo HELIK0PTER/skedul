@@ -18,6 +18,7 @@ const schema = z.object({
   NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: z.string().optional(),
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().default("Skedul <onboarding@resend.dev>"),
+  BLOB_READ_WRITE_TOKEN: z.string().optional(),
   // Provided automatically by Vercel
   VERCEL_URL: z.string().optional(),
   VERCEL_ENV: z.string().optional(),
@@ -60,6 +61,8 @@ export const env = {
   STRIPE_ENABLED: !isPlaceholder(raw.STRIPE_SECRET_KEY),
   /** Resend logs to the console until a real API key is provided. */
   RESEND_ENABLED: !isPlaceholder(raw.RESEND_API_KEY),
+  /** Image uploads use Vercel Blob; disabled (mock) until a token is provided. */
+  BLOB_ENABLED: !isPlaceholder(raw.BLOB_READ_WRITE_TOKEN),
 };
 
 export type Env = typeof env;

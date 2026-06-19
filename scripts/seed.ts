@@ -74,7 +74,12 @@ async function main() {
       businessName: "Studio Camille · Coaching & Yoga",
       headline: "Coaching de vie & yoga privé à Paris",
       bio: "J'accompagne depuis 8 ans des indépendants et des équipes vers plus de clarté et d'énergie. Réservez une séance à l'unité ou économisez avec un pack.",
-      brandColor: "#6d5cf6",
+      brandColor: "#0d9488",
+      themePreset: "teal",
+      headerLayout: "vitrine",
+      avatarKind: "generated",
+      avatarStyle: "micah",
+      avatarSeed: "studio-camille",
       timezone: TZ,
       currency: "eur",
     })

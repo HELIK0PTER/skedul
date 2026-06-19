@@ -34,8 +34,7 @@ export default function Home() {
               <span className="text-primary">payée d&apos;avance.</span>
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-balance text-lg text-muted-foreground">
-              Skedul donne à chaque indépendant son agenda à la Calendly{" "}
-              <strong className="font-semibold text-foreground">et</strong> une
+              Skedul donne à chaque indépendant son agenda et une
               boutique : vos clients réservent un créneau ou achètent un pack
               d&apos;heures qu&apos;ils posent quand ils veulent.
             </p>

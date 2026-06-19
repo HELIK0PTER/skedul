@@ -37,7 +37,7 @@ export function DashboardSidebar({
   const pathname = usePathname();
 
   return (
-    <aside className="flex w-full shrink-0 flex-col border-b border-border bg-card md:h-screen md:w-64 md:border-b-0 md:border-r">
+    <aside className="sticky top-0 z-30 flex w-full shrink-0 flex-col border-b border-border bg-card md:h-screen md:w-64 md:border-b-0 md:border-r">
       <div className="flex items-center justify-between p-4 md:block">
         <Link href="/dashboard">
           <Logo />

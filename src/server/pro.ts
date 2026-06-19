@@ -14,6 +14,7 @@ import {
   user as userTable,
 } from "@/lib/db/schema";
 import { getCurrentProfessional, getCurrentUser } from "@/lib/session";
+import { isHexColor, presetColor } from "@/lib/color";
 import { buildTimeOffInterval } from "@/lib/timeoff";
 import { slugify } from "@/lib/utils";
 
@@ -101,6 +102,54 @@ export async function updateProfile(input: {
       bio: input.bio || null,
       brandColor: input.brandColor || pro.brandColor,
       timezone: input.timezone || pro.timezone,
+    })
+    .where(eq(professional.id, pro.id));
+  revalidatePath("/dashboard/settings");
+  revalidatePath(`/${pro.slug}`);
+}
+
+export async function updateBranding(input: {
+  themePreset?: string;
+  customColor?: string | null;
+  bannerUrl?: string | null;
+  headerLayout?: string;
+  avatarKind?: string | null;
+  avatarStyle?: string | null;
+  avatarSeed?: string | null;
+  avatarUrl?: string | null;
+}) {
+  const pro = await requirePro();
+  const layout = input.headerLayout === "vitrine" ? "vitrine" : "profil";
+  const kind =
+    input.avatarKind === "generated" ||
+    input.avatarKind === "pack" ||
+    input.avatarKind === "upload"
+      ? input.avatarKind
+      : null;
+
+  // Resolve the active brand color from the chosen preset (or the pro's custom).
+  // The custom color persists even while a named preset is active.
+  const custom = isHexColor(input.customColor)
+    ? (input.customColor as string)
+    : pro.customColor;
+  const preset = presetColor(input.themePreset);
+  const themePreset = input.themePreset === "custom" || !preset ? "custom" : input.themePreset!;
+  const brandColor =
+    themePreset === "custom" ? (custom ?? pro.brandColor) : (preset as string);
+
+  await db
+    .update(professional)
+    .set({
+      brandColor,
+      themePreset,
+      customColor: custom ?? null,
+      bannerUrl: input.bannerUrl ?? null,
+      headerLayout: layout,
+      avatarKind: kind,
+      avatarStyle: kind === "generated" ? (input.avatarStyle ?? null) : null,
+      avatarSeed: kind === "generated" ? (input.avatarSeed ?? null) : null,
+      avatarUrl:
+        kind === "pack" || kind === "upload" ? (input.avatarUrl ?? null) : null,
     })
     .where(eq(professional.id, pro.id));
   revalidatePath("/dashboard/settings");
