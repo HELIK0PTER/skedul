@@ -35,4 +35,6 @@ services/availability/packs in a back-office; their clients book slots
 - `pnpm typecheck` and `pnpm build` must stay green.
 - Schema change → `pnpm db:generate` then `pnpm db:migrate` (targets `DATABASE_URL`).
 - 3 envs map to Neon branches: dev→`development`, preview→`preview`, prod→`main`.
+- **Deploys are manual, CLI-only** (`vercel.ts` sets `git.deploymentEnabled: false`):
+  `pnpm deploy:preview` / `pnpm deploy:prod`. Never re-enable auto Git deploys.
 - Demo: `pro@skedul.app` / `password123`, public page `/studio-camille`.
