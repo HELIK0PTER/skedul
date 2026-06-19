@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { Clock, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import { CalendarClock, Clock, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { deleteEventType, saveEventType } from "@/server/pro";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { formatMoney } from "@/lib/utils";
+import {
+  WeeklyHoursEditor,
+  byDayFromRules,
+  rulesFromByDay,
+  type ByDay,
+  type Rule,
+} from "./weekly-hours-editor";
 
 export interface EventTypeItem {
   id: string;
@@ -23,6 +30,8 @@ export interface EventTypeItem {
   bufferBeforeMinutes: number;
   bufferAfterMinutes: number;
   isActive: boolean;
+  /** the event type's own availability rules; empty = inherits the global schedule */
+  availability: Rule[];
 }
 
 const COLORS = ["#6d5cf6", "#0ea5e9", "#16a34a", "#f59e0b", "#ec4899", "#ef4444"];
@@ -32,7 +41,11 @@ export function EventTypesManager({ items }: { items: EventTypeItem[] }) {
   const [editing, setEditing] = useState<string | "new" | null>(null);
   const [pending, startTransition] = useTransition();
 
-  function onSubmit(e: React.FormEvent<HTMLFormElement>, id?: string) {
+  function onSubmit(
+    e: React.FormEvent<HTMLFormElement>,
+    id: string | undefined,
+    availability: { customized: boolean; rules: Rule[] },
+  ) {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
     startTransition(async () => {
@@ -46,6 +59,7 @@ export function EventTypesManager({ items }: { items: EventTypeItem[] }) {
         bufferBeforeMinutes: Number(f.get("bufferBefore") ?? 0),
         bufferAfterMinutes: Number(f.get("bufferAfter") ?? 0),
         isActive: f.get("isActive") === "on",
+        availability,
       });
       setEditing(null);
       router.refresh();
@@ -69,7 +83,7 @@ export function EventTypesManager({ items }: { items: EventTypeItem[] }) {
             item={item}
             pending={pending}
             onCancel={() => setEditing(null)}
-            onSubmit={(e) => onSubmit(e, item.id)}
+            onSubmit={(e, availability) => onSubmit(e, item.id, availability)}
           />
         ) : (
           <Card key={item.id}>
@@ -82,6 +96,12 @@ export function EventTypesManager({ items }: { items: EventTypeItem[] }) {
                 <div className="flex items-center gap-2">
                   <p className="font-semibold">{item.title}</p>
                   {!item.isActive && <Badge variant="neutral">Masquée</Badge>}
+                  {item.availability.length > 0 && (
+                    <Badge variant="neutral">
+                      <CalendarClock className="size-3.5" />
+                      Horaires perso
+                    </Badge>
+                  )}
                 </div>
                 <p className="flex items-center gap-3 text-sm text-muted-foreground">
                   <span className="inline-flex items-center gap-1">
@@ -120,7 +140,7 @@ export function EventTypesManager({ items }: { items: EventTypeItem[] }) {
         <EventTypeForm
           pending={pending}
           onCancel={() => setEditing(null)}
-          onSubmit={(e) => onSubmit(e)}
+          onSubmit={(e, availability) => onSubmit(e, undefined, availability)}
         />
       ) : (
         <Button variant="secondary" onClick={() => setEditing("new")}>
@@ -141,12 +161,24 @@ function EventTypeForm({
   item?: EventTypeItem;
   pending: boolean;
   onCancel: () => void;
-  onSubmit: (e: React.FormEvent<HTMLFormElement>) => void;
+  onSubmit: (
+    e: React.FormEvent<HTMLFormElement>,
+    availability: { customized: boolean; rules: Rule[] },
+  ) => void;
 }) {
+  const [custom, setCustom] = useState((item?.availability.length ?? 0) > 0);
+  const [byDay, setByDay] = useState<ByDay>(() =>
+    byDayFromRules(item?.availability ?? []),
+  );
+
+  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    onSubmit(e, { customized: custom, rules: rulesFromByDay(byDay) });
+  }
+
   return (
     <Card className="border-primary/40">
       <CardContent className="p-5">
-        <form onSubmit={onSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="title">Titre</Label>
             <Input
@@ -247,6 +279,25 @@ function EventTypeForm({
             />
             Visible sur la page publique
           </label>
+
+          <div className="space-y-3 rounded-lg border border-input p-4">
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked={custom}
+                onChange={(e) => setCustom(e.target.checked)}
+                className="size-4 rounded border-input"
+              />
+              Horaires personnalisés pour cette prestation
+            </label>
+            {custom ? (
+              <WeeklyHoursEditor value={byDay} onChange={setByDay} />
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Utilise les disponibilités générales.
+              </p>
+            )}
+          </div>
 
           <div className="flex gap-2 pt-2">
             <Button type="submit" disabled={pending}>

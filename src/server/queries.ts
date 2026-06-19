@@ -1,5 +1,16 @@
 import "server-only";
-import { and, asc, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  sql,
+} from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
@@ -10,6 +21,7 @@ import {
   pack,
   packPurchase,
   professional,
+  timeOff,
 } from "@/lib/db/schema";
 
 export async function getProDashboardData(proId: string) {
@@ -99,8 +111,39 @@ export function getProAvailability(proId: string) {
   return db
     .select()
     .from(availabilityRule)
-    .where(eq(availabilityRule.professionalId, proId))
+    .where(
+      and(
+        eq(availabilityRule.professionalId, proId),
+        isNull(availabilityRule.eventTypeId),
+      ),
+    )
     .orderBy(asc(availabilityRule.dayOfWeek), asc(availabilityRule.startMinute));
+}
+
+export function getProEventTypeRules(proId: string) {
+  return db
+    .select({
+      eventTypeId: availabilityRule.eventTypeId,
+      dayOfWeek: availabilityRule.dayOfWeek,
+      startMinute: availabilityRule.startMinute,
+      endMinute: availabilityRule.endMinute,
+    })
+    .from(availabilityRule)
+    .where(
+      and(
+        eq(availabilityRule.professionalId, proId),
+        isNotNull(availabilityRule.eventTypeId),
+      ),
+    )
+    .orderBy(asc(availabilityRule.dayOfWeek), asc(availabilityRule.startMinute));
+}
+
+export function getProTimeOff(proId: string) {
+  return db
+    .select()
+    .from(timeOff)
+    .where(and(eq(timeOff.professionalId, proId), gte(timeOff.endAt, new Date())))
+    .orderBy(asc(timeOff.startAt));
 }
 
 export async function getProPacks(proId: string) {

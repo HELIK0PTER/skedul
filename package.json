@@ -8,12 +8,12 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx scripts/seed.ts",
+    "test": "tsx --test",
     "deploy:preview": "vercel deploy",
     "deploy:prod": "vercel deploy --prod"
   },
@@ -50,7 +50,6 @@
     "eslint-config-next": "16.2.9",
     "tailwindcss": "^4",
     "tsx": "^4.22.4",
-    "typescript": "^5",
-    "vitest": "^4.1.9"
+    "typescript": "^5"
   }
 }

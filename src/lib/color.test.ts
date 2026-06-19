@@ -1,44 +1,45 @@
-import { describe, expect, it } from "vitest";
+import test from "node:test";
+import assert from "node:assert/strict";
 
 import { brandTheme, presetColor, THEME_PRESETS } from "./color";
 
-describe("brandTheme", () => {
-  it("met un texte blanc sur une marque foncée", () => {
-    expect(brandTheme("#6d5cf6").primaryForeground).toBe("#ffffff");
-  });
-  it("met un texte sombre sur une marque claire", () => {
-    expect(brandTheme("#facc15").primaryForeground).toBe("#1a1a2e");
-    expect(brandTheme("#ffffff").primaryForeground).toBe("#1a1a2e");
-  });
-  it("met un texte blanc sur du noir", () => {
-    expect(brandTheme("#000000").primaryForeground).toBe("#ffffff");
-  });
-  it("retombe sur la couleur par défaut si hex invalide", () => {
-    expect(brandTheme("pas-une-couleur").primary).toBe("#6d5cf6");
-  });
-  it("produit un muted clair et valide, distinct du primary", () => {
-    const m = brandTheme("#6d5cf6").primaryMuted;
-    expect(/^#[0-9a-f]{6}$/.test(m)).toBe(true);
-    expect(m).not.toBe("#6d5cf6");
-  });
-  it("produit des tokens accent valides (surface claire, texte foncé distinct)", () => {
-    const t = brandTheme("#2563eb");
-    expect(/^#[0-9a-f]{6}$/.test(t.accent)).toBe(true);
-    expect(/^#[0-9a-f]{6}$/.test(t.accentForeground)).toBe(true);
-    expect(t.accent).not.toBe(t.accentForeground);
-    expect(t.ring).toBe("#2563eb");
-  });
+test("brandTheme: texte blanc sur une marque foncée", () => {
+  assert.equal(brandTheme("#6d5cf6").primaryForeground, "#ffffff");
 });
 
-describe("THEME_PRESETS", () => {
-  it("expose des presets avec des couleurs hex valides", () => {
-    expect(THEME_PRESETS.length).toBeGreaterThanOrEqual(6);
-    for (const p of THEME_PRESETS) {
-      expect(/^#[0-9a-f]{6}$/.test(p.color)).toBe(true);
-    }
-  });
-  it("résout la couleur d'un preset par id", () => {
-    expect(presetColor("violet")).toBe("#6d5cf6");
-    expect(presetColor("inconnu")).toBe(null);
-  });
+test("brandTheme: texte sombre sur une marque claire", () => {
+  assert.equal(brandTheme("#facc15").primaryForeground, "#1a1a2e");
+  assert.equal(brandTheme("#ffffff").primaryForeground, "#1a1a2e");
+});
+
+test("brandTheme: texte blanc sur du noir", () => {
+  assert.equal(brandTheme("#000000").primaryForeground, "#ffffff");
+});
+
+test("brandTheme: fallback sur le défaut si hex invalide", () => {
+  assert.equal(brandTheme("pas-une-couleur").primary, "#6d5cf6");
+});
+
+test("brandTheme: muted clair valide, distinct du primary", () => {
+  const m = brandTheme("#6d5cf6").primaryMuted;
+  assert.ok(/^#[0-9a-f]{6}$/.test(m));
+  assert.notEqual(m, "#6d5cf6");
+});
+
+test("brandTheme: tokens accent valides (surface claire, texte foncé distinct)", () => {
+  const t = brandTheme("#2563eb");
+  assert.ok(/^#[0-9a-f]{6}$/.test(t.accent));
+  assert.ok(/^#[0-9a-f]{6}$/.test(t.accentForeground));
+  assert.notEqual(t.accent, t.accentForeground);
+  assert.equal(t.ring, "#2563eb");
+});
+
+test("THEME_PRESETS: presets avec couleurs hex valides", () => {
+  assert.ok(THEME_PRESETS.length >= 6);
+  for (const p of THEME_PRESETS) assert.ok(/^#[0-9a-f]{6}$/.test(p.color));
+});
+
+test("presetColor: résout la couleur d'un preset par id", () => {
+  assert.equal(presetColor("violet"), "#6d5cf6");
+  assert.equal(presetColor("inconnu"), null);
 });

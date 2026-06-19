@@ -1,6 +1,6 @@
 {
-  "id": "147022d9-0260-4ecf-b39b-f3a308cee95c",
-  "prevId": "aa884f03-c0d8-4a20-916d-e372164c3a9c",
+  "id": "d9c8621b-eff0-49be-a81e-6ac1bcd069dd",
+  "prevId": "9b43a6a7-ef6f-4afd-ad64-53cb784a91e3",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1065,6 +1065,19 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'#6366f1'"
+        },
+        "theme_preset": {
+          "name": "theme_preset",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'violet'"
+        },
+        "custom_color": {
+          "name": "custom_color",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "header_layout": {
           "name": "header_layout",
