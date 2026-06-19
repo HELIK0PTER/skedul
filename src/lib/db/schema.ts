@@ -282,6 +282,24 @@ export const booking = pgTable(
   ],
 );
 
+/** A one-off block of unavailability (time off) for a professional. */
+export const timeOff = pgTable(
+  "time_off",
+  {
+    id: id(),
+    professionalId: text("professional_id")
+      .notNull()
+      .references(() => professional.id, { onDelete: "cascade" }),
+    // instant range; endAt is an EXCLUSIVE bound
+    startAt: timestamp("start_at", { withTimezone: true }).notNull(),
+    endAt: timestamp("end_at", { withTimezone: true }).notNull(),
+    allDay: boolean("all_day").default(true).notNull(),
+    reason: text("reason"),
+    ...timestamps,
+  },
+  (t) => [index("time_off_pro_idx").on(t.professionalId, t.startAt)],
+);
+
 /* ───────────────────────────── Relations ───────────────────────── */
 
 export const userRelations = relations(user, ({ one }) => ({
@@ -298,6 +316,7 @@ export const professionalRelations = relations(professional, ({ one, many }) => 
   packs: many(pack),
   customers: many(customer),
   bookings: many(booking),
+  timeOff: many(timeOff),
 }));
 
 export const eventTypeRelations = relations(eventType, ({ one, many }) => ({
@@ -359,5 +378,12 @@ export const bookingRelations = relations(booking, ({ one }) => ({
   packPurchase: one(packPurchase, {
     fields: [booking.packPurchaseId],
     references: [packPurchase.id],
+  }),
+}));
+
+export const timeOffRelations = relations(timeOff, ({ one }) => ({
+  professional: one(professional, {
+    fields: [timeOff.professionalId],
+    references: [professional.id],
   }),
 }));

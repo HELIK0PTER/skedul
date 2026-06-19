@@ -2,7 +2,7 @@ import "server-only";
 import { and, eq, gte, inArray } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { availabilityRule, booking } from "@/lib/db/schema";
+import { availabilityRule, booking, timeOff } from "@/lib/db/schema";
 import { computeSlots, type Slot } from "@/lib/availability";
 
 interface EventTypeLike {
@@ -20,7 +20,7 @@ export async function loadBookableSlots(
 ): Promise<Slot[]> {
   const now = new Date();
 
-  const [rules, busy] = await Promise.all([
+  const [rules, busyBookings, busyTimeOff] = await Promise.all([
     db
       .select({
         dayOfWeek: availabilityRule.dayOfWeek,
@@ -39,11 +39,17 @@ export async function loadBookableSlots(
           inArray(booking.status, ["pending", "confirmed"]),
         ),
       ),
+    db
+      .select({ startAt: timeOff.startAt, endAt: timeOff.endAt })
+      .from(timeOff)
+      .where(
+        and(eq(timeOff.professionalId, professionalId), gte(timeOff.endAt, now)),
+      ),
   ]);
 
   return computeSlots({
     rules,
-    busy,
+    busy: [...busyBookings, ...busyTimeOff],
     durationMinutes: evt.durationMinutes,
     bufferBeforeMinutes: evt.bufferBeforeMinutes,
     bufferAfterMinutes: evt.bufferAfterMinutes,

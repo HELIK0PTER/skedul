@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   CalendarDays,
+  CalendarOff,
   Clock,
   ExternalLink,
   LayoutDashboard,
@@ -20,6 +21,7 @@ const NAV = [
   { href: "/dashboard", label: "Vue d'ensemble", icon: LayoutDashboard, exact: true },
   { href: "/dashboard/event-types", label: "Prestations", icon: CalendarDays },
   { href: "/dashboard/availability", label: "Disponibilités", icon: Clock },
+  { href: "/dashboard/unavailability", label: "Indisponibilités", icon: CalendarOff },
   { href: "/dashboard/packs", label: "Packs", icon: Ticket },
   { href: "/dashboard/bookings", label: "Réservations", icon: Users },
   { href: "/dashboard/settings", label: "Réglages", icon: Settings },
