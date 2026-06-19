@@ -52,6 +52,7 @@ export default async function SettingsPage() {
         <CardContent>
           <BrandingForm
             businessName={pro.businessName}
+            headline={pro.headline}
             blobEnabled={env.BLOB_ENABLED}
             values={{
               themePreset: pro.themePreset,

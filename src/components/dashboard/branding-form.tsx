@@ -6,10 +6,10 @@ import { Loader2, Upload } from "lucide-react";
 
 import { updateBranding } from "@/server/pro";
 import { AVATAR_PACK, packSrc } from "@/lib/avatar-pack";
-import { THEME_PRESETS, presetColor } from "@/lib/color";
+import { THEME_PRESETS, brandThemeVars, presetColor } from "@/lib/color";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { cn } from "@/lib/utils";
+import { cn, initials } from "@/lib/utils";
 
 const STYLES = ["fun-emoji", "micah", "lorelei", "pixel-art"] as const;
 const preview = (style: string, seed: string) =>
@@ -38,10 +38,12 @@ interface AvatarState {
 export function BrandingForm({
   values,
   businessName,
+  headline,
   blobEnabled,
 }: {
   values: BrandingValues;
   businessName: string;
+  headline?: string | null;
   blobEnabled: boolean;
 }) {
   const router = useRouter();
@@ -73,6 +75,66 @@ export function BrandingForm({
   const [error, setError] = useState<string | null>(null);
   const bannerInput = useRef<HTMLInputElement>(null);
   const avatarInput = useRef<HTMLInputElement>(null);
+
+  const centered = layout === "vitrine";
+
+  // Detect unsaved edits by comparing the live state to the saved values.
+  const dirty =
+    JSON.stringify({
+      themePreset,
+      customColor,
+      banner,
+      layout,
+      ...avatar,
+    }) !==
+    JSON.stringify({
+      themePreset: values.themePreset || "violet",
+      customColor: values.customColor || "#6d5cf6",
+      banner: values.bannerUrl,
+      layout: values.headerLayout || "profil",
+      kind: values.avatarKind,
+      style: values.avatarStyle,
+      seed: values.avatarSeed,
+      url: values.avatarUrl,
+    });
+
+  function reset() {
+    setThemePreset(values.themePreset || "violet");
+    setCustomColor(values.customColor || "#6d5cf6");
+    setBanner(values.bannerUrl);
+    setLayout(values.headerLayout || "profil");
+    setAvatar({
+      kind: values.avatarKind,
+      style: values.avatarStyle,
+      seed: values.avatarSeed,
+      url: values.avatarUrl,
+    });
+    setTab(
+      values.avatarKind === "pack"
+        ? "pack"
+        : values.avatarKind === "upload"
+          ? "upload"
+          : "gallery",
+    );
+    setError(null);
+    setSaved(false);
+  }
+
+  function previewAvatar() {
+    if (avatar.kind === "generated" && avatar.style && avatar.seed) {
+      // eslint-disable-next-line @next/next/no-img-element
+      return <img src={preview(avatar.style, avatar.seed)} alt="" className="size-full" />;
+    }
+    if ((avatar.kind === "pack" || avatar.kind === "upload") && avatar.url) {
+      // eslint-disable-next-line @next/next/no-img-element
+      return <img src={avatar.url} alt="" className="size-full object-cover" />;
+    }
+    return (
+      <span className="grid size-full place-items-center bg-accent text-sm font-semibold text-accent-foreground">
+        {initials(businessName)}
+      </span>
+    );
+  }
 
   async function upload(file: File, kind: "banner" | "avatar"): Promise<string | null> {
     setError(null);
@@ -124,6 +186,64 @@ export function BrandingForm({
 
   return (
     <div className="space-y-6">
+      {/* Aperçu en direct */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <Label>Aperçu en direct</Label>
+          {dirty && (
+            <span className="text-xs font-medium text-warning">
+              Modifications non enregistrées
+            </span>
+          )}
+        </div>
+        <div
+          className="overflow-hidden rounded-xl border border-border bg-card"
+          style={brandThemeVars(activeColor)}
+        >
+          {banner ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={banner} alt="" className="h-24 w-full object-cover" />
+          ) : (
+            <div
+              className="h-16"
+              style={{ background: `linear-gradient(180deg, ${activeColor}33, transparent)` }}
+            />
+          )}
+          <div className={cn("px-4 pb-4", centered && "text-center")}>
+            <div
+              className={cn(
+                "-mt-7 flex gap-3",
+                centered ? "flex-col items-center" : "items-end",
+              )}
+            >
+              <span className="size-14 shrink-0 overflow-hidden rounded-2xl border-4 border-card bg-card shadow-sm [&>svg]:size-full">
+                {previewAvatar()}
+              </span>
+              <div className={cn("min-w-0", centered ? "" : "pb-1")}>
+                <p className="truncate text-sm font-bold">{businessName}</p>
+                {headline && (
+                  <p className="truncate text-xs text-muted-foreground">{headline}</p>
+                )}
+              </div>
+            </div>
+            <div
+              className={cn(
+                "mt-3 flex flex-wrap items-center gap-2",
+                centered && "justify-center",
+              )}
+            >
+              <span className="inline-flex h-8 items-center rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground">
+                Réserver
+              </span>
+              <span className="inline-flex h-8 items-center rounded-lg bg-accent px-3 text-xs font-medium text-accent-foreground">
+                Pack 5 séances
+              </span>
+              <span className="text-xs font-semibold text-primary">En savoir plus</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Bannière */}
       <div className="space-y-2">
         <Label>Bannière</Label>
@@ -383,10 +503,18 @@ export function BrandingForm({
 
       {error && <p className="text-sm text-destructive">{error}</p>}
       <div className="flex items-center gap-3 pt-1">
-        <Button type="button" onClick={save} disabled={pending}>
+        <Button type="button" onClick={save} disabled={pending || !dirty}>
           {pending && <Loader2 className="size-4 animate-spin" />} Enregistrer
         </Button>
-        {saved && <span className="text-sm text-success">Enregistré ✓</span>}
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={reset}
+          disabled={pending || !dirty}
+        >
+          Annuler
+        </Button>
+        {saved && !dirty && <span className="text-sm text-success">Enregistré ✓</span>}
       </div>
     </div>
   );
