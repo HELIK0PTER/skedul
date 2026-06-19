@@ -1,0 +1,363 @@
+import { relations } from "drizzle-orm";
+import {
+  boolean,
+  index,
+  integer,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+} from "drizzle-orm/pg-core";
+import { nanoid } from "nanoid";
+
+const id = () =>
+  text("id")
+    .primaryKey()
+    .$defaultFn(() => nanoid());
+
+const timestamps = {
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
+};
+
+/* ───────────────────────────── Enums ───────────────────────────── */
+
+export const userRole = pgEnum("user_role", ["client", "pro"]);
+export const bookingStatus = pgEnum("booking_status", [
+  "pending",
+  "confirmed",
+  "cancelled",
+  "completed",
+]);
+export const paymentType = pgEnum("payment_type", ["direct", "credit", "free"]);
+export const purchaseStatus = pgEnum("purchase_status", [
+  "pending",
+  "paid",
+  "refunded",
+]);
+
+/* ──────────────────────── Better Auth tables ───────────────────── */
+
+export const user = pgTable("user", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  email: text("email").notNull().unique(),
+  emailVerified: boolean("email_verified").default(false).notNull(),
+  image: text("image"),
+  role: userRole("role").default("client").notNull(),
+  ...timestamps,
+});
+
+export const session = pgTable(
+  "session",
+  {
+    id: text("id").primaryKey(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    token: text("token").notNull().unique(),
+    ipAddress: text("ip_address"),
+    userAgent: text("user_agent"),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    ...timestamps,
+  },
+  (t) => [index("session_user_id_idx").on(t.userId)],
+);
+
+export const account = pgTable(
+  "account",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id").notNull(),
+    providerId: text("provider_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    idToken: text("id_token"),
+    accessTokenExpiresAt: timestamp("access_token_expires_at", {
+      withTimezone: true,
+    }),
+    refreshTokenExpiresAt: timestamp("refresh_token_expires_at", {
+      withTimezone: true,
+    }),
+    scope: text("scope"),
+    password: text("password"),
+    ...timestamps,
+  },
+  (t) => [index("account_user_id_idx").on(t.userId)],
+);
+
+export const verification = pgTable(
+  "verification",
+  {
+    id: text("id").primaryKey(),
+    identifier: text("identifier").notNull(),
+    value: text("value").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    ...timestamps,
+  },
+  (t) => [index("verification_identifier_idx").on(t.identifier)],
+);
+
+/* ─────────────────────────── Domain tables ─────────────────────── */
+
+/** A professional's public business profile (one per pro user). */
+export const professional = pgTable(
+  "professional",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .unique()
+      .references(() => user.id, { onDelete: "cascade" }),
+    slug: text("slug").notNull().unique(),
+    businessName: text("business_name").notNull(),
+    headline: text("headline"),
+    bio: text("bio"),
+    avatarUrl: text("avatar_url"),
+    brandColor: text("brand_color").default("#6366f1").notNull(),
+    timezone: text("timezone").default("Europe/Paris").notNull(),
+    currency: text("currency").default("eur").notNull(),
+    stripeAccountId: text("stripe_account_id"),
+    ...timestamps,
+  },
+  (t) => [index("professional_slug_idx").on(t.slug)],
+);
+
+/** A bookable service / slot type (e.g. "Coaching 1h"). */
+export const eventType = pgTable(
+  "event_type",
+  {
+    id: id(),
+    professionalId: text("professional_id")
+      .notNull()
+      .references(() => professional.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    slug: text("slug").notNull(),
+    description: text("description"),
+    durationMinutes: integer("duration_minutes").default(30).notNull(),
+    priceCents: integer("price_cents").default(0).notNull(),
+    color: text("color").default("#6366f1").notNull(),
+    bufferBeforeMinutes: integer("buffer_before_minutes").default(0).notNull(),
+    bufferAfterMinutes: integer("buffer_after_minutes").default(0).notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    unique("event_type_pro_slug_unique").on(t.professionalId, t.slug),
+    index("event_type_pro_idx").on(t.professionalId),
+  ],
+);
+
+/** Recurring weekly availability for a professional. */
+export const availabilityRule = pgTable(
+  "availability_rule",
+  {
+    id: id(),
+    professionalId: text("professional_id")
+      .notNull()
+      .references(() => professional.id, { onDelete: "cascade" }),
+    // 0 = Sunday … 6 = Saturday
+    dayOfWeek: integer("day_of_week").notNull(),
+    // minutes from midnight (e.g. 540 = 09:00, 1020 = 17:00)
+    startMinute: integer("start_minute").notNull(),
+    endMinute: integer("end_minute").notNull(),
+    ...timestamps,
+  },
+  (t) => [index("availability_pro_idx").on(t.professionalId)],
+);
+
+/** A prepaid pack of credits sold by a professional. */
+export const pack = pgTable(
+  "pack",
+  {
+    id: id(),
+    professionalId: text("professional_id")
+      .notNull()
+      .references(() => professional.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description"),
+    // number of bookings (credits) granted by the pack
+    credits: integer("credits").notNull(),
+    priceCents: integer("price_cents").notNull(),
+    // optional: credits only valid for this event type (null = any)
+    eventTypeId: text("event_type_id").references(() => eventType.id, {
+      onDelete: "set null",
+    }),
+    isActive: boolean("is_active").default(true).notNull(),
+    ...timestamps,
+  },
+  (t) => [index("pack_pro_idx").on(t.professionalId)],
+);
+
+/** A customer of a professional (may be linked to an auth user). */
+export const customer = pgTable(
+  "customer",
+  {
+    id: id(),
+    professionalId: text("professional_id")
+      .notNull()
+      .references(() => professional.id, { onDelete: "cascade" }),
+    userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+    name: text("name").notNull(),
+    email: text("email").notNull(),
+    phone: text("phone"),
+    ...timestamps,
+  },
+  (t) => [
+    unique("customer_pro_email_unique").on(t.professionalId, t.email),
+    index("customer_pro_idx").on(t.professionalId),
+  ],
+);
+
+/** A purchased pack with its remaining credit balance. */
+export const packPurchase = pgTable(
+  "pack_purchase",
+  {
+    id: id(),
+    packId: text("pack_id")
+      .notNull()
+      .references(() => pack.id, { onDelete: "restrict" }),
+    professionalId: text("professional_id")
+      .notNull()
+      .references(() => professional.id, { onDelete: "cascade" }),
+    customerId: text("customer_id")
+      .notNull()
+      .references(() => customer.id, { onDelete: "cascade" }),
+    creditsTotal: integer("credits_total").notNull(),
+    creditsRemaining: integer("credits_remaining").notNull(),
+    amountPaidCents: integer("amount_paid_cents").notNull(),
+    currency: text("currency").default("eur").notNull(),
+    status: purchaseStatus("status").default("pending").notNull(),
+    stripeSessionId: text("stripe_session_id"),
+    stripePaymentIntentId: text("stripe_payment_intent_id"),
+    ...timestamps,
+  },
+  (t) => [
+    index("pack_purchase_customer_idx").on(t.customerId),
+    index("pack_purchase_pro_idx").on(t.professionalId),
+  ],
+);
+
+/** A booked appointment. */
+export const booking = pgTable(
+  "booking",
+  {
+    id: id(),
+    professionalId: text("professional_id")
+      .notNull()
+      .references(() => professional.id, { onDelete: "cascade" }),
+    eventTypeId: text("event_type_id")
+      .notNull()
+      .references(() => eventType.id, { onDelete: "restrict" }),
+    customerId: text("customer_id")
+      .notNull()
+      .references(() => customer.id, { onDelete: "cascade" }),
+    startAt: timestamp("start_at", { withTimezone: true }).notNull(),
+    endAt: timestamp("end_at", { withTimezone: true }).notNull(),
+    status: bookingStatus("status").default("pending").notNull(),
+    paymentType: paymentType("payment_type").default("direct").notNull(),
+    amountPaidCents: integer("amount_paid_cents"),
+    // set when paid with a pack credit
+    packPurchaseId: text("pack_purchase_id").references(
+      () => packPurchase.id,
+      { onDelete: "set null" },
+    ),
+    stripeSessionId: text("stripe_session_id"),
+    customerNotes: text("customer_notes"),
+    ...timestamps,
+  },
+  (t) => [
+    index("booking_pro_idx").on(t.professionalId),
+    index("booking_customer_idx").on(t.customerId),
+    index("booking_start_idx").on(t.startAt),
+  ],
+);
+
+/* ───────────────────────────── Relations ───────────────────────── */
+
+export const userRelations = relations(user, ({ one }) => ({
+  professional: one(professional, {
+    fields: [user.id],
+    references: [professional.userId],
+  }),
+}));
+
+export const professionalRelations = relations(professional, ({ one, many }) => ({
+  user: one(user, { fields: [professional.userId], references: [user.id] }),
+  eventTypes: many(eventType),
+  availability: many(availabilityRule),
+  packs: many(pack),
+  customers: many(customer),
+  bookings: many(booking),
+}));
+
+export const eventTypeRelations = relations(eventType, ({ one, many }) => ({
+  professional: one(professional, {
+    fields: [eventType.professionalId],
+    references: [professional.id],
+  }),
+  bookings: many(booking),
+}));
+
+export const packRelations = relations(pack, ({ one, many }) => ({
+  professional: one(professional, {
+    fields: [pack.professionalId],
+    references: [professional.id],
+  }),
+  eventType: one(eventType, {
+    fields: [pack.eventTypeId],
+    references: [eventType.id],
+  }),
+  purchases: many(packPurchase),
+}));
+
+export const customerRelations = relations(customer, ({ one, many }) => ({
+  professional: one(professional, {
+    fields: [customer.professionalId],
+    references: [professional.id],
+  }),
+  user: one(user, { fields: [customer.userId], references: [user.id] }),
+  purchases: many(packPurchase),
+  bookings: many(booking),
+}));
+
+export const packPurchaseRelations = relations(packPurchase, ({ one, many }) => ({
+  pack: one(pack, { fields: [packPurchase.packId], references: [pack.id] }),
+  professional: one(professional, {
+    fields: [packPurchase.professionalId],
+    references: [professional.id],
+  }),
+  customer: one(customer, {
+    fields: [packPurchase.customerId],
+    references: [customer.id],
+  }),
+  bookings: many(booking),
+}));
+
+export const bookingRelations = relations(booking, ({ one }) => ({
+  professional: one(professional, {
+    fields: [booking.professionalId],
+    references: [professional.id],
+  }),
+  eventType: one(eventType, {
+    fields: [booking.eventTypeId],
+    references: [eventType.id],
+  }),
+  customer: one(customer, {
+    fields: [booking.customerId],
+    references: [customer.id],
+  }),
+  packPurchase: one(packPurchase, {
+    fields: [booking.packPurchaseId],
+    references: [packPurchase.id],
+  }),
+}));
