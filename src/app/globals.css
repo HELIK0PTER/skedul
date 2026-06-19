@@ -60,6 +60,93 @@ body {
   background-size: 28px 28px;
 }
 
+/* Interactive violet spotlight layer for the hero (see HeroSpotlight).
+   --x/--y are updated on pointer move; defaults keep it centered without JS. */
+.hero-spotlight {
+  --x: 50%;
+  --y: 35%;
+  --spot-size: 240px;
+  --spot-op: 0.14;
+}
+/* Dot grid, revealed only around the cursor */
+.hero-spotlight::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle at 1px 1px, #b9b9cf 1px, transparent 0);
+  background-size: 28px 28px;
+  -webkit-mask-image: radial-gradient(
+    var(--spot-size) circle at var(--x) var(--y),
+    #000 10%,
+    transparent 75%
+  );
+  mask-image: radial-gradient(
+    var(--spot-size) circle at var(--x) var(--y),
+    #000 10%,
+    transparent 75%
+  );
+}
+/* Soft violet glow following the cursor */
+.hero-spotlight::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    var(--spot-size) circle at var(--x) var(--y),
+    rgba(109, 92, 246, var(--spot-op)),
+    transparent 70%
+  );
+}
+
+/* Two soft violet orbs drifting/bobbing behind the hero content */
+.hero-orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(42px);
+  opacity: 0.3;
+  will-change: transform;
+}
+.hero-orb-1 {
+  top: 6%;
+  left: 10%;
+  width: 240px;
+  height: 240px;
+  background: #8b7cf6;
+}
+.hero-orb-2 {
+  top: 28%;
+  right: 12%;
+  width: 180px;
+  height: 180px;
+  background: #ed9ed6;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .hero-orb-1 {
+    animation: hero-float-1 22s ease-in-out infinite;
+  }
+  .hero-orb-2 {
+    animation: hero-float-2 26s ease-in-out infinite;
+  }
+}
+@keyframes hero-float-1 {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(18%, 16%) scale(1.08);
+  }
+}
+@keyframes hero-float-2 {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(-16%, -14%) scale(0.94);
+  }
+}
+
 @layer utilities {
   .text-balance {
     text-wrap: balance;

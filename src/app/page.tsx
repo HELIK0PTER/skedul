@@ -12,6 +12,7 @@ import {
 
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
+import { HeroSpotlight } from "@/components/hero-spotlight";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -23,8 +24,13 @@ export default function Home() {
 
       <main className="flex-1">
         {/* Hero */}
-        <section className="bg-aurora">
-          <div className="mx-auto max-w-4xl px-5 pb-24 pt-20 text-center">
+        <section className="relative overflow-hidden bg-aurora">
+          <div className="pointer-events-none absolute inset-0" aria-hidden>
+            <span className="hero-orb hero-orb-1" />
+            <span className="hero-orb hero-orb-2" />
+          </div>
+          <HeroSpotlight />
+          <div className="relative mx-auto max-w-4xl cursor-default px-5 pb-24 pt-20 text-center">
             <Badge className="mx-auto mb-6 inline-flex">
               <Sparkles className="size-3.5" />
               Réservations + packs prépayés
@@ -34,9 +40,16 @@ export default function Home() {
               <span className="text-primary">payée d&apos;avance.</span>
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-balance text-lg text-muted-foreground">
-              Skedul donne à chaque indépendant son agenda et une
-              boutique : vos clients réservent un créneau ou achètent un pack
-              d&apos;heures qu&apos;ils posent quand ils veulent.
+              Skedul donne à chaque indépendant{" "}
+              <span className="font-semibold text-[#2b73e0]">son agenda</span> et{" "}
+              <span className="font-semibold text-[#d8417a]">une boutique</span> :
+              vos clients réservent{" "}
+              <span className="font-semibold text-[#2b73e0]">un créneau</span> ou
+              achètent{" "}
+              <span className="font-semibold text-primary">
+                un pack d&apos;heures
+              </span>{" "}
+              qu&apos;ils posent quand ils veulent.
             </p>
             <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Button asChild size="lg">
@@ -77,36 +90,44 @@ export default function Home() {
               {
                 icon: CalendarCheck,
                 title: "Créneaux à la Calendly",
+                chip: "bg-[#e8f1ff] text-[#2b73e0]",
                 body: "Définissez vos disponibilités hebdomadaires et vos prestations. Les créneaux se calculent automatiquement.",
               },
               {
                 icon: Ticket,
                 title: "Packs d'heures prépayés",
+                chip: "bg-[#f1effe] text-[#6d5cf6]",
                 body: "Vendez des packs (4 séances, 10 cours…). Vos clients paient une fois, puis réservent sans repayer.",
               },
               {
                 icon: Wallet,
                 title: "Crédits & solde",
+                chip: "bg-[#fbeed5] text-[#b8730a]",
                 body: "Chaque pack crédite un solde. À chaque réservation, un crédit est déduit automatiquement.",
               },
               {
                 icon: Store,
                 title: "Votre page boutique",
+                chip: "bg-[#fde8f1] text-[#d8417a]",
                 body: "Une landing page publique façon e-commerce : prestations, packs et réservation en quelques clics.",
               },
               {
                 icon: CreditCard,
                 title: "Paiement Stripe",
+                chip: "bg-[#e1f5ec] text-[#08916a]",
                 body: "Encaissez les réservations à l'unité et les packs en toute sécurité via Stripe Checkout.",
               },
               {
                 icon: Layers,
                 title: "Multi-environnements",
+                chip: "bg-[#def4f6] text-[#0a8597]",
                 body: "Dev, preview et production séparés (Neon + Vercel), prêts à déployer.",
               },
             ].map((f) => (
               <Card key={f.title} className="p-6">
-                <span className="grid size-11 place-items-center rounded-xl bg-accent text-accent-foreground">
+                <span
+                  className={`grid size-11 place-items-center rounded-xl ${f.chip}`}
+                >
                   <f.icon className="size-5" />
                 </span>
                 <h3 className="mt-4 text-lg font-semibold">{f.title}</h3>
@@ -127,21 +148,24 @@ export default function Home() {
                 {
                   step: "01",
                   title: "Le pro configure",
+                  tone: "text-[#6d5cf6]",
                   body: "Prestations, disponibilités et packs depuis le back-office.",
                 },
                 {
                   step: "02",
                   title: "Le client achète",
+                  tone: "text-[#2b73e0]",
                   body: "Un créneau à l'unité, ou un pack d'heures prépayé via Stripe.",
                 },
                 {
                   step: "03",
                   title: "Le client réserve",
+                  tone: "text-[#08916a]",
                   body: "Il pose ses créneaux quand il veut, ses crédits se décomptent.",
                 },
               ].map((s) => (
                 <div key={s.step} className="relative">
-                  <span className="text-5xl font-bold text-primary-muted">
+                  <span className={`text-5xl font-bold ${s.tone}`}>
                     {s.step}
                   </span>
                   <h3 className="mt-2 text-lg font-semibold">{s.title}</h3>
