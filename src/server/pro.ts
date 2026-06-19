@@ -13,6 +13,7 @@ import {
   user as userTable,
 } from "@/lib/db/schema";
 import { getCurrentProfessional, getCurrentUser } from "@/lib/session";
+import { isHexColor, presetColor } from "@/lib/color";
 import { slugify } from "@/lib/utils";
 
 async function requirePro() {
@@ -106,7 +107,8 @@ export async function updateProfile(input: {
 }
 
 export async function updateBranding(input: {
-  brandColor?: string;
+  themePreset?: string;
+  customColor?: string | null;
   bannerUrl?: string | null;
   headerLayout?: string;
   avatarKind?: string | null;
@@ -122,10 +124,23 @@ export async function updateBranding(input: {
     input.avatarKind === "upload"
       ? input.avatarKind
       : null;
+
+  // Resolve the active brand color from the chosen preset (or the pro's custom).
+  // The custom color persists even while a named preset is active.
+  const custom = isHexColor(input.customColor)
+    ? (input.customColor as string)
+    : pro.customColor;
+  const preset = presetColor(input.themePreset);
+  const themePreset = input.themePreset === "custom" || !preset ? "custom" : input.themePreset!;
+  const brandColor =
+    themePreset === "custom" ? (custom ?? pro.brandColor) : (preset as string);
+
   await db
     .update(professional)
     .set({
-      brandColor: input.brandColor || pro.brandColor,
+      brandColor,
+      themePreset,
+      customColor: custom ?? null,
       bannerUrl: input.bannerUrl ?? null,
       headerLayout: layout,
       avatarKind: kind,

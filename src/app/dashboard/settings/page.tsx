@@ -54,7 +54,8 @@ export default async function SettingsPage() {
             businessName={pro.businessName}
             blobEnabled={env.BLOB_ENABLED}
             values={{
-              brandColor: pro.brandColor,
+              themePreset: pro.themePreset,
+              customColor: pro.customColor,
               bannerUrl: pro.bannerUrl,
               headerLayout: pro.headerLayout,
               avatarKind: pro.avatarKind,

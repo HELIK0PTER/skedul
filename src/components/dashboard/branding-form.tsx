@@ -6,6 +6,7 @@ import { Loader2, Upload } from "lucide-react";
 
 import { updateBranding } from "@/server/pro";
 import { AVATAR_PACK, packSrc } from "@/lib/avatar-pack";
+import { THEME_PRESETS, presetColor } from "@/lib/color";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
@@ -15,7 +16,8 @@ const preview = (style: string, seed: string) =>
   `https://api.dicebear.com/9.x/${style}/svg?seed=${encodeURIComponent(seed)}`;
 
 export interface BrandingValues {
-  brandColor: string;
+  themePreset: string;
+  customColor: string | null;
   bannerUrl: string | null;
   headerLayout: string;
   avatarKind: string | null;
@@ -46,7 +48,10 @@ export function BrandingForm({
   const [pending, startTransition] = useTransition();
   const [saved, setSaved] = useState(false);
 
-  const [brandColor, setBrandColor] = useState(values.brandColor);
+  const [themePreset, setThemePreset] = useState(values.themePreset || "violet");
+  const [customColor, setCustomColor] = useState(values.customColor || "#6d5cf6");
+  const activeColor =
+    themePreset === "custom" ? customColor : (presetColor(themePreset) ?? "#6d5cf6");
   const [layout, setLayout] = useState(values.headerLayout || "profil");
   const [banner, setBanner] = useState<string | null>(values.bannerUrl);
   const [avatar, setAvatar] = useState<AvatarState>({
@@ -88,7 +93,8 @@ export function BrandingForm({
     setSaved(false);
     startTransition(async () => {
       await updateBranding({
-        brandColor,
+        themePreset,
+        customColor,
         bannerUrl: banner,
         headerLayout: layout,
         avatarKind: avatar.kind,
@@ -125,7 +131,7 @@ export function BrandingForm({
           className="relative h-28 overflow-hidden rounded-xl border border-border bg-muted"
           style={
             !banner
-              ? { background: `linear-gradient(180deg, ${brandColor}22, #fff)` }
+              ? { background: `linear-gradient(180deg, ${activeColor}22, #fff)` }
               : undefined
           }
         >
@@ -293,37 +299,85 @@ export function BrandingForm({
         )}
       </div>
 
-      {/* Couleur + mise en page */}
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="brandColor">Couleur de marque</Label>
-          <input
-            id="brandColor"
-            type="color"
-            value={brandColor}
-            onChange={(e) => setBrandColor(e.target.value)}
-            className="h-10 w-full cursor-pointer rounded-xl border border-input bg-card p-1"
+      {/* Thème couleur : presets + preset personnalisé */}
+      <div className="space-y-2">
+        <Label>Thème couleur</Label>
+        <p className="text-xs text-muted-foreground">
+          Teinte boutons, liens, badges et accents de votre page publique.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          {THEME_PRESETS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              title={p.label}
+              aria-label={p.label}
+              onClick={() => setThemePreset(p.id)}
+              className={cn(
+                "size-9 rounded-full border-2 transition-transform",
+                themePreset === p.id
+                  ? "scale-110 border-foreground"
+                  : "border-transparent hover:scale-105",
+              )}
+              style={{ backgroundColor: p.color }}
+            />
+          ))}
+          <button
+            type="button"
+            title="Couleur personnalisée"
+            aria-label="Couleur personnalisée"
+            onClick={() => setThemePreset("custom")}
+            className={cn(
+              "size-9 rounded-full border-2 transition-transform",
+              themePreset === "custom"
+                ? "scale-110 border-foreground"
+                : "border-input hover:scale-105",
+            )}
+            style={
+              themePreset === "custom"
+                ? { backgroundColor: customColor }
+                : {
+                    background:
+                      "conic-gradient(from 0deg, #ef4444, #f59e0b, #22c55e, #3b82f6, #a855f7, #ef4444)",
+                  }
+            }
           />
         </div>
-        <div className="space-y-1.5">
-          <Label>Mise en page</Label>
-          <div className="flex gap-2">
-            {(["profil", "vitrine"] as const).map((l) => (
-              <button
-                key={l}
-                type="button"
-                onClick={() => setLayout(l)}
-                className={cn(
-                  "flex-1 rounded-xl border px-3 py-2 text-sm capitalize transition-colors",
-                  layout === l
-                    ? "border-primary bg-primary-muted text-primary"
-                    : "border-input hover:bg-muted",
-                )}
-              >
-                {l}
-              </button>
-            ))}
+        {themePreset === "custom" && (
+          <div className="flex items-center gap-2">
+            <input
+              type="color"
+              aria-label="Couleur personnalisée"
+              value={customColor}
+              onChange={(e) => setCustomColor(e.target.value)}
+              className="h-10 w-16 cursor-pointer rounded-xl border border-input bg-card p-1"
+            />
+            <span className="text-xs text-muted-foreground">
+              Votre preset personnalisé — modifiable à volonté.
+            </span>
           </div>
+        )}
+      </div>
+
+      {/* Mise en page */}
+      <div className="space-y-1.5">
+        <Label>Mise en page</Label>
+        <div className="flex max-w-xs gap-2">
+          {(["profil", "vitrine"] as const).map((l) => (
+            <button
+              key={l}
+              type="button"
+              onClick={() => setLayout(l)}
+              className={cn(
+                "flex-1 rounded-xl border px-3 py-2 text-sm capitalize transition-colors",
+                layout === l
+                  ? "border-primary bg-primary-muted text-primary"
+                  : "border-input hover:bg-muted",
+              )}
+            >
+              {l}
+            </button>
+          ))}
         </div>
       </div>
 

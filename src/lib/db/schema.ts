@@ -128,6 +128,8 @@ export const professional = pgTable(
     avatarSeed: text("avatar_seed"),
     bannerUrl: text("banner_url"),
     brandColor: text("brand_color").default("#6366f1").notNull(),
+    themePreset: text("theme_preset").default("violet").notNull(),
+    customColor: text("custom_color"),
     headerLayout: text("header_layout").default("profil").notNull(),
     timezone: text("timezone").default("Europe/Paris").notNull(),
     currency: text("currency").default("eur").notNull(),
