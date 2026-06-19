@@ -19,6 +19,8 @@
   },
   "dependencies": {
     "@date-fns/tz": "^1.5.0",
+    "@dicebear/collection": "^9.4.2",
+    "@dicebear/core": "^9.4.2",
     "@neondatabase/serverless": "^1.1.0",
     "better-auth": "^1.6.19",
     "class-variance-authority": "^0.7.1",
