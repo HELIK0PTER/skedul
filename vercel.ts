@@ -7,9 +7,9 @@ import type { VercelConfig } from "@vercel/config/v1";
  *   pnpm deploy:preview   → preview environment  (Neon "preview" branch)
  *   pnpm deploy:prod      → production environment (Neon "main" branch)
  *
- * `git.deploymentEnabled: false` disables every automatic Git-triggered
- * deployment (push / PR) on all branches. It does NOT affect `vercel deploy`,
- * so you stay in full control from the CLI.
+ * `git.deploymentEnabled: { main: false }` keeps PRODUCTION manual: pushing
+ * `main` never auto-deploys (use `pnpm deploy:prod`). Every other branch —
+ * notably `preview` — auto-deploys to the Preview environment on push.
  *
  * `buildCommand` runs Drizzle migrations against the deployment's own
  * DATABASE_URL before building — so each environment's Neon branch is migrated
@@ -20,6 +20,8 @@ export const config: VercelConfig = {
   framework: "nextjs",
   buildCommand: "pnpm db:migrate && pnpm build",
   git: {
-    deploymentEnabled: false,
+    deploymentEnabled: {
+      main: false,
+    },
   },
 };
