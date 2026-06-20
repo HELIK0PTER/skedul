@@ -5,11 +5,13 @@ import { and, desc, eq, gt, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   booking,
+  bookingAnswer,
   customer,
   eventType,
   pack,
   packPurchase,
   professional,
+  question,
 } from "@/lib/db/schema";
 import { createCheckoutUrl } from "@/lib/stripe";
 import { fulfillBooking } from "@/lib/payments";
@@ -164,12 +166,51 @@ async function loadEventType(eventTypeId: string) {
   return rows[0] ?? null;
 }
 
+/** Validates required questions and returns rows to insert into booking_answer. */
+async function buildAnswers(
+  eventTypeId: string,
+  answers: { questionId: string; value: string }[] | undefined,
+): Promise<
+  | { ok: true; rows: { questionId: string; questionLabel: string; value: string }[] }
+  | { ok: false; error: string }
+> {
+  const questions = await db
+    .select({
+      id: question.id,
+      label: question.label,
+      required: question.required,
+    })
+    .from(question)
+    .where(eq(question.eventTypeId, eventTypeId));
+
+  if (questions.length === 0) return { ok: true, rows: [] };
+
+  const byId = new Map(answers?.map((a) => [a.questionId, a.value.trim()]));
+  const rows: { questionId: string; questionLabel: string; value: string }[] = [];
+  for (const q of questions) {
+    const value = byId.get(q.id) ?? "";
+    if (q.required && !value)
+      return { ok: false, error: `Merci de répondre à : ${q.label}` };
+    if (value) rows.push({ questionId: q.id, questionLabel: q.label, value });
+  }
+  return { ok: true, rows };
+}
+
+async function insertAnswers(
+  bookingId: string,
+  rows: { questionId: string; questionLabel: string; value: string }[],
+) {
+  if (rows.length === 0) return;
+  await db.insert(bookingAnswer).values(rows.map((r) => ({ bookingId, ...r })));
+}
+
 /** Book by paying now (Stripe / mock) — or instantly if the event is free. */
 export async function bookWithPayment(input: {
   eventTypeId: string;
   startISO: string;
   customer: CustomerInput;
   notes?: string;
+  answers?: { questionId: string; value: string }[];
 }): Promise<ActionResult> {
   const row = await loadEventType(input.eventTypeId);
   if (!row) return { ok: false, error: "Prestation introuvable." };
@@ -182,6 +223,9 @@ export async function bookWithPayment(input: {
   );
   if (!available)
     return { ok: false, error: "Ce créneau n'est plus disponible." };
+
+  const answers = await buildAnswers(row.eventType.id, input.answers);
+  if (!answers.ok) return { ok: false, error: answers.error };
 
   const cust = await getOrCreateCustomer(row.professional.id, input.customer);
   const start = new Date(input.startISO);
@@ -212,6 +256,8 @@ export async function bookWithPayment(input: {
       customerNotes: input.notes ?? null,
     })
     .returning();
+
+  await insertAnswers(created.id, answers.rows);
 
   if (free) {
     await fulfillBooking(created.id);
@@ -245,6 +291,7 @@ export async function bookWithCredit(input: {
   startISO: string;
   customer: CustomerInput;
   notes?: string;
+  answers?: { questionId: string; value: string }[];
 }): Promise<ActionResult> {
   const row = await loadEventType(input.eventTypeId);
   if (!row) return { ok: false, error: "Prestation introuvable." };
@@ -285,6 +332,9 @@ export async function bookWithCredit(input: {
   );
   if (!available)
     return { ok: false, error: "Ce créneau n'est plus disponible." };
+
+  const answers = await buildAnswers(row.eventType.id, input.answers);
+  if (!answers.ok) return { ok: false, error: answers.error };
 
   const start = new Date(input.startISO);
   const end = new Date(start.getTime() + row.eventType.durationMinutes * 60_000);
@@ -331,6 +381,7 @@ export async function bookWithCredit(input: {
     })
     .returning();
 
+  await insertAnswers(created.id, answers.rows);
   await fulfillBooking(created.id);
 
   return {
