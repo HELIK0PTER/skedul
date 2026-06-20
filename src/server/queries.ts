@@ -21,6 +21,7 @@ import {
   pack,
   packPurchase,
   professional,
+  question,
   timeOff,
 } from "@/lib/db/schema";
 
@@ -226,6 +227,21 @@ export async function getPublicPack(slug: string, packId: string) {
     )
     .limit(1);
   return rows[0] ?? null;
+}
+
+export function getEventTypeQuestions(eventTypeId: string) {
+  return db
+    .select({
+      id: question.id,
+      label: question.label,
+      type: question.type,
+      options: question.options,
+      required: question.required,
+      position: question.position,
+    })
+    .from(question)
+    .where(eq(question.eventTypeId, eventTypeId))
+    .orderBy(asc(question.position), asc(question.createdAt));
 }
 
 export async function getPublicProfile(slug: string) {
