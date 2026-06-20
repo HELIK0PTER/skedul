@@ -15,7 +15,15 @@ import { cn } from "@/lib/utils";
 interface Day {
   key: string;
   label: string;
-  slots: { iso: string; time: string }[];
+  slots: { iso: string; time: string; seatsRemaining: number; capacity: number }[];
+}
+
+interface Question {
+  id: string;
+  label: string;
+  type: "text" | "choice" | "boolean";
+  options: string[] | null;
+  required: boolean;
 }
 
 interface Props {
@@ -25,20 +33,24 @@ interface Props {
     title: string;
     durationMinutes: number;
     priceCents: number;
+    capacity: number;
   };
+  questions: Question[];
   days: Day[];
 }
 
-export function BookingFlow({ professionalId, eventType, days }: Props) {
+export function BookingFlow({ professionalId, eventType, questions, days }: Props) {
   const [selectedDay, setSelectedDay] = useState(days[0]?.key ?? null);
   const [selectedIso, setSelectedIso] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [credits, setCredits] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
   const [pending, startTransition] = useTransition();
 
   const day = days.find((d) => d.key === selectedDay);
   const free = eventType.priceCents <= 0;
+  const isGroup = eventType.capacity > 1;
 
   // Check applicable credits (debounced) when a valid email is entered.
   useEffect(() => {
@@ -73,6 +85,10 @@ export function BookingFlow({ professionalId, eventType, days }: Props) {
       setError("Choisissez un créneau.");
       return;
     }
+    const answerList = questions.map((q) => ({
+      questionId: q.id,
+      value: answers[q.id] ?? "",
+    }));
     setError(null);
     startTransition(async () => {
       const action = mode === "credit" ? bookWithCredit : bookWithPayment;
@@ -81,6 +97,7 @@ export function BookingFlow({ professionalId, eventType, days }: Props) {
         startISO: selectedIso,
         customer,
         notes,
+        answers: answerList,
       });
       if (!res.ok) {
         setError(res.error);
@@ -135,21 +152,31 @@ export function BookingFlow({ professionalId, eventType, days }: Props) {
           </div>
 
           <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4">
-            {day?.slots.map((s) => (
-              <button
-                key={s.iso}
-                type="button"
-                onClick={() => setSelectedIso(s.iso)}
-                className={cn(
-                  "rounded-xl border px-2 py-2 text-sm font-medium transition-colors",
-                  selectedIso === s.iso
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border hover:border-primary hover:bg-accent",
-                )}
-              >
-                {s.time}
-              </button>
-            ))}
+            {day?.slots.map((s) => {
+              const full = s.seatsRemaining <= 0;
+              return (
+                <button
+                  key={s.iso}
+                  type="button"
+                  disabled={full}
+                  onClick={() => setSelectedIso(s.iso)}
+                  className={cn(
+                    "flex flex-col items-center rounded-xl border px-2 py-2 text-sm font-medium transition-colors",
+                    full && "cursor-not-allowed opacity-40",
+                    selectedIso === s.iso
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border hover:border-primary hover:bg-accent",
+                  )}
+                >
+                  {s.time}
+                  {isGroup && (
+                    <span className="text-[11px] font-normal opacity-80">
+                      {full ? "Complet" : `${s.seatsRemaining} place${s.seatsRemaining > 1 ? "s" : ""}`}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
         </CardContent>
       </Card>
@@ -193,6 +220,55 @@ export function BookingFlow({ professionalId, eventType, days }: Props) {
               <Textarea id="notes" name="notes" rows={2} />
             </div>
 
+            {questions.map((q) => (
+              <div key={q.id} className="space-y-1.5">
+                <Label htmlFor={`q_${q.id}`}>
+                  {q.label}
+                  {q.required && <span className="text-destructive"> *</span>}
+                </Label>
+                {q.type === "text" && (
+                  <Input
+                    id={`q_${q.id}`}
+                    value={answers[q.id] ?? ""}
+                    onChange={(e) =>
+                      setAnswers((a) => ({ ...a, [q.id]: e.target.value }))
+                    }
+                  />
+                )}
+                {q.type === "boolean" && (
+                  <select
+                    id={`q_${q.id}`}
+                    className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                    value={answers[q.id] ?? ""}
+                    onChange={(e) =>
+                      setAnswers((a) => ({ ...a, [q.id]: e.target.value }))
+                    }
+                  >
+                    <option value="">—</option>
+                    <option value="Oui">Oui</option>
+                    <option value="Non">Non</option>
+                  </select>
+                )}
+                {q.type === "choice" && (
+                  <select
+                    id={`q_${q.id}`}
+                    className="h-10 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                    value={answers[q.id] ?? ""}
+                    onChange={(e) =>
+                      setAnswers((a) => ({ ...a, [q.id]: e.target.value }))
+                    }
+                  >
+                    <option value="">—</option>
+                    {(q.options ?? []).map((o) => (
+                      <option key={o} value={o}>
+                        {o}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            ))}
+
             {credits !== null && credits > 0 && (
               <div className="flex items-center gap-2 rounded-xl bg-success-muted px-3 py-2 text-sm text-success">
                 <Ticket className="size-4" />
@@ -231,7 +307,7 @@ export function BookingFlow({ professionalId, eventType, days }: Props) {
                 {pending && <Loader2 className="size-4 animate-spin" />}
                 {free
                   ? "Confirmer la réservation"
-                  : `Payer ${formatMoney(eventType.priceCents)}`}
+                  : `Payer ${formatMoney(eventType.priceCents)}${isGroup ? " / pers." : ""}`}
               </Button>
             </div>
 

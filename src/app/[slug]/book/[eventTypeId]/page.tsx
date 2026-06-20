@@ -9,7 +9,7 @@ import { groupSlotsByDay } from "@/lib/availability";
 import { formatDateLong, formatTime } from "@/lib/datetime";
 import { formatMoney } from "@/lib/utils";
 import { loadBookableSlots } from "@/lib/slots";
-import { getPublicEventType } from "@/server/queries";
+import { getPublicEventType, getEventTypeQuestions } from "@/server/queries";
 
 type Params = { params: Promise<{ slug: string; eventTypeId: string }> };
 
@@ -26,11 +26,10 @@ export default async function BookEventPage({ params }: Params) {
   if (!data) notFound();
 
   const { eventType, professional } = data;
-  const slots = await loadBookableSlots(
-    professional.id,
-    professional.timezone,
-    eventType,
-  );
+  const [slots, questions] = await Promise.all([
+    loadBookableSlots(professional.id, professional.timezone, eventType),
+    getEventTypeQuestions(eventType.id),
+  ]);
 
   const days = groupSlotsByDay(slots, professional.timezone).map((g) => {
     const label = formatDateLong(g.slots[0].start, professional.timezone);
@@ -40,6 +39,8 @@ export default async function BookEventPage({ params }: Params) {
       slots: g.slots.map((s) => ({
         iso: s.start.toISOString(),
         time: formatTime(s.start, professional.timezone),
+        seatsRemaining: s.seatsRemaining,
+        capacity: s.capacity,
       })),
     };
   });
@@ -73,7 +74,9 @@ export default async function BookEventPage({ params }: Params) {
           title: eventType.title,
           durationMinutes: eventType.durationMinutes,
           priceCents: eventType.priceCents,
+          capacity: eventType.capacity,
         }}
+        questions={questions}
         days={days}
       />
     </PublicShell>
