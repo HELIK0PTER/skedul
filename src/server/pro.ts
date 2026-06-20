@@ -419,10 +419,11 @@ export async function saveQuestion(input: {
     .limit(1);
   if (owns.length === 0) return;
 
-  const options =
+  const cleaned =
     input.type === "choice"
       ? (input.options ?? []).map((o) => o.trim()).filter(Boolean)
-      : null;
+      : [];
+  const options = cleaned.length > 0 ? cleaned : null;
 
   if (input.id) {
     await db
@@ -434,7 +435,12 @@ export async function saveQuestion(input: {
         required: input.required ?? false,
         position: input.position ?? 0,
       })
-      .where(eq(question.id, input.id));
+      .where(
+        and(
+          eq(question.id, input.id),
+          eq(question.eventTypeId, input.eventTypeId),
+        ),
+      );
   } else {
     await db.insert(question).values({
       eventTypeId: input.eventTypeId,
