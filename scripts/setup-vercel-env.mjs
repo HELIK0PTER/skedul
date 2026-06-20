@@ -43,7 +43,9 @@ function pushVar(key, value, env) {
     stdio: "ignore",
     shell: true,
   });
-  const res = spawnSync("vercel", ["env", "add", key, env], {
+  // `--yes` is required for the "preview" target to default to all preview
+  // branches non-interactively (otherwise the CLI asks for a git branch).
+  const res = spawnSync("vercel", ["env", "add", key, env, "--yes"], {
     input: value + "\n",
     stdio: ["pipe", "inherit", "inherit"],
     shell: true,

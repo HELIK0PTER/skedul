@@ -14,7 +14,7 @@
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx scripts/seed.ts",
     "test": "tsx --test",
-    "deploy:preview": "vercel deploy",
+    "deploy:preview": "node scripts/deploy-preview.mjs",
     "deploy:prod": "vercel deploy --prod"
   },
   "dependencies": {
