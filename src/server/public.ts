@@ -13,6 +13,7 @@ import {
 } from "@/lib/db/schema";
 import { createCheckoutUrl } from "@/lib/stripe";
 import { fulfillBooking } from "@/lib/payments";
+import { claimSeat } from "@/lib/sessions";
 import { isSlotAvailable } from "@/lib/slots";
 import { env } from "@/lib/env";
 
@@ -187,12 +188,22 @@ export async function bookWithPayment(input: {
   const end = new Date(start.getTime() + row.eventType.durationMinutes * 60_000);
   const free = row.eventType.priceCents <= 0;
 
+  const seat = await claimSeat({
+    professionalId: row.professional.id,
+    eventTypeId: row.eventType.id,
+    startAt: start,
+    endAt: end,
+    capacity: row.eventType.capacity,
+  });
+  if (!seat.ok) return { ok: false, error: "Cette séance est complète." };
+
   const [created] = await db
     .insert(booking)
     .values({
       professionalId: row.professional.id,
       eventTypeId: row.eventType.id,
       customerId: cust.id,
+      sessionId: seat.sessionId,
       startAt: start,
       endAt: end,
       status: free ? "confirmed" : "pending",
