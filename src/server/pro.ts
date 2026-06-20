@@ -1,12 +1,13 @@
 "use server";
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { db } from "@/lib/db";
 import {
   availabilityRule,
+  classSession,
   eventType,
   pack,
   professional,
@@ -466,4 +467,29 @@ export async function deleteQuestion(id: string) {
   if (owned.length === 0) return;
   await db.delete(question).where(eq(question.id, id));
   revalidatePath("/dashboard/event-types");
+}
+
+/* ─────────────────────────── Séances ───────────────────────────── */
+
+export async function updateSessionCapacity(input: {
+  sessionId: string;
+  capacity: number;
+}) {
+  const pro = await requirePro();
+  const next = Math.max(1, Math.floor(input.capacity));
+  // booked = capacity - seatsRemaining ; new seatsRemaining = max(0, next - booked).
+  // Guarded by professionalId so a pro can only touch their own sessions.
+  await db
+    .update(classSession)
+    .set({
+      capacity: next,
+      seatsRemaining: sql`GREATEST(0, ${next} - (${classSession.capacity} - ${classSession.seatsRemaining}))`,
+    })
+    .where(
+      and(
+        eq(classSession.id, input.sessionId),
+        eq(classSession.professionalId, pro.id),
+      ),
+    );
+  revalidatePath("/dashboard/bookings");
 }
