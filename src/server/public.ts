@@ -13,7 +13,7 @@ import {
 } from "@/lib/db/schema";
 import { createCheckoutUrl } from "@/lib/stripe";
 import { fulfillBooking } from "@/lib/payments";
-import { claimSeat } from "@/lib/sessions";
+import { claimSeat, releaseSeat } from "@/lib/sessions";
 import { isSlotAvailable } from "@/lib/slots";
 import { env } from "@/lib/env";
 
@@ -286,7 +286,20 @@ export async function bookWithCredit(input: {
   if (!available)
     return { ok: false, error: "Ce créneau n'est plus disponible." };
 
-  // atomic credit decrement
+  const start = new Date(input.startISO);
+  const end = new Date(start.getTime() + row.eventType.durationMinutes * 60_000);
+
+  // 1) claim a seat atomically (authority against oversell)
+  const seat = await claimSeat({
+    professionalId: row.professional.id,
+    eventTypeId: row.eventType.id,
+    startAt: start,
+    endAt: end,
+    capacity: row.eventType.capacity,
+  });
+  if (!seat.ok) return { ok: false, error: "Cette séance est complète." };
+
+  // 2) atomic credit decrement; if it fails, give the seat back
   const decremented = await db
     .update(packPurchase)
     .set({ creditsRemaining: sql`${packPurchase.creditsRemaining} - 1` })
@@ -295,18 +308,19 @@ export async function bookWithCredit(input: {
     )
     .returning({ id: packPurchase.id });
 
-  if (decremented.length === 0)
+  if (decremented.length === 0) {
+    await releaseSeat(seat.sessionId);
     return { ok: false, error: "Crédit indisponible, réessayez." };
+  }
 
-  const start = new Date(input.startISO);
-  const end = new Date(start.getTime() + row.eventType.durationMinutes * 60_000);
-
+  // 3) create the booking
   const [created] = await db
     .insert(booking)
     .values({
       professionalId: row.professional.id,
       eventTypeId: row.eventType.id,
       customerId: cust.id,
+      sessionId: seat.sessionId,
       startAt: start,
       endAt: end,
       status: "confirmed",
