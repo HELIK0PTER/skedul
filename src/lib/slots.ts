@@ -65,6 +65,9 @@ export async function loadBookableSlots(
   return computeSlots({
     rules,
     busy: [...busyBookings, ...busyTimeOff],
+    sessions: [],
+    eventTypeId: evt.id,
+    defaultCapacity: 1,
     durationMinutes: evt.durationMinutes,
     bufferBeforeMinutes: evt.bufferBeforeMinutes,
     bufferAfterMinutes: evt.bufferAfterMinutes,
