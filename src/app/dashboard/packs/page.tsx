@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { ArrowLeft } from "lucide-react";
 
 import { PageHeader } from "@/components/dashboard/page-header";
 import {
@@ -31,6 +33,13 @@ export default async function PacksPage() {
 
   return (
     <>
+      <Link
+        href="/dashboard/event-types"
+        className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+      >
+        <ArrowLeft className="size-4" />
+        Prestations
+      </Link>
       <PageHeader
         title="Packs prépayés"
         description="Vendez des lots de crédits que vos clients utilisent pour réserver."
