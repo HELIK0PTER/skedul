@@ -717,6 +717,7 @@ export async function createManualBooking(input: {
 
   await insertAnswers(created.id, answers.rows);
   await fulfillBooking(created.id);
+  await syncSession(seat.sessionId);
 
   revalidatePath("/dashboard/planning");
   revalidatePath("/dashboard/bookings");
@@ -775,5 +776,9 @@ export async function disconnectGoogleCalendar(): Promise<{ ok: boolean }> {
     .update(professional)
     .set({ googleCalendarId: null })
     .where(eq(professional.id, pro.id));
+  await db
+    .update(classSession)
+    .set({ googleEventId: null })
+    .where(eq(classSession.professionalId, pro.id));
   return { ok: true };
 }

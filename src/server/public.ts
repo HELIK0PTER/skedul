@@ -13,6 +13,7 @@ import {
 } from "@/lib/db/schema";
 import { createCheckoutUrl } from "@/lib/stripe";
 import { fulfillBooking } from "@/lib/payments";
+import { syncSession } from "@/lib/calendar-sync";
 import { claimSeat, releaseSeat } from "@/lib/sessions";
 import { isSlotAvailable } from "@/lib/slots";
 import {
@@ -185,6 +186,7 @@ export async function bookWithPayment(input: {
 
   if (free) {
     await fulfillBooking(created.id);
+    await syncSession(seat.sessionId);
     return {
       ok: true,
       bookingId: created.id,
@@ -307,6 +309,7 @@ export async function bookWithCredit(input: {
 
   await insertAnswers(created.id, answers.rows);
   await fulfillBooking(created.id);
+  await syncSession(seat.sessionId);
 
   return {
     ok: true,

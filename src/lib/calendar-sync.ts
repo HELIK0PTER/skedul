@@ -45,7 +45,7 @@ async function loadSession(sid: string): Promise<LoadedSession | null> {
   return {
     ...row,
     attendees: attendees
-      .filter((a) => a.status === "pending" || a.status === "confirmed")
+      .filter((a) => a.status === "confirmed")
       .map((a) => ({ name: a.name, email: a.email })),
   };
 }

@@ -100,15 +100,19 @@ calls the client, and persists `google_event_id`. All entry points are
 - `removeSession({ googleEventId, professionalId })` — delete the event.
 - Guard: if `!env.GOOGLE_CALENDAR_ENABLED` or the pro has no
   `google_calendar_id`, return immediately (no-op).
+- **Active attendees = booking status `confirmed` only.** Pending bookings are
+  not included in the event's attendee list/count.
 
 **Call sites (existing code):**
 
-- `src/server/public.ts` — after a public booking creates/joins a session →
-  `syncSession`; on public cancellation → `syncSession` (seats changed) or
-  `removeSession` (session emptied).
-- `src/server/pro.ts` — manual booking, manual enrolment, session create,
-  reschedule, capacity change → `syncSession`; cancellation/removal →
-  `syncSession`/`removeSession`.
+- `src/server/public.ts` — free bookings (inserted `confirmed`): `syncSession`
+  called explicitly after `fulfillBooking`; credit bookings (inserted
+  `confirmed`): same. Paid bookings (inserted `pending`): synced later when the
+  Stripe/mock webhook calls `fulfillBooking` and transitions to `confirmed`.
+- `src/server/pro.ts` — manual booking (inserted `confirmed`): `syncSession`
+  called explicitly after `fulfillBooking`; cancel booking, move attendee,
+  cancel session, capacity change → `syncSession`; disconnect → also clears
+  `class_session.google_event_id` so a future reconnect starts fresh.
 
 `claimSeat`/`releaseSeat` in `src/lib/sessions.ts` stay pure (no Google calls);
 the server actions that call them trigger the sync afterwards, so the seat
@@ -149,13 +153,20 @@ A server query exposes connection state (`google_calendar_id` + linked Google
 ## Data flow (happy path)
 
 ```
-client books slot
-  → public.ts: claimSeat() creates/joins class_session, inserts booking
-  → public.ts: syncSession(sessionId)        [best-effort]
+client books slot (free or credit — inserted confirmed)
+  → public.ts: claimSeat() creates/joins class_session, inserts booking (status=confirmed)
+  → public.ts: fulfillBooking() [no-op: already confirmed]
+  → public.ts: syncSession(sessionId)        [best-effort, explicit call]
+       → loadSession: attendees filtered to status=confirmed only
        → getAccessToken(google) [auto-refresh]
        → upsertSessionEvent(...) → Google event id
        → UPDATE class_session.google_event_id
   → booking confirmed regardless of Google outcome
+
+client books slot (paid — inserted pending)
+  → public.ts: claimSeat() creates/joins class_session, inserts booking (status=pending)
+  → Stripe/mock webhook: fulfillBooking() transitions pending→confirmed
+  → fulfillBooking: syncSession(sessionId)   [best-effort, inside fulfillBooking]
 ```
 
 ## Error handling
