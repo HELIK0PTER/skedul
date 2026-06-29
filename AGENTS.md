@@ -37,4 +37,4 @@ services/availability/packs in a back-office; their clients book slots
 - 3 envs map to Neon branches: dev→`development`, preview→`preview`, prod→`main`.
 - **Deploys are manual, CLI-only** (`vercel.ts` sets `git.deploymentEnabled: false`):
   `pnpm deploy:preview` / `pnpm deploy:prod`. Never re-enable auto Git deploys.
-- Demo: `pro@skedul.app` / `password123`, public page `/studio-camille`.
+- Demo: `pro@skedul.app` / `password123`, public page `/altinha-paris`.

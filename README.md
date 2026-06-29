@@ -45,9 +45,9 @@ pnpm dev                     # http://localhost:3000
 | Rôle | Identifiants |
 |---|---|
 | Professionnel | `pro@skedul.app` / `password123` |
-| Client | `sophie@example.com` / `password123` |
+| Client | `beatriz@example.com` / `password123` |
 
-- Page publique de démo : **`/studio-camille`**
+- Page publique de démo : **`/altinha-paris`**
 - Back-office : **`/dashboard`**
 
 ## Environnements

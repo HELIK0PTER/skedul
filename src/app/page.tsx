@@ -16,6 +16,7 @@ import { HeroSpotlight } from "@/components/hero-spotlight";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { env } from "@/lib/env";
 
 export default function Home() {
   return (
@@ -59,19 +60,21 @@ export default function Home() {
                 </Link>
               </Button>
               <Button asChild size="lg" variant="secondary">
-                <Link href="/studio-camille">Voir une page de démo</Link>
+                <Link href="/altinha-paris">Voir une page de démo</Link>
               </Button>
             </div>
-            <p className="mt-4 text-sm text-muted-foreground">
-              Démo :{" "}
-              <code className="rounded bg-muted px-1.5 py-0.5">
-                pro@skedul.app
-              </code>{" "}
-              /{" "}
-              <code className="rounded bg-muted px-1.5 py-0.5">
-                password123
-              </code>
-            </p>
+            {env.APP_ENV !== "production" && (
+              <p className="mt-4 text-sm text-muted-foreground">
+                Démo :{" "}
+                <code className="rounded bg-muted px-1.5 py-0.5">
+                  pro@skedul.app
+                </code>{" "}
+                /{" "}
+                <code className="rounded bg-muted px-1.5 py-0.5">
+                  password123
+                </code>
+              </p>
+            )}
           </div>
         </section>
 

@@ -1,9 +1,12 @@
 "use client";
 
-import { Plus, X } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Copy, Plus, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Popover } from "@/components/ui/popover";
+import { mergeRangeIntoDays, replaceDaysWith } from "@/lib/availability-copy";
 import { cn } from "@/lib/utils";
 
 export type Range = { start: string; end: string };
@@ -57,6 +60,101 @@ export function rulesFromByDay(byDay: ByDay): Rule[] {
   return rules;
 }
 
+/**
+ * Day picker shown when duplicating/copying ranges. Owns only the day selection;
+ * the parent decides what "apply" does with the chosen days.
+ */
+function CopyToDaysPopover({
+  sourceDay,
+  open,
+  onOpenChange,
+  onApply,
+  trigger,
+  align = "start",
+}: {
+  sourceDay: number;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onApply: (targetDays: number[]) => void;
+  trigger: ReactNode;
+  align?: "start" | "end";
+}) {
+  const days = DAY_ORDER.filter((d) => d !== sourceDay);
+  const [selected, setSelected] = useState<number[]>([]);
+
+  useEffect(() => {
+    if (open) setSelected([]);
+  }, [open]);
+
+  const allSelected = selected.length === days.length;
+
+  function toggleDay(day: number) {
+    setSelected((prev) =>
+      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day],
+    );
+  }
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={onOpenChange}
+      trigger={trigger}
+      align={align}
+    >
+      <p className="px-1 pb-1 text-xs font-medium text-muted-foreground">
+        Copier vers
+      </p>
+      <label className="flex cursor-pointer items-center gap-2 rounded-lg px-1 py-1 text-sm font-medium hover:bg-muted">
+        <input
+          type="checkbox"
+          checked={allSelected}
+          onChange={() => setSelected(allSelected ? [] : [...days])}
+          className="size-4 accent-primary"
+        />
+        Tous les jours
+      </label>
+      <div className="my-1 h-px bg-border" />
+      {days.map((day) => (
+        <label
+          key={day}
+          className="flex cursor-pointer items-center gap-2 rounded-lg px-1 py-1 text-sm hover:bg-muted"
+        >
+          <input
+            type="checkbox"
+            checked={selected.includes(day)}
+            onChange={() => toggleDay(day)}
+            className="size-4 accent-primary"
+          />
+          {DAY_LABELS[day]}
+        </label>
+      ))}
+      <div className="flex justify-end gap-2 pt-2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => onOpenChange(false)}
+        >
+          Annuler
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          disabled={selected.length === 0}
+          onClick={() => {
+            onApply(selected);
+            onOpenChange(false);
+          }}
+        >
+          Appliquer
+        </Button>
+      </div>
+    </Popover>
+  );
+}
+
+type PopoverKey = { day: number; slot: number | "all" };
+
 /** Presentational weekly schedule grid. Owns no persistence. */
 export function WeeklyHoursEditor({
   value,
@@ -65,6 +163,15 @@ export function WeeklyHoursEditor({
   value: ByDay;
   onChange: (next: ByDay) => void;
 }) {
+  const [openPopover, setOpenPopover] = useState<PopoverKey | null>(null);
+
+  const isOpen = (day: number, slot: number | "all") =>
+    openPopover?.day === day && openPopover?.slot === slot;
+  const setOpen = (day: number, slot: number | "all", open: boolean) =>
+    setOpenPopover(open ? { day, slot } : null);
+  const toggleOpen = (day: number, slot: number | "all") =>
+    setOpen(day, slot, !isOpen(day, slot));
+
   function update(day: number, ranges: Range[]) {
     onChange({ ...value, [day]: ranges });
   }
@@ -129,10 +236,30 @@ export function WeeklyHoursEditor({
                       }}
                       className="h-9 rounded-lg border border-input bg-card px-2 text-sm"
                     />
+                    <CopyToDaysPopover
+                      sourceDay={day}
+                      open={isOpen(day, i)}
+                      onOpenChange={(open) => setOpen(day, i, open)}
+                      onApply={(targetDays) =>
+                        onChange(mergeRangeIntoDays(value, r, targetDays))
+                      }
+                      trigger={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          title="Dupliquer ce créneau vers d'autres jours"
+                          onClick={() => toggleOpen(day, i)}
+                        >
+                          <Copy className="size-4" />
+                        </Button>
+                      }
+                    />
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon"
+                      title="Supprimer ce créneau"
                       onClick={() =>
                         update(
                           day,
@@ -145,17 +272,43 @@ export function WeeklyHoursEditor({
                   </div>
                 ))}
                 {enabled && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() =>
-                      update(day, [...ranges, { start: "09:00", end: "17:00" }])
-                    }
-                  >
-                    <Plus className="size-4" />
-                    Ajouter une plage
-                  </Button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        update(day, [
+                          ...ranges,
+                          { start: "09:00", end: "17:00" },
+                        ])
+                      }
+                    >
+                      <Plus className="size-4" />
+                      Ajouter une plage
+                    </Button>
+                    <CopyToDaysPopover
+                      sourceDay={day}
+                      open={isOpen(day, "all")}
+                      onOpenChange={(open) => setOpen(day, "all", open)}
+                      onApply={(targetDays) =>
+                        onChange(replaceDaysWith(value, ranges, targetDays))
+                      }
+                      align="end"
+                      trigger={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          title="Copier tous les créneaux de ce jour vers d'autres jours"
+                          onClick={() => toggleOpen(day, "all")}
+                        >
+                          <Copy className="size-4" />
+                          Tout copier
+                        </Button>
+                      }
+                    />
+                  </div>
                 )}
               </div>
             </CardContent>

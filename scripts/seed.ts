@@ -60,7 +60,7 @@ async function main() {
 
   /* ── Professional account ─────────────────────────────────────── */
   const proUserId = await createUser(
-    "Camille Laurent",
+    "Altinha Paris",
     "pro@skedul.app",
     "password123",
   );
@@ -70,174 +70,167 @@ async function main() {
     .insert(professional)
     .values({
       userId: proUserId,
-      slug: "studio-camille",
-      businessName: "Studio Camille · Coaching & Yoga",
-      headline: "Coaching de vie & yoga privé à Paris",
-      bio: "J'accompagne depuis 8 ans des indépendants et des équipes vers plus de clarté et d'énergie. Réservez une séance à l'unité ou économisez avec un pack.",
-      brandColor: "#0d9488",
-      themePreset: "teal",
+      slug: "altinha-paris",
+      businessName: "Altinha Paris",
+      headline: "Aulas de altinha em Paris, com a energia do Rio ☀️",
+      bio: "A gente começou a dar aulas pra compartilhar a altinha e fazer esse esporte crescer aqui em Paris. Nascemos e crescemos no Rio, então trazemos essa energia pra cá. As aulas duram 1h, em grupos pequenos organizados por nível, pra todo mundo evoluir no seu ritmo. De segunda a sábado, entre Nation e Tuileries. 🤍",
+      brandColor: "#d97706",
+      themePreset: "amber",
       headerLayout: "vitrine",
       avatarKind: "generated",
-      avatarStyle: "micah",
-      avatarSeed: "studio-camille",
+      avatarStyle: "fun-emoji",
+      avatarSeed: "altinha-paris",
       timezone: TZ,
       currency: "eur",
     })
     .returning();
 
-  /* ── Event types ──────────────────────────────────────────────── */
-  const [coaching] = await db
+  /* ── Event types (aulas, toutes 1h) ───────────────────────────── */
+  const [experimental] = await db
     .insert(eventType)
     .values({
       professionalId: pro.id,
-      title: "Séance de coaching",
-      slug: "seance-de-coaching",
+      title: "Aula experimental",
+      slug: "aula-experimental",
       description:
-        "Un face-à-face d'une heure pour avancer sur un objectif précis.",
+        "Sua primeira aula pra experimentar a altinha e sentir a vibe, sem compromisso.",
       durationMinutes: 60,
-      priceCents: 8000,
-      color: "#6d5cf6",
-      bufferAfterMinutes: 15,
+      priceCents: 1500,
+      color: "#f59e0b",
     })
     .returning();
 
-  const [yoga] = await db
+  const [individual] = await db
     .insert(eventType)
     .values({
       professionalId: pro.id,
-      title: "Cours de yoga privé",
-      slug: "cours-de-yoga-prive",
-      description: "Séance de yoga sur-mesure, à votre rythme.",
-      durationMinutes: 45,
-      priceCents: 5000,
+      title: "Aula individual",
+      slug: "aula-individual",
+      description:
+        "Aula só pra você, com foco total na sua evolução e no seu ritmo.",
+      durationMinutes: 60,
+      priceCents: 3000,
       color: "#0ea5e9",
     })
     .returning();
 
-  const [discovery] = await db
+  const [group] = await db
     .insert(eventType)
     .values({
       professionalId: pro.id,
-      title: "Appel découverte",
-      slug: "appel-decouverte",
-      description: "15 minutes offertes pour faire connaissance.",
-      durationMinutes: 15,
-      priceCents: 0,
+      title: "Aula em grupo",
+      slug: "aula-em-grupo",
+      description:
+        "Grupo pequeno organizado por nível. A energia da altinha com a galera. Preço por pessoa.",
+      durationMinutes: 60,
+      priceCents: 2500,
       color: "#16a34a",
     })
     .returning();
 
-  /* ── Availability: Mon–Fri 9–12 & 14–18, Sat 10–13 ───────────── */
+  /* ── Availability: seg–sáb, 10h/11h/12h & 17h30/18h30/19h30 ───── */
+  // Créneaux de 1h → step = durée : 600–780 = 10h,11h,12h ; 1050–1230 = 17h30,18h30,19h30.
   const rules: {
     professionalId: string;
     dayOfWeek: number;
     startMinute: number;
     endMinute: number;
   }[] = [];
-  for (const day of [1, 2, 3, 4, 5]) {
-    rules.push({ professionalId: pro.id, dayOfWeek: day, startMinute: 540, endMinute: 720 });
-    rules.push({ professionalId: pro.id, dayOfWeek: day, startMinute: 840, endMinute: 1080 });
+  for (const day of [1, 2, 3, 4, 5, 6]) {
+    rules.push({ professionalId: pro.id, dayOfWeek: day, startMinute: 600, endMinute: 780 });
+    rules.push({ professionalId: pro.id, dayOfWeek: day, startMinute: 1050, endMinute: 1230 });
   }
-  rules.push({ professionalId: pro.id, dayOfWeek: 6, startMinute: 600, endMinute: 780 });
   await db.insert(availabilityRule).values(rules);
 
   /* ── Packs ────────────────────────────────────────────────────── */
-  const [packCoaching] = await db
+  const [pack4] = await db
     .insert(pack)
     .values({
       professionalId: pro.id,
-      name: "Pack 4 séances de coaching",
-      description: "4 heures de coaching à utiliser quand vous voulez. -12%.",
+      name: "Pack 4 aulas",
+      description:
+        "4 aulas em grupo pré-pagas, pra usar quando quiser. Economize 15€ vs. a aula avulsa. 🌞",
       credits: 4,
-      priceCents: 28000,
-      eventTypeId: coaching.id,
+      priceCents: 8500,
+      eventTypeId: group.id,
     })
     .returning();
-
-  const [packYoga] = await db
-    .insert(pack)
-    .values({
-      professionalId: pro.id,
-      name: "Pack 10 cours de yoga",
-      description: "10 cours privés prépayés. -16%.",
-      credits: 10,
-      priceCents: 42000,
-      eventTypeId: yoga.id,
-    })
-    .returning();
-
-  await db.insert(pack).values({
-    professionalId: pro.id,
-    name: "Carte 3 séances (toutes prestations)",
-    description: "3 crédits utilisables sur n'importe quelle prestation.",
-    credits: 3,
-    priceCents: 18000,
-    eventTypeId: null,
-  });
 
   /* ── Clients & customers ──────────────────────────────────────── */
-  const sophieUserId = await createUser(
-    "Sophie Martin",
-    "sophie@example.com",
+  const beatrizUserId = await createUser(
+    "Beatriz Almeida",
+    "beatriz@example.com",
     "password123",
   );
 
-  const [sophie] = await db
+  const [beatriz] = await db
     .insert(customer)
     .values({
       professionalId: pro.id,
-      userId: sophieUserId,
-      name: "Sophie Martin",
-      email: "sophie@example.com",
-      phone: "+33 6 12 34 56 78",
+      userId: beatrizUserId,
+      name: "Beatriz Almeida",
+      email: "beatriz@example.com",
+      phone: "+33 6 11 22 33 44",
     })
     .returning();
 
-  const [lucas] = await db
+  const [rafael] = await db
     .insert(customer)
     .values({
       professionalId: pro.id,
-      name: "Lucas Bernard",
-      email: "lucas@example.com",
+      name: "Rafael Souza",
+      email: "rafael@example.com",
     })
     .returning();
 
-  const [emma] = await db
+  const [thomas] = await db
     .insert(customer)
     .values({
       professionalId: pro.id,
-      name: "Emma Dubois",
-      email: "emma@example.com",
+      name: "Thomas Leroy",
+      email: "thomas@example.com",
+    })
+    .returning();
+
+  const [marina] = await db
+    .insert(customer)
+    .values({
+      professionalId: pro.id,
+      name: "Marina Costa",
+      email: "marina@example.com",
     })
     .returning();
 
   /* ── Pack purchases (paid, with remaining credits) ────────────── */
-  const [sophiePurchase] = await db
+  const [beatrizPurchase] = await db
     .insert(packPurchase)
     .values({
-      packId: packCoaching.id,
+      packId: pack4.id,
       professionalId: pro.id,
-      customerId: sophie.id,
+      customerId: beatriz.id,
       creditsTotal: 4,
-      creditsRemaining: 3, // 1 already used below
-      amountPaidCents: 28000,
+      creditsRemaining: 2, // 2 used below (1 past + 1 upcoming)
+      amountPaidCents: 8500,
       currency: "eur",
       status: "paid",
-      stripeSessionId: "cs_test_seed_sophie",
+      stripeSessionId: "cs_test_seed_beatriz",
     })
     .returning();
 
-  await db.insert(packPurchase).values({
-    packId: packYoga.id,
-    professionalId: pro.id,
-    customerId: lucas.id,
-    creditsTotal: 10,
-    creditsRemaining: 8, // 2 used below
-    amountPaidCents: 42000,
-    currency: "eur",
-    status: "paid",
-    stripeSessionId: "cs_test_seed_lucas",
-  });
+  const [rafaelPurchase] = await db
+    .insert(packPurchase)
+    .values({
+      packId: pack4.id,
+      professionalId: pro.id,
+      customerId: rafael.id,
+      creditsTotal: 4,
+      creditsRemaining: 3, // 1 used below (upcoming)
+      amountPaidCents: 8500,
+      currency: "eur",
+      status: "paid",
+      stripeSessionId: "cs_test_seed_rafael",
+    })
+    .returning();
 
   /* ── Bookings (past + upcoming) ───────────────────────────────── */
   const at = (
@@ -252,80 +245,81 @@ async function main() {
     return { start, end };
   };
 
-  // Sophie — 1 past completed coaching (credit), 1 upcoming confirmed (credit)
-  const s1 = at(2026, 6, 12, 600, 60); // Fri 12 June 10:00 (past)
-  const s2 = at(2026, 6, 22, 600, 60); // Mon 22 June 10:00 (upcoming)
-  // Lucas — 2 yoga sessions (credit): 1 past, 1 upcoming
-  const l1 = at(2026, 6, 13, 600, 45); // Sat 13 June 10:00 (past)
-  const l2 = at(2026, 6, 24, 840, 45); // Wed 24 June 14:00 (upcoming)
-  // Emma — direct-paid coaching upcoming
-  const e1 = at(2026, 6, 26, 570, 60); // Fri 26 June 09:30 (upcoming)
+  // Beatriz — pack credits: 1 past completed group + 1 upcoming confirmed group
+  const b1 = at(2026, 6, 17, 1110, 60); // Wed 17 June 18:30 (past)
+  const b2 = at(2026, 6, 22, 1110, 60); // Mon 22 June 18:30 (upcoming)
+  // Rafael — pack credit: 1 upcoming group
+  const r1 = at(2026, 6, 23, 1110, 60); // Tue 23 June 18:30 (upcoming)
+  // Thomas — direct-paid trial upcoming
+  const t1 = at(2026, 6, 24, 660, 60); // Wed 24 June 11:00 (upcoming)
+  // Marina — direct-paid individual upcoming
+  const m1 = at(2026, 6, 25, 1170, 60); // Thu 25 June 19:30 (upcoming)
 
   await db.insert(booking).values([
     {
       professionalId: pro.id,
-      eventTypeId: coaching.id,
-      customerId: sophie.id,
-      startAt: s1.start,
-      endAt: s1.end,
+      eventTypeId: group.id,
+      customerId: beatriz.id,
+      startAt: b1.start,
+      endAt: b1.end,
       status: "completed",
       paymentType: "credit",
       amountPaidCents: 0,
-      packPurchaseId: sophiePurchase.id,
+      packPurchaseId: beatrizPurchase.id,
     },
     {
       professionalId: pro.id,
-      eventTypeId: coaching.id,
-      customerId: sophie.id,
-      startAt: s2.start,
-      endAt: s2.end,
+      eventTypeId: group.id,
+      customerId: beatriz.id,
+      startAt: b2.start,
+      endAt: b2.end,
       status: "confirmed",
       paymentType: "credit",
       amountPaidCents: 0,
-      packPurchaseId: sophiePurchase.id,
-      customerNotes: "On reprend là où on s'était arrêtées 🙂",
+      packPurchaseId: beatrizPurchase.id,
+      customerNotes: "Bora! Tô amando as aulas 🙌",
     },
     {
       professionalId: pro.id,
-      eventTypeId: yoga.id,
-      customerId: lucas.id,
-      startAt: l1.start,
-      endAt: l1.end,
-      status: "completed",
-      paymentType: "credit",
-      amountPaidCents: 0,
-    },
-    {
-      professionalId: pro.id,
-      eventTypeId: yoga.id,
-      customerId: lucas.id,
-      startAt: l2.start,
-      endAt: l2.end,
+      eventTypeId: group.id,
+      customerId: rafael.id,
+      startAt: r1.start,
+      endAt: r1.end,
       status: "confirmed",
       paymentType: "credit",
       amountPaidCents: 0,
+      packPurchaseId: rafaelPurchase.id,
     },
     {
       professionalId: pro.id,
-      eventTypeId: coaching.id,
-      customerId: emma.id,
-      startAt: e1.start,
-      endAt: e1.end,
+      eventTypeId: experimental.id,
+      customerId: thomas.id,
+      startAt: t1.start,
+      endAt: t1.end,
       status: "confirmed",
       paymentType: "direct",
-      amountPaidCents: 8000,
-      stripeSessionId: "cs_test_seed_emma",
+      amountPaidCents: 1500,
+      stripeSessionId: "cs_test_seed_thomas",
+      customerNotes: "Jamais joué, mais super curieux d'essayer !",
+    },
+    {
+      professionalId: pro.id,
+      eventTypeId: individual.id,
+      customerId: marina.id,
+      startAt: m1.start,
+      endAt: m1.end,
+      status: "confirmed",
+      paymentType: "direct",
+      amountPaidCents: 3000,
+      stripeSessionId: "cs_test_seed_marina",
     },
   ]);
 
-  // mark the free discovery type used so it shows up in stats too
-  void discovery;
-
   console.info("\n✅ Seed terminé.\n");
   console.info("Comptes de démonstration :");
-  console.info("  • Pro    → pro@skedul.app     / password123");
-  console.info("  • Client → sophie@example.com / password123");
-  console.info("\nPage publique : /studio-camille");
+  console.info("  • Pro    → pro@skedul.app       / password123");
+  console.info("  • Client → beatriz@example.com  / password123");
+  console.info("\nPage publique : /altinha-paris");
   console.info("Back-office   : /dashboard\n");
 }
 

@@ -9,7 +9,7 @@ export function SiteFooter() {
         <Logo />
         <p>© {new Date().getFullYear()} Skedul. Démo — données fictives.</p>
         <div className="flex gap-6">
-          <Link href="/studio-camille" className="hover:text-foreground">
+          <Link href="/altinha-paris" className="hover:text-foreground">
             Page de démo
           </Link>
           <Link href="/sign-up" className="hover:text-foreground">

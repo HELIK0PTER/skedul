@@ -2,7 +2,9 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { AuthForm } from "@/components/auth/auth-form";
+import { DemoQuickLogin } from "@/components/auth/demo-quick-login";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { env } from "@/lib/env";
 import { getCurrentUser } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Connexion" };
@@ -20,6 +22,7 @@ export default async function SignInPage() {
       </CardHeader>
       <CardContent>
         <AuthForm mode="sign-in" />
+        {env.APP_ENV !== "production" && <DemoQuickLogin />}
       </CardContent>
     </Card>
   );

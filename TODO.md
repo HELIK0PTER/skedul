@@ -55,16 +55,25 @@ Paris, communication PT/FR) et l'état actuel de Skedul (outil de réservation *
 - [ ] **7. Notification au pro des nouvelles résas** — le pro n'est pas notifié aujourd'hui.
   Besoin : alerte e-mail (a minima) à chaque réservation pour organiser les groupes.
 
+- [ ] **8. Espace client (côté réservant)** — aujourd'hui le client réserve/achète sans
+  espace dédié : pas d'écran pour suivre ses résas, voir ses crédits de pack restants ou son
+  historique. Le modèle a déjà les amorces (rôle `client` sur `user`, `customer.userId` qui
+  relie un customer à un compte auth), mais aucune UI.
+  Besoin : un espace client connecté (mes réservations à venir/passées, crédits de pack
+  restants + expiration, achats, annulation, infos perso/questionnaire).
+  Note : un **pro peut aussi être client** s'il réserve chez un autre pro → le même compte
+  doit pouvoir basculer entre son back-office pro et son espace client.
+
 ---
 
 ## 🟡 P2 — Confort / différenciants
 
-- [ ] **8. Niveau comme attribut structurant** — taguer un créneau « groupe intermédiaire », filtrer côté client.
-- [ ] **9. Liste d'attente** — les petits groupes se remplissent vite.
-- [ ] **10. Réservation récurrente / abonnement** — les élèves reviennent chaque semaine.
-- [ ] **11. Expiration des crédits de pack** — aujourd'hui valables à vie.
-- [ ] **12. E-mail d'annulation + UI de remboursement** — statut en base, pas d'envoi ni d'écran.
-- [ ] **13. Vue calendrier du planning (back-office)** — aujourd'hui le pro n'a pas de visualisation
+- [ ] **9. Niveau comme attribut structurant** — taguer un créneau « groupe intermédiaire », filtrer côté client.
+- [ ] **10. Liste d'attente** — les petits groupes se remplissent vite.
+- [ ] **11. Réservation récurrente / abonnement** — les élèves reviennent chaque semaine.
+- [ ] **12. Expiration des crédits de pack** — aujourd'hui valables à vie.
+- [ ] **13. E-mail d'annulation + UI de remboursement** — statut en base, pas d'envoi ni d'écran.
+- [ ] **14. Vue calendrier du planning (back-office)** — aujourd'hui le pro n'a pas de visualisation
   agenda de ses créneaux/réservations. Besoin : vue calendrier (jour/semaine) côté dashboard pour
   voir d'un coup d'œil les cours à venir, le remplissage et qui est inscrit. Confort d'orga — se
   marie avec le #7 (notif de résa) et, une fois le P0 #1 fait, l'affichage du remplissage des groupes.
