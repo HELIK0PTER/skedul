@@ -60,6 +60,23 @@ export function PlanningCalendar(props: {
   const hours = Array.from({ length: endHour - startHour }, (_, i) => startHour + i);
   const colHeight = hours.length * HOUR_PX;
 
+  // Libellé de la semaine affichée, ex. « 22 – 28 juin 2026 ».
+  const fmt = (opts: Intl.DateTimeFormatOptions) =>
+    new Intl.DateTimeFormat("fr-FR", { ...opts, timeZone: tz });
+  const first = days[0];
+  const last = days[6];
+  const sameMonth =
+    fmt({ month: "long", year: "numeric" }).format(first) ===
+    fmt({ month: "long", year: "numeric" }).format(last);
+  const sameYear =
+    fmt({ year: "numeric" }).format(first) === fmt({ year: "numeric" }).format(last);
+  const startLabel = sameMonth
+    ? fmt({ day: "numeric" }).format(first)
+    : sameYear
+      ? fmt({ day: "numeric", month: "long" }).format(first)
+      : fmt({ day: "numeric", month: "long", year: "numeric" }).format(first);
+  const weekLabel = `${startLabel} – ${fmt({ day: "numeric", month: "long", year: "numeric" }).format(last)}`;
+
   const topPx = (iso: string, key: string) =>
     ((new Date(iso).getTime() - localMidnightForKey(key, tz)) / 60_000 -
       startHour * 60) *
@@ -72,21 +89,26 @@ export function PlanningCalendar(props: {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1">
-          <Button asChild variant="ghost" size="sm">
-            <Link href={`/dashboard/planning?week=${props.nav.prevParam}`} aria-label="Semaine précédente">
-              <ChevronLeft className="size-4" />
-            </Link>
-          </Button>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
+            <Button asChild variant="ghost" size="sm">
+              <Link href={`/dashboard/planning?week=${props.nav.prevParam}`} aria-label="Semaine précédente">
+                <ChevronLeft className="size-4" />
+              </Link>
+            </Button>
+            <span className="min-w-[11rem] text-center text-sm font-medium">
+              {weekLabel}
+            </span>
+            <Button asChild variant="ghost" size="sm">
+              <Link href={`/dashboard/planning?week=${props.nav.nextParam}`} aria-label="Semaine suivante">
+                <ChevronRight className="size-4" />
+              </Link>
+            </Button>
+          </div>
           <Button asChild variant="secondary" size="sm">
             <Link href={`/dashboard/planning?week=${props.nav.todayParam}`}>
               Aujourd&apos;hui
-            </Link>
-          </Button>
-          <Button asChild variant="ghost" size="sm">
-            <Link href={`/dashboard/planning?week=${props.nav.nextParam}`} aria-label="Semaine suivante">
-              <ChevronRight className="size-4" />
             </Link>
           </Button>
         </div>
