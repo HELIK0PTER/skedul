@@ -19,6 +19,8 @@ const schema = z.object({
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().default("Skedul <onboarding@resend.dev>"),
   BLOB_READ_WRITE_TOKEN: z.string().optional(),
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
   // Provided automatically by Vercel
   VERCEL_URL: z.string().optional(),
   VERCEL_ENV: z.string().optional(),
@@ -63,6 +65,10 @@ export const env = {
   RESEND_ENABLED: !isPlaceholder(raw.RESEND_API_KEY),
   /** Image uploads use Vercel Blob; disabled (mock) until a token is provided. */
   BLOB_ENABLED: !isPlaceholder(raw.BLOB_READ_WRITE_TOKEN),
+  /** Google Calendar sync is live once an OAuth client is configured. */
+  GOOGLE_CALENDAR_ENABLED:
+    !isPlaceholder(raw.GOOGLE_CLIENT_ID) &&
+    !isPlaceholder(raw.GOOGLE_CLIENT_SECRET),
 };
 
 export type Env = typeof env;
