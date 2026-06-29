@@ -70,10 +70,13 @@ In the `classSession` table definition, after the `seatsRemaining` line:
 Run: `pnpm db:generate`
 Expected: a new file under `drizzle/` adding `google_calendar_id` and `google_event_id` columns.
 
-- [ ] **Step 4: Apply the migration**
+- [ ] **Step 4: Do NOT run `pnpm db:migrate`**
 
-Run: `pnpm db:migrate`
-Expected: migration applies cleanly to `DATABASE_URL` (development branch).
+`pnpm db:migrate` FAILS on this Windows environment (drizzle-kit WebSocket). Do not run it.
+The controller applies the generated `ALTER TABLE` statements to the Neon development branch
+via the Neon MCP after this task. Instead, just open the newly generated `drizzle/*.sql`
+file and confirm it contains exactly two statements adding `google_calendar_id` to
+`professional` and `google_event_id` to `class_session` (both nullable `text`).
 
 - [ ] **Step 5: Verify typecheck**
 
