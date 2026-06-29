@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   CalendarDays,
   CalendarOff,
+  CalendarRange,
   Clock,
   ExternalLink,
   LayoutDashboard,
@@ -24,6 +25,7 @@ const NAV = [
   { href: "/dashboard/unavailability", label: "Indisponibilités", icon: CalendarOff },
   { href: "/dashboard/packs", label: "Packs", icon: Ticket },
   { href: "/dashboard/bookings", label: "Réservations", icon: Users },
+  { href: "/dashboard/planning", label: "Planning", icon: CalendarRange },
   { href: "/dashboard/settings", label: "Réglages", icon: Settings },
 ];
 
