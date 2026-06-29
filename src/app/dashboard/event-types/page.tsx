@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { Ticket } from "lucide-react";
 
 import { PageHeader } from "@/components/dashboard/page-header";
+import { Button } from "@/components/ui/button";
 import {
   EventTypesManager,
   type EventTypeItem,
@@ -61,6 +64,14 @@ export default async function EventTypesPage() {
       <PageHeader
         title="Prestations"
         description="Les types de rendez-vous que vos clients peuvent réserver."
+        action={
+          <Button asChild variant="outline" size="sm">
+            <Link href="/dashboard/packs">
+              <Ticket className="size-4" />
+              Packs prépayés
+            </Link>
+          </Button>
+        }
       />
       <EventTypesManager items={items} questionsByEventType={questionsByEventType} />
     </>

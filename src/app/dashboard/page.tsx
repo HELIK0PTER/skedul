@@ -9,18 +9,36 @@ import {
 
 import { PageHeader } from "@/components/dashboard/page-header";
 import { CopyLinkButton } from "@/components/dashboard/copy-link-button";
+import { WeekPreview } from "@/components/dashboard/week-preview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatMoney } from "@/lib/utils";
-import { formatSlot } from "@/lib/datetime";
+import { dayKeyInTz, formatSlot } from "@/lib/datetime";
 import { env } from "@/lib/env";
 import { getCurrentProfessional } from "@/lib/session";
-import { getProDashboardData } from "@/server/queries";
+import { getProDashboardData, getProPlanningWeek } from "@/server/queries";
+import {
+  gridRange,
+  paramForWeek,
+  weekBounds,
+  weekDays,
+  weekStartFromParam,
+} from "@/lib/planning";
 
 export default async function DashboardPage() {
   const pro = (await getCurrentProfessional())!;
-  const data = await getProDashboardData(pro.id);
+  const tz = pro.timezone;
+  const weekStart = weekStartFromParam(undefined, tz, new Date());
+  const { start, end } = weekBounds(weekStart);
+
+  const [data, { sessions, timeOff }] = await Promise.all([
+    getProDashboardData(pro.id),
+    getProPlanningWeek(pro.id, start, end),
+  ]);
+
+  const days = weekDays(weekStart);
+  const range = gridRange([...sessions, ...timeOff], tz);
   const publicUrl = `${env.APP_URL}/${pro.slug}`;
 
   const stats = [
@@ -84,6 +102,33 @@ export default async function DashboardPage() {
             </CardContent>
           </Card>
         ))}
+      </div>
+
+      {/* Week-at-a-glance calendar */}
+      <div className="mt-6">
+        <WeekPreview
+          tz={tz}
+          days={days.map((d) => d.toISOString())}
+          startHour={range.startHour}
+          endHour={range.endHour}
+          sessions={sessions.map((s) => ({
+            id: s.id,
+            startAt: s.startAt.toISOString(),
+            endAt: s.endAt.toISOString(),
+            capacity: s.capacity,
+            seatsRemaining: s.seatsRemaining,
+            eventTitle: s.eventTitle,
+            eventColor: s.eventColor,
+          }))}
+          timeOff={timeOff.map((t) => ({
+            id: t.id,
+            startAt: t.startAt.toISOString(),
+            endAt: t.endAt.toISOString(),
+            reason: t.reason,
+          }))}
+          weekParam={paramForWeek(weekStart, tz)}
+          todayKey={dayKeyInTz(new Date(), tz)}
+        />
       </div>
 
       {/* Upcoming bookings */}
