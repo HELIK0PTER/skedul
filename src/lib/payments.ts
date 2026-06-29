@@ -1,6 +1,8 @@
 import "server-only";
 import { eq } from "drizzle-orm";
 
+import { syncSession } from "@/lib/calendar-sync";
+
 import { db } from "@/lib/db";
 import {
   booking,
@@ -89,6 +91,8 @@ export async function fulfillBooking(bookingId: string) {
     .update(booking)
     .set({ status: "confirmed" })
     .where(eq(booking.id, bookingId));
+
+  if (row.booking.sessionId) await syncSession(row.booking.sessionId);
 
   await sendEmail({
     to: row.customer.email,
