@@ -20,11 +20,13 @@ export function GoogleCalendarCard(props: {
   const router = useRouter();
   const params = useSearchParams();
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // After the OAuth redirect, finalize (create the Skedul calendar) once.
   useEffect(() => {
     if (params.get("google") === "connected") {
-      finalizeGoogleConnection().then(() => {
+      finalizeGoogleConnection().then((r) => {
+        if (!r.ok) setError(r.error ?? "La connexion à Google Agenda a échoué.");
         router.replace("/dashboard/settings");
       });
     }
@@ -32,18 +34,25 @@ export function GoogleCalendarCard(props: {
 
   const connect = async () => {
     setBusy(true);
-    await authClient.linkSocial({
-      provider: "google",
-      scopes: ["https://www.googleapis.com/auth/calendar"],
-      callbackURL: "/dashboard/settings?google=connected",
-    });
+    try {
+      await authClient.linkSocial({
+        provider: "google",
+        scopes: ["https://www.googleapis.com/auth/calendar"],
+        callbackURL: "/dashboard/settings?google=connected",
+      });
+    } catch {
+      setBusy(false);
+    }
   };
 
   const disconnect = async () => {
     setBusy(true);
-    await disconnectGoogleCalendar();
-    setBusy(false);
-    router.refresh();
+    try {
+      await disconnectGoogleCalendar();
+    } finally {
+      setBusy(false);
+      router.refresh();
+    }
   };
 
   return (
@@ -58,6 +67,7 @@ export function GoogleCalendarCard(props: {
         </p>
       </CardHeader>
       <CardContent>
+        {error && <p className="text-sm text-destructive mb-3">{error}</p>}
         {!props.configured ? (
           <div className="space-y-2">
             <Button disabled>Connecter Google Agenda</Button>
