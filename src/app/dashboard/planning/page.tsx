@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { PlanningCalendar } from "@/components/dashboard/planning-calendar";
 import { getCurrentProfessional } from "@/lib/session";
+import { dayKeyInTz } from "@/lib/datetime";
 import { getProEventTypes, getProPlanningWeek } from "@/server/queries";
 import {
   gridRange,
@@ -24,13 +25,13 @@ export default async function PlanningPage({
   const tz = pro.timezone;
 
   const weekStart = weekStartFromParam(week, tz, new Date());
-  const { start, end } = weekBounds(weekStart, tz);
+  const { start, end } = weekBounds(weekStart);
   const [{ sessions, timeOff }, eventTypes] = await Promise.all([
     getProPlanningWeek(pro.id, start, end),
     getProEventTypes(pro.id),
   ]);
 
-  const days = weekDays(weekStart, tz);
+  const days = weekDays(weekStart);
   const range = gridRange([...sessions, ...timeOff], tz);
 
   return (
@@ -63,6 +64,7 @@ export default async function PlanningPage({
         eventTypes={eventTypes
           .filter((e) => e.isActive)
           .map((e) => ({ id: e.id, title: e.title }))}
+        todayKey={dayKeyInTz(new Date(), tz)}
         nav={{
           prevParam: paramForWeek(
             new Date(weekStart.getTime() - 7 * 86_400_000),

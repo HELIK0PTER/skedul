@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
 import { TZDate } from "@date-fns/tz";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { SessionDetailDialog } from "@/components/dashboard/session-detail-dialog";
 import { ManualBookingButton } from "@/components/dashboard/manual-booking-form";
 import { DAYS_FR, dayKeyInTz, formatTime, minutesToLabel } from "@/lib/datetime";
+import { cn } from "@/lib/utils";
 
 export type PlanningAttendeeVM = {
   bookingId: string;
@@ -52,11 +53,36 @@ export function PlanningCalendar(props: {
   sessions: PlanningSessionVM[];
   timeOff: PlanningTimeOffVM[];
   eventTypes: { id: string; title: string }[];
+  todayKey: string;
   nav: { prevParam: string; nextParam: string; todayParam: string };
 }) {
   const { tz, startHour, endHour } = props;
   const [selected, setSelected] = useState<PlanningSessionVM | null>(null);
   const days = props.days.map((d) => new Date(d));
+
+  // Indicateur « maintenant » : minutes depuis minuit (fuseau du pro), rafraîchi
+  // après montage (évite tout décalage d'hydratation) puis chaque minute.
+  const [nowMinutes, setNowMinutes] = useState<number | null>(null);
+  useEffect(() => {
+    const update = () => {
+      const z = new TZDate(Date.now(), tz);
+      setNowMinutes(z.getHours() * 60 + z.getMinutes());
+    };
+    update();
+    const id = setInterval(update, 60_000);
+    return () => clearInterval(id);
+  }, [tz]);
+
+  const isCurrentWeek = days.some((d) => dayKeyInTz(d, tz) === props.todayKey);
+  const showNow =
+    isCurrentWeek &&
+    nowMinutes !== null &&
+    nowMinutes >= startHour * 60 &&
+    nowMinutes <= endHour * 60;
+  const nowTop =
+    nowMinutes !== null
+      ? (nowMinutes - startHour * 60) * (HOUR_PX / 60)
+      : 0;
   const hours = Array.from({ length: endHour - startHour }, (_, i) => startHour + i);
   const colHeight = hours.length * HOUR_PX;
 
@@ -141,9 +167,21 @@ export function PlanningCalendar(props: {
                 (t) => dayKeyInTz(new Date(t.startAt), tz) === key,
               );
               const dow = new TZDate(day.getTime(), tz).getDay();
+              const isToday = key === props.todayKey;
               return (
-                <div key={key} className="flex-1 border-l border-border">
-                  <div className="flex h-8 items-center justify-center border-b border-border text-center text-xs font-medium">
+                <div
+                  key={key}
+                  className={cn(
+                    "relative flex-1 border-l border-border",
+                    isToday && "z-10 rounded-md ring-2 ring-inset ring-red-500",
+                  )}
+                >
+                  <div
+                    className={cn(
+                      "flex h-8 items-center justify-center border-b border-border text-center text-xs font-medium",
+                      isToday && "font-semibold text-red-600",
+                    )}
+                  >
                     {DAYS_FR[dow].slice(0, 3)}{" "}
                     {new Intl.DateTimeFormat("fr-FR", {
                       day: "numeric",
@@ -151,6 +189,16 @@ export function PlanningCalendar(props: {
                     }).format(day)}
                   </div>
                   <div className="relative" style={{ height: colHeight }}>
+                    {showNow && (
+                      <div
+                        className="pointer-events-none absolute inset-x-0 z-20 h-0.5 bg-red-500"
+                        style={{ top: nowTop }}
+                      >
+                        {isToday && (
+                          <span className="absolute -left-1 -top-[3px] size-2 rounded-full bg-red-500" />
+                        )}
+                      </div>
+                    )}
                     {dayOff.map((t) => (
                       <div
                         key={t.id}
