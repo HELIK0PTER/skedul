@@ -135,6 +135,7 @@ export const professional = pgTable(
     timezone: text("timezone").default("Europe/Paris").notNull(),
     currency: text("currency").default("eur").notNull(),
     stripeAccountId: text("stripe_account_id"),
+    googleCalendarId: text("google_calendar_id"),
     ...timestamps,
   },
   (t) => [index("professional_slug_idx").on(t.slug)],
@@ -181,6 +182,7 @@ export const classSession = pgTable(
     endAt: timestamp("end_at", { withTimezone: true }).notNull(),
     capacity: integer("capacity").notNull(),
     seatsRemaining: integer("seats_remaining").notNull(),
+    googleEventId: text("google_event_id"),
     ...timestamps,
   },
   (t) => [
