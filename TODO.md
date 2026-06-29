@@ -73,10 +73,10 @@ Paris, communication PT/FR) et l'état actuel de Skedul (outil de réservation *
 - [ ] **11. Réservation récurrente / abonnement** — les élèves reviennent chaque semaine.
 - [ ] **12. Expiration des crédits de pack** — aujourd'hui valables à vie.
 - [ ] **13. E-mail d'annulation + UI de remboursement** — statut en base, pas d'envoi ni d'écran.
-- [ ] **14. Vue calendrier du planning (back-office)** — aujourd'hui le pro n'a pas de visualisation
-  agenda de ses créneaux/réservations. Besoin : vue calendrier (jour/semaine) côté dashboard pour
-  voir d'un coup d'œil les cours à venir, le remplissage et qui est inscrit. Confort d'orga — se
-  marie avec le #7 (notif de résa) et, une fois le P0 #1 fait, l'affichage du remplissage des groupes.
+- [x] **14. Vue calendrier du planning (back-office)** — page **Planning** : vue semaine
+  (séances de groupe X/N, RDV 1:1, indispos grisées), navigation par semaine, détail de séance
+  (roster + réponses + capacité), déplacement d'inscrit, annulation, inscription manuelle.
+  Spec `docs/superpowers/specs/2026-06-29-planning-back-office-design.md`.
 
 ---
 

@@ -10,6 +10,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  lt,
   sql,
 } from "drizzle-orm";
 
@@ -27,6 +28,8 @@ import {
   question,
   timeOff,
 } from "@/lib/db/schema";
+import { loadBookableSlots } from "@/lib/slots";
+import { dayKeyInTz, formatTime } from "@/lib/datetime";
 
 export async function getProDashboardData(proId: string) {
   const now = new Date();
@@ -319,6 +322,134 @@ export async function getProSessions(proId: string) {
         answers: answersByBooking.get(r.bookingId) ?? [],
       })),
   }));
+}
+
+export async function getProPlanningWeek(proId: string, start: Date, end: Date) {
+  const sessions = await db
+    .select({
+      id: classSession.id,
+      startAt: classSession.startAt,
+      endAt: classSession.endAt,
+      capacity: classSession.capacity,
+      seatsRemaining: classSession.seatsRemaining,
+      eventTypeId: classSession.eventTypeId,
+      eventTitle: eventType.title,
+      eventColor: eventType.color,
+    })
+    .from(classSession)
+    .innerJoin(eventType, eq(eventType.id, classSession.eventTypeId))
+    .where(
+      and(
+        eq(classSession.professionalId, proId),
+        gte(classSession.startAt, start),
+        lt(classSession.startAt, end),
+      ),
+    )
+    .orderBy(asc(classSession.startAt));
+
+  const timeOffRows = await db
+    .select({
+      id: timeOff.id,
+      startAt: timeOff.startAt,
+      endAt: timeOff.endAt,
+      reason: timeOff.reason,
+    })
+    .from(timeOff)
+    .where(
+      and(
+        eq(timeOff.professionalId, proId),
+        lt(timeOff.startAt, end),
+        gt(timeOff.endAt, start),
+      ),
+    )
+    .orderBy(asc(timeOff.startAt));
+
+  if (sessions.length === 0) {
+    return { sessions: [], timeOff: timeOffRows };
+  }
+
+  const sessionIds = sessions.map((s) => s.id);
+  const attRows = await db
+    .select({
+      sessionId: booking.sessionId,
+      bookingId: booking.id,
+      name: customer.name,
+      email: customer.email,
+      status: booking.status,
+      paymentType: booking.paymentType,
+    })
+    .from(booking)
+    .innerJoin(customer, eq(customer.id, booking.customerId))
+    .where(
+      and(
+        inArray(booking.sessionId, sessionIds),
+        inArray(booking.status, ["pending", "confirmed"]),
+      ),
+    );
+
+  const bookingIds = attRows.map((r) => r.bookingId);
+  const answerRows = bookingIds.length
+    ? await db
+        .select({
+          bookingId: bookingAnswer.bookingId,
+          label: bookingAnswer.questionLabel,
+          value: bookingAnswer.value,
+        })
+        .from(bookingAnswer)
+        .where(inArray(bookingAnswer.bookingId, bookingIds))
+    : [];
+
+  const answersByBooking = new Map<string, { label: string; value: string }[]>();
+  for (const a of answerRows) {
+    const arr = answersByBooking.get(a.bookingId) ?? [];
+    arr.push({ label: a.label, value: a.value });
+    answersByBooking.set(a.bookingId, arr);
+  }
+
+  return {
+    sessions: sessions.map((s) => ({
+      ...s,
+      attendees: attRows
+        .filter((r) => r.sessionId === s.id)
+        .map((r) => ({
+          bookingId: r.bookingId,
+          name: r.name,
+          email: r.email,
+          status: r.status,
+          paymentType: r.paymentType,
+          answers: answersByBooking.get(r.bookingId) ?? [],
+        })),
+    })),
+    timeOff: timeOffRows,
+  };
+}
+
+export async function getManualDaySlots(
+  proId: string,
+  eventTypeId: string,
+  dayKey: string,
+) {
+  const [evt] = await db
+    .select()
+    .from(eventType)
+    .where(
+      and(eq(eventType.id, eventTypeId), eq(eventType.professionalId, proId)),
+    )
+    .limit(1);
+  const [pro] = await db
+    .select({ timezone: professional.timezone })
+    .from(professional)
+    .where(eq(professional.id, proId))
+    .limit(1);
+  if (!evt || !pro) return [];
+
+  const slots = await loadBookableSlots(proId, pro.timezone, evt, 21);
+  return slots
+    .filter((s) => dayKeyInTz(s.start, pro.timezone) === dayKey)
+    .map((s) => ({
+      startISO: s.start.toISOString(),
+      label: formatTime(s.start, pro.timezone),
+    }));
 }
 
 export async function getPublicProfile(slug: string) {

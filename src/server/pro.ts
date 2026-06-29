@@ -1,12 +1,13 @@
 "use server";
 
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { db } from "@/lib/db";
 import {
   availabilityRule,
+  booking,
   classSession,
   eventType,
   pack,
@@ -19,6 +20,18 @@ import { getCurrentProfessional, getCurrentUser } from "@/lib/session";
 import { isHexColor, presetColor } from "@/lib/color";
 import { buildTimeOffInterval } from "@/lib/timeoff";
 import { slugify } from "@/lib/utils";
+import { claimSeat, releaseSeat } from "@/lib/sessions";
+import { isSlotAvailable } from "@/lib/slots";
+import { fulfillBooking } from "@/lib/payments";
+import {
+  buildAnswers,
+  getOrCreateCustomer,
+  insertAnswers,
+  restoreCreditFor,
+} from "@/server/booking-core";
+import { getManualDaySlots } from "@/server/queries";
+
+type Res = { ok: true } | { ok: false; error: string };
 
 async function requirePro() {
   const pro = await getCurrentProfessional();
@@ -492,4 +505,208 @@ export async function updateSessionCapacity(input: {
       ),
     );
   revalidatePath("/dashboard/bookings");
+  revalidatePath("/dashboard/planning");
+}
+
+/* ─────────────────────── Organisation du planning ──────────────── */
+
+export async function cancelBooking(bookingId: string): Promise<Res> {
+  const pro = await requirePro();
+  const rows = await db
+    .select({
+      id: booking.id,
+      sessionId: booking.sessionId,
+      status: booking.status,
+    })
+    .from(booking)
+    .where(and(eq(booking.id, bookingId), eq(booking.professionalId, pro.id)))
+    .limit(1);
+  const b = rows[0];
+  if (!b) return { ok: false, error: "Réservation introuvable." };
+  if (b.status === "cancelled") return { ok: true };
+
+  await db
+    .update(booking)
+    .set({ status: "cancelled" })
+    .where(eq(booking.id, b.id));
+  if (b.sessionId) await releaseSeat(b.sessionId);
+  await restoreCreditFor(b.id);
+
+  revalidatePath("/dashboard/planning");
+  revalidatePath("/dashboard/bookings");
+  return { ok: true };
+}
+
+export async function moveAttendee(input: {
+  bookingId: string;
+  targetSessionId: string;
+}): Promise<Res> {
+  const pro = await requirePro();
+  const bRows = await db
+    .select({ id: booking.id, sessionId: booking.sessionId })
+    .from(booking)
+    .where(
+      and(eq(booking.id, input.bookingId), eq(booking.professionalId, pro.id)),
+    )
+    .limit(1);
+  const b = bRows[0];
+  if (!b) return { ok: false, error: "Réservation introuvable." };
+  if (b.sessionId === input.targetSessionId) return { ok: true };
+
+  const tRows = await db
+    .select({
+      id: classSession.id,
+      eventTypeId: classSession.eventTypeId,
+      startAt: classSession.startAt,
+      endAt: classSession.endAt,
+      capacity: classSession.capacity,
+    })
+    .from(classSession)
+    .where(
+      and(
+        eq(classSession.id, input.targetSessionId),
+        eq(classSession.professionalId, pro.id),
+      ),
+    )
+    .limit(1);
+  const t = tRows[0];
+  if (!t) return { ok: false, error: "Séance cible introuvable." };
+
+  // claim a seat in the target first (atomic) — abort untouched if it's full
+  const seat = await claimSeat({
+    professionalId: pro.id,
+    eventTypeId: t.eventTypeId,
+    startAt: t.startAt,
+    endAt: t.endAt,
+    capacity: t.capacity,
+  });
+  if (!seat.ok) return { ok: false, error: "La séance cible est complète." };
+
+  if (b.sessionId) await releaseSeat(b.sessionId);
+  await db
+    .update(booking)
+    .set({
+      sessionId: seat.sessionId,
+      eventTypeId: t.eventTypeId,
+      startAt: t.startAt,
+      endAt: t.endAt,
+    })
+    .where(eq(booking.id, b.id));
+
+  revalidatePath("/dashboard/planning");
+  revalidatePath("/dashboard/bookings");
+  return { ok: true };
+}
+
+export async function cancelSession(sessionId: string): Promise<Res> {
+  const pro = await requirePro();
+  const owns = await db
+    .select({ id: classSession.id })
+    .from(classSession)
+    .where(
+      and(
+        eq(classSession.id, sessionId),
+        eq(classSession.professionalId, pro.id),
+      ),
+    )
+    .limit(1);
+  if (owns.length === 0) return { ok: false, error: "Séance introuvable." };
+
+  const bks = await db
+    .select({ id: booking.id })
+    .from(booking)
+    .where(
+      and(
+        eq(booking.sessionId, sessionId),
+        inArray(booking.status, ["pending", "confirmed"]),
+      ),
+    );
+
+  for (const bk of bks) {
+    await db
+      .update(booking)
+      .set({ status: "cancelled" })
+      .where(eq(booking.id, bk.id));
+    await restoreCreditFor(bk.id);
+  }
+  // reset seats to full (session kept; no future bookings hold seats)
+  await db
+    .update(classSession)
+    .set({ seatsRemaining: sql`${classSession.capacity}` })
+    .where(eq(classSession.id, sessionId));
+
+  revalidatePath("/dashboard/planning");
+  revalidatePath("/dashboard/bookings");
+  return { ok: true };
+}
+
+/** Client-callable wrapper: available slots for one local day + event type. */
+export async function fetchManualDaySlots(eventTypeId: string, dayKey: string) {
+  const pro = await requirePro();
+  return getManualDaySlots(pro.id, eventTypeId, dayKey);
+}
+
+export async function createManualBooking(input: {
+  eventTypeId: string;
+  startISO: string;
+  customerName: string;
+  customerEmail: string;
+  answers?: { questionId: string; value: string }[];
+}): Promise<Res> {
+  const pro = await requirePro();
+  const [evt] = await db
+    .select()
+    .from(eventType)
+    .where(
+      and(
+        eq(eventType.id, input.eventTypeId),
+        eq(eventType.professionalId, pro.id),
+      ),
+    )
+    .limit(1);
+  if (!evt) return { ok: false, error: "Prestation introuvable." };
+
+  const ok = await isSlotAvailable(pro.id, pro.timezone, evt, input.startISO);
+  if (!ok) return { ok: false, error: "Ce créneau n'est pas disponible." };
+
+  const answers = await buildAnswers(evt.id, input.answers);
+  if (!answers.ok) return { ok: false, error: answers.error };
+
+  const cust = await getOrCreateCustomer(pro.id, {
+    name: input.customerName,
+    email: input.customerEmail,
+  });
+  const start = new Date(input.startISO);
+  const end = new Date(start.getTime() + evt.durationMinutes * 60_000);
+
+  const seat = await claimSeat({
+    professionalId: pro.id,
+    eventTypeId: evt.id,
+    startAt: start,
+    endAt: end,
+    capacity: evt.capacity,
+  });
+  if (!seat.ok) return { ok: false, error: "Cette séance est complète." };
+
+  const [created] = await db
+    .insert(booking)
+    .values({
+      professionalId: pro.id,
+      eventTypeId: evt.id,
+      customerId: cust.id,
+      sessionId: seat.sessionId,
+      startAt: start,
+      endAt: end,
+      status: "confirmed",
+      paymentType: "free",
+      amountPaidCents: 0,
+    })
+    .returning();
+
+  await insertAnswers(created.id, answers.rows);
+  await fulfillBooking(created.id);
+
+  revalidatePath("/dashboard/planning");
+  revalidatePath("/dashboard/bookings");
+  return { ok: true };
 }

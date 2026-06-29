@@ -5,12 +5,11 @@ import { usePathname } from "next/navigation";
 import {
   CalendarDays,
   CalendarOff,
+  CalendarRange,
   Clock,
   ExternalLink,
   LayoutDashboard,
   Settings,
-  Ticket,
-  Users,
 } from "lucide-react";
 
 import { Logo } from "@/components/ui/logo";
@@ -19,11 +18,10 @@ import { cn } from "@/lib/utils";
 
 const NAV = [
   { href: "/dashboard", label: "Vue d'ensemble", icon: LayoutDashboard, exact: true },
+  { href: "/dashboard/planning", label: "Planning", icon: CalendarRange },
   { href: "/dashboard/event-types", label: "Prestations", icon: CalendarDays },
   { href: "/dashboard/availability", label: "Disponibilités", icon: Clock },
   { href: "/dashboard/unavailability", label: "Indisponibilités", icon: CalendarOff },
-  { href: "/dashboard/packs", label: "Packs", icon: Ticket },
-  { href: "/dashboard/bookings", label: "Réservations", icon: Users },
   { href: "/dashboard/settings", label: "Réglages", icon: Settings },
 ];
 
