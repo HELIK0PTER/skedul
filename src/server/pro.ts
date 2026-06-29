@@ -23,6 +23,7 @@ import { slugify } from "@/lib/utils";
 import { claimSeat, releaseSeat } from "@/lib/sessions";
 import { isSlotAvailable } from "@/lib/slots";
 import { fulfillBooking } from "@/lib/payments";
+import { syncSession } from "@/lib/calendar-sync";
 import {
   buildAnswers,
   getOrCreateCustomer,
@@ -504,6 +505,7 @@ export async function updateSessionCapacity(input: {
         eq(classSession.professionalId, pro.id),
       ),
     );
+  await syncSession(input.sessionId);
   revalidatePath("/dashboard/bookings");
   revalidatePath("/dashboard/planning");
 }
@@ -530,6 +532,7 @@ export async function cancelBooking(bookingId: string): Promise<Res> {
     .set({ status: "cancelled" })
     .where(eq(booking.id, b.id));
   if (b.sessionId) await releaseSeat(b.sessionId);
+  if (b.sessionId) await syncSession(b.sessionId);
   await restoreCreditFor(b.id);
 
   revalidatePath("/dashboard/planning");
@@ -593,6 +596,9 @@ export async function moveAttendee(input: {
     })
     .where(eq(booking.id, b.id));
 
+  if (b.sessionId) await syncSession(b.sessionId);
+  await syncSession(seat.sessionId);
+
   revalidatePath("/dashboard/planning");
   revalidatePath("/dashboard/bookings");
   return { ok: true };
@@ -634,6 +640,8 @@ export async function cancelSession(sessionId: string): Promise<Res> {
     .update(classSession)
     .set({ seatsRemaining: sql`${classSession.capacity}` })
     .where(eq(classSession.id, sessionId));
+
+  await syncSession(sessionId);
 
   revalidatePath("/dashboard/planning");
   revalidatePath("/dashboard/bookings");
