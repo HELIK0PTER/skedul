@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { syncSessionWith } from "./calendar-sync";
+import { syncSessionWith } from "./calendar-sync-core";
 
 // A session loader that returns a connected pro with one attendee.
 const connectedSession = {
