@@ -1,8 +1,8 @@
 import "server-only";
-import { and, eq, gte, inArray, isNull, or } from "drizzle-orm";
+import { and, eq, gte, isNull, or } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { availabilityRule, booking, timeOff } from "@/lib/db/schema";
+import { availabilityRule, classSession, timeOff } from "@/lib/db/schema";
 import { computeSlots, type Slot } from "@/lib/availability";
 
 interface EventTypeLike {
@@ -10,6 +10,7 @@ interface EventTypeLike {
   durationMinutes: number;
   bufferBeforeMinutes: number;
   bufferAfterMinutes: number;
+  capacity: number;
 }
 
 /** Loads the bookable slots for a professional + event type over the next weeks. */
@@ -21,7 +22,7 @@ export async function loadBookableSlots(
 ): Promise<Slot[]> {
   const now = new Date();
 
-  const [allRules, busyBookings, busyTimeOff] = await Promise.all([
+  const [allRules, sessions, busyTimeOff] = await Promise.all([
     db
       .select({
         eventTypeId: availabilityRule.eventTypeId,
@@ -40,13 +41,18 @@ export async function loadBookableSlots(
         ),
       ),
     db
-      .select({ startAt: booking.startAt, endAt: booking.endAt })
-      .from(booking)
+      .select({
+        eventTypeId: classSession.eventTypeId,
+        startAt: classSession.startAt,
+        endAt: classSession.endAt,
+        seatsRemaining: classSession.seatsRemaining,
+        capacity: classSession.capacity,
+      })
+      .from(classSession)
       .where(
         and(
-          eq(booking.professionalId, professionalId),
-          gte(booking.startAt, now),
-          inArray(booking.status, ["pending", "confirmed"]),
+          eq(classSession.professionalId, professionalId),
+          gte(classSession.startAt, now),
         ),
       ),
     db
@@ -64,7 +70,16 @@ export async function loadBookableSlots(
 
   return computeSlots({
     rules,
-    busy: [...busyBookings, ...busyTimeOff],
+    busy: busyTimeOff,
+    sessions: sessions.map((s) => ({
+      eventTypeId: s.eventTypeId,
+      startMs: s.startAt.getTime(),
+      endMs: s.endAt.getTime(),
+      seatsRemaining: s.seatsRemaining,
+      capacity: s.capacity,
+    })),
+    eventTypeId: evt.id,
+    defaultCapacity: evt.capacity,
     durationMinutes: evt.durationMinutes,
     bufferBeforeMinutes: evt.bufferBeforeMinutes,
     bufferAfterMinutes: evt.bufferAfterMinutes,
@@ -74,7 +89,7 @@ export async function loadBookableSlots(
   });
 }
 
-/** Returns true if `startISO` is a currently bookable slot. */
+/** Returns true if `startISO` is a currently bookable slot (seat available). */
 export async function isSlotAvailable(
   professionalId: string,
   timezone: string,

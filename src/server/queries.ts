@@ -5,6 +5,7 @@ import {
   count,
   desc,
   eq,
+  gt,
   gte,
   inArray,
   isNotNull,
@@ -15,12 +16,15 @@ import {
 import { db } from "@/lib/db";
 import {
   availabilityRule,
+  bookingAnswer,
   booking,
+  classSession,
   customer,
   eventType,
   pack,
   packPurchase,
   professional,
+  question,
   timeOff,
 } from "@/lib/db/schema";
 
@@ -226,6 +230,95 @@ export async function getPublicPack(slug: string, packId: string) {
     )
     .limit(1);
   return rows[0] ?? null;
+}
+
+export function getEventTypeQuestions(eventTypeId: string) {
+  return db
+    .select({
+      id: question.id,
+      label: question.label,
+      type: question.type,
+      options: question.options,
+      required: question.required,
+      position: question.position,
+    })
+    .from(question)
+    .where(eq(question.eventTypeId, eventTypeId))
+    .orderBy(asc(question.position), asc(question.createdAt));
+}
+
+export async function getProSessions(proId: string) {
+  const now = new Date();
+  const sessions = await db
+    .select({
+      id: classSession.id,
+      startAt: classSession.startAt,
+      endAt: classSession.endAt,
+      capacity: classSession.capacity,
+      seatsRemaining: classSession.seatsRemaining,
+      eventTitle: eventType.title,
+      eventColor: eventType.color,
+    })
+    .from(classSession)
+    .innerJoin(eventType, eq(eventType.id, classSession.eventTypeId))
+    .where(
+      and(
+        eq(classSession.professionalId, proId),
+        gte(classSession.startAt, now),
+        gt(classSession.capacity, 1),
+      ),
+    )
+    .orderBy(asc(classSession.startAt));
+
+  if (sessions.length === 0) return [];
+
+  const sessionIds = sessions.map((s) => s.id);
+  const rows = await db
+    .select({
+      sessionId: booking.sessionId,
+      bookingId: booking.id,
+      name: customer.name,
+      email: customer.email,
+      status: booking.status,
+    })
+    .from(booking)
+    .innerJoin(customer, eq(customer.id, booking.customerId))
+    .where(
+      and(
+        inArray(booking.sessionId, sessionIds),
+        inArray(booking.status, ["pending", "confirmed"]),
+      ),
+    );
+
+  const bookingIds = rows.map((r) => r.bookingId);
+  const answerRows = bookingIds.length
+    ? await db
+        .select({
+          bookingId: bookingAnswer.bookingId,
+          label: bookingAnswer.questionLabel,
+          value: bookingAnswer.value,
+        })
+        .from(bookingAnswer)
+        .where(inArray(bookingAnswer.bookingId, bookingIds))
+    : [];
+
+  const answersByBooking = new Map<string, { label: string; value: string }[]>();
+  for (const a of answerRows) {
+    const arr = answersByBooking.get(a.bookingId) ?? [];
+    arr.push({ label: a.label, value: a.value });
+    answersByBooking.set(a.bookingId, arr);
+  }
+
+  return sessions.map((s) => ({
+    ...s,
+    attendees: rows
+      .filter((r) => r.sessionId === s.id)
+      .map((r) => ({
+        name: r.name,
+        email: r.email,
+        answers: answersByBooking.get(r.bookingId) ?? [],
+      })),
+  }));
 }
 
 export async function getPublicProfile(slug: string) {

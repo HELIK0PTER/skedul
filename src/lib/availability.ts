@@ -11,14 +11,27 @@ export interface BusyInterval {
   endAt: Date;
 }
 
+export interface SessionInfo {
+  eventTypeId: string;
+  startMs: number;
+  endMs: number;
+  seatsRemaining: number;
+  capacity: number;
+}
+
 export interface Slot {
   start: Date;
   end: Date;
+  seatsRemaining: number;
+  capacity: number;
 }
 
 interface ComputeArgs {
   rules: Rule[];
-  busy: BusyInterval[];
+  busy: BusyInterval[]; // time-off only
+  sessions: SessionInfo[]; // all of the pro's future sessions
+  eventTypeId: string; // the event type we are computing slots for
+  defaultCapacity: number; // eventType.capacity (used when no session exists yet)
   durationMinutes: number;
   bufferBeforeMinutes?: number;
   bufferAfterMinutes?: number;
@@ -29,10 +42,13 @@ interface ComputeArgs {
   minNoticeMinutes?: number;
 }
 
-/** Computes bookable slots over the next `daysAhead` days. */
+/** Computes bookable slots over the next `daysAhead` days, capacity-aware. */
 export function computeSlots({
   rules,
   busy,
+  sessions,
+  eventTypeId,
+  defaultCapacity,
   durationMinutes,
   bufferBeforeMinutes = 0,
   bufferAfterMinutes = 0,
@@ -47,8 +63,8 @@ export function computeSlots({
   const step = durationMinutes;
 
   for (let offset = 0; offset < daysAhead; offset++) {
-    const base = new Date(now.getTime() + offset * 86_400_000);
-    const ymd = dayKeyInTz(base, timezone); // YYYY-MM-DD (local to tz)
+    const baseDate = new Date(now.getTime() + offset * 86_400_000);
+    const ymd = dayKeyInTz(baseDate, timezone); // YYYY-MM-DD (local to tz)
     const [year, month, day] = ymd.split("-").map(Number);
     const dow = new Date(Date.UTC(year, month - 1, day, 12)).getUTCDay();
 
@@ -60,8 +76,9 @@ export function computeSlots({
         t += step
       ) {
         const start = instantFromWallClock(year, month, day, t, timezone);
-        if (start.getTime() < earliest) continue;
-        if (seen.has(start.getTime())) continue;
+        const startMs = start.getTime();
+        if (startMs < earliest) continue;
+        if (seen.has(startMs)) continue;
 
         const end = instantFromWallClock(
           year,
@@ -71,16 +88,35 @@ export function computeSlots({
           timezone,
         );
 
-        const blockStart = start.getTime() - bufferBeforeMinutes * 60_000;
+        const blockStart = startMs - bufferBeforeMinutes * 60_000;
         const blockEnd = end.getTime() + bufferAfterMinutes * 60_000;
-        const overlaps = busy.some(
+
+        // time-off blocks
+        const timeOffOverlap = busy.some(
           (b) =>
             b.startAt.getTime() < blockEnd && b.endAt.getTime() > blockStart,
         );
-        if (overlaps) continue;
+        if (timeOffOverlap) continue;
 
-        seen.add(start.getTime());
-        slots.push({ start, end });
+        // any OTHER session occupies the pro ("one class at a time")
+        const otherSessionOverlap = sessions.some(
+          (s) =>
+            !(s.eventTypeId === eventTypeId && s.startMs === startMs) &&
+            s.startMs < blockEnd &&
+            s.endMs > blockStart,
+        );
+        if (otherSessionOverlap) continue;
+
+        // the session exactly at this (eventType, start), if any
+        const exact = sessions.find(
+          (s) => s.eventTypeId === eventTypeId && s.startMs === startMs,
+        );
+        const seatsRemaining = exact ? exact.seatsRemaining : defaultCapacity;
+        const capacity = exact ? exact.capacity : defaultCapacity;
+        if (seatsRemaining <= 0) continue;
+
+        seen.add(startMs);
+        slots.push({ start, end, seatsRemaining, capacity });
       }
     }
   }

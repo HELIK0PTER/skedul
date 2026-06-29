@@ -67,6 +67,27 @@ export function bookingConfirmationEmail(args: {
   `);
 }
 
+export function proNewBookingEmail(args: {
+  businessName: string;
+  eventTitle: string;
+  whenLabel: string;
+  customerName: string;
+  customerEmail: string;
+  fillLabel: string; // ex. "3/6 inscrits"
+  paidLabel: string;
+}) {
+  return layout("Nouvelle réservation 📅", `
+    <p>Bonjour ${args.businessName},</p>
+    <p>Nouvelle réservation pour <strong>${args.eventTitle}</strong>.</p>
+    <table style="width:100%;font-size:14px;margin:16px 0;border-collapse:collapse">
+      <tr><td style="padding:6px 0;color:#71717a">Quand</td><td style="text-align:right">${args.whenLabel}</td></tr>
+      <tr><td style="padding:6px 0;color:#71717a">Client</td><td style="text-align:right">${args.customerName} (${args.customerEmail})</td></tr>
+      <tr><td style="padding:6px 0;color:#71717a">Remplissage</td><td style="text-align:right">${args.fillLabel}</td></tr>
+      <tr><td style="padding:6px 0;color:#71717a">Paiement</td><td style="text-align:right">${args.paidLabel}</td></tr>
+    </table>
+  `);
+}
+
 export function packReceiptEmail(args: {
   customerName: string;
   businessName: string;

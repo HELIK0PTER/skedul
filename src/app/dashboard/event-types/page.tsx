@@ -4,9 +4,10 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import {
   EventTypesManager,
   type EventTypeItem,
+  type Question,
 } from "@/components/dashboard/event-types-manager";
 import { getCurrentProfessional } from "@/lib/session";
-import { getProEventTypes, getProEventTypeRules } from "@/server/queries";
+import { getProEventTypes, getProEventTypeRules, getEventTypeQuestions } from "@/server/queries";
 
 export const metadata: Metadata = { title: "Prestations" };
 
@@ -38,6 +39,7 @@ export default async function EventTypesPage() {
     description: r.description,
     durationMinutes: r.durationMinutes,
     priceCents: r.priceCents,
+    capacity: r.capacity,
     color: r.color,
     bufferBeforeMinutes: r.bufferBeforeMinutes,
     bufferAfterMinutes: r.bufferAfterMinutes,
@@ -45,13 +47,22 @@ export default async function EventTypesPage() {
     availability: byEvent.get(r.id) ?? [],
   }));
 
+  const questionsArrays = await Promise.all(
+    rows.map((r) => getEventTypeQuestions(r.id)),
+  );
+
+  const questionsByEventType: Record<string, Question[]> = {};
+  rows.forEach((r, i) => {
+    questionsByEventType[r.id] = questionsArrays[i] as Question[];
+  });
+
   return (
     <>
       <PageHeader
         title="Prestations"
         description="Les types de rendez-vous que vos clients peuvent réserver."
       />
-      <EventTypesManager items={items} />
+      <EventTypesManager items={items} questionsByEventType={questionsByEventType} />
     </>
   );
 }

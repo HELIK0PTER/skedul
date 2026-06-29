@@ -1,15 +1,17 @@
 "use server";
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { db } from "@/lib/db";
 import {
   availabilityRule,
+  classSession,
   eventType,
   pack,
   professional,
+  question,
   timeOff,
   user as userTable,
 } from "@/lib/db/schema";
@@ -164,6 +166,7 @@ export async function saveEventType(input: {
   description?: string;
   durationMinutes: number;
   priceCents: number;
+  capacity?: number;
   color?: string;
   bufferBeforeMinutes?: number;
   bufferAfterMinutes?: number;
@@ -184,6 +187,7 @@ export async function saveEventType(input: {
         description: input.description || null,
         durationMinutes: input.durationMinutes,
         priceCents: input.priceCents,
+        capacity: Math.max(1, Math.floor(input.capacity ?? 1)),
         color: input.color || "#6d5cf6",
         bufferBeforeMinutes: input.bufferBeforeMinutes ?? 0,
         bufferAfterMinutes: input.bufferAfterMinutes ?? 0,
@@ -224,6 +228,7 @@ export async function saveEventType(input: {
         description: input.description || null,
         durationMinutes: input.durationMinutes,
         priceCents: input.priceCents,
+        capacity: Math.max(1, Math.floor(input.capacity ?? 1)),
         color: input.color || "#6d5cf6",
         bufferBeforeMinutes: input.bufferBeforeMinutes ?? 0,
         bufferAfterMinutes: input.bufferAfterMinutes ?? 0,
@@ -388,4 +393,103 @@ export async function deleteTimeOff(id: string) {
     .where(and(eq(timeOff.id, id), eq(timeOff.professionalId, pro.id)));
   revalidatePath("/dashboard/unavailability");
   revalidatePath(`/${pro.slug}`);
+}
+
+/* ─────────────────────────── Questions ─────────────────────────── */
+
+export async function saveQuestion(input: {
+  id?: string;
+  eventTypeId: string;
+  label: string;
+  type: "text" | "choice" | "boolean";
+  options?: string[];
+  required?: boolean;
+  position?: number;
+}) {
+  const pro = await requirePro();
+  // ownership check: the event type must belong to this pro
+  const owns = await db
+    .select({ id: eventType.id })
+    .from(eventType)
+    .where(
+      and(
+        eq(eventType.id, input.eventTypeId),
+        eq(eventType.professionalId, pro.id),
+      ),
+    )
+    .limit(1);
+  if (owns.length === 0) return;
+
+  const cleaned =
+    input.type === "choice"
+      ? (input.options ?? []).map((o) => o.trim()).filter(Boolean)
+      : [];
+  const options = cleaned.length > 0 ? cleaned : null;
+
+  if (input.id) {
+    await db
+      .update(question)
+      .set({
+        label: input.label,
+        type: input.type,
+        options,
+        required: input.required ?? false,
+        position: input.position ?? 0,
+      })
+      .where(
+        and(
+          eq(question.id, input.id),
+          eq(question.eventTypeId, input.eventTypeId),
+        ),
+      );
+  } else {
+    await db.insert(question).values({
+      eventTypeId: input.eventTypeId,
+      label: input.label,
+      type: input.type,
+      options,
+      required: input.required ?? false,
+      position: input.position ?? 0,
+    });
+  }
+  revalidatePath("/dashboard/event-types");
+}
+
+export async function deleteQuestion(id: string) {
+  const pro = await requirePro();
+  // ownership via join on the pro's event types
+  const owned = await db
+    .select({ id: question.id })
+    .from(question)
+    .innerJoin(eventType, eq(eventType.id, question.eventTypeId))
+    .where(and(eq(question.id, id), eq(eventType.professionalId, pro.id)))
+    .limit(1);
+  if (owned.length === 0) return;
+  await db.delete(question).where(eq(question.id, id));
+  revalidatePath("/dashboard/event-types");
+}
+
+/* ─────────────────────────── Séances ───────────────────────────── */
+
+export async function updateSessionCapacity(input: {
+  sessionId: string;
+  capacity: number;
+}) {
+  const pro = await requirePro();
+  const next = Math.max(1, Math.floor(input.capacity));
+  // booked = capacity - seatsRemaining ; new seatsRemaining = max(0, next - booked).
+  // Guarded by professionalId so a pro can only touch their own sessions.
+  await db
+    .update(classSession)
+    .set({
+      capacity: next,
+      seatsRemaining: sql`GREATEST(0, ${next} - (${classSession.capacity} - ${classSession.seatsRemaining}))`,
+    })
+    .where(
+      and(
+        eq(classSession.id, input.sessionId),
+        eq(classSession.professionalId, pro.id),
+      ),
+    );
+  revalidatePath("/dashboard/bookings");
 }

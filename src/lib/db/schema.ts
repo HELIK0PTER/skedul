@@ -41,6 +41,7 @@ export const purchaseStatus = pgEnum("purchase_status", [
   "paid",
   "refunded",
 ]);
+export const questionType = pgEnum("question_type", ["text", "choice", "boolean"]);
 
 /* ──────────────────────── Better Auth tables ───────────────────── */
 
@@ -152,6 +153,7 @@ export const eventType = pgTable(
     description: text("description"),
     durationMinutes: integer("duration_minutes").default(30).notNull(),
     priceCents: integer("price_cents").default(0).notNull(),
+    capacity: integer("capacity").default(1).notNull(),
     color: text("color").default("#6366f1").notNull(),
     bufferBeforeMinutes: integer("buffer_before_minutes").default(0).notNull(),
     bufferAfterMinutes: integer("buffer_after_minutes").default(0).notNull(),
@@ -161,6 +163,29 @@ export const eventType = pgTable(
   (t) => [
     unique("event_type_pro_slug_unique").on(t.professionalId, t.slug),
     index("event_type_pro_idx").on(t.professionalId),
+  ],
+);
+
+/** A materialised class session: the seat-counter that makes group capacity atomic. */
+export const classSession = pgTable(
+  "class_session",
+  {
+    id: id(),
+    professionalId: text("professional_id")
+      .notNull()
+      .references(() => professional.id, { onDelete: "cascade" }),
+    eventTypeId: text("event_type_id")
+      .notNull()
+      .references(() => eventType.id, { onDelete: "cascade" }),
+    startAt: timestamp("start_at", { withTimezone: true }).notNull(),
+    endAt: timestamp("end_at", { withTimezone: true }).notNull(),
+    capacity: integer("capacity").notNull(),
+    seatsRemaining: integer("seats_remaining").notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    unique("session_event_start_unique").on(t.eventTypeId, t.startAt),
+    index("session_pro_start_idx").on(t.professionalId, t.startAt),
   ],
 );
 
@@ -272,6 +297,9 @@ export const booking = pgTable(
     eventTypeId: text("event_type_id")
       .notNull()
       .references(() => eventType.id, { onDelete: "restrict" }),
+    sessionId: text("session_id").references(() => classSession.id, {
+      onDelete: "restrict",
+    }),
     customerId: text("customer_id")
       .notNull()
       .references(() => customer.id, { onDelete: "cascade" }),
@@ -314,6 +342,45 @@ export const timeOff = pgTable(
   (t) => [index("time_off_pro_idx").on(t.professionalId, t.startAt)],
 );
 
+/** A custom registration question attached to an event type. */
+export const question = pgTable(
+  "question",
+  {
+    id: id(),
+    eventTypeId: text("event_type_id")
+      .notNull()
+      .references(() => eventType.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    type: questionType("type").notNull(),
+    options: text("options").array(),
+    required: boolean("required").default(false).notNull(),
+    position: integer("position").default(0).notNull(),
+    ...timestamps,
+  },
+  (t) => [index("question_event_type_idx").on(t.eventTypeId)],
+);
+
+/** A customer's answer to a question, snapshotted onto the booking. */
+export const bookingAnswer = pgTable(
+  "booking_answer",
+  {
+    id: id(),
+    bookingId: text("booking_id")
+      .notNull()
+      .references(() => booking.id, { onDelete: "cascade" }),
+    questionId: text("question_id").references(() => question.id, {
+      onDelete: "set null",
+    }),
+    questionLabel: text("question_label").notNull(),
+    value: text("value").notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    unique("booking_answer_unique").on(t.bookingId, t.questionId),
+    index("booking_answer_booking_idx").on(t.bookingId),
+  ],
+);
+
 /* ───────────────────────────── Relations ───────────────────────── */
 
 export const userRelations = relations(user, ({ one }) => ({
@@ -331,6 +398,7 @@ export const professionalRelations = relations(professional, ({ one, many }) => 
   customers: many(customer),
   bookings: many(booking),
   timeOff: many(timeOff),
+  sessions: many(classSession),
 }));
 
 export const eventTypeRelations = relations(eventType, ({ one, many }) => ({
@@ -340,6 +408,8 @@ export const eventTypeRelations = relations(eventType, ({ one, many }) => ({
   }),
   bookings: many(booking),
   availabilityRules: many(availabilityRule),
+  sessions: many(classSession),
+  questions: many(question),
 }));
 
 export const availabilityRuleRelations = relations(
@@ -408,11 +478,46 @@ export const bookingRelations = relations(booking, ({ one }) => ({
     fields: [booking.packPurchaseId],
     references: [packPurchase.id],
   }),
+  session: one(classSession, {
+    fields: [booking.sessionId],
+    references: [classSession.id],
+  }),
 }));
 
 export const timeOffRelations = relations(timeOff, ({ one }) => ({
   professional: one(professional, {
     fields: [timeOff.professionalId],
     references: [professional.id],
+  }),
+}));
+
+export const classSessionRelations = relations(classSession, ({ one, many }) => ({
+  professional: one(professional, {
+    fields: [classSession.professionalId],
+    references: [professional.id],
+  }),
+  eventType: one(eventType, {
+    fields: [classSession.eventTypeId],
+    references: [eventType.id],
+  }),
+  bookings: many(booking),
+}));
+
+export const questionRelations = relations(question, ({ one, many }) => ({
+  eventType: one(eventType, {
+    fields: [question.eventTypeId],
+    references: [eventType.id],
+  }),
+  answers: many(bookingAnswer),
+}));
+
+export const bookingAnswerRelations = relations(bookingAnswer, ({ one }) => ({
+  booking: one(booking, {
+    fields: [bookingAnswer.bookingId],
+    references: [booking.id],
+  }),
+  question: one(question, {
+    fields: [bookingAnswer.questionId],
+    references: [question.id],
   }),
 }));

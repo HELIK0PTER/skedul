@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 
 import { PageHeader } from "@/components/dashboard/page-header";
+import { SessionCapacityControl } from "@/components/dashboard/session-capacity-control";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatSlot } from "@/lib/datetime";
 import { formatMoney } from "@/lib/utils";
 import { getCurrentProfessional } from "@/lib/session";
-import { getProBookings } from "@/server/queries";
+import { getProBookings, getProSessions } from "@/server/queries";
 
 export const metadata: Metadata = { title: "Réservations" };
 
@@ -25,7 +26,10 @@ const PAYMENT_LABEL: Record<string, string> = {
 
 export default async function BookingsPage() {
   const pro = (await getCurrentProfessional())!;
-  const rows = await getProBookings(pro.id);
+  const [rows, sessions] = await Promise.all([
+    getProBookings(pro.id),
+    getProSessions(pro.id),
+  ]);
   const now = new Date().getTime();
   const upcoming = rows.filter((r) => r.startAt.getTime() >= now);
   const past = rows.filter((r) => r.startAt.getTime() < now);
@@ -36,6 +40,69 @@ export default async function BookingsPage() {
         title="Réservations"
         description="Toutes les réservations de vos clients."
       />
+
+      {sessions.length > 0 && (
+        <div className="mb-8">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            Séances de groupe · {sessions.length}
+          </h2>
+          <div className="space-y-4">
+            {sessions.map((s) => {
+              const booked = s.capacity - s.seatsRemaining;
+              return (
+                <Card key={s.id}>
+                  <CardContent className="p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="size-2.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: s.eventColor }}
+                        />
+                        <div>
+                          <p className="text-sm font-medium">{s.eventTitle}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {formatSlot(s.startAt, s.endAt, pro.timezone)}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <Badge variant="neutral">
+                          {booked}/{s.capacity} inscrits
+                        </Badge>
+                        <SessionCapacityControl
+                          sessionId={s.id}
+                          capacity={s.capacity}
+                        />
+                      </div>
+                    </div>
+                    {s.attendees.length > 0 && (
+                      <ul className="mt-3 space-y-2 border-t pt-3">
+                        {s.attendees.map((a, i) => (
+                          <li key={i} className="text-xs">
+                            <span className="font-medium">{a.name}</span>
+                            <span className="ml-1 text-muted-foreground">
+                              {a.email}
+                            </span>
+                            {a.answers.length > 0 && (
+                              <ul className="ml-3 mt-0.5 space-y-0.5 text-muted-foreground">
+                                {a.answers.map((ans, j) => (
+                                  <li key={j}>
+                                    {ans.label}: {ans.value}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <Section title="À venir" rows={upcoming} tz={pro.timezone} empty="Aucune réservation à venir." />
       <div className="mt-8">
