@@ -70,8 +70,6 @@ export function PlanningCalendar(props: {
       ((new Date(b).getTime() - new Date(a).getTime()) / 60_000) * (HOUR_PX / 60),
     );
 
-  const empty = props.sessions.length === 0 && props.timeOff.length === 0;
-
   return (
     <div>
       <div className="mb-4 flex items-center justify-between gap-2">
@@ -95,13 +93,8 @@ export function PlanningCalendar(props: {
         <ManualBookingButton eventTypes={props.eventTypes} />
       </div>
 
-      {empty ? (
-        <p className="rounded-xl border border-border bg-card py-10 text-center text-sm text-muted-foreground">
-          Aucune séance cette semaine.
-        </p>
-      ) : (
-        <div className="overflow-x-auto">
-          <div className="flex min-w-[760px]">
+      <div className="overflow-x-auto">
+        <div className="flex min-w-[760px]">
             <div className="w-12 shrink-0 pt-8">
               {hours.map((h) => (
                 <div
@@ -173,9 +166,8 @@ export function PlanningCalendar(props: {
                 </div>
               );
             })}
-          </div>
         </div>
-      )}
+      </div>
 
       {selected && (
         <SessionDetailDialog
