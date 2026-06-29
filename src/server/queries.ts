@@ -16,6 +16,7 @@ import {
 
 import { db } from "@/lib/db";
 import {
+  account,
   availabilityRule,
   bookingAnswer,
   booking,
@@ -27,7 +28,9 @@ import {
   professional,
   question,
   timeOff,
+  user,
 } from "@/lib/db/schema";
+import { env } from "@/lib/env";
 import { loadBookableSlots } from "@/lib/slots";
 import { dayKeyInTz, formatTime } from "@/lib/datetime";
 
@@ -486,4 +489,40 @@ export async function getPublicProfile(slug: string) {
   ]);
 
   return { pro, eventTypes, packs };
+}
+
+export async function getGoogleConnection(pro: {
+  id: string;
+  userId: string;
+}) {
+  const proRows = await db
+    .select({ googleCalendarId: professional.googleCalendarId })
+    .from(professional)
+    .where(eq(professional.id, pro.id))
+    .limit(1);
+
+  const acct = await db
+    .select({ accountId: account.accountId })
+    .from(account)
+    .where(
+      and(eq(account.userId, pro.userId), eq(account.providerId, "google")),
+    )
+    .limit(1);
+
+  const linkedEmail = acct.length
+    ? (
+        await db
+          .select({ email: user.email })
+          .from(user)
+          .where(eq(user.id, pro.userId))
+          .limit(1)
+      )[0]?.email ?? null
+    : null;
+
+  return {
+    configured: env.GOOGLE_CALENDAR_ENABLED,
+    connected: !!proRows[0]?.googleCalendarId,
+    linked: acct.length > 0,
+    accountEmail: linkedEmail,
+  };
 }

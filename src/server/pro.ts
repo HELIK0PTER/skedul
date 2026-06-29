@@ -3,7 +3,9 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 
+import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import {
   availabilityRule,
@@ -16,6 +18,8 @@ import {
   timeOff,
   user as userTable,
 } from "@/lib/db/schema";
+import { env } from "@/lib/env";
+import { createSkedulCalendar } from "@/lib/google-calendar";
 import { getCurrentProfessional, getCurrentUser } from "@/lib/session";
 import { isHexColor, presetColor } from "@/lib/color";
 import { buildTimeOffInterval } from "@/lib/timeoff";
@@ -716,5 +720,60 @@ export async function createManualBooking(input: {
 
   revalidatePath("/dashboard/planning");
   revalidatePath("/dashboard/bookings");
+  return { ok: true };
+}
+
+/* ─────────────────────── Google Calendar ───────────────────────── */
+
+/** After the Google OAuth redirect: create the Skedul calendar + store its id. */
+export async function finalizeGoogleConnection(): Promise<{
+  ok: boolean;
+  error?: string;
+}> {
+  const pro = await getCurrentProfessional();
+  if (!pro) return { ok: false, error: "Non authentifié." };
+  if (!env.GOOGLE_CALENDAR_ENABLED) return { ok: false, error: "Désactivé." };
+
+  // Already connected → idempotent success.
+  const existing = await db
+    .select({ id: professional.googleCalendarId })
+    .from(professional)
+    .where(eq(professional.id, pro.id))
+    .limit(1);
+  if (existing[0]?.id) return { ok: true };
+
+  try {
+    const { accessToken } = await auth.api.getAccessToken({
+      body: { providerId: "google" },
+      headers: await headers(),
+    });
+    const calendarId = await createSkedulCalendar(accessToken);
+    await db
+      .update(professional)
+      .set({ googleCalendarId: calendarId })
+      .where(eq(professional.id, pro.id));
+    return { ok: true };
+  } catch (err) {
+    console.error("[google] finalize connection failed:", err);
+    return { ok: false, error: "Connexion à Google impossible." };
+  }
+}
+
+/** Unlink Google and stop syncing (the Skedul calendar is left in place). */
+export async function disconnectGoogleCalendar(): Promise<{ ok: boolean }> {
+  const pro = await getCurrentProfessional();
+  if (!pro) return { ok: false };
+  try {
+    await auth.api.unlinkAccount({
+      body: { providerId: "google" },
+      headers: await headers(),
+    });
+  } catch (err) {
+    console.error("[google] unlink failed:", err);
+  }
+  await db
+    .update(professional)
+    .set({ googleCalendarId: null })
+    .where(eq(professional.id, pro.id));
   return { ok: true };
 }
