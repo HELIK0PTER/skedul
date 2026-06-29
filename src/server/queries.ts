@@ -28,6 +28,8 @@ import {
   question,
   timeOff,
 } from "@/lib/db/schema";
+import { loadBookableSlots } from "@/lib/slots";
+import { dayKeyInTz, formatTime } from "@/lib/datetime";
 
 export async function getProDashboardData(proId: string) {
   const now = new Date();
@@ -420,6 +422,34 @@ export async function getProPlanningWeek(proId: string, start: Date, end: Date) 
     })),
     timeOff: timeOffRows,
   };
+}
+
+export async function getManualDaySlots(
+  proId: string,
+  eventTypeId: string,
+  dayKey: string,
+) {
+  const [evt] = await db
+    .select()
+    .from(eventType)
+    .where(
+      and(eq(eventType.id, eventTypeId), eq(eventType.professionalId, proId)),
+    )
+    .limit(1);
+  const [pro] = await db
+    .select({ timezone: professional.timezone })
+    .from(professional)
+    .where(eq(professional.id, proId))
+    .limit(1);
+  if (!evt || !pro) return [];
+
+  const slots = await loadBookableSlots(proId, pro.timezone, evt, 21);
+  return slots
+    .filter((s) => dayKeyInTz(s.start, pro.timezone) === dayKey)
+    .map((s) => ({
+      startISO: s.start.toISOString(),
+      label: formatTime(s.start, pro.timezone),
+    }));
 }
 
 export async function getPublicProfile(slug: string) {

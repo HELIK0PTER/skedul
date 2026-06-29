@@ -30,17 +30,14 @@ export function weekStartFromParam(
   return new Date(midnight.getTime() - backToMonday * 86_400_000);
 }
 
-export function weekBounds(
-  weekStart: Date,
-  _tz: string,
-): { start: Date; end: Date } {
+export function weekBounds(weekStart: Date): { start: Date; end: Date } {
   return {
     start: weekStart,
     end: new Date(weekStart.getTime() + 7 * 86_400_000),
   };
 }
 
-export function weekDays(weekStart: Date, _tz: string): Date[] {
+export function weekDays(weekStart: Date): Date[] {
   return Array.from(
     { length: 7 },
     (_, i) => new Date(weekStart.getTime() + i * 86_400_000),
