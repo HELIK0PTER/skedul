@@ -3,15 +3,18 @@ import type { Metadata } from "next";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { ProfileForm } from "@/components/dashboard/profile-form";
 import { BrandingForm } from "@/components/dashboard/branding-form";
+import { GoogleCalendarCard } from "@/components/dashboard/google-calendar-card";
 import { SignOutButton } from "@/components/sign-out-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { env } from "@/lib/env";
 import { getCurrentProfessional } from "@/lib/session";
+import { getGoogleConnection } from "@/server/queries";
 
 export const metadata: Metadata = { title: "Réglages" };
 
 export default async function SettingsPage() {
   const pro = (await getCurrentProfessional())!;
+  const google = await getGoogleConnection({ id: pro.id, userId: pro.userId });
 
   return (
     <>
@@ -67,6 +70,12 @@ export default async function SettingsPage() {
           />
         </CardContent>
       </Card>
+
+      <GoogleCalendarCard
+        configured={google.configured}
+        connected={google.connected}
+        accountEmail={google.accountEmail}
+      />
 
       <Card>
         <CardHeader>
