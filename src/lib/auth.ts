@@ -24,6 +24,17 @@ export const auth = betterAuth({
     autoSignIn: true,
     minPasswordLength: 8,
   },
+  socialProviders: env.GOOGLE_CALENDAR_ENABLED
+    ? {
+        google: {
+          clientId: env.GOOGLE_CLIENT_ID!,
+          clientSecret: env.GOOGLE_CLIENT_SECRET!,
+          // Force Google to return a refresh_token even on re-consent.
+          accessType: "offline",
+          prompt: "select_account consent",
+        },
+      }
+    : undefined,
   user: {
     additionalFields: {
       role: {
