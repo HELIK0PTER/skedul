@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
 import { TZDate } from "@date-fns/tz";
 
 import { Button } from "@/components/ui/button";
@@ -108,6 +108,7 @@ export function PlanningCalendar(props: {
           </div>
           <Button asChild variant="secondary" size="sm">
             <Link href={`/dashboard/planning?week=${props.nav.todayParam}`}>
+              <CalendarDays className="size-4" />
               Aujourd&apos;hui
             </Link>
           </Button>
