@@ -34,6 +34,7 @@ test("outlookCalendarUrl → deeplink/compose with ISO dates", () => {
   assert.equal(url.searchParams.get("body"), "Rendez-vous avec Altinha Paris");
   assert.equal(url.searchParams.get("startdt"), "2026-07-03T12:00:00.000Z");
   assert.equal(url.searchParams.get("enddt"), "2026-07-03T13:00:00.000Z");
+  assert.equal(url.searchParams.get("path"), null);
 });
 
 test("buildIcs → valid VCALENDAR with CRLF lines and UID", () => {

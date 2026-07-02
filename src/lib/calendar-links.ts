@@ -24,7 +24,6 @@ export function googleCalendarUrl(input: CalendarLinkInput): string {
 /** "Add to calendar" web link for Outlook.com. */
 export function outlookCalendarUrl(input: CalendarLinkInput): string {
   const params = new URLSearchParams({
-    path: "/calendar/action/compose",
     rru: "addevent",
     subject: input.title,
     body: input.description,

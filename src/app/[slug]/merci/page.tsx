@@ -52,35 +52,37 @@ export default async function MerciPage({ params, searchParams }: Props) {
           <p className="text-sm text-muted-foreground">
             {formatSlot(b.booking.startAt, b.booking.endAt, pro.timezone)}
           </p>
-          <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
-            <span className="flex items-center gap-1 text-xs text-muted-foreground">
-              <CalendarPlus className="size-3.5" />
-              Ajouter à mon calendrier :
-            </span>
-            <Button asChild variant="secondary" size="sm">
-              <a
-                href={googleCalendarUrl(linkInput)}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Google Agenda
-              </a>
-            </Button>
-            <Button asChild variant="secondary" size="sm">
-              <a
-                href={outlookCalendarUrl(linkInput)}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Outlook
-              </a>
-            </Button>
-            <Button asChild variant="secondary" size="sm">
-              <a href={`/api/bookings/${b.booking.id}/calendar.ics`}>
-                Apple / .ics
-              </a>
-            </Button>
-          </div>
+          {b.booking.status !== "cancelled" && (
+            <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                <CalendarPlus className="size-3.5" />
+                Ajouter à mon calendrier :
+              </span>
+              <Button asChild variant="secondary" size="sm">
+                <a
+                  href={googleCalendarUrl(linkInput)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Google Agenda
+                </a>
+              </Button>
+              <Button asChild variant="secondary" size="sm">
+                <a
+                  href={outlookCalendarUrl(linkInput)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Outlook
+                </a>
+              </Button>
+              <Button asChild variant="secondary" size="sm">
+                <a href={`/api/bookings/${b.booking.id}/calendar.ics`}>
+                  Apple / .ics
+                </a>
+              </Button>
+            </div>
+          )}
         </>
       );
     }
