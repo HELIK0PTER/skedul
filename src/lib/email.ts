@@ -55,7 +55,14 @@ export function bookingConfirmationEmail(args: {
   eventTitle: string;
   whenLabel: string;
   paidLabel: string;
+  calendarLinks?: { google: string; outlook: string; ics: string };
 }) {
+  const calendarRow = args.calendarLinks
+    ? `<p style="font-size:13px;margin:16px 0 0">Ajouter à mon calendrier :
+        <a href="${args.calendarLinks.google}" style="color:#6366f1">Google</a> ·
+        <a href="${args.calendarLinks.outlook}" style="color:#6366f1">Outlook</a> ·
+        <a href="${args.calendarLinks.ics}" style="color:#6366f1">Apple (.ics)</a></p>`
+    : "";
   return layout("Réservation confirmée ✅", `
     <p>Bonjour ${args.customerName},</p>
     <p>Votre réservation <strong>${args.eventTitle}</strong> avec <strong>${args.businessName}</strong> est confirmée.</p>
@@ -63,6 +70,7 @@ export function bookingConfirmationEmail(args: {
       <tr><td style="padding:6px 0;color:#71717a">Quand</td><td style="text-align:right">${args.whenLabel}</td></tr>
       <tr><td style="padding:6px 0;color:#71717a">Paiement</td><td style="text-align:right">${args.paidLabel}</td></tr>
     </table>
+    ${calendarRow}
     <p style="color:#71717a;font-size:13px">À très bientôt !</p>
   `);
 }

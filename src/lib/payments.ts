@@ -2,6 +2,8 @@ import "server-only";
 import { eq } from "drizzle-orm";
 
 import { syncSession } from "@/lib/calendar-sync";
+import { googleCalendarUrl, outlookCalendarUrl } from "@/lib/calendar-links";
+import { env } from "@/lib/env";
 
 import { db } from "@/lib/db";
 import {
@@ -94,6 +96,18 @@ export async function fulfillBooking(bookingId: string) {
 
   if (row.booking.sessionId) await syncSession(row.booking.sessionId);
 
+  const linkInput = {
+    title: row.eventType.title,
+    description: `Rendez-vous avec ${row.professional.businessName}`,
+    startAt: row.booking.startAt,
+    endAt: row.booking.endAt,
+  };
+  const calendarLinks = {
+    google: googleCalendarUrl(linkInput),
+    outlook: outlookCalendarUrl(linkInput),
+    ics: `${env.APP_URL}/api/bookings/${bookingId}/calendar.ics`,
+  };
+
   await sendEmail({
     to: row.customer.email,
     subject: `Réservation confirmée — ${row.eventType.title}`,
@@ -113,6 +127,7 @@ export async function fulfillBooking(bookingId: string) {
               currency: "EUR",
             }).format(row.booking.amountPaidCents / 100)
           : "Crédit de pack",
+      calendarLinks,
     }),
   });
 
