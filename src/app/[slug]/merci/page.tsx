@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { eq } from "drizzle-orm";
-import { CheckCircle2, Ticket } from "lucide-react";
+import { CalendarPlus, CheckCircle2, Ticket } from "lucide-react";
 
 import { PublicShell } from "@/components/public/public-shell";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { db } from "@/lib/db";
 import { booking, eventType, pack, packPurchase } from "@/lib/db/schema";
 import { formatSlot } from "@/lib/datetime";
+import { googleCalendarUrl, outlookCalendarUrl } from "@/lib/calendar-links";
 import { formatMoney } from "@/lib/utils";
 import { getPublicProfile } from "@/server/queries";
 
@@ -39,12 +40,47 @@ export default async function MerciPage({ params, searchParams }: Props) {
       .limit(1);
     const b = rows[0];
     if (b) {
+      const linkInput = {
+        title: b.title,
+        description: `Rendez-vous avec ${pro.businessName}`,
+        startAt: b.booking.startAt,
+        endAt: b.booking.endAt,
+      };
       detail = (
         <>
           <p className="font-semibold">{b.title}</p>
           <p className="text-sm text-muted-foreground">
             {formatSlot(b.booking.startAt, b.booking.endAt, pro.timezone)}
           </p>
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              <CalendarPlus className="size-3.5" />
+              Ajouter à mon calendrier :
+            </span>
+            <Button asChild variant="secondary" size="sm">
+              <a
+                href={googleCalendarUrl(linkInput)}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Google Agenda
+              </a>
+            </Button>
+            <Button asChild variant="secondary" size="sm">
+              <a
+                href={outlookCalendarUrl(linkInput)}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Outlook
+              </a>
+            </Button>
+            <Button asChild variant="secondary" size="sm">
+              <a href={`/api/bookings/${b.booking.id}/calendar.ics`}>
+                Apple / .ics
+              </a>
+            </Button>
+          </div>
         </>
       );
     }
