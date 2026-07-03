@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import { CalendarX2, Check, Clock, Loader2, Ticket } from "lucide-react";
 
 import { bookWithCredit, bookWithPayment, lookupCredits } from "@/server/public";
+import { DayCalendar } from "@/components/public/day-calendar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -49,6 +50,7 @@ export function BookingFlow({ professionalId, eventType, questions, days }: Prop
   const [pending, startTransition] = useTransition();
 
   const day = days.find((d) => d.key === selectedDay);
+  const availableKeys = days.map((d) => d.key);
   const free = eventType.priceCents <= 0;
   const isGroup = eventType.capacity > 1;
 
@@ -130,26 +132,14 @@ export function BookingFlow({ professionalId, eventType, questions, days }: Prop
             <Clock className="size-4 text-primary" /> 1. Choisissez un créneau
           </h2>
 
-          <div className="flex gap-2 overflow-x-auto pb-2">
-            {days.map((d) => (
-              <button
-                key={d.key}
-                type="button"
-                onClick={() => {
-                  setSelectedDay(d.key);
-                  setSelectedIso(null);
-                }}
-                className={cn(
-                  "shrink-0 rounded-xl border px-3 py-2 text-sm capitalize transition-colors",
-                  selectedDay === d.key
-                    ? "border-primary bg-accent text-accent-foreground"
-                    : "border-border hover:bg-muted",
-                )}
-              >
-                {d.label}
-              </button>
-            ))}
-          </div>
+          <DayCalendar
+            availableKeys={availableKeys}
+            selectedKey={selectedDay}
+            onSelect={(key) => {
+              setSelectedDay(key);
+              setSelectedIso(null);
+            }}
+          />
 
           <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4">
             {day?.slots.map((s) => {
