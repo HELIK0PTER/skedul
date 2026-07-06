@@ -33,7 +33,7 @@ export function DayCalendar({ availableKeys, selectedKey, onSelect }: DayCalenda
           type="button"
           aria-label="Mois précédent"
           onClick={() => setViewMonth((m) => subMonths(m, 1))}
-          className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted"
+          className="cursor-pointer rounded-lg p-1.5 text-muted-foreground hover:bg-muted"
         >
           <ChevronLeft className="size-4" />
         </button>
@@ -44,7 +44,7 @@ export function DayCalendar({ availableKeys, selectedKey, onSelect }: DayCalenda
           type="button"
           aria-label="Mois suivant"
           onClick={() => setViewMonth((m) => addMonths(m, 1))}
-          className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted"
+          className="cursor-pointer rounded-lg p-1.5 text-muted-foreground hover:bg-muted"
         >
           <ChevronRight className="size-4" />
         </button>
@@ -77,7 +77,7 @@ export function DayCalendar({ availableKeys, selectedKey, onSelect }: DayCalenda
                 !available && "cursor-not-allowed text-muted-foreground opacity-40",
                 available &&
                   !selected &&
-                  "text-foreground hover:border-primary hover:bg-accent",
+                  "cursor-pointer text-foreground hover:border-primary hover:bg-accent",
                 selected && "border-primary bg-accent text-accent-foreground",
               )}
             >
