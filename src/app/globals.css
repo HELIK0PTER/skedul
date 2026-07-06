@@ -241,6 +241,42 @@ body {
   }
 }
 
+/* --- Visite guidée /demo --- */
+.demo-click {
+  opacity: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .demo-click {
+    animation: demo-click 0.45s ease-out both;
+  }
+  .demo-url {
+    animation: demo-url-in 0.3s ease-out both;
+  }
+  .demo-pop {
+    animation: stamp-in 0.4s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+  }
+}
+@keyframes demo-click {
+  from {
+    opacity: 0.8;
+    transform: scale(0.4);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.4);
+  }
+}
+@keyframes demo-url-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @layer utilities {
   .text-balance {
     text-wrap: balance;
