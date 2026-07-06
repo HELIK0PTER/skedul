@@ -177,13 +177,15 @@ Signature : **le carnet à tampons**, déjà au cœur de l'identité (hero
   (`transform: scale(largeurConteneur / 960)`, mesuré par `ResizeObserver`)
   pour tenir sur toutes les tailles d'écran, mobile compris. Le curseur vit
   *dans* le repère mis à l'échelle : aucune conversion de coordonnées.
-- **Talon de contrôle** : sous le cadre, relié par une ligne perforée en
-  pointillés avec encoches latérales (motif `.ticket-notch` existant).
-  Contenu : eyebrow mono uppercase « Côté client » / « Côté pro », titre
-  d'étape en `font-display`, description `text-sm text-muted-foreground`,
-  boutons « Précédent » (ghost), lecture auto (icône Play/Pause, ghost) et
-  « Suivant » (primaire, `ArrowRight`). À la dernière étape, « Suivant »
-  devient « Créer ma page » → `/sign-up`.
+- **Talon de contrôle** : colonne à droite du cadre sur desktop (comme le
+  talon latéral d'un billet de cinéma — le cadre garde ainsi le maximum de
+  hauteur d'écran), empilé sous le cadre sur mobile. Carte blanche à
+  bordure en pointillés (perforation simplifiée). Contenu : eyebrow mono
+  uppercase « Côté client » / « Côté pro », titre d'étape en `font-display`,
+  description `text-sm text-muted-foreground`, boutons « Précédent »
+  (ghost), lecture auto (icône Play/Pause, ghost) et « Suivant » (primaire,
+  `ArrowRight`). À la dernière étape, « Suivant » devient « Créer ma page »
+  → `/sign-up`.
 - **Progression = carnet à tampons** : une case ronde par étape (cercle en
   pointillés, comme les cases non tamponnées du hero) ; chaque étape
   franchie est tamponnée en rose `--color-stamp` avec l'animation
