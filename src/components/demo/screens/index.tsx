@@ -1,6 +1,7 @@
 "use client";
 
 import type { DemoState } from "../demo-script";
+import { ClientProfile } from "./client-profile";
 
 export interface ScreenProps {
   state: DemoState;
@@ -27,7 +28,7 @@ function Stub({ label, targets }: { label: string; targets: string[] }) {
 export function DemoScreen({ state }: ScreenProps) {
   switch (state.screen) {
     case "client-profile":
-      return <Stub label="client-profile" targets={["service-decouverte", "service-decouverte-cta", "pack-card", "pack-buy"]} />;
+      return <ClientProfile state={state} />;
     case "client-booking":
       return <Stub label="client-booking" targets={["calendar", "slot-18:00", "slot-10:30", "field-name", "field-email", "pay-button", "credit-button"]} />;
     case "client-pack":
