@@ -104,7 +104,7 @@ export interface DemoSession {
 export const DEMO_WEEK_SESSIONS: DemoSession[] = [
   { id: "s1", dayIndex: 0, startMinute: 10 * 60, durationMinutes: 90, title: "Cours collectif", color: "#0ea5e9", subtitle: "5/8" },
   { id: "s2", dayIndex: 1, startMinute: 12 * 60, durationMinutes: 60, title: "Coaching privé", color: "#16a34a", subtitle: "Marc D." },
-  { id: "s3", dayIndex: 3, startMinute: 18 * 60 + 30, durationMinutes: 90, title: "Cours collectif", color: "#0ea5e9", subtitle: "8/8" },
+  { id: "s3", dayIndex: 3, startMinute: 16 * 60 + 30, durationMinutes: 90, title: "Cours collectif", color: "#0ea5e9", subtitle: "8/8" },
   { id: "s4", dayIndex: 4, startMinute: 9 * 60 + 30, durationMinutes: 60, title: "Séance découverte", color: "#6d5cf6", subtitle: "Noé P." },
 ];
 

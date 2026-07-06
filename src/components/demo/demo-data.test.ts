@@ -9,6 +9,7 @@ import {
   demoAvailableKeys,
   leaSession,
   planningWeekDays,
+  DEMO_WEEK_SESSIONS,
 } from "./demo-data";
 
 test("demoAvailableKeys: 8 jours, le premier à J+2", () => {
@@ -34,4 +35,14 @@ test("leaSession: positionnée sur le jour réservé à 18:00", () => {
   assert.ok(s.dayIndex >= 0 && s.dayIndex <= 6);
   assert.equal(toDayKey(planningWeekDays()[s.dayIndex]), bookedDayKey());
   assert.equal(s.startMinute, 18 * 60);
+});
+
+test("aucune séance statique ne chevauche le créneau de Léa (18:00 – 19:00), quel que soit son jour", () => {
+  const lea = leaSession();
+  const leaEnd = lea.startMinute + lea.durationMinutes;
+  for (const s of DEMO_WEEK_SESSIONS) {
+    const sEnd = s.startMinute + s.durationMinutes;
+    const overlaps = s.startMinute < leaEnd && sEnd > lea.startMinute;
+    assert.equal(overlaps, false, `${s.id} chevauche la séance de Léa`);
+  }
 });
