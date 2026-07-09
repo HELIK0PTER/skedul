@@ -231,7 +231,7 @@ export default function Home() {
                   </Link>
                 </Button>
                 <Button asChild size="lg" variant="secondary">
-                  <Link href="/altinha-paris">Voir une page de démo</Link>
+                  <Link href="/demo">Voir la démo</Link>
                 </Button>
               </div>
               {env.APP_ENV !== "production" && (

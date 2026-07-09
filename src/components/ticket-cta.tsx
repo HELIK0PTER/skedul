@@ -127,7 +127,7 @@ export function TicketCta() {
           style={{ bottom: REVEALED_BUTTON_BOTTOM_PX }}
         >
           <Button asChild className={cn(!torn && "pointer-events-none")}>
-            <Link href="/altinha-paris" tabIndex={torn ? undefined : -1}>
+            <Link href="/demo" tabIndex={torn ? undefined : -1}>
               Voir la démo
               <ArrowRight className="size-4" />
             </Link>
