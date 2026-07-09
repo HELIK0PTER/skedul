@@ -5,6 +5,7 @@ import { ClientBooking } from "./client-booking";
 import { ClientConfirmation } from "./client-confirmation";
 import { ClientPack } from "./client-pack";
 import { ClientProfile } from "./client-profile";
+import { ProPlanning } from "./pro-planning";
 
 export interface ScreenProps {
   state: DemoState;
@@ -39,7 +40,7 @@ export function DemoScreen({ state }: ScreenProps) {
     case "client-confirmation":
       return <ClientConfirmation state={state} />;
     case "pro-planning":
-      return <Stub label="pro-planning" targets={["session-lea"]} />;
+      return <ProPlanning state={state} />;
     case "pro-event-types":
       return <Stub label="pro-event-types" targets={["edit-service"]} />;
     case "pro-packs":
