@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { addDays } from "date-fns";
 
-import { toDayKey } from "../../lib/calendar-grid";
+import { parseDayKey, toDayKey } from "../../lib/calendar-grid";
 import {
   bookedDayKey,
   creditDayKey,
@@ -12,15 +12,24 @@ import {
   DEMO_WEEK_SESSIONS,
 } from "./demo-data";
 
-test("demoAvailableKeys: 8 jours, le premier à J+2", () => {
+test("demoAvailableKeys: 8 jours, le premier à J+2 (ou J+4 en fin de mois)", () => {
   const keys = demoAvailableKeys();
   assert.equal(keys.length, 8);
-  assert.equal(keys[0], toDayKey(addDays(new Date(), 2)));
+  const twoDaysOut = toDayKey(addDays(new Date(), 2));
+  const fourDaysOut = toDayKey(addDays(new Date(), 4));
+  assert.ok(
+    keys[0] === twoDaysOut || keys[0] === fourDaysOut,
+    "le 1er jour est J+2, ou J+4 quand J+2 est le dernier jour du mois",
+  );
 });
 
-test("bookedDayKey/creditDayKey: J+2 et J+3", () => {
-  assert.equal(bookedDayKey(), toDayKey(addDays(new Date(), 2)));
-  assert.equal(creditDayKey(), toDayKey(addDays(new Date(), 3)));
+test("bookedDayKey/creditDayKey: jours consécutifs, toujours dans le même mois", () => {
+  // creditDayKey doit rester dans le mois affiché par le calendrier (calé sur le
+  // jour réservé), sinon le curseur de l'étape 6 vise un jour hors de la vue.
+  const booked = parseDayKey(bookedDayKey());
+  const credit = parseDayKey(creditDayKey());
+  assert.equal(creditDayKey(), toDayKey(addDays(booked, 1)), "crédit = réservé + 1 jour");
+  assert.equal(booked.getMonth(), credit.getMonth(), "même mois → tous deux visibles");
 });
 
 test("planningWeekDays: 7 jours, lundi en tête, contient le jour réservé", () => {

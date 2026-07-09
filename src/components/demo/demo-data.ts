@@ -63,9 +63,23 @@ export const DEMO_CLIENT = { name: "Léa Martin", email: "lea@exemple.com" };
 /** Offsets (jours depuis aujourd'hui) des jours réservables — la démo reste d'actualité sans maintenance. */
 const AVAILABLE_OFFSETS = [2, 3, 5, 7, 9, 12, 14, 16];
 
+/**
+ * Décale toute la fenêtre de 2 jours quand le 1er jour réservable (J+2) tombe le
+ * dernier jour de son mois : sinon le 2e jour (la réservation à crédit) bascule au
+ * mois suivant, hors du mois affiché par le calendrier — qui se cale sur le 1er jour.
+ * Ce décalage ne concerne qu'une date par mois et garde les deux premiers jours
+ * dans le même mois. (La démo reste relative à « aujourd'hui ».)
+ */
+function windowShift(today: Date): number {
+  const first = addDays(today, AVAILABLE_OFFSETS[0]);
+  const second = addDays(today, AVAILABLE_OFFSETS[0] + 1);
+  return first.getMonth() === second.getMonth() ? 0 : 2;
+}
+
 export function demoAvailableKeys(): string[] {
   const today = new Date();
-  return AVAILABLE_OFFSETS.map((o) => toDayKey(addDays(today, o)));
+  const shift = windowShift(today);
+  return AVAILABLE_OFFSETS.map((o) => toDayKey(addDays(today, o + shift)));
 }
 
 /** Jour de la 1re réservation (payée) : J+2. */
