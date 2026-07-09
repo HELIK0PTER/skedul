@@ -2,6 +2,8 @@
 
 import type { DemoState } from "../demo-script";
 import { ClientBooking } from "./client-booking";
+import { ClientConfirmation } from "./client-confirmation";
+import { ClientPack } from "./client-pack";
 import { ClientProfile } from "./client-profile";
 
 export interface ScreenProps {
@@ -33,9 +35,9 @@ export function DemoScreen({ state }: ScreenProps) {
     case "client-booking":
       return <ClientBooking state={state} />;
     case "client-pack":
-      return <Stub label="client-pack" targets={["field-name", "field-email", "pack-pay"]} />;
+      return <ClientPack state={state} />;
     case "client-confirmation":
-      return <Stub label={`client-confirmation (${state.confirmation})`} targets={["book-with-credit"]} />;
+      return <ClientConfirmation state={state} />;
     case "pro-planning":
       return <Stub label="pro-planning" targets={["session-lea"]} />;
     case "pro-event-types":
