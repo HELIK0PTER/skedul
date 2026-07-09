@@ -19,11 +19,19 @@ export function BrowserFrame({ url, contentRef, children }: BrowserFrameProps) {
   useEffect(() => {
     const el = outerRef.current;
     if (!el) return;
-    const observer = new ResizeObserver(([entry]) => {
-      setScale(Math.min(entry.contentRect.width / FRAME_W, 1));
-    });
+    const measure = () =>
+      setScale(Math.min(el.clientWidth / FRAME_W, 1));
+    // Measure now, then track changes. ResizeObserver catches layout-driven
+    // resizes (sidebar reflow, etc.); the window listener is a fallback for
+    // environments that don't deliver ResizeObserver callbacks.
+    measure();
+    const observer = new ResizeObserver(measure);
     observer.observe(el);
-    return () => observer.disconnect();
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
   }, []);
 
   return (
