@@ -37,10 +37,12 @@ export function TourControls({
 
   return (
     <div className="relative rounded-2xl border border-dashed border-border bg-card p-5 shadow-(--shadow-card)">
-      <p className="font-mono text-[11px] uppercase tracking-widest text-primary">
-        {CHAPTER_LABELS[step.chapter]} · étape {index + 1}/{steps.length}
-      </p>
+      {/* aria-live englobe le chapitre + numéro d'étape en plus du titre/description,
+          pour que le changement d'étape soit annoncé en entier aux lecteurs d'écran. */}
       <div aria-live="polite">
+        <p className="font-mono text-[11px] uppercase tracking-widest text-primary">
+          {CHAPTER_LABELS[step.chapter]} · étape {index + 1}/{steps.length}
+        </p>
         <h2 className="mt-1 font-display text-xl font-bold tracking-tight">{step.title}</h2>
         <p className="mt-1 text-sm text-muted-foreground">{step.description}</p>
       </div>

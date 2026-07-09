@@ -22,6 +22,7 @@ export default function DemoPage() {
         </Link>
       </header>
       <main className="flex flex-1 items-start justify-center pb-10 pt-4">
+        <h1 className="sr-only">Démo Skedul — visite guidée du produit</h1>
         <DemoTour />
       </main>
     </div>
