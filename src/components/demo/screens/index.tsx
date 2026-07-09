@@ -5,6 +5,8 @@ import { ClientBooking } from "./client-booking";
 import { ClientConfirmation } from "./client-confirmation";
 import { ClientPack } from "./client-pack";
 import { ClientProfile } from "./client-profile";
+import { ProAvailability } from "./pro-availability";
+import { ProBranding } from "./pro-branding";
 import { ProEventTypes } from "./pro-event-types";
 import { ProPacks } from "./pro-packs";
 import { ProPlanning } from "./pro-planning";
@@ -48,9 +50,9 @@ export function DemoScreen({ state }: ScreenProps) {
     case "pro-packs":
       return <ProPacks state={state} />;
     case "pro-availability":
-      return <Stub label="pro-availability" targets={["availability", "saturday-toggle"]} />;
+      return <ProAvailability state={state} />;
     case "pro-branding":
-      return <Stub label="pro-branding" targets={["swatch-turquoise", "layout-vitrine"]} />;
+      return <ProBranding state={state} />;
     case "outro":
       return null; // rendu hors cadre par DemoTour
   }
