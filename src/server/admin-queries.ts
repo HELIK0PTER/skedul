@@ -515,3 +515,61 @@ export function listRecentPurchases(status: PurchaseStatus | null) {
     .orderBy(desc(packPurchase.createdAt))
     .limit(ACTIVITY_LIMIT);
 }
+
+/* ───────────────────────────── Traffic ───────────────────────────── */
+
+export async function getTrafficReport(since: Date) {
+  const day = dayOf(pageView.createdAt);
+  const visitors = () => sql<string>`count(distinct ${pageView.visitorHash})`;
+  const source = sql<string>`coalesce(${pageView.source}, ${pageView.referrerHost}, 'Direct')`;
+  const inRange = gte(pageView.createdAt, since);
+
+  const [daily, devices, pages, pros, sources, countries] = await Promise.all([
+    db
+      .select({ day, views: count(), visitors: visitors() })
+      .from(pageView)
+      .where(inRange)
+      .groupBy(day),
+    db
+      .select({ device: pageView.device, views: count() })
+      .from(pageView)
+      .where(inRange)
+      .groupBy(pageView.device)
+      .orderBy(desc(count())),
+    db
+      .select({ path: pageView.path, views: count(), visitors: visitors() })
+      .from(pageView)
+      .where(inRange)
+      .groupBy(pageView.path)
+      .orderBy(desc(count()))
+      .limit(10),
+    db
+      .select({
+        userId: professional.userId,
+        businessName: professional.businessName,
+        slug: professional.slug,
+        views: count(),
+      })
+      .from(pageView)
+      .innerJoin(professional, eq(professional.id, pageView.professionalId))
+      .where(inRange)
+      .groupBy(professional.id)
+      .orderBy(desc(count()))
+      .limit(10),
+    db
+      .select({ source, visits: count() })
+      .from(pageView)
+      .where(and(inRange, eq(pageView.entry, true)))
+      .groupBy(source)
+      .orderBy(desc(count()))
+      .limit(10),
+    db
+      .select({ country: pageView.country, views: count() })
+      .from(pageView)
+      .where(inRange)
+      .groupBy(pageView.country)
+      .orderBy(desc(count()))
+      .limit(10),
+  ]);
+  return { daily, devices, pages, pros, sources, countries };
+}
