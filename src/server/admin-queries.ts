@@ -1,10 +1,25 @@
 import "server-only";
 
-import { and, count, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gt,
+  gte,
+  ilike,
+  inArray,
+  isNotNull,
+  lt,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
 import { db } from "@/lib/db";
 import {
+  account,
   booking,
   customer,
   eventType,
@@ -12,12 +27,18 @@ import {
   packPurchase,
   pageView,
   professional,
+  session,
   user,
 } from "@/lib/db/schema";
 import { env } from "@/lib/env";
 import { ADMIN_TZ } from "@/lib/analytics";
 import { mergeMoney, stripeMode, type MoneyTotal } from "@/lib/admin-metrics";
-import { BOOKING_STATUS_LABELS } from "@/lib/admin-params";
+import {
+  BOOKING_STATUS_LABELS,
+  USERS_PAGE_SIZE,
+  type UserFilter,
+} from "@/lib/admin-params";
+import { userIsSuspended } from "@/lib/suspension";
 import { formatMoney } from "@/lib/utils";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -276,5 +297,163 @@ export async function getAppHealth(now: Date = new Date()) {
     dbLatencyMs,
     pendingBookings: pendingBookings[0]?.value ?? 0,
     pendingPurchases: pendingPurchases[0]?.value ?? 0,
+  };
+}
+
+/* ───────────────────────────── Users ───────────────────────────── */
+
+export async function listUsers(opts: {
+  q: string;
+  filter: UserFilter;
+  page: number;
+}) {
+  const conditions: (SQL | undefined)[] = [];
+  if (opts.q) {
+    const pattern = `%${opts.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    conditions.push(
+      or(
+        ilike(user.name, pattern),
+        ilike(user.email, pattern),
+        ilike(professional.businessName, pattern),
+      ),
+    );
+  }
+  if (opts.filter === "client") conditions.push(eq(user.role, "client"));
+  if (opts.filter === "admin") conditions.push(eq(user.role, "admin"));
+  if (opts.filter === "pro") conditions.push(isNotNull(professional.id));
+  if (opts.filter === "suspended") conditions.push(userIsSuspended());
+  const where = and(...conditions);
+
+  const [rows, totals] = await Promise.all([
+    db
+      .select({
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        createdAt: user.createdAt,
+        lastLoginAt: user.lastLoginAt,
+        banned: user.banned,
+        banExpires: user.banExpires,
+        slug: professional.slug,
+      })
+      .from(user)
+      .leftJoin(professional, eq(professional.userId, user.id))
+      .where(where)
+      .orderBy(desc(user.createdAt))
+      .limit(USERS_PAGE_SIZE)
+      .offset((opts.page - 1) * USERS_PAGE_SIZE),
+    db
+      .select({ value: count() })
+      .from(user)
+      .leftJoin(professional, eq(professional.userId, user.id))
+      .where(where),
+  ]);
+  return { rows, total: totals[0]?.value ?? 0 };
+}
+
+async function getProStats(professionalId: string, now: Date) {
+  const [eventTypes, confirmed, upcoming, customers, packsSold] =
+    await Promise.all([
+      db
+        .select({ value: count() })
+        .from(eventType)
+        .where(eq(eventType.professionalId, professionalId)),
+      db
+        .select({ value: count() })
+        .from(booking)
+        .where(
+          and(
+            eq(booking.professionalId, professionalId),
+            inArray(booking.status, [...CONFIRMED]),
+          ),
+        ),
+      db
+        .select({ value: count() })
+        .from(booking)
+        .where(
+          and(
+            eq(booking.professionalId, professionalId),
+            inArray(booking.status, ["pending", "confirmed"]),
+            gte(booking.startAt, now),
+          ),
+        ),
+      db
+        .select({ value: count() })
+        .from(customer)
+        .where(eq(customer.professionalId, professionalId)),
+      db
+        .select({ value: count() })
+        .from(packPurchase)
+        .where(
+          and(
+            eq(packPurchase.professionalId, professionalId),
+            eq(packPurchase.status, "paid"),
+          ),
+        ),
+    ]);
+  return {
+    eventTypes: eventTypes[0]?.value ?? 0,
+    bookings: confirmed[0]?.value ?? 0,
+    upcoming: upcoming[0]?.value ?? 0,
+    customers: customers[0]?.value ?? 0,
+    packsSold: packsSold[0]?.value ?? 0,
+  };
+}
+
+export async function getUserDetail(userId: string, now: Date = new Date()) {
+  const [found] = await db
+    .select({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      image: user.image,
+      emailVerified: user.emailVerified,
+      role: user.role,
+      createdAt: user.createdAt,
+      lastLoginAt: user.lastLoginAt,
+      banned: user.banned,
+      banReason: user.banReason,
+      banExpires: user.banExpires,
+    })
+    .from(user)
+    .where(eq(user.id, userId))
+    .limit(1);
+  if (!found) return null;
+
+  const [proRows, providers, sessions] = await Promise.all([
+    db.select().from(professional).where(eq(professional.userId, userId)).limit(1),
+    db
+      .select({ providerId: account.providerId })
+      .from(account)
+      .where(eq(account.userId, userId)),
+    db
+      .select({
+        id: session.id,
+        createdAt: session.createdAt,
+        expiresAt: session.expiresAt,
+        ipAddress: session.ipAddress,
+        userAgent: session.userAgent,
+        impersonatedBy: session.impersonatedBy,
+      })
+      .from(session)
+      .where(and(eq(session.userId, userId), gt(session.expiresAt, now)))
+      .orderBy(desc(session.createdAt)),
+  ]);
+  const pro = proRows[0] ?? null;
+  const [stats, revenue] = pro
+    ? await Promise.all([
+        getProStats(pro.id, now),
+        getRevenue({ professionalId: pro.id }),
+      ])
+    : [null, []];
+
+  return {
+    user: found,
+    pro,
+    providers: providers.map((p) => p.providerId),
+    sessions,
+    stats,
+    revenue,
   };
 }
