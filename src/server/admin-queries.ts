@@ -36,6 +36,8 @@ import { mergeMoney, stripeMode, type MoneyTotal } from "@/lib/admin-metrics";
 import {
   BOOKING_STATUS_LABELS,
   USERS_PAGE_SIZE,
+  type BookingStatus,
+  type PurchaseStatus,
   type UserFilter,
 } from "@/lib/admin-params";
 import { userIsSuspended } from "@/lib/suspension";
@@ -456,4 +458,60 @@ export async function getUserDetail(userId: string, now: Date = new Date()) {
     stats,
     revenue,
   };
+}
+
+/* ───────────────────────────── Activity ───────────────────────────── */
+
+export const ACTIVITY_LIMIT = 50;
+
+export function listRecentBookings(status: BookingStatus | null) {
+  return db
+    .select({
+      id: booking.id,
+      createdAt: booking.createdAt,
+      startAt: booking.startAt,
+      endAt: booking.endAt,
+      status: booking.status,
+      paymentType: booking.paymentType,
+      amountCents: booking.amountPaidCents,
+      proUserId: professional.userId,
+      businessName: professional.businessName,
+      timezone: professional.timezone,
+      currency: professional.currency,
+      customerName: customer.name,
+      customerEmail: customer.email,
+      eventTitle: eventType.title,
+    })
+    .from(booking)
+    .innerJoin(professional, eq(professional.id, booking.professionalId))
+    .innerJoin(customer, eq(customer.id, booking.customerId))
+    .innerJoin(eventType, eq(eventType.id, booking.eventTypeId))
+    .where(status ? eq(booking.status, status) : undefined)
+    .orderBy(desc(booking.createdAt))
+    .limit(ACTIVITY_LIMIT);
+}
+
+export function listRecentPurchases(status: PurchaseStatus | null) {
+  return db
+    .select({
+      id: packPurchase.id,
+      createdAt: packPurchase.createdAt,
+      status: packPurchase.status,
+      amountCents: packPurchase.amountPaidCents,
+      currency: packPurchase.currency,
+      creditsTotal: packPurchase.creditsTotal,
+      creditsRemaining: packPurchase.creditsRemaining,
+      proUserId: professional.userId,
+      businessName: professional.businessName,
+      customerName: customer.name,
+      customerEmail: customer.email,
+      packName: pack.name,
+    })
+    .from(packPurchase)
+    .innerJoin(professional, eq(professional.id, packPurchase.professionalId))
+    .innerJoin(customer, eq(customer.id, packPurchase.customerId))
+    .innerJoin(pack, eq(pack.id, packPurchase.packId))
+    .where(status ? eq(packPurchase.status, status) : undefined)
+    .orderBy(desc(packPurchase.createdAt))
+    .limit(ACTIVITY_LIMIT);
 }
