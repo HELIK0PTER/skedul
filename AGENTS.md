@@ -26,8 +26,9 @@ services/availability/packs in a back-office; their clients book slots
   `src/lib/admin.ts` — they re-read the role from the DB. Grant with
   `pnpm admin:grant <email>` (`--revoke` to remove). Admins get an Admin/Client
   chooser after sign-in (cookie `skedul_entry`). Reads in `src/server/admin-queries.ts`,
-  actions in `src/server/admin.ts`. The plugin's own `/api/auth/admin/*` HTTP
-  endpoints are disabled (`disabledPaths` in `src/lib/auth.ts`) — never re-enable them.
+  actions in `src/server/admin.ts`. The admin plugin's HTTP endpoints are all
+  disabled: `disabledPaths` is derived from the plugin's own endpoint list in
+  `src/lib/auth-admin.ts` (covered by a test) — never re-enable them.
 - **Traffic**: cookieless page views (`page_view`) sent by `<PageViewTracker />` to
   `/api/track`; public pages only (see `isTrackedPath` in `src/lib/analytics.ts`).
 - **Money**: integer cents + `currency` (default `eur`). Format via `formatMoney`.

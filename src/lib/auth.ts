@@ -1,37 +1,12 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { nextCookies } from "better-auth/next-js";
-import { admin } from "better-auth/plugins";
 import { eq } from "drizzle-orm";
 
+import { ADMIN_HTTP_ENDPOINTS, adminPlugin } from "@/lib/auth-admin";
 import { db } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { env } from "@/lib/env";
-
-/**
- * The admin plugin also serves these over HTTP (/api/auth/admin/*), authorised
- * from the 5-minute cookie-cached role. Admin actions go through the server
- * actions in src/server/admin.ts (stricter, DB-fresh checks, no delete or
- * set-password), so the raw endpoints would bypass them: close them. This only
- * affects the HTTP router; in-process `auth.api.*` calls keep working.
- */
-const ADMIN_HTTP_ENDPOINTS = [
-  "/admin/set-role",
-  "/admin/get-user",
-  "/admin/create-user",
-  "/admin/update-user",
-  "/admin/list-users",
-  "/admin/list-user-sessions",
-  "/admin/unban-user",
-  "/admin/ban-user",
-  "/admin/impersonate-user",
-  "/admin/stop-impersonating",
-  "/admin/revoke-user-session",
-  "/admin/revoke-user-sessions",
-  "/admin/remove-user",
-  "/admin/set-user-password",
-  "/admin/has-permission",
-];
 
 export const auth = betterAuth({
   appName: "Skedul",
@@ -95,14 +70,7 @@ export const auth = betterAuth({
   },
   disabledPaths: ADMIN_HTTP_ENDPOINTS,
   plugins: [
-    // Roles, suspension, impersonation. defaultRole must be a user_role enum
-    // value — the plugin's own default ("user") would violate the enum.
-    admin({
-      defaultRole: "client",
-      adminRoles: ["admin"],
-      bannedUserMessage:
-        "Votre compte a été suspendu. Contactez le support si vous pensez qu'il s'agit d'une erreur.",
-    }),
+    adminPlugin,
     // nextCookies() must be the last plugin so it can set cookies in actions.
     nextCookies(),
   ],
