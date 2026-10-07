@@ -85,6 +85,11 @@ export async function suspendUser(input: {
         ...(seconds ? { banExpiresIn: seconds } : {}),
       },
     });
+    // Open-ended ban: Better Auth leaves banExpires untouched when no
+    // banExpiresIn is sent, so clear the lapsed expiry of an earlier timed ban.
+    if (seconds === null) {
+      await db.update(user).set({ banExpires: null }).where(eq(user.id, target.id));
+    }
   } catch (err) {
     return failure(err);
   }
