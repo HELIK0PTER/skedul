@@ -10,6 +10,7 @@ import {
   ExternalLink,
   LayoutDashboard,
   Settings,
+  ShieldCheck,
 } from "lucide-react";
 
 import { Logo } from "@/components/ui/logo";
@@ -28,9 +29,11 @@ const NAV = [
 export function DashboardSidebar({
   businessName,
   slug,
+  isAdmin = false,
 }: {
   businessName: string;
   slug: string;
+  isAdmin?: boolean;
 }) {
   const pathname = usePathname();
 
@@ -69,6 +72,15 @@ export function DashboardSidebar({
       </nav>
 
       <div className="hidden gap-2 border-t border-border p-3 md:flex md:flex-col">
+        {isAdmin && (
+          <Link
+            href="/admin"
+            className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-primary hover:bg-accent"
+          >
+            <ShieldCheck className="size-4" />
+            Dashboard Admin
+          </Link>
+        )}
         <Link
           href={`/${slug}`}
           target="_blank"
