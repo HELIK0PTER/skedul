@@ -88,10 +88,11 @@ export async function createProfessionalProfile(input: {
     })
     .returning({ id: professional.id });
 
+  // Promote plain clients to "pro" — never demote an admin.
   await db
     .update(userTable)
     .set({ role: "pro" })
-    .where(eq(userTable.id, user.id));
+    .where(and(eq(userTable.id, user.id), eq(userTable.role, "client")));
 
   // sensible default availability: Mon–Fri 9:00–17:00
   await db.insert(availabilityRule).values(
