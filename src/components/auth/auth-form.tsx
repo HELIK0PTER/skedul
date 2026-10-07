@@ -6,7 +6,7 @@ import { useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { signIn, signUp } from "@/lib/auth-client";
-import { resolvePostSignIn } from "@/server/entry";
+import { resolvePostSignIn, type PostSignIn } from "@/server/entry";
 import { EntryChooser } from "@/components/auth/entry-chooser";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -53,7 +53,15 @@ export function AuthForm({
     }
 
     // Admins pick Admin vs Client (unless remembered); everyone else → /dashboard.
-    const next = await resolvePostSignIn();
+    let next: PostSignIn;
+    try {
+      next = await resolvePostSignIn();
+    } catch {
+      // Sign-in worked; only the routing lookup failed (network, DB, stale action).
+      setLoading(false);
+      setError("Connexion réussie, mais la redirection a échoué. Réessayez.");
+      return;
+    }
     if (next.kind === "choose") {
       setLoading(false);
       setChoosing(true);

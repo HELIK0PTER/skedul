@@ -30,6 +30,7 @@ export function EntryChooser({ open }: { open: boolean }) {
   const router = useRouter();
   const [remember, setRemember] = useState(false);
   const [pending, setPending] = useState<EntryChoice | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const firstOption = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -39,8 +40,17 @@ export function EntryChooser({ open }: { open: boolean }) {
   if (!open) return null;
 
   async function pick(choice: EntryChoice) {
+    setError(null);
     setPending(choice);
-    const to = await chooseEntry(choice, remember);
+    let to: string;
+    try {
+      to = await chooseEntry(choice, remember);
+    } catch {
+      // The dialog cannot be dismissed: give the options back and say what failed.
+      setPending(null);
+      setError("Impossible d'ouvrir ce tableau de bord. Réessayez.");
+      return;
+    }
     // Push only: a router.refresh() queued right after a server action leaves the
     // navigation pending forever (Next 16 router queue). The target is fetched fresh.
     router.push(to);
@@ -99,6 +109,14 @@ export function EntryChooser({ open }: { open: boolean }) {
             </button>
           ))}
         </div>
+        {error && (
+          <p
+            role="alert"
+            className="mt-3 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            {error}
+          </p>
+        )}
         <label className="mt-4 flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
           <input
             type="checkbox"
