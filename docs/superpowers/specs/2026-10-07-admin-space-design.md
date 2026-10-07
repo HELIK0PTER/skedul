@@ -82,7 +82,8 @@ le back-office d'un pro pour l'aider.
     suspendu.
   - `requireAdmin()` pour les pages : pas de session → `redirect("/sign-in")` ; session non
     admin → `notFound()` (on ne révèle pas l'existence de l'admin).
-  - `assertAdmin()` pour les server actions : lève une erreur « Accès refusé ».
+  - Les server actions appellent `getAdminUser()` et renvoient « Accès refusé » sans lui.
+  - `isSuspended()` et ses équivalents SQL vivent dans `src/lib/suspension.ts`.
 - **Layout** `src/app/admin/layout.tsx` : `requireAdmin()` puis barre latérale admin.
 - **Script** `scripts/grant-admin.ts` → `pnpm admin:grant <email>` (et `--revoke`) : met à
   jour `user.role` sur la base de `DATABASE_URL` (via `scripts/load-env`), refuse un e-mail
@@ -134,7 +135,7 @@ sont des Server Components dynamiques ; les requêtes vivent dans
 | Volume encaissé | réservations `payment_type = direct` et `confirmed`/`completed` (`amount_paid_cents`, devise du pro) + achats de packs `paid` (`amount_paid_cents`, devise de l'achat) ; affiché **par devise** |
 | Visiteurs | somme, jour par jour, des `visitor_hash` distincts sur la période (§ 5) |
 | Suspendu | `banned = true` et (`ban_expires` nul ou futur) — une suspension dont la date est passée compte comme levée |
-| Paiement bloqué | réservation ou achat `pending` créé il y a plus d'1 h |
+| Paiement en attente | réservation ou achat `pending` créé il y a plus d'1 h (sur les 7 derniers jours) |
 
 ### Vue d'ensemble (`/admin`)
 
@@ -146,7 +147,8 @@ sont des Server Components dynamiques ; les requêtes vivent dans
 - **État de l'app** : environnement (`APP_ENV`, URL) ; Stripe **Réel / Test / Simulé**
   (préfixe de clé `sk_live_`/`rk_live_` vs `sk_test_`/`rk_test_`) + webhook configuré ou non ;
   Resend, Blob : Réel / Simulé ; Google Agenda : configuré ou non ; latence d'un `select 1` ;
-  alerte « N paiements bloqués » avec lien vers l'Activité filtrée sur `pending`.
+  alerte « N réservations / achats en attente de paiement depuis plus d'1 h » avec lien vers
+  l'Activité filtrée sur `pending`.
 
 ### Utilisateurs (`/admin/users`)
 
@@ -181,9 +183,10 @@ affichera ensuite (plans, abonnés actifs, MRR, résiliations). Aucune requête.
 
 ## 4. Actions sur un utilisateur
 
-Server actions dans `src/server/admin.ts` ; chacune appelle `assertAdmin()`, refuse d'agir sur
-soi-même, puis appelle l'API Better Auth (`auth.api.* ({ headers, body })`, qui revérifie la
-permission). Retour `{ ok: true } | { ok: false, error }`, erreurs affichées dans le panneau.
+Server actions dans `src/server/admin.ts` ; chacune vérifie l'admin via `getAdminUser()`,
+refuse d'agir sur soi-même, puis appelle l'API Better Auth (`auth.api.* ({ headers, body })`,
+qui revérifie la permission) — sauf le rôle, écrit directement en base. Retour
+`{ ok: true } | { ok: false, error }`, erreurs affichées dans le panneau.
 
 | Action | Effet | Garde-fous |
 |---|---|---|
@@ -191,8 +194,8 @@ permission). Retour `{ ok: true } | { ok: false, error }`, erreurs affichées da
 | **Réactiver** | `unbanUser` | cible suspendue |
 | **Déconnecter partout** | `revokeUserSessions` | cible non admin |
 | **Se connecter en tant que** | `impersonateUser` (session 1 h) puis redirection `/dashboard` | cible pro (a une page), non admin, non suspendue |
-| **Nommer admin** | `setRole("admin")` | cible non admin, non suspendue |
-| **Retirer admin** | `setRole("pro" \| "client")` selon la page pro | cible admin |
+| **Nommer admin** | `user.role = "admin"` (écrit en base : notre rôle est l'enum `user_role`) | cible non admin, non suspendue |
+| **Retirer admin** | `user.role = "pro" \| "client"` selon la page pro | cible admin |
 
 Sur un autre admin, seule « Retirer admin » est proposée ; sur son propre compte, aucune
 action. Le serveur applique les mêmes règles que l'interface.
@@ -202,7 +205,8 @@ action. Le serveur applique les mêmes règles que l'interface.
   (achat de pack, réservation) les refusent.
 - **Bandeau d'impersonation** : le layout du dashboard lit `session.impersonatedBy` et affiche
   « Vous êtes connecté en tant que {nom} ({e-mail}) — Revenir à l'admin ». Le bouton appelle
-  `stopImpersonation()` (sans `assertAdmin` : la session courante est celle du pro) →
+  `stopImpersonation()` (sans vérification admin : la session courante est celle du pro ;
+  Better Auth contrôle le cookie signé `admin_session`) →
   `stopImpersonating` → redirection vers la fiche du pro.
 - **Dernière connexion** : colonne `user.last_login_at`, mise à jour par un
   `databaseHooks.session.create.after` Better Auth, sauf si la session porte
@@ -239,7 +243,8 @@ action. Le serveur applique les mêmes règles que l'interface.
 
 - `searchParams.range` : `7 | 30 | 90` (défaut 30).
 - Totaux : pages vues, visiteurs, pages par visiteur, part mobile.
-- Graphe en barres par jour (pages vues + visiteurs).
+- Graphe en barres des visiteurs par jour, avec les pages vues du jour dans l'infobulle
+  (une seule série, donc pas de légende).
 - Top 10 : pages (vues, visiteurs), pages pro (nom d'activité + slug), sources (sur les
   `entry` : `source` sinon `referrer_host` sinon « Direct »), appareils, pays (« Inconnu » si
   nul).
@@ -266,9 +271,14 @@ la migration dans `drizzle.__drizzle_migrations`. Preview/prod migrent au déplo
 |---|---|
 | `src/lib/db/schema.ts` | enum + colonnes + table `page_view` |
 | `src/lib/auth.ts` | plugin `admin`, hook `last_login_at` |
-| `src/lib/admin.ts` | `getAdminUser`, `requireAdmin`, `assertAdmin`, `isSuspended` |
+| `src/lib/admin.ts` | `getAdminUser`, `requireAdmin` |
+| `src/lib/suspension.ts` (+ test) | `isSuspended`, `userIsSuspended()`, `userNotSuspended()` |
 | `src/lib/entry.ts` (+ test) | logique pure du choix d'entrée |
-| `src/lib/analytics.ts` (+ test) | `isTrackedPath`, `isBot`, `classifyDevice`, `referrerHost`, `visitorHash`, `proSlugFromPath`, `fillDailySeries` |
+| `src/lib/analytics.ts` (+ test) | `ADMIN_TZ`, `isTrackedPath`, `isBot`, `classifyDevice`, `browserName`, `classifyReferrer`, `normalizeSource`, `proSlugFromPath` |
+| `src/lib/visitor-hash.ts` (+ test) | empreinte visiteur du jour (`node:crypto`) |
+| `src/lib/admin-metrics.ts` (+ test) | jours, séries, montants par devise, mode Stripe, dates relatives |
+| `src/lib/admin-params.ts` (+ test) | lecture des `searchParams`, libellés, durées de suspension |
+| `scripts/apply-migration.ts` | `pnpm db:apply` (migration via le driver HTTP Neon) |
 | `src/server/entry.ts` | `resolvePostSignIn`, `chooseEntry`, `forgetEntryChoice` |
 | `src/server/admin.ts` | actions utilisateur + `stopImpersonation` |
 | `src/server/admin-queries.ts` | lectures admin |
