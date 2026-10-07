@@ -31,6 +31,8 @@ services/availability/packs in a back-office; their clients book slots
   `src/lib/auth-admin.ts` (covered by a test) — never re-enable them.
 - **Traffic**: cookieless page views (`page_view`) sent by `<PageViewTracker />` to
   `/api/track`; public pages only (see `isTrackedPath` in `src/lib/analytics.ts`).
+  Visitor hash = HMAC with a random per-day salt (`analytics_salt`, deleted after 2
+  days); page views older than 25 months are purged (`src/server/analytics-salt.ts`).
 - **Money**: integer cents + `currency` (default `eur`). Format via `formatMoney`.
 - **Time**: availability is wall-clock minutes-from-midnight in the pro's tz.
   Convert to instants with `instantFromWallClock` (`@date-fns/tz`). Slot logic in

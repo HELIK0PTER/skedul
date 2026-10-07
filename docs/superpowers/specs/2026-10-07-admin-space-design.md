@@ -37,7 +37,8 @@ le back-office d'un pro pour l'aider.
 
 - Facturation SaaS des pros (projet 2) et toute notion de plan/limite.
 - Suppression de compte, édition des données d'un utilisateur, export CSV.
-- Purge automatique des pages vues, tableau de bord temps réel, alertes par e-mail.
+- Tableau de bord temps réel, alertes par e-mail (la purge des pages vues à 25 mois, elle, est
+  en place : § 5).
 - Journal d'audit des actions admin (à envisager si plusieurs admins).
 
 ## Contraintes structurantes
@@ -225,19 +226,30 @@ action. Le serveur applique les mêmes règles que l'interface.
 - **Route** `src/app/api/track/route.ts` (POST) :
   - valide le corps (zod, tailles bornées) et revérifie `isTrackedPath` ;
   - ignore les robots (`isBot(user-agent)`) et les requêtes sans user-agent ;
-  - `visitor_hash` = sha256(`BETTER_AUTH_SECRET` | jour `ADMIN_TZ` | IP | user-agent), tronqué
-    — l'IP (`x-forwarded-for`) n'est jamais stockée ;
+  - `visitor_hash` = HMAC-SHA256 de `IP | user-agent`, avec pour clé le **sel aléatoire du
+    jour** (jour `ADMIN_TZ`, table `analytics_salt`, supprimé au bout de 2 jours), tronqué à
+    32 caractères hexadécimaux — l'IP (`x-forwarded-for`) n'est jamais stockée ;
   - `device` = `mobile | tablet | desktop` ; `country` = header `x-vercel-ip-country`
     (nul en local) ;
   - `entry` = `first` et référent externe ou absent ; `referrer_host` = domaine référent si
     externe ; `source` = `utm_source` normalisé ;
   - `professional_id` : premier segment du chemin résolu en pro par slug (hors segments
     réservés), au moment de la visite → survit à un changement de slug ;
-  - répond toujours `204`, journalise les erreurs sans les renvoyer.
+  - répond toujours `204` : un corps illisible est ignoré en silence, les vraies erreurs (base)
+    sont journalisées sans être renvoyées.
 - **Confidentialité** : ni cookie ni stockage local, pas d'identifiant utilisateur, IP non
-  conservée, empreinte renouvelée chaque jour → mesure d'audience anonyme sans bandeau.
-  Conséquence : les visiteurs uniques sont comptés **par jour** ; sur une période, « visiteurs »
-  = somme des visiteurs quotidiens.
+  conservée. L'empreinte est un HMAC dont la clé est un **sel aléatoire par jour**
+  (`analytics_salt`), créé à la première visite du jour et **supprimé au bout de 2 jours** :
+  passé ce délai, personne — pas même quelqu'un qui détiendrait `BETTER_AUTH_SECRET` ou la
+  base — ne peut relier une empreinte à une adresse IP, ni la suivre d'un jour à l'autre
+  (pendant ces 2 jours, les empreintes restent pseudonymes). Les pages vues sont **conservées
+  25 mois** puis supprimées → mesure d'audience anonyme sans bandeau. Conséquence : les
+  visiteurs uniques sont comptés **par jour** ; sur une période, « visiteurs » = somme des
+  visiteurs quotidiens.
+- **Rétention** : `getDailySalt()` (`src/server/analytics-salt.ts`) garde le sel du jour en
+  mémoire, par instance ; à chaque défaut de cache (environ une fois par jour et par instance)
+  il supprime les sels de plus de 2 jours et les `page_view` de plus de 25 mois, sans jamais
+  faire échouer le suivi.
 
 ### Page Trafic (`/admin/traffic`)
 
@@ -249,7 +261,7 @@ action. Le serveur applique les mêmes règles que l'interface.
   `entry` : `source` sinon `referrer_host` sinon « Direct »), appareils, pays (« Inconnu » si
   nul).
 
-## 6. Modèle de données — migration `0006`
+## 6. Modèle de données — migrations `0006` et `0007`
 
 | Table | Changement |
 |---|---|
@@ -257,10 +269,12 @@ action. Le serveur applique les mêmes règles que l'interface.
 | `user` | `banned boolean not null default false`, `ban_reason text`, `ban_expires timestamptz`, `last_login_at timestamptz` |
 | `session` | `impersonated_by text` |
 | `page_view` (nouvelle) | `id text pk`, `created_at timestamptz not null default now()`, `path text not null`, `professional_id text → professional.id on delete set null`, `referrer_host text`, `source text`, `entry boolean not null default false`, `device text not null`, `country text`, `visitor_hash text not null` ; index `(created_at)` et `(professional_id, created_at)` |
+| `analytics_salt` (nouvelle, migration `0007`) | `day text pk` (`YYYY-MM-DD` en `ADMIN_TZ`), `salt text not null` (32 octets aléatoires, en hexadécimal), `created_at timestamptz not null default now()` ; une ligne par jour, supprimée au bout de 2 jours (§ 5) |
 
-`page_view` est immuable : pas de `updated_at`.
+`page_view` est immuable : pas de `updated_at` ; ses lignes de plus de 25 mois sont supprimées.
 
-**Application** : `pnpm db:generate` produit `0006` ; en local, le SQL est appliqué sur la
+**Application** : `pnpm db:generate` produit `0006` (puis `0007` pour `analytics_salt`, ajoutée
+après la revue de la branche) ; en local, le SQL est appliqué sur la
 branche Neon `development` via un petit script qui passe par le driver HTTP Neon de l'app
 (`db:migrate` cassé sous Windows, MCP Neon indisponible dans cette session), en enregistrant
 la migration dans `drizzle.__drizzle_migrations`. Preview/prod migrent au déploiement.
@@ -269,13 +283,14 @@ la migration dans `drizzle.__drizzle_migrations`. Preview/prod migrent au déplo
 
 | Fichier | Contenu |
 |---|---|
-| `src/lib/db/schema.ts` | enum + colonnes + table `page_view` |
+| `src/lib/db/schema.ts` | enum + colonnes + tables `page_view` et `analytics_salt` |
 | `src/lib/auth.ts` | plugin `admin`, hook `last_login_at` |
 | `src/lib/admin.ts` | `getAdminUser`, `requireAdmin` |
 | `src/lib/suspension.ts` (+ test) | `isSuspended`, `userIsSuspended()`, `userNotSuspended()` |
 | `src/lib/entry.ts` (+ test) | logique pure du choix d'entrée |
 | `src/lib/analytics.ts` (+ test) | `ADMIN_TZ`, `isTrackedPath`, `isBot`, `classifyDevice`, `browserName`, `classifyReferrer`, `normalizeSource`, `proSlugFromPath` |
-| `src/lib/visitor-hash.ts` (+ test) | empreinte visiteur du jour (`node:crypto`) |
+| `src/lib/visitor-hash.ts` (+ test) | empreinte visiteur : HMAC-SHA256 avec le sel du jour (`node:crypto`) |
+| `src/server/analytics-salt.ts` | `getDailySalt` (sel aléatoire du jour, cache par instance) + purge : sels de plus de 2 jours, `page_view` de plus de 25 mois |
 | `src/lib/admin-metrics.ts` (+ test) | jours, séries, montants par devise, mode Stripe, dates relatives |
 | `src/lib/admin-params.ts` (+ test) | lecture des `searchParams`, libellés, durées de suspension |
 | `scripts/apply-migration.ts` | `pnpm db:apply` (migration via le driver HTTP Neon) |
@@ -309,8 +324,9 @@ la migration dans `drizzle.__drizzle_migrations`. Preview/prod migrent au déplo
 
 - **Unitaires** (`pnpm test`, `node:test` via `tsx`) : `entry.test.ts` (matrice
   `resolveEntry`, cookie invalide), `analytics.test.ts` (chemins suivis, robots, appareils,
-  référent interne/externe, empreinte stable dans la journée et différente le lendemain, slug
-  depuis le chemin, remplissage des jours vides).
+  référent interne/externe, slug depuis le chemin, remplissage des jours vides),
+  `visitor-hash.test.ts` (empreinte stable pour un même sel, IP et user-agent ; différente avec
+  un autre sel — la rotation quotidienne —, une autre IP ou un autre user-agent).
 - **Statique** : `pnpm typecheck`, `pnpm lint`, `pnpm build`.
 - **Navigateur** (dev, base `development`) :
   - non-admin : connexion → `/dashboard` directement, `/admin` → 404 ;

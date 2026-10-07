@@ -410,7 +410,8 @@ export const pageView = pgTable(
     entry: boolean("entry").default(false).notNull(),
     device: text("device").notNull(),
     country: text("country"),
-    // daily-rotating anonymous hash — the IP is never stored
+    // HMAC of IP + user agent keyed with the day's random salt (analytics_salt) —
+    // the IP is never stored
     visitorHash: text("visitor_hash").notNull(),
   },
   (t) => [
@@ -418,6 +419,16 @@ export const pageView = pgTable(
     index("page_view_pro_created_idx").on(t.professionalId, t.createdAt),
   ],
 );
+
+/**
+ * One random salt per Paris day for the visitor hash. Rows older than 2 days are
+ * deleted, after which that day's hashes can no longer be linked back to an IP.
+ */
+export const analyticsSalt = pgTable("analytics_salt", {
+  day: text("day").primaryKey(), // YYYY-MM-DD in ADMIN_TZ
+  salt: text("salt").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 /* ───────────────────────────── Relations ───────────────────────── */
 

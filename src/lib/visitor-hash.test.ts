@@ -4,26 +4,30 @@ import assert from "node:assert/strict";
 import { visitorHash } from "./visitor-hash";
 
 const base = {
-  secret: "s3cret",
-  dayKey: "2026-10-07",
+  salt: "a".repeat(64),
   ip: "203.0.113.7",
   userAgent: "Mozilla/5.0 Test",
 };
 
-test("visitorHash is stable for the same visitor on the same day", () => {
+test("visitorHash is stable for the same salt, IP and user agent", () => {
   assert.equal(visitorHash(base), visitorHash({ ...base }));
 });
 
-test("visitorHash rotates the next day", () => {
-  assert.notEqual(visitorHash(base), visitorHash({ ...base, dayKey: "2026-10-08" }));
+test("visitorHash changes with the salt (daily rotation)", () => {
+  assert.notEqual(visitorHash(base), visitorHash({ ...base, salt: "b".repeat(64) }));
 });
 
-test("visitorHash differs between visitors", () => {
+test("visitorHash differs between IPs", () => {
   assert.notEqual(visitorHash(base), visitorHash({ ...base, ip: "203.0.113.8" }));
 });
 
-test("visitorHash is 32 hex chars and does not leak the IP", () => {
-  const hash = visitorHash(base);
-  assert.match(hash, /^[0-9a-f]{32}$/);
-  assert.equal(hash.includes(base.ip), false);
+test("visitorHash differs between user agents", () => {
+  assert.notEqual(
+    visitorHash(base),
+    visitorHash({ ...base, userAgent: "Mozilla/5.0 Other" }),
+  );
+});
+
+test("visitorHash is 32 lowercase hex chars", () => {
+  assert.match(visitorHash(base), /^[0-9a-f]{32}$/);
 });

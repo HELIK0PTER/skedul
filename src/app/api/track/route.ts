@@ -13,8 +13,8 @@ import {
 import { dayKeyInTz } from "@/lib/datetime";
 import { db } from "@/lib/db";
 import { pageView, professional } from "@/lib/db/schema";
-import { env } from "@/lib/env";
 import { visitorHash } from "@/lib/visitor-hash";
+import { getDailySalt } from "@/server/analytics-salt";
 
 const bodySchema = z.object({
   path: z.string().min(1).max(512),
@@ -34,7 +34,14 @@ export async function POST(request: Request) {
     if (!userAgent || isBot(userAgent)) return noContent();
     if (request.headers.get("sec-fetch-site") === "cross-site") return noContent();
 
-    const parsed = bodySchema.safeParse(JSON.parse(await request.text()));
+    // A malformed beacon is not an error worth a stack trace in the logs.
+    let json: unknown;
+    try {
+      json = JSON.parse(await request.text());
+    } catch {
+      return noContent();
+    }
+    const parsed = bodySchema.safeParse(json);
     if (!parsed.success || !isTrackedPath(parsed.data.path)) return noContent();
     const { path, first, referrer, source } = parsed.data;
 
@@ -55,6 +62,9 @@ export async function POST(request: Request) {
           .limit(1)
       : [];
 
+    const dayKey = dayKeyInTz(new Date(), ADMIN_TZ);
+    const salt = await getDailySalt(dayKey);
+
     await db.insert(pageView).values({
       path,
       professionalId: pro?.id ?? null,
@@ -63,12 +73,7 @@ export async function POST(request: Request) {
       entry: first && ref.kind !== "internal",
       device: classifyDevice(userAgent),
       country: country && /^[A-Z]{2}$/.test(country) ? country : null,
-      visitorHash: visitorHash({
-        secret: env.BETTER_AUTH_SECRET,
-        dayKey: dayKeyInTz(new Date(), ADMIN_TZ),
-        ip,
-        userAgent,
-      }),
+      visitorHash: visitorHash({ salt, ip, userAgent }),
     });
   } catch (err) {
     console.error("[track] could not record page view", err);
