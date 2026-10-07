@@ -37,12 +37,14 @@ export default async function AdminOverviewPage() {
   const keys = lastDayKeys(30, now);
   const since = startOfDayKey(keys[0]);
 
-  const [stats, signupRows, trafficRows, activity, health] = await Promise.all([
+  // Measured alone, before the other queries: run in parallel with them, the
+  // `select 1` would queue behind them and overstate the DB latency.
+  const health = await getAppHealth(now);
+  const [stats, signupRows, trafficRows, activity] = await Promise.all([
     getOverviewStats(now),
     getDailySignups(since),
     getDailyTraffic(since),
     getRecentActivity(10),
-    getAppHealth(now),
   ]);
 
   const signups = fillDailySeries(signupRows, keys);

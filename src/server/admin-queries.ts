@@ -342,7 +342,8 @@ export async function listUsers(opts: {
       .from(user)
       .leftJoin(professional, eq(professional.userId, user.id))
       .where(where)
-      .orderBy(desc(user.createdAt))
+      // id breaks ties so offset paging never repeats or skips a row
+      .orderBy(desc(user.createdAt), desc(user.id))
       .limit(USERS_PAGE_SIZE)
       .offset((opts.page - 1) * USERS_PAGE_SIZE),
     db

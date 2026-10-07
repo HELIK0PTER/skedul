@@ -460,12 +460,25 @@ export async function getManualDaySlots(
     }));
 }
 
-export async function getPublicProfile(slug: string) {
+/**
+ * A suspended pro's page is offline (null), except where `includeSuspended` is
+ * set: the thank-you page, so a customer who paid just before the suspension
+ * still sees their confirmation.
+ */
+export async function getPublicProfile(
+  slug: string,
+  opts: { includeSuspended?: boolean } = {},
+) {
   const rows = await db
     .select({ pro: professional })
     .from(professional)
     .innerJoin(user, eq(user.id, professional.userId))
-    .where(and(eq(professional.slug, slug), userNotSuspended()))
+    .where(
+      and(
+        eq(professional.slug, slug),
+        opts.includeSuspended ? undefined : userNotSuspended(),
+      ),
+    )
     .limit(1);
   const pro = rows[0]?.pro;
   if (!pro) return null;

@@ -6,6 +6,7 @@ import {
   classifyDevice,
   classifyReferrer,
   isBot,
+  isReservedSegment,
   isTrackedPath,
   normalizeSource,
   proSlugFromPath,
@@ -45,6 +46,15 @@ test("proSlugFromPath returns the pro slug of public pro pages only", () => {
   }
 });
 
+test("isReservedSegment flags app routes, never a pro slug", () => {
+  for (const s of ["admin", "api", "dashboard", "demo", "onboarding", "sign-in", "sign-up", "_next"]) {
+    assert.equal(isReservedSegment(s), true, s);
+  }
+  for (const s of ["altinha-paris", "admin-2", "administration", "dashboards", ""]) {
+    assert.equal(isReservedSegment(s), false, s);
+  }
+});
+
 test("isBot flags crawlers and scripts, not browsers", () => {
   assert.equal(isBot(UA.googlebot), true);
   assert.equal(isBot("curl/8.5.0"), true);
@@ -75,6 +85,15 @@ test("classifyReferrer separates none, internal and external referrers", () => {
   assert.deepEqual(classifyReferrer("not a url", "skedul.app"), { kind: "none" });
   assert.deepEqual(classifyReferrer("http://localhost:3100/demo", "localhost:3100"), { kind: "internal" });
   assert.deepEqual(classifyReferrer("https://www.skedul.app/x", "skedul.app"), { kind: "internal" });
+  // returning from Stripe Checkout is a payment round-trip, not a traffic source
+  assert.deepEqual(
+    classifyReferrer("https://checkout.stripe.com/c/pay/cs_test_x", "skedul.app"),
+    { kind: "internal" },
+  );
+  assert.deepEqual(
+    classifyReferrer("https://stripe.com/docs", "skedul.app"),
+    { kind: "external", host: "stripe.com" },
+  );
   assert.deepEqual(
     classifyReferrer("https://www.google.com/search?q=x", "skedul.app"),
     { kind: "external", host: "google.com" },

@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { professional, user } from "@/lib/db/schema";
+import { professional, session, user } from "@/lib/db/schema";
 import { getAdminUser } from "@/lib/admin";
 import { BAN_DURATIONS, parseBanDuration, type UserRole } from "@/lib/admin-params";
 import { getSession } from "@/lib/session";
@@ -77,6 +77,13 @@ export async function suspendUser(input: {
   if (!duration) return { ok: false, error: "Durée invalide." };
   const seconds = BAN_DURATIONS[duration];
   try {
+    // Open-ended ban: Better Auth leaves banExpires untouched when no
+    // banExpiresIn is sent, so clear the lapsed expiry of an earlier timed ban
+    // first. Done before banning so that a failure here fails closed: the ban
+    // is never recorded with a stale expiry that would read as already lifted.
+    if (seconds === null) {
+      await db.update(user).set({ banExpires: null }).where(eq(user.id, target.id));
+    }
     await auth.api.banUser({
       headers: await headers(),
       body: {
@@ -85,11 +92,6 @@ export async function suspendUser(input: {
         ...(seconds ? { banExpiresIn: seconds } : {}),
       },
     });
-    // Open-ended ban: Better Auth leaves banExpires untouched when no
-    // banExpiresIn is sent, so clear the lapsed expiry of an earlier timed ban.
-    if (seconds === null) {
-      await db.update(user).set({ banExpires: null }).where(eq(user.id, target.id));
-    }
   } catch (err) {
     return failure(err);
   }
@@ -100,6 +102,9 @@ export async function suspendUser(input: {
 export async function reactivateUser(userId: string): Promise<AdminActionResult> {
   const check = await authorize(userId);
   if ("error" in check) return { ok: false, error: check.error };
+  if (check.target.role === "admin") {
+    return { ok: false, error: "Action impossible sur un admin." };
+  }
   if (!check.target.suspended) {
     return { ok: false, error: "Ce compte n'est pas suspendu." };
   }
@@ -164,6 +169,10 @@ export async function setAdminRole(input: {
   // only re-check the admin permission verified above).
   const role: UserRole = input.admin ? "admin" : target.isPro ? "pro" : "client";
   await db.update(user).set({ role }).where(eq(user.id, target.id));
+  if (!input.admin) {
+    // A demoted admin must not keep impersonating pros until the sessions expire.
+    await db.delete(session).where(eq(session.impersonatedBy, target.id));
+  }
   refresh(target.id);
   return { ok: true };
 }

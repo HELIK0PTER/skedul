@@ -27,11 +27,12 @@ export const metadata: Metadata = { title: "Utilisateurs" };
 export default async function AdminUsersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; filter?: string; page?: string }>;
+  searchParams: Promise<{ q?: string | string[]; filter?: string; page?: string }>;
 }) {
   await requireAdmin();
   const params = await searchParams;
-  const q = (params.q ?? "").trim().slice(0, 100);
+  // A repeated ?q=a&q=b arrives as an array: ignore it rather than crash.
+  const q = (typeof params.q === "string" ? params.q : "").trim().slice(0, 100);
   const filter = parseUserFilter(params.filter);
   const page = parsePage(params.page);
   const { rows, total } = await listUsers({ q, filter, page });

@@ -51,6 +51,8 @@ export function BarChart({
 
   function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    // Alt/Cmd+← → are the browser's back/forward: leave them alone.
+    if (e.altKey || e.metaKey || e.ctrlKey) return;
     e.preventDefault();
     const step = e.key === "ArrowRight" ? 1 : -1;
     setActive((i) =>

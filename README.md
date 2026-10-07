@@ -90,8 +90,14 @@ Variables attendues : voir **`.env.example`**.
 | `pnpm db:apply <fichier>` | applique une migration via HTTP (repli si `db:migrate` échoue) |
 | `pnpm admin:grant <email>` | donne le rôle admin (`--revoke` pour le retirer) |
 
-> `db:migrate` / `db:seed` ciblent `DATABASE_URL`. Pour viser preview/prod :
-> `DATABASE_URL='…' pnpm db:migrate` (sur Windows PowerShell : `$env:DATABASE_URL='…'; pnpm db:migrate`).
+> `db:migrate` / `db:seed` / `db:apply` / `admin:grant` ciblent `DATABASE_URL`. Pour viser
+> preview/prod : `DATABASE_URL='…' pnpm db:migrate` (sur Windows PowerShell :
+> `$env:DATABASE_URL='…'; pnpm db:migrate`). `db:apply` affiche d'abord l'hôte visé et refuse
+> d'appliquer une migration si la précédente n'est pas la dernière enregistrée.
+>
+> **Premier admin sur preview/prod** : créez le compte sur cet environnement (`/sign-up`), puis
+> `DATABASE_URL='…' pnpm admin:grant <email>` (PowerShell :
+> `$env:DATABASE_URL='…'; pnpm admin:grant <email>`) et reconnectez-vous.
 
 ## Modèle métier (packs prépayés)
 

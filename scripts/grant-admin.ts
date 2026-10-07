@@ -3,7 +3,7 @@ import "./load-env";
 import { eq, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { professional, user } from "@/lib/db/schema";
+import { professional, session, user } from "@/lib/db/schema";
 
 /**
  * Grants — or with --revoke removes — the admin role on the DATABASE_URL db.
@@ -32,6 +32,10 @@ async function main() {
 
   const role = revoke ? (target.proId ? "pro" : "client") : "admin";
   await db.update(user).set({ role }).where(eq(user.id, target.id));
+  if (revoke) {
+    // A demoted admin must not keep impersonating pros until the sessions expire.
+    await db.delete(session).where(eq(session.impersonatedBy, target.id));
+  }
   console.info(
     `✓ ${email} → rôle "${role}". Reconnectez-vous pour que la session en tienne compte.`,
   );

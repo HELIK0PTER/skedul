@@ -27,6 +27,11 @@ const RESERVED_SEGMENTS = new Set([
   "_next",
 ]);
 
+/** True for an app route segment (e.g. "admin"): never a pro's public slug. */
+export function isReservedSegment(segment: string): boolean {
+  return RESERVED_SEGMENTS.has(segment);
+}
+
 /** Public pages only: never the back-office, onboarding, admin or API. */
 export function isTrackedPath(path: string): boolean {
   if (!path.startsWith("/")) return false;
@@ -38,7 +43,7 @@ export function isTrackedPath(path: string): boolean {
 /** "/altinha-paris/book/x" → "altinha-paris"; null for app routes. */
 export function proSlugFromPath(path: string): string | null {
   const segment = path.split("/")[1] ?? "";
-  if (!/^[a-z0-9-]+$/.test(segment) || RESERVED_SEGMENTS.has(segment)) {
+  if (!/^[a-z0-9-]+$/.test(segment) || isReservedSegment(segment)) {
     return null;
   }
   return segment;
@@ -74,7 +79,16 @@ export function browserName(userAgent: string | null | undefined): string {
   return "Navigateur inconnu";
 }
 
-/** Compares hostnames without port or leading "www.". */
+/**
+ * Hosts that only bounce a visitor back into our own flow: returning from
+ * Stripe Checkout is a payment round-trip, not a traffic source.
+ */
+const INTERNAL_REFERRER_HOSTS = new Set(["checkout.stripe.com"]);
+
+/**
+ * Compares hostnames without port or leading "www."; our own host and the
+ * payment round-trip hosts count as internal.
+ */
 export function classifyReferrer(
   referrer: string | null | undefined,
   ownHost: string,
@@ -88,7 +102,9 @@ export function classifyReferrer(
   }
   if (!host) return { kind: "none" };
   const own = ownHost.split(":")[0].replace(/^www\./, "");
-  return host === own ? { kind: "internal" } : { kind: "external", host };
+  return host === own || INTERNAL_REFERRER_HOSTS.has(host)
+    ? { kind: "internal" }
+    : { kind: "external", host };
 }
 
 export function normalizeSource(utmSource: string | null | undefined): string | null {

@@ -68,11 +68,16 @@ le back-office d'un pro pour l'aider.
 
 - **Enum** `user_role` : `client | pro | admin`. Le statut « pro » reste déterminé par
   l'existence d'une ligne `professional` ; un admin peut donc avoir sa page pro.
-- **Better Auth** ([auth.ts](../../../src/lib/auth.ts)) : ajout du plugin
+- **Better Auth** ([auth.ts](../../../src/lib/auth.ts),
+  [auth-admin.ts](../../../src/lib/auth-admin.ts)) : ajout du plugin
   `admin({ defaultRole: "client", adminRoles: ["admin"], bannedUserMessage })` avant
   `nextCookies()`. `defaultRole: "client"` est **obligatoire** : sans lui, le plugin insère
   `role = "user"`, valeur absente de l'enum. `bannedUserMessage` : « Votre compte a été
   suspendu. Contactez le support si vous pensez qu'il s'agit d'une erreur. »
+  Les endpoints HTTP du plugin (`/api/auth/admin/*`) sont **tous fermés** (`disabledPaths`,
+  liste dérivée du plugin lui-même et couverte par un test) : ils s'appuient sur le rôle du
+  cookie de session (cache 5 min) et contourneraient les garde-fous de nos server actions, qui
+  relisent le rôle en base.
 - **Client** ([auth-client.ts](../../../src/lib/auth-client.ts)) : `adminClient()` n'est pas
   nécessaire (toutes les actions passent par des server actions).
 - **Onboarding** : `createProfessionalProfile` ne repasse plus un admin en `pro` (il ne met
@@ -203,7 +208,9 @@ action. Le serveur applique les mêmes règles que l'interface.
 
 - **Page publique d'un pro suspendu** : hors ligne (404). `getPublicProfile`,
   `getPublicEventType`, `getPublicPack` excluent les pros suspendus, et les actions publiques
-  (achat de pack, réservation) les refusent.
+  (achat de pack, réservation) les refusent. Seule exception : la page de remerciement
+  `/[slug]/merci` (`getPublicProfile(slug, { includeSuspended: true })`) reste accessible, pour
+  qu'un client qui a payé juste avant la suspension voie sa confirmation.
 - **Bandeau d'impersonation** : le layout du dashboard lit `session.impersonatedBy` et affiche
   « Vous êtes connecté en tant que {nom} ({e-mail}) — Revenir à l'admin ». Le bouton appelle
   `stopImpersonation()` (sans vérification admin : la session courante est celle du pro ;
@@ -284,7 +291,8 @@ la migration dans `drizzle.__drizzle_migrations`. Preview/prod migrent au déplo
 | Fichier | Contenu |
 |---|---|
 | `src/lib/db/schema.ts` | enum + colonnes + tables `page_view` et `analytics_salt` |
-| `src/lib/auth.ts` | plugin `admin`, hook `last_login_at` |
+| `src/lib/auth.ts` | hook `last_login_at`, `disabledPaths` |
+| `src/lib/auth-admin.ts` (+ test) | plugin `admin` ; `ADMIN_HTTP_ENDPOINTS` = tous ses endpoints HTTP, dérivés du plugin et fermés |
 | `src/lib/admin.ts` | `getAdminUser`, `requireAdmin` |
 | `src/lib/suspension.ts` (+ test) | `isSuspended`, `userIsSuspended()`, `userNotSuspended()` |
 | `src/lib/entry.ts` (+ test) | logique pure du choix d'entrée |
