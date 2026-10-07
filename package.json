@@ -13,6 +13,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx scripts/seed.ts",
+    "db:apply": "tsx scripts/apply-migration.ts",
     "test": "tsx --test",
     "deploy:preview": "vercel",
     "deploy:prod": "vercel --prod"
