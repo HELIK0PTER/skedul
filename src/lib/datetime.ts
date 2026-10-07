@@ -75,3 +75,25 @@ export function dayKeyInTz(d: Date, tz: string): string {
   }).format(d);
   return parts; // en-CA gives YYYY-MM-DD
 }
+
+/** "7 oct. 2026" */
+export function formatDateShort(d: Date, tz: string): string {
+  return new Intl.DateTimeFormat("fr-FR", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: tz,
+  }).format(d);
+}
+
+/** "7 oct. 2026, 14:32" */
+export function formatDateTimeShort(d: Date, tz: string): string {
+  return new Intl.DateTimeFormat("fr-FR", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: tz,
+  }).format(d);
+}
