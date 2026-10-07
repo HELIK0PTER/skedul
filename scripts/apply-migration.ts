@@ -8,8 +8,11 @@ import { neon } from "@neondatabase/serverless";
 /**
  * Applies one drizzle migration over Neon's HTTP driver — a stand-in for
  * `pnpm db:migrate`, whose connection fails on some Windows machines.
- * Statements run one by one (neon-http has no transactions), then the file is
- * recorded in drizzle's journal so a later `db:migrate` skips it.
+ * Every statement of the file and its row in drizzle's journal are submitted as
+ * one non-interactive transaction (`sql.transaction`): all-or-nothing, so a
+ * failing statement leaves the database untouched, and once the row is
+ * recorded a later `db:migrate` skips the file. Like `db:migrate`, it cannot
+ * run statements that refuse a transaction block (e.g. CREATE INDEX CONCURRENTLY).
  *
  *   pnpm db:apply drizzle/0006_xxx.sql
  */
@@ -44,18 +47,24 @@ async function main() {
     .split("--> statement-breakpoint")
     .map((s) => s.trim())
     .filter(Boolean);
+  // drizzle only compares created_at with the latest row, so recording this one
+  // also marks every earlier migration as applied.
+  const hash = createHash("sha256").update(content).digest("hex");
+
+  // Statements first, journal row last. sql.query() only builds a lazy query:
+  // nothing is sent until sql.transaction() submits the whole batch in a single
+  // request that Postgres commits entirely or rolls back entirely.
+  await sql.transaction([
+    ...statements.map((statement) => sql.query(statement)),
+    sql.query(
+      `insert into drizzle.__drizzle_migrations (hash, created_at) values ($1, $2)`,
+      [hash, entry.when],
+    ),
+  ]);
+
   for (const statement of statements) {
-    await sql.query(statement);
     console.info(`✓ ${statement.split("\n")[0]}`);
   }
-
-  // drizzle only compares created_at with the latest row, so this also marks
-  // every earlier migration as applied.
-  const hash = createHash("sha256").update(content).digest("hex");
-  await sql.query(
-    `insert into drizzle.__drizzle_migrations (hash, created_at) values ($1, $2)`,
-    [hash, entry.when],
-  );
   console.info(`✓ ${tag} applied and recorded.`);
 }
 
