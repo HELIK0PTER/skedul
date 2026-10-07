@@ -32,6 +32,7 @@ import {
 } from "@/lib/db/schema";
 import { env } from "@/lib/env";
 import { loadBookableSlots } from "@/lib/slots";
+import { userNotSuspended } from "@/lib/suspension";
 import { dayKeyInTz, formatTime } from "@/lib/datetime";
 
 export async function getProDashboardData(proId: string) {
@@ -206,11 +207,13 @@ export async function getPublicEventType(slug: string, eventTypeId: string) {
     .select({ eventType, professional })
     .from(eventType)
     .innerJoin(professional, eq(professional.id, eventType.professionalId))
+    .innerJoin(user, eq(user.id, professional.userId))
     .where(
       and(
         eq(professional.slug, slug),
         eq(eventType.id, eventTypeId),
         eq(eventType.isActive, true),
+        userNotSuspended(),
       ),
     )
     .limit(1);
@@ -226,12 +229,14 @@ export async function getPublicPack(slug: string, packId: string) {
     })
     .from(pack)
     .innerJoin(professional, eq(professional.id, pack.professionalId))
+    .innerJoin(user, eq(user.id, professional.userId))
     .leftJoin(eventType, eq(eventType.id, pack.eventTypeId))
     .where(
       and(
         eq(professional.slug, slug),
         eq(pack.id, packId),
         eq(pack.isActive, true),
+        userNotSuspended(),
       ),
     )
     .limit(1);
@@ -457,11 +462,12 @@ export async function getManualDaySlots(
 
 export async function getPublicProfile(slug: string) {
   const rows = await db
-    .select()
+    .select({ pro: professional })
     .from(professional)
-    .where(eq(professional.slug, slug))
+    .innerJoin(user, eq(user.id, professional.userId))
+    .where(and(eq(professional.slug, slug), userNotSuspended()))
     .limit(1);
-  const pro = rows[0];
+  const pro = rows[0]?.pro;
   if (!pro) return null;
 
   const [eventTypes, packs] = await Promise.all([

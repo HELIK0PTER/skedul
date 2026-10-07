@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, ExternalLink } from "lucide-react";
 
+import { UserActions } from "@/components/admin/user-actions";
 import { RoleBadge, SuspensionBadge } from "@/components/admin/user-badges";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -36,7 +37,7 @@ export default async function AdminUserPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const { id } = await params;
   const detail = await getUserDetail(id);
   if (!detail) notFound();
@@ -183,6 +184,16 @@ export default async function AdminUserPage({
               )}
             </CardContent>
           </Card>
+        </div>
+
+        <div>
+          <UserActions
+            userId={u.id}
+            isSelf={u.id === admin.id}
+            role={u.role}
+            isPro={pro !== null}
+            suspended={suspended}
+          />
         </div>
       </div>
     </>
