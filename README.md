@@ -47,6 +47,9 @@ pnpm dev                     # http://localhost:3000
 | Professionnel | `pro@skedul.app` / `password123` |
 | Client | `beatriz@example.com` / `password123` |
 
+Espace admin : **`/admin`**. Aucun compte admin n'est créé par le seed — créez un
+compte puis `pnpm admin:grant <email>`.
+
 - Page publique de démo : **`/altinha-paris`**
 - Back-office : **`/dashboard`**
 
@@ -84,6 +87,8 @@ Variables attendues : voir **`.env.example`**.
 | `pnpm db:push` | push direct du schéma (dev rapide) |
 | `pnpm db:studio` | Drizzle Studio |
 | `pnpm db:seed` | (re)remplit les données de démo |
+| `pnpm db:apply <fichier>` | applique une migration via HTTP (repli si `db:migrate` échoue) |
+| `pnpm admin:grant <email>` | donne le rôle admin (`--revoke` pour le retirer) |
 
 > `db:migrate` / `db:seed` ciblent `DATABASE_URL`. Pour viser preview/prod :
 > `DATABASE_URL='…' pnpm db:migrate` (sur Windows PowerShell : `$env:DATABASE_URL='…'; pnpm db:migrate`).

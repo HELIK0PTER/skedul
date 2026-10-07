@@ -21,6 +21,15 @@ services/availability/packs in a back-office; their clients book slots
 - **Auth**: Better Auth, tables `user/session/account/verification` (text ids).
   Server session helpers in `src/lib/session.ts`. Client uses `auth-client.ts`.
   The seed builds a plugin-free Better Auth instance to create users outside HTTP.
+- **Admin**: `/admin` (role `admin` on `user.role`, Better Auth `admin` plugin for
+  ban/impersonation). Guard with `requireAdmin()` / `getAdminUser()` from
+  `src/lib/admin.ts` — they re-read the role from the DB. Grant with
+  `pnpm admin:grant <email>` (`--revoke` to remove). Admins get an Admin/Client
+  chooser after sign-in (cookie `skedul_entry`). Reads in `src/server/admin-queries.ts`,
+  actions in `src/server/admin.ts`. The plugin's own `/api/auth/admin/*` HTTP
+  endpoints are disabled (`disabledPaths` in `src/lib/auth.ts`) — never re-enable them.
+- **Traffic**: cookieless page views (`page_view`) sent by `<PageViewTracker />` to
+  `/api/track`; public pages only (see `isTrackedPath` in `src/lib/analytics.ts`).
 - **Money**: integer cents + `currency` (default `eur`). Format via `formatMoney`.
 - **Time**: availability is wall-clock minutes-from-midnight in the pro's tz.
   Convert to instants with `instantFromWallClock` (`@date-fns/tz`). Slot logic in
@@ -34,6 +43,7 @@ services/availability/packs in a back-office; their clients book slots
 ## Workflow
 - `pnpm typecheck` and `pnpm build` must stay green.
 - Schema change → `pnpm db:generate` then `pnpm db:migrate` (targets `DATABASE_URL`).
+  If `db:migrate` fails locally (Windows), use `pnpm db:apply drizzle/<file>.sql`.
 - 3 envs map to Neon branches: dev→`development`, preview→`preview`, prod→`main`.
 - **Deploys are manual, CLI-only** (`vercel.ts` sets `git.deploymentEnabled: false`):
   `pnpm deploy:preview` / `pnpm deploy:prod`. Never re-enable auto Git deploys.
