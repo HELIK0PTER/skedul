@@ -25,7 +25,8 @@ export default async function MerciPage({ params, searchParams }: Props) {
   const { slug } = await params;
   const { type, ref } = await searchParams;
 
-  const profile = await getPublicProfile(slug);
+  // A customer who paid just before the pro was suspended still sees their confirmation.
+  const profile = await getPublicProfile(slug, { includeSuspended: true });
   if (!profile) notFound();
   const { pro } = profile;
 

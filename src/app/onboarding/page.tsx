@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { OnboardingForm } from "@/components/onboarding-form";
@@ -31,6 +32,13 @@ export default async function OnboardingPage() {
             <OnboardingForm />
           </CardContent>
         </Card>
+        {user.role === "admin" && (
+          <p className="mt-4 text-center text-sm text-muted-foreground">
+            <Link href="/admin" className="font-medium text-primary hover:underline">
+              Aller au Dashboard Admin
+            </Link>
+          </p>
+        )}
       </div>
     </div>
   );

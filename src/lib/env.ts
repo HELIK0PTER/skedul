@@ -61,6 +61,8 @@ export const env = {
   APP_URL: getAppUrl(),
   /** Stripe runs in mock mode until a real secret key is provided. */
   STRIPE_ENABLED: !isPlaceholder(raw.STRIPE_SECRET_KEY),
+  /** Webhook signing secret present (needed to confirm live Stripe payments). */
+  STRIPE_WEBHOOK_CONFIGURED: !isPlaceholder(raw.STRIPE_WEBHOOK_SECRET),
   /** Resend logs to the console until a real API key is provided. */
   RESEND_ENABLED: !isPlaceholder(raw.RESEND_API_KEY),
   /** Image uploads use Vercel Blob; disabled (mock) until a token is provided. */

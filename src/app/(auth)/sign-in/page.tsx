@@ -6,11 +6,18 @@ import { DemoQuickLogin } from "@/components/auth/demo-quick-login";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { env } from "@/lib/env";
 import { getCurrentUser } from "@/lib/session";
+import { resolvePostSignIn } from "@/server/entry";
 
 export const metadata: Metadata = { title: "Connexion" };
 
 export default async function SignInPage() {
-  if (await getCurrentUser()) redirect("/dashboard");
+  // Already signed in: same routing as right after sign-in (admins may choose).
+  let showChooser = false;
+  if (await getCurrentUser()) {
+    const next = await resolvePostSignIn();
+    if (next.kind === "redirect") redirect(next.to);
+    showChooser = true;
+  }
 
   return (
     <Card>
@@ -21,7 +28,7 @@ export default async function SignInPage() {
         </p>
       </CardHeader>
       <CardContent>
-        <AuthForm mode="sign-in" />
+        <AuthForm mode="sign-in" initialChooser={showChooser} />
         {env.APP_ENV !== "production" && <DemoQuickLogin />}
       </CardContent>
     </Card>

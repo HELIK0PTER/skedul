@@ -10,12 +10,14 @@ import {
   pack,
   packPurchase,
   professional,
+  user,
 } from "@/lib/db/schema";
 import { createCheckoutUrl } from "@/lib/stripe";
 import { fulfillBooking } from "@/lib/payments";
 import { syncSession } from "@/lib/calendar-sync";
 import { claimSeat, releaseSeat } from "@/lib/sessions";
 import { isSlotAvailable } from "@/lib/slots";
+import { userNotSuspended } from "@/lib/suspension";
 import {
   buildAnswers,
   getOrCreateCustomer,
@@ -38,7 +40,14 @@ export async function purchasePack(input: {
     .select({ pack, professional })
     .from(pack)
     .innerJoin(professional, eq(professional.id, pack.professionalId))
-    .where(and(eq(pack.id, input.packId), eq(pack.isActive, true)))
+    .innerJoin(user, eq(user.id, professional.userId))
+    .where(
+      and(
+        eq(pack.id, input.packId),
+        eq(pack.isActive, true),
+        userNotSuspended(),
+      ),
+    )
     .limit(1);
   const row = rows[0];
   if (!row) return { ok: false, error: "Pack introuvable." };
@@ -124,7 +133,14 @@ async function loadEventType(eventTypeId: string) {
     .select({ eventType, professional })
     .from(eventType)
     .innerJoin(professional, eq(professional.id, eventType.professionalId))
-    .where(and(eq(eventType.id, eventTypeId), eq(eventType.isActive, true)))
+    .innerJoin(user, eq(user.id, professional.userId))
+    .where(
+      and(
+        eq(eventType.id, eventTypeId),
+        eq(eventType.isActive, true),
+        userNotSuspended(),
+      ),
+    )
     .limit(1);
   return rows[0] ?? null;
 }

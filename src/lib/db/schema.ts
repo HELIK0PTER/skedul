@@ -28,7 +28,7 @@ const timestamps = {
 
 /* ───────────────────────────── Enums ───────────────────────────── */
 
-export const userRole = pgEnum("user_role", ["client", "pro"]);
+export const userRole = pgEnum("user_role", ["client", "pro", "admin"]);
 export const bookingStatus = pgEnum("booking_status", [
   "pending",
   "confirmed",
@@ -52,6 +52,12 @@ export const user = pgTable("user", {
   emailVerified: boolean("email_verified").default(false).notNull(),
   image: text("image"),
   role: userRole("role").default("client").notNull(),
+  // Better Auth admin plugin (suspension)
+  banned: boolean("banned").default(false).notNull(),
+  banReason: text("ban_reason"),
+  banExpires: timestamp("ban_expires", { withTimezone: true }),
+  // stamped on every real sign-in (see databaseHooks in src/lib/auth.ts)
+  lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
   ...timestamps,
 });
 
@@ -63,6 +69,8 @@ export const session = pgTable(
     token: text("token").notNull().unique(),
     ipAddress: text("ip_address"),
     userAgent: text("user_agent"),
+    // Better Auth admin plugin: id of the admin behind an impersonation session
+    impersonatedBy: text("impersonated_by"),
     userId: text("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
@@ -382,6 +390,45 @@ export const bookingAnswer = pgTable(
     index("booking_answer_booking_idx").on(t.bookingId),
   ],
 );
+
+/** One public page view from the cookieless tracker (see src/app/api/track). Immutable. */
+export const pageView = pgTable(
+  "page_view",
+  {
+    id: id(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    path: text("path").notNull(),
+    // resolved from the slug at visit time, so it survives a slug change
+    professionalId: text("professional_id").references(() => professional.id, {
+      onDelete: "set null",
+    }),
+    referrerHost: text("referrer_host"),
+    source: text("source"),
+    // first view of a visit (external or no referrer)
+    entry: boolean("entry").default(false).notNull(),
+    device: text("device").notNull(),
+    country: text("country"),
+    // HMAC of IP + user agent keyed with the day's random salt (analytics_salt) —
+    // the IP is never stored
+    visitorHash: text("visitor_hash").notNull(),
+  },
+  (t) => [
+    index("page_view_created_idx").on(t.createdAt),
+    index("page_view_pro_created_idx").on(t.professionalId, t.createdAt),
+  ],
+);
+
+/**
+ * One random salt per Paris day for the visitor hash. Rows older than 2 days are
+ * deleted, after which that day's hashes can no longer be linked back to an IP.
+ */
+export const analyticsSalt = pgTable("analytics_salt", {
+  day: text("day").primaryKey(), // YYYY-MM-DD in ADMIN_TZ
+  salt: text("salt").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 /* ───────────────────────────── Relations ───────────────────────── */
 

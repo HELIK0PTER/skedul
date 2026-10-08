@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 
+import { isReservedSegment } from "@/lib/analytics";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import {
@@ -48,14 +49,17 @@ async function uniqueSlug(base: string): Promise<string> {
   const root = slugify(base) || "pro";
   let candidate = root;
   let n = 1;
-  // ensure global uniqueness of professional slug
+  // ensure global uniqueness of professional slug; an app route ("admin",
+  // "dashboard"…) counts as taken so a pro page never shadows it
   while (true) {
-    const existing = await db
-      .select({ id: professional.id })
-      .from(professional)
-      .where(eq(professional.slug, candidate))
-      .limit(1);
-    if (existing.length === 0) return candidate;
+    if (!isReservedSegment(candidate)) {
+      const existing = await db
+        .select({ id: professional.id })
+        .from(professional)
+        .where(eq(professional.slug, candidate))
+        .limit(1);
+      if (existing.length === 0) return candidate;
+    }
     candidate = `${root}-${++n}`;
   }
 }
@@ -88,10 +92,11 @@ export async function createProfessionalProfile(input: {
     })
     .returning({ id: professional.id });
 
+  // Promote plain clients to "pro" — never demote an admin.
   await db
     .update(userTable)
     .set({ role: "pro" })
-    .where(eq(userTable.id, user.id));
+    .where(and(eq(userTable.id, user.id), eq(userTable.role, "client")));
 
   // sensible default availability: Mon–Fri 9:00–17:00
   await db.insert(availabilityRule).values(
