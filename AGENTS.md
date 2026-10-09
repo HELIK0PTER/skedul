@@ -25,8 +25,10 @@ services/availability/packs in a back-office; their clients book slots
   (sign-in/sign-up, `AuthForm`) and the Calendar sync (`linkSocial` + calendar scope);
   both show only when `env.GOOGLE_CALENDAR_ENABLED`. Implicit linking to an existing
   email/password account needs a verified local email (Better Auth default, kept on
-  purpose against pre-account takeover) → `?error=account_not_linked`; such users link
-  Google from Réglages › Google Agenda. Error codes → `oauthErrorMessage`.
+  purpose against pre-account takeover) → `?error=account_not_linked`, which the
+  sign-in/sign-up pages redirect to `/link-google`: the user enters the account's
+  password (`signIn.email`), then `linkSocial` sends them back through Google (same
+  email required). Error codes → `oauthErrorMessage`.
 - **Admin**: `/admin` (role `admin` on `user.role`, Better Auth `admin` plugin for
   ban/impersonation). Guard with `requireAdmin()` / `getAdminUser()` from
   `src/lib/admin.ts` — they re-read the role from the DB. Grant with

@@ -17,6 +17,8 @@ export default async function SignInPage({
   searchParams: Promise<{ error?: string | string[] }>;
 }) {
   const { error } = await searchParams;
+  // Google found an existing email/password account: offer to link it.
+  if (error === "account_not_linked") redirect("/link-google");
 
   // Already signed in: same routing as right after sign-in (admins may choose).
   let showChooser = false;

@@ -16,6 +16,8 @@ export default async function SignUpPage({
 }) {
   if (await getCurrentUser()) redirect("/dashboard");
   const { error } = await searchParams;
+  // Google found an existing email/password account: offer to link it.
+  if (error === "account_not_linked") redirect("/link-google");
 
   return (
     <Card>
