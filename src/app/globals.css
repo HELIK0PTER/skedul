@@ -43,8 +43,12 @@
   --shadow-pop: 0 12px 40px -12px rgba(76, 62, 217, 0.25);
 }
 
-* {
-  border-color: var(--color-border);
+/* Default border colour, kept in the base layer: unlayered, it would beat
+   every border-colour utility (border-primary, border-input, …). */
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
 }
 
 body {
