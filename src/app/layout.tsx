@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Bricolage_Grotesque, Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { PageViewTracker } from "@/components/analytics/page-view-tracker";
+import { Analytics } from "@vercel/analytics/next";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -40,6 +41,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col bg-background text-foreground">
         {children}
         <PageViewTracker />
+        <Analytics />
       </body>
     </html>
   );
