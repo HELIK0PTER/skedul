@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-09",
+  "framework": "Next.js 16.2.9 (App Router)",
+  "fonts": {
+    "display": "Bricolage Grotesque (next/font, src/app/layout.tsx)",
+    "body": "Geist (next/font)",
+    "mono": "Geist Mono (next/font)"
+  },
+  "palette": "Tailwind v4 @theme tokens in src/app/globals.css, brand violet #6d5cf6, light-only app",
+  "motion": "no motion library installed: CSS-only motion",
+  "spacing": "Tailwind v4 default scale",
+  "icons": "lucide-react",
+  "preserved": ["font stack", "brand violet and app tokens", "nav labels and section anchors"],
+  "introduced": [
+    "landing-scoped tokens with dark mode (src/components/landing/landing.module.css)",
+    "Workbench macrostructure, N5 nav, Ft1 footer",
+    "slop-test gates"
+  ]
+}

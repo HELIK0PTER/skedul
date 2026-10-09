@@ -1,9 +1,23 @@
 import Link from "next/link";
 
+import { navPrimary, navQuiet } from "@/components/landing/cta";
+import styles from "@/components/landing/landing.module.css";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/ui/logo";
 import { getCurrentProfessional, getCurrentUser } from "@/lib/session";
+import { cn } from "@/lib/utils";
 
+const SECTIONS = [
+  { href: "/#features", label: "Fonctionnalités" },
+  { href: "/#packs", label: "Packs prépayés" },
+  { href: "/#how", label: "Comment ça marche" },
+];
+
+/**
+ * Floating pill nav (Hallmark N5): content-sized, detached from the edges,
+ * sticky. The full-width header box lets clicks through; only the pill
+ * itself catches the pointer.
+ */
 export async function SiteHeader() {
   const [user, pro] = await Promise.all([
     getCurrentUser(),
@@ -11,42 +25,60 @@ export async function SiteHeader() {
   ]);
 
   return (
-    <header className="sticky top-0 z-40 border-b border-border/70 bg-background/80 backdrop-blur">
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5">
-        <Link href="/" className="transition-opacity hover:opacity-80">
-          <Logo />
+    <header className="pointer-events-none sticky top-3 z-40 px-3 sm:top-4">
+      <div
+        className={cn(
+          styles.navPill,
+          "pointer-events-auto mx-auto flex w-fit max-w-full items-center gap-1 rounded-full border border-(--lp-rule) p-1.5 pl-2 max-[400px]:gap-0.5",
+        )}
+      >
+        <Link
+          href="/"
+          aria-label="Skedul, accueil"
+          className="mr-1 flex items-center gap-2 rounded-full pr-1 max-[400px]:mr-0 transition-opacity duration-150 hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--lp-focus)"
+        >
+          <Logo withWordmark={false} />
+          <span className="hidden text-[1.0625rem] font-bold tracking-tight min-[420px]:inline">
+            Skedul
+          </span>
         </Link>
 
-        <nav className="hidden items-center gap-8 text-sm font-medium text-muted-foreground md:flex">
-          <Link href="/#features" className="hover:text-foreground">
-            Fonctionnalités
-          </Link>
-          <Link href="/#packs" className="hover:text-foreground">
-            Packs prépayés
-          </Link>
-          <Link href="/#how" className="hover:text-foreground">
-            Comment ça marche
-          </Link>
+        <nav aria-label="Sections de la page" className="hidden lg:block">
+          <ul className="flex items-center">
+            {SECTIONS.map((section) => (
+              <li key={section.href}>
+                <Link
+                  href={section.href}
+                  className="block whitespace-nowrap rounded-full px-3.5 py-2 text-sm font-medium text-(--lp-ink-2) transition-[background-color,color] duration-150 hover:bg-(--lp-paper-2) hover:text-(--lp-ink) focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--lp-focus) active:bg-(--lp-rule)"
+                >
+                  {section.label}
+                </Link>
+              </li>
+            ))}
+          </ul>
         </nav>
 
-        <div className="flex items-center gap-2">
-          {user ? (
-            <Button asChild size="sm">
-              <Link href={pro ? "/dashboard" : "/onboarding"}>
-                {pro ? "Mon espace" : "Devenir pro"}
-              </Link>
+        <span
+          aria-hidden
+          className="mx-1.5 hidden h-5 w-px bg-(--lp-rule) lg:block"
+        />
+
+        {user ? (
+          <Button asChild size="sm" className={navPrimary}>
+            <Link href={pro ? "/dashboard" : "/onboarding"}>
+              {pro ? "Mon espace" : "Devenir pro"}
+            </Link>
+          </Button>
+        ) : (
+          <>
+            <Button asChild variant="ghost" size="sm" className={navQuiet}>
+              <Link href="/sign-in">Se connecter</Link>
             </Button>
-          ) : (
-            <>
-              <Button asChild variant="ghost" size="sm">
-                <Link href="/sign-in">Se connecter</Link>
-              </Button>
-              <Button asChild size="sm">
-                <Link href="/sign-up">Commencer</Link>
-              </Button>
-            </>
-          )}
-        </div>
+            <Button asChild size="sm" className={navPrimary}>
+              <Link href="/sign-up">Créer ma page</Link>
+            </Button>
+          </>
+        )}
       </div>
     </header>
   );
