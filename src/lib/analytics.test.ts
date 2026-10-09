@@ -47,7 +47,7 @@ test("proSlugFromPath returns the pro slug of public pro pages only", () => {
 });
 
 test("isReservedSegment flags app routes, never a pro slug", () => {
-  for (const s of ["admin", "api", "dashboard", "demo", "onboarding", "sign-in", "sign-up", "_next"]) {
+  for (const s of ["admin", "api", "dashboard", "demo", "forgot-password", "link-google", "onboarding", "reset-password", "sign-in", "sign-up", "_next"]) {
     assert.equal(isReservedSegment(s), true, s);
   }
   for (const s of ["altinha-paris", "admin-2", "administration", "dashboards", ""]) {

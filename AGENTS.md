@@ -29,6 +29,11 @@ services/availability/packs in a back-office; their clients book slots
   sign-in/sign-up pages redirect to `/link-google`: the user enters the account's
   password (`signIn.email`), then `linkSocial` sends them back through Google (same
   email required). Error codes → `oauthErrorMessage`.
+- **Password reset**: `/forgot-password` → `authClient.requestPasswordReset` → email
+  (`sendResetPassword` in `auth.ts`, template `passwordResetEmail`; in mock mode the link
+  is logged) → `/api/auth/reset-password/:token` → `/reset-password?token=…`. Token is
+  single-use, 1 h; all sessions are revoked and `emailVerified` is set on reset. New
+  top-level routes must be added to `RESERVED_SEGMENTS` in `src/lib/analytics.ts`.
 - **Admin**: `/admin` (role `admin` on `user.role`, Better Auth `admin` plugin for
   ban/impersonation). Guard with `requireAdmin()` / `getAdminUser()` from
   `src/lib/admin.ts` — they re-read the role from the DB. Grant with
