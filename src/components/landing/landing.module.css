@@ -45,6 +45,7 @@
   --lp-shadow-soft: oklch(32% 0.05 285 / 0.08);
 
   --lp-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --lp-ease-in: cubic-bezier(0.7, 0, 0.84, 0);
   --lp-dur-micro: 120ms;
   --lp-dur-long: 420ms;
   --lp-radius: 1.25rem;
@@ -157,9 +158,21 @@
     drop-shadow(0 26px 30px var(--lp-shadow));
 }
 
+/* The deck: a completed card leaves up and away, the next one is dealt in.
+   Under reduced motion the swap is instant (handled in hero-deck.tsx). */
 @media (prefers-reduced-motion: no-preference) {
   .carnetIn {
     animation: lp-carnet-in 560ms var(--lp-ease-out) 160ms both;
+  }
+
+  /* Dealt after the page load: no entrance delay. */
+  .dealt {
+    animation-delay: 0ms;
+  }
+
+  /* Duration must match LEAVE_MS in hero-deck.tsx. */
+  .carnetOut {
+    animation: lp-carnet-out 320ms var(--lp-ease-in) both;
   }
 }
 
@@ -168,6 +181,15 @@
     opacity: 0;
     translate: 0 24px;
     rotate: 2deg;
+  }
+}
+
+@keyframes lp-carnet-out {
+  to {
+    opacity: 0;
+    translate: 0 -24px;
+    rotate: -7deg;
+    scale: 0.95;
   }
 }
 

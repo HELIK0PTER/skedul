@@ -3,11 +3,11 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 
-import { DEMO_BRAND, DEMO_PACK } from "@/components/demo/demo-data";
+import { DEMO_BRAND } from "@/components/demo/demo-data";
 import { INITIAL_STATE, type DemoState } from "@/components/demo/demo-script";
 import { ClientProfile } from "@/components/demo/screens/client-profile";
 import { ProPacks } from "@/components/demo/screens/pro-packs";
-import { Carnet } from "@/components/landing/carnet";
+import { HeroDeck } from "@/components/landing/hero-deck";
 import { ctaPrimary, ctaSecondary } from "@/components/landing/cta";
 import styles from "@/components/landing/landing.module.css";
 import { PlanningScreen } from "@/components/landing/planning-screen";
@@ -15,7 +15,8 @@ import { ProductShot } from "@/components/landing/product-shot";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { Button } from "@/components/ui/button";
-import { cn, formatMoney } from "@/lib/utils";
+import { toDayKey } from "@/lib/calendar-grid";
+import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
   title: { absolute: "Skedul · Réservations et carnets prépayés" },
@@ -203,13 +204,8 @@ export default function Home() {
           </div>
 
           <div className="lg:col-span-5">
-            <Carnet
-              business={DEMO_BRAND.businessName}
-              packName={DEMO_PACK.name}
-              priceLabel={formatMoney(DEMO_PACK.priceCents)}
-              credits={DEMO_PACK.credits}
-              used={4}
-            />
+            {/* Server-side "today", so the deck's dates hydrate identically. */}
+            <HeroDeck todayKey={toDayKey(new Date())} />
           </div>
         </section>
 
