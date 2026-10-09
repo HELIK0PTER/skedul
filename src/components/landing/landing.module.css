@@ -1,0 +1,486 @@
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench · theme: custom · enrichment: Tier-A CSS carnet · nav: N5 floating pill · footer: Ft1 mast-headed
+ * H2 split knobs: ratio=7/5, right=interactive object, divider=negative space
+ * F5 knobs: callouts=margin list, frame=plain hairline, anchor=image-led
+ * F4 knobs: numbering=none (verbs), layout=diagonal, connector=perforation
+ * vibe: "carnet tamponné, encre violette, papier calme"
+ * paper oklch(98.6% 0.005 285) · accent var(--color-primary) #6d5cf6 ≈ oklch(58% 0.21 284)
+ * display Bricolage Grotesque 700 · body Geist 400 · outlier Geist Mono (carnet print only)
+ * axes: light / grotesk-sans / cool
+ * taste dials: DESIGN_VARIANCE 7 · MOTION_INTENSITY 5 · VISUAL_DENSITY 4
+ * pre-emit critique: P5 H4 E4 S5 R4 V5
+ * contrast: pass (40–41) · nav: N5 · footer: Ft1 · slop: pass (42–45)
+ * honest: pass (46) · chrome: pass (47) · tokens: pass (48) · responsive: pass (49) · icons: pass (30)
+ * mobile: pass (34, 49, 50–57), checked at 320 / 375 / 768 / 1280 / 1440
+ *
+ * Shape rule: interactive CTAs are full pills, objects (carnet, ticket,
+ * product shots) use --lp-radius, small inner chips use 12px.
+ * Product shots always render the real (light-only) app UI: they read the
+ * app's own tokens, never the --lp-* ones, so they stay true in dark mode.
+ */
+
+/* ---------------------------------------------------------------- tokens */
+
+/* Declared on <html> while the landing is mounted, so the page canvas
+   (overscroll, scrollbar) can use them too. They vanish on other routes. */
+:global(html):has(.root) {
+  --lp-paper: oklch(98.6% 0.005 285);
+  --lp-paper-2: oklch(96.3% 0.009 285);
+  --lp-surface: oklch(99.6% 0.003 285);
+  --lp-ink: oklch(21% 0.025 285);
+  --lp-ink-2: oklch(44% 0.02 285);
+  --lp-ink-3: oklch(52% 0.02 285);
+  --lp-rule: oklch(91% 0.012 285);
+  --lp-rule-2: oklch(78% 0.018 285);
+  --lp-accent: var(--color-primary);
+  --lp-accent-hover: oklch(51% 0.22 284);
+  --lp-accent-soft: oklch(95% 0.03 285);
+  --lp-on-accent: oklch(99.5% 0.004 285);
+  --lp-stamp-ring: oklch(100% 0 0 / 0.28);
+  --lp-ticket: var(--color-ink);
+  --lp-ticket-ink: var(--color-ink-foreground);
+  --lp-ticket-ink-2: oklch(82% 0.035 285);
+  --lp-ticket-rule: oklch(48% 0.06 285);
+  --lp-focus: var(--color-ring);
+  --lp-shadow: oklch(32% 0.09 285 / 0.2);
+  --lp-shadow-soft: oklch(32% 0.05 285 / 0.08);
+
+  --lp-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --lp-dur-micro: 120ms;
+  --lp-dur-long: 420ms;
+  --lp-radius: 1.25rem;
+
+  background-color: var(--lp-paper);
+}
+
+/* The packs shot bleeds to the viewport edge: never let that become a
+   horizontal scroll. `clip` (unlike `hidden`) keeps the sticky nav alive. */
+:global(html):has(.root),
+:global(body):has(.root) {
+  overflow-x: clip;
+}
+
+.root {
+  background: var(--lp-paper);
+  color: var(--lp-ink);
+  overflow-x: clip;
+}
+
+@media (prefers-color-scheme: dark) {
+  :global(html):has(.root) {
+    --lp-paper: oklch(16% 0.018 285);
+    --lp-paper-2: oklch(19.5% 0.022 285);
+    --lp-surface: oklch(23% 0.026 285);
+    --lp-ink: oklch(95% 0.008 285);
+    --lp-ink-2: oklch(78% 0.014 285);
+    --lp-ink-3: oklch(69% 0.016 285);
+    --lp-rule: oklch(28% 0.022 285);
+    --lp-rule-2: oklch(38% 0.026 285);
+    /* --lp-accent-hover stays the darker violet: a lighter hover would drop
+       the white label under 4.5:1. */
+    --lp-accent-soft: oklch(27% 0.05 285);
+    --lp-stamp-ring: oklch(100% 0 0 / 0.22);
+    --lp-ticket: oklch(26% 0.06 285);
+    --lp-ticket-ink: oklch(96% 0.01 285);
+    --lp-ticket-ink-2: oklch(80% 0.03 285);
+    --lp-ticket-rule: oklch(44% 0.06 285);
+    --lp-shadow: oklch(5% 0.02 285 / 0.55);
+    --lp-shadow-soft: oklch(5% 0.02 285 / 0.3);
+    color-scheme: dark;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :global(html):has(.root) {
+    scroll-behavior: smooth;
+  }
+}
+
+/* ------------------------------------------------------------ floating nav */
+
+.navPill {
+  background: color-mix(in oklch, var(--lp-paper) 86%, transparent);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  box-shadow:
+    0 1px 2px var(--lp-shadow-soft),
+    0 12px 32px -20px var(--lp-shadow);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .navPill {
+    background: var(--lp-paper);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* ------------------------------------------------------- hero entrance */
+
+@media (prefers-reduced-motion: no-preference) {
+  .rise {
+    animation: lp-rise var(--lp-dur-long) var(--lp-ease-out) both;
+    animation-delay: calc(var(--i, 0) * 80ms + 60ms);
+  }
+}
+
+@keyframes lp-rise {
+  from {
+    opacity: 0;
+    translate: 0 12px;
+  }
+}
+
+/* ------------------------------------------------------------- carnet */
+
+.carnetStack {
+  position: relative;
+  width: min(100%, 25rem);
+  margin-inline: auto;
+}
+
+/* A second carnet peeking out behind: the pro sells more than one. */
+.carnetBack {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--lp-rule);
+  border-radius: var(--lp-radius);
+  background: var(--lp-paper-2);
+  rotate: 4deg;
+  translate: 14px 10px;
+}
+
+.carnet {
+  position: relative;
+  rotate: -2deg;
+  /* drop-shadow (not box-shadow) so the shadow follows the notched mask. */
+  filter: drop-shadow(0 1px 1px var(--lp-shadow-soft))
+    drop-shadow(0 26px 30px var(--lp-shadow));
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .carnetIn {
+    animation: lp-carnet-in 560ms var(--lp-ease-out) 160ms both;
+  }
+}
+
+@keyframes lp-carnet-in {
+  from {
+    opacity: 0;
+    translate: 0 24px;
+    rotate: 2deg;
+  }
+}
+
+.carnetTop,
+.carnetStub {
+  position: relative;
+  background: var(--lp-surface);
+  mask-size: 51% 100%;
+  mask-position: left, right;
+  mask-repeat: no-repeat;
+}
+
+.carnetTop {
+  border-radius: var(--lp-radius) var(--lp-radius) 0 0;
+  padding: 1.5rem 1.5rem 1.375rem;
+  mask-image:
+    radial-gradient(circle 12px at 0 100%, transparent 11.5px, black 12.5px),
+    radial-gradient(circle 12px at 100% 100%, transparent 11.5px, black 12.5px);
+}
+
+.carnetStub {
+  border-radius: 0 0 var(--lp-radius) var(--lp-radius);
+  padding: 1.125rem 1.5rem 1.25rem;
+  mask-image:
+    radial-gradient(circle 12px at 0 0, transparent 11.5px, black 12.5px),
+    radial-gradient(circle 12px at 100% 0, transparent 11.5px, black 12.5px);
+}
+
+/* The tear line between the two halves, inset past the notches. */
+.carnetStub::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 1.125rem;
+  right: 1.125rem;
+  border-top: 1.5px dashed var(--lp-rule-2);
+}
+
+.holes {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.625rem;
+}
+
+.hole {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 9999px;
+  border: 1.5px dashed var(--lp-ink-3);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    border-color var(--lp-dur-micro) var(--lp-ease-out),
+    background-color var(--lp-dur-micro) var(--lp-ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .hole:hover {
+    border-color: var(--lp-accent);
+    background: var(--lp-accent-soft);
+  }
+}
+
+.hole:active {
+  border-color: var(--lp-accent);
+  background: var(--lp-accent-soft);
+}
+
+.hole:focus-visible {
+  outline: 2px solid var(--lp-focus);
+  outline-offset: 2px;
+}
+
+/* One-time nudge on the first free case, never a loop. */
+@media (prefers-reduced-motion: no-preference) {
+  .hint::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    border-radius: inherit;
+    border: 2px solid var(--lp-accent);
+    opacity: 0;
+    animation: lp-ping 1.3s var(--lp-ease-out) 1.4s 2;
+    pointer-events: none;
+  }
+}
+
+@keyframes lp-ping {
+  from {
+    opacity: 0.7;
+    scale: 0.9;
+  }
+  to {
+    opacity: 0;
+    scale: 1.45;
+  }
+}
+
+.stamp {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  border-radius: 9999px;
+  background: var(--lp-accent);
+  color: var(--lp-on-accent);
+  rotate: var(--r, 0deg);
+  box-shadow: inset 0 0 0 2px var(--lp-stamp-ring);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .stampIn {
+    animation: lp-stamp 240ms var(--lp-ease-out) both;
+  }
+}
+
+@keyframes lp-stamp {
+  from {
+    opacity: 0;
+    scale: 1.55;
+  }
+}
+
+/* --------------------------------------------------------- product shots */
+
+.shot {
+  position: relative;
+  container-type: inline-size;
+  aspect-ratio: calc((var(--shot-w) - var(--shot-x, 0)) / var(--shot-overscan, 1))
+    / var(--shot-h);
+  overflow: hidden;
+  border: 1px solid var(--lp-rule);
+  border-radius: var(--lp-radius);
+  background: var(--color-background);
+  box-shadow:
+    0 1px 2px var(--lp-shadow-soft),
+    0 32px 64px -40px var(--lp-shadow);
+}
+
+/* Runs flush into the viewport edge: the app keeps going off-screen. */
+.shotBleed {
+  border-right: 0;
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+/* Scales the fixed-size app canvas to the figure width with no JS:
+   tan(atan2(a, b)) turns the length ratio a/b into a plain number.
+   --shot-x crops the canvas from the left (scale applies before translate,
+   so the shift is expressed in scaled pixels). */
+.shotCanvas {
+  --shot-scale: tan(
+    atan2(
+      calc(100cqw * var(--shot-overscan, 1)),
+      calc((var(--shot-w) - var(--shot-x, 0)) * 1px)
+    )
+  );
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  scale: var(--shot-scale);
+  translate: calc(var(--shot-x, 0) * -1px * var(--shot-scale)) 0;
+  /* The app UI inherits its ink from <body>; re-anchor it here so the
+     landing's own (possibly dark-mode) ink never leaks into the shot. */
+  background: var(--color-background);
+  color: var(--color-foreground);
+  color-scheme: light;
+}
+
+/* The shots arrive as the reader reaches them: the proof lands with the
+   claim. Scroll-driven, so no listener; static where unsupported. */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .reveal {
+      animation: lp-reveal both var(--lp-ease-out);
+      animation-timeline: view();
+      animation-range: entry 5% entry 75%;
+    }
+  }
+}
+
+@keyframes lp-reveal {
+  from {
+    opacity: 0;
+    translate: 0 40px;
+  }
+}
+
+/* ---------------------------------------------------- packs breakout */
+
+/* Margin labels on the left, the shot running off the right edge. The
+   content tracks add up to the page container (71rem of content), so the
+   labels line up with every other section; the side tracks are the
+   gutters, and the shot takes the right one too. */
+.packsGrid {
+  display: grid;
+  grid-template-columns: minmax(1.25rem, 1fr) minmax(0, 71rem) minmax(1.25rem, 1fr);
+  row-gap: 3rem;
+}
+
+.packsFigure {
+  grid-column: 2 / 4;
+  grid-row: 1;
+}
+
+.packsText {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+@media (min-width: 40rem) {
+  .packsGrid {
+    grid-template-columns: minmax(2rem, 1fr) minmax(0, 71rem) minmax(2rem, 1fr);
+  }
+}
+
+@media (min-width: 64rem) {
+  .packsGrid {
+    grid-template-columns:
+      minmax(2rem, 1fr) minmax(0, 17rem) 3.5rem minmax(0, 50.5rem)
+      minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .packsText {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .packsFigure {
+    grid-column: 4 / 6;
+    grid-row: 1;
+  }
+}
+
+/* --------------------------------------------------- closing ticket */
+
+.ticket {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  filter: drop-shadow(0 30px 40px var(--lp-shadow));
+}
+
+.ticketMain,
+.ticketStub {
+  position: relative;
+  background: var(--lp-ticket);
+  color: var(--lp-ticket-ink);
+  mask-repeat: no-repeat;
+}
+
+/* Small screens: main on top, stub below, horizontal tear line. */
+.ticketMain {
+  border-radius: var(--lp-radius) var(--lp-radius) 0 0;
+  padding: 2.25rem 1.75rem 2rem;
+  mask-size: 51% 100%;
+  mask-position: left, right;
+  mask-image:
+    radial-gradient(circle 14px at 0 100%, transparent 13.5px, black 14.5px),
+    radial-gradient(circle 14px at 100% 100%, transparent 13.5px, black 14.5px);
+}
+
+.ticketStub {
+  border-radius: 0 0 var(--lp-radius) var(--lp-radius);
+  padding: 1.75rem;
+  mask-size: 51% 100%;
+  mask-position: left, right;
+  mask-image:
+    radial-gradient(circle 14px at 0 0, transparent 13.5px, black 14.5px),
+    radial-gradient(circle 14px at 100% 0, transparent 13.5px, black 14.5px);
+}
+
+.ticketStub::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 1.25rem;
+  right: 1.25rem;
+  border-top: 1.5px dashed var(--lp-ticket-rule);
+}
+
+/* Wide screens: classic cinema ticket, stub on the right. */
+@media (min-width: 48rem) {
+  .ticket {
+    grid-template-columns: minmax(0, 1fr) 17rem;
+  }
+
+  .ticketMain {
+    border-radius: var(--lp-radius) 0 0 var(--lp-radius);
+    padding: 3.25rem 3rem;
+    mask-size: 100% 51%;
+    mask-position: top, bottom;
+    mask-image:
+      radial-gradient(circle 14px at 100% 0, transparent 13.5px, black 14.5px),
+      radial-gradient(circle 14px at 100% 100%, transparent 13.5px, black 14.5px);
+  }
+
+  .ticketStub {
+    border-radius: 0 var(--lp-radius) var(--lp-radius) 0;
+    padding: 2.5rem 2rem;
+    mask-size: 100% 51%;
+    mask-position: top, bottom;
+    mask-image:
+      radial-gradient(circle 14px at 0 0, transparent 13.5px, black 14.5px),
+      radial-gradient(circle 14px at 0 100%, transparent 13.5px, black 14.5px);
+  }
+
+  .ticketStub::before {
+    top: 1.25rem;
+    bottom: 1.25rem;
+    left: 0;
+    right: auto;
+    border-top: 0;
+    border-left: 1.5px dashed var(--lp-ticket-rule);
+  }
+}
