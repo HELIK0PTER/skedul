@@ -28,19 +28,16 @@ export const auth = betterAuth({
     minPasswordLength: 8,
     // "Mot de passe oublié" → /forgot-password. The link is single-use and
     // expires after one hour. Better Auth answers the same way whether or not
-    // the email has an account, so never let a send failure surface either.
+    // the email has an account; sendEmail never throws, so a send failure
+    // cannot reveal which addresses exist either.
     resetPasswordTokenExpiresIn: 60 * 60,
     sendResetPassword: async ({ user, url }) => {
-      try {
-        await sendEmail({
-          to: user.email,
-          subject: "Réinitialisez votre mot de passe Skedul",
-          html: passwordResetEmail({ name: user.name, url }),
-        });
-        if (!env.RESEND_ENABLED) console.info(`   reset link: ${url}\n`);
-      } catch (err) {
-        console.error("[auth] could not send the password reset email", err);
-      }
+      await sendEmail({
+        to: user.email,
+        subject: "Réinitialisez votre mot de passe Skedul",
+        html: passwordResetEmail({ name: user.name, url }),
+      });
+      if (!env.RESEND_ENABLED) console.info(`   reset link: ${url}\n`);
     },
     // A reset may come from someone who had the old password: end every session.
     revokeSessionsOnPasswordReset: true,

@@ -11,23 +11,38 @@ interface SendArgs {
   html: string;
 }
 
-/** Sends an email via Resend, or logs to the console in mock mode. */
-export async function sendEmail({ to, subject, html }: SendArgs) {
+type SendResult =
+  | { id: string; mocked: boolean; failed?: false }
+  | { id: null; mocked: false; failed: true };
+
+/**
+ * Sends an email via Resend, or logs to the console in mock mode.
+ *
+ * Best effort: a failure is logged and returned, never thrown. Emails are sent
+ * after a booking or payment is already saved, so a Resend outage or a rejected
+ * sender must not turn a successful booking into an error for the customer.
+ */
+export async function sendEmail({ to, subject, html }: SendArgs): Promise<SendResult> {
   if (!resend) {
     console.info(`\n📧 [email:mock] → ${to}\n   subject: ${subject}\n`);
-    return { id: "mock", mocked: true as const };
+    return { id: "mock", mocked: true };
   }
-  const { data, error } = await resend.emails.send({
-    from: env.EMAIL_FROM,
-    to,
-    subject,
-    html,
-  });
-  if (error) {
-    console.error("[email] Resend error:", error);
-    throw new Error(error.message);
+  try {
+    const { data, error } = await resend.emails.send({
+      from: env.EMAIL_FROM,
+      to,
+      subject,
+      html,
+    });
+    if (error) {
+      console.error(`[email] Resend rejected "${subject}":`, error);
+      return { id: null, mocked: false, failed: true };
+    }
+    return { id: data?.id ?? "unknown", mocked: false };
+  } catch (err) {
+    console.error(`[email] Resend request failed for "${subject}":`, err);
+    return { id: null, mocked: false, failed: true };
   }
-  return { id: data?.id ?? "unknown", mocked: false as const };
 }
 
 /* ───────────────────────────── Templates ──────────────────────── */
