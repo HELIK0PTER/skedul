@@ -21,6 +21,12 @@ services/availability/packs in a back-office; their clients book slots
 - **Auth**: Better Auth, tables `user/session/account/verification` (text ids).
   Server session helpers in `src/lib/session.ts`. Client uses `auth-client.ts`.
   The seed builds a plugin-free Better Auth instance to create users outside HTTP.
+- **Google**: one Better Auth `google` provider serves both « Continuer avec Google »
+  (sign-in/sign-up, `AuthForm`) and the Calendar sync (`linkSocial` + calendar scope);
+  both show only when `env.GOOGLE_CALENDAR_ENABLED`. Implicit linking to an existing
+  email/password account needs a verified local email (Better Auth default, kept on
+  purpose against pre-account takeover) → `?error=account_not_linked`; such users link
+  Google from Réglages › Google Agenda. Error codes → `oauthErrorMessage`.
 - **Admin**: `/admin` (role `admin` on `user.role`, Better Auth `admin` plugin for
   ban/impersonation). Guard with `requireAdmin()` / `getAdminUser()` from
   `src/lib/admin.ts` — they re-read the role from the DB. Grant with

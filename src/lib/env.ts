@@ -67,7 +67,10 @@ export const env = {
   RESEND_ENABLED: !isPlaceholder(raw.RESEND_API_KEY),
   /** Image uploads use Vercel Blob; disabled (mock) until a token is provided. */
   BLOB_ENABLED: !isPlaceholder(raw.BLOB_READ_WRITE_TOKEN),
-  /** Google Calendar sync is live once an OAuth client is configured. */
+  /**
+   * A Google OAuth client is configured: enables both "Continuer avec Google"
+   * on sign-in/sign-up and the Google Calendar sync (same Better Auth provider).
+   */
   GOOGLE_CALENDAR_ENABLED:
     !isPlaceholder(raw.GOOGLE_CLIENT_ID) &&
     !isPlaceholder(raw.GOOGLE_CLIENT_SECRET),
