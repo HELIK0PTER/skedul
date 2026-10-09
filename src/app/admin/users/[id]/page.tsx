@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, ExternalLink } from "lucide-react";
 
+import { DeleteUserCard } from "@/components/admin/delete-user-card";
 import { UserActions } from "@/components/admin/user-actions";
 import { RoleBadge, SuspensionBadge } from "@/components/admin/user-badges";
 import { Avatar } from "@/components/ui/avatar";
@@ -41,8 +42,9 @@ export default async function AdminUserPage({
   const { id } = await params;
   const detail = await getUserDetail(id);
   if (!detail) notFound();
-  const { user: u, pro, providers, sessions, stats, revenue } = detail;
+  const { user: u, pro, providers, sessions, stats, revenue, deletion } = detail;
   const suspended = isSuspended(u);
+  const isSelf = u.id === admin.id;
 
   return (
     <>
@@ -189,11 +191,21 @@ export default async function AdminUserPage({
         <div>
           <UserActions
             userId={u.id}
-            isSelf={u.id === admin.id}
+            isSelf={isSelf}
             role={u.role}
             isPro={pro !== null}
             suspended={suspended}
           />
+          {!isSelf && (
+            <DeleteUserCard
+              userId={u.id}
+              email={u.email}
+              role={u.role}
+              pro={pro ? { slug: pro.slug } : null}
+              stats={stats}
+              deletion={deletion}
+            />
+          )}
         </div>
       </div>
     </>

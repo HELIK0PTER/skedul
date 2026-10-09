@@ -11,8 +11,10 @@ import {
   inArray,
   isNotNull,
   lt,
+  ne,
   or,
   sql,
+  sum,
   type SQL,
 } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
@@ -444,12 +446,11 @@ export async function getUserDetail(userId: string, now: Date = new Date()) {
       .orderBy(desc(session.createdAt)),
   ]);
   const pro = proRows[0] ?? null;
-  const [stats, revenue] = pro
-    ? await Promise.all([
-        getProStats(pro.id, now),
-        getRevenue({ professionalId: pro.id }),
-      ])
-    : [null, []];
+  const [stats, revenue, deletion] = await Promise.all([
+    pro ? getProStats(pro.id, now) : null,
+    pro ? getRevenue({ professionalId: pro.id }) : [],
+    getDeletionImpact(userId, pro?.id ?? null),
+  ]);
 
   return {
     user: found,
@@ -458,6 +459,42 @@ export async function getUserDetail(userId: string, now: Date = new Date()) {
     sessions,
     stats,
     revenue,
+    deletion,
+  };
+}
+
+/**
+ * What deleting this account changes beyond its own pro page (which the
+ * user → professional cascade removes entirely): prepaid credits its clients
+ * would lose, and client records it has with other pros, which are kept but
+ * detached from the account (customer.user_id is ON DELETE SET NULL).
+ */
+async function getDeletionImpact(userId: string, professionalId: string | null) {
+  const [credits, elsewhere] = await Promise.all([
+    professionalId
+      ? db
+          .select({ value: sum(packPurchase.creditsRemaining) })
+          .from(packPurchase)
+          .where(
+            and(
+              eq(packPurchase.professionalId, professionalId),
+              eq(packPurchase.status, "paid"),
+            ),
+          )
+      : [{ value: null }],
+    db
+      .select({ value: count() })
+      .from(customer)
+      .where(
+        and(
+          eq(customer.userId, userId),
+          professionalId ? ne(customer.professionalId, professionalId) : undefined,
+        ),
+      ),
+  ]);
+  return {
+    creditsOutstanding: Number(credits[0]?.value ?? 0),
+    clientRecordsElsewhere: elsewhere[0]?.value ?? 0,
   };
 }
 

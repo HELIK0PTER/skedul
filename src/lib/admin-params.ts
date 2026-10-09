@@ -107,3 +107,12 @@ export function parsePage(value: unknown): number {
   const n = typeof value === "string" ? Number(value) : NaN;
   return Number.isInteger(n) && n >= 1 && n <= 10_000 ? n : 1;
 }
+
+/**
+ * Deleting an account needs its email retyped. Case and surrounding spaces are
+ * ignored; an empty input never matches.
+ */
+export function deletionConfirmed(typed: string, email: string): boolean {
+  const t = typed.trim().toLowerCase();
+  return t.length > 0 && t === email.trim().toLowerCase();
+}

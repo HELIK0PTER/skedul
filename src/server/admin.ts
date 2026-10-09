@@ -3,24 +3,38 @@
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { del, list } from "@vercel/blob";
 import { eq } from "drizzle-orm";
 
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { professional, session, user } from "@/lib/db/schema";
-import { getAdminUser } from "@/lib/admin";
-import { BAN_DURATIONS, parseBanDuration, type UserRole } from "@/lib/admin-params";
+import { getAdminUser, type AdminUser } from "@/lib/admin";
+import {
+  BAN_DURATIONS,
+  deletionConfirmed,
+  parseBanDuration,
+  type UserRole,
+} from "@/lib/admin-params";
+import { env } from "@/lib/env";
 import { getSession } from "@/lib/session";
 import { isSuspended } from "@/lib/suspension";
 
 export type AdminActionResult = { ok: true } | { ok: false; error: string };
 
-type Target = { id: string; role: UserRole; isPro: boolean; suspended: boolean };
+type Target = {
+  id: string;
+  email: string;
+  role: UserRole;
+  proId: string | null;
+  isPro: boolean;
+  suspended: boolean;
+};
 
 /** The caller must be an active admin acting on someone else who exists. */
 async function authorize(
   userId: string,
-): Promise<{ target: Target } | { error: string }> {
+): Promise<{ admin: AdminUser; target: Target } | { error: string }> {
   const admin = await getAdminUser();
   if (!admin) return { error: "Accès refusé." };
   if (userId === admin.id) {
@@ -29,6 +43,7 @@ async function authorize(
   const [row] = await db
     .select({
       id: user.id,
+      email: user.email,
       role: user.role,
       banned: user.banned,
       banExpires: user.banExpires,
@@ -40,9 +55,12 @@ async function authorize(
     .limit(1);
   if (!row) return { error: "Utilisateur introuvable." };
   return {
+    admin,
     target: {
       id: row.id,
+      email: row.email,
       role: row.role,
+      proId: row.proId,
       isPro: row.proId !== null,
       suspended: isSuspended(row),
     },
@@ -175,6 +193,54 @@ export async function setAdminRole(input: {
   }
   refresh(target.id);
   return { ok: true };
+}
+
+/**
+ * Permanently deletes an account. One DELETE on "user" cascades to its
+ * sessions, accounts and pro page with all its data (services, sessions,
+ * availability, packs, clients, bookings, purchases); its client records with
+ * other pros are kept but detached (customer.user_id → NULL). Admins must be
+ * demoted first, and the account's email must be retyped.
+ */
+export async function deleteUser(input: {
+  userId: string;
+  confirmEmail: string;
+}): Promise<AdminActionResult> {
+  const check = await authorize(input.userId);
+  if ("error" in check) return { ok: false, error: check.error };
+  const { admin, target } = check;
+  if (target.role === "admin") {
+    return { ok: false, error: "Retirez d'abord le rôle admin." };
+  }
+  if (!deletionConfirmed(input.confirmEmail, target.email)) {
+    return { ok: false, error: "L'email saisi ne correspond pas à ce compte." };
+  }
+  try {
+    await db.delete(user).where(eq(user.id, target.id));
+  } catch (err) {
+    return failure(err);
+  }
+  console.info(`[admin] user ${target.id} deleted by admin ${admin.id}`);
+  if (target.proId) await deleteBrandingImages(target.proId);
+  revalidatePath("/admin");
+  revalidatePath("/admin/users");
+  redirect("/admin/users?deleted=1");
+}
+
+/** Best effort: the account is already gone, so a Blob failure is only logged. */
+async function deleteBrandingImages(professionalId: string) {
+  if (!env.BLOB_ENABLED) return;
+  try {
+    const prefix = `branding/${professionalId}/`;
+    let cursor: string | undefined;
+    do {
+      const page = await list({ prefix, cursor });
+      if (page.blobs.length) await del(page.blobs.map((b) => b.url));
+      cursor = page.hasMore ? page.cursor : undefined;
+    } while (cursor);
+  } catch (err) {
+    console.error(`[admin] could not delete branding images of ${professionalId}`, err);
+  }
 }
 
 /**

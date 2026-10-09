@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  deletionConfirmed,
   parseActivityTab,
   parseBanDuration,
   parseBookingStatus,
@@ -48,4 +49,12 @@ test("parseBanDuration ignores inherited object keys", () => {
   assert.equal(parseBanDuration("forever"), "forever");
   assert.equal(parseBanDuration("toString"), null);
   assert.equal(parseBanDuration(42), null);
+});
+
+test("deletionConfirmed needs the exact email, ignoring case and outer spaces", () => {
+  assert.equal(deletionConfirmed("pro@skedul.app", "pro@skedul.app"), true);
+  assert.equal(deletionConfirmed("  PRO@Skedul.app ", "pro@skedul.app"), true);
+  assert.equal(deletionConfirmed("pro@skedul.ap", "pro@skedul.app"), false);
+  assert.equal(deletionConfirmed("", ""), false);
+  assert.equal(deletionConfirmed("   ", "pro@skedul.app"), false);
 });

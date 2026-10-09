@@ -27,7 +27,12 @@ export const metadata: Metadata = { title: "Utilisateurs" };
 export default async function AdminUsersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string | string[]; filter?: string; page?: string }>;
+  searchParams: Promise<{
+    q?: string | string[];
+    filter?: string;
+    page?: string;
+    deleted?: string;
+  }>;
 }) {
   await requireAdmin();
   const params = await searchParams;
@@ -54,6 +59,12 @@ export default async function AdminUsersPage({
         title="Utilisateurs"
         description={`${total.toLocaleString("fr-FR")} compte${total > 1 ? "s" : ""}`}
       />
+
+      {params.deleted === "1" && (
+        <p role="status" className="mb-4 rounded-xl bg-success-muted px-4 py-3 text-sm text-success">
+          Compte supprimé.
+        </p>
+      )}
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <form

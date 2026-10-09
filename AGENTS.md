@@ -42,6 +42,10 @@ services/availability/packs in a back-office; their clients book slots
   actions in `src/server/admin.ts`. The admin plugin's HTTP endpoints are all
   disabled: `disabledPaths` is derived from the plugin's own endpoint list in
   `src/lib/auth-admin.ts` (covered by a test) — never re-enable them.
+  `deleteUser` (/admin/users/[id], email retyped, admins must be demoted first) is a
+  single `DELETE FROM "user"`: the FK cascades remove the pro page and all its data,
+  while `customer.user_id` and `page_view.professional_id` are set to NULL. Keep new
+  tables cascading from `professional` (or SET NULL) or deletion will break.
 - **Traffic**: cookieless page views (`page_view`) sent by `<PageViewTracker />` to
   `/api/track`; public pages only (see `isTrackedPath` in `src/lib/analytics.ts`).
   Visitor hash = HMAC with a random per-day salt (`analytics_salt`, deleted after 2
