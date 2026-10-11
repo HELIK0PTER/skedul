@@ -4,12 +4,13 @@ import { Logo } from "@/components/ui/logo";
 
 const LINKS = [
   { href: "/demo", label: "Voir la démo" },
+  { href: "/aide", label: "Centre d’aide" },
   { href: "/sign-in", label: "Se connecter" },
   { href: "/sign-up", label: "Créer ma page" },
 ];
 
 /** Mast-headed footer (Hallmark Ft1): wordmark and tagline, three links. */
-export function SiteFooter() {
+export function SiteFooter({ note = "Les exemples de cette page utilisent des données fictives." }: { note?: string | null } = {}) {
   return (
     <footer className="border-t border-(--lp-rule) bg-(--lp-paper-2)">
       <div className="mx-auto w-full max-w-[75rem] px-5 pb-10 pt-14 sm:px-8">
@@ -37,7 +38,7 @@ export function SiteFooter() {
         </div>
         <div className="mt-12 flex flex-col gap-2 border-t border-(--lp-rule) pt-6 text-sm text-(--lp-ink-2) sm:flex-row sm:justify-between">
           <p>© {new Date().getFullYear()} Skedul</p>
-          <p>Les exemples de cette page utilisent des données fictives.</p>
+          {note && <p>{note}</p>}
         </div>
       </div>
     </footer>

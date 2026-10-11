@@ -1,0 +1,33 @@
+/* The help center is product UI built on the app primitives, which are light
+ * only, so the whole section (header and footer included) is locked to the
+ * light theme: a light-only copy of the landing's --lp-* tokens, scoped to
+ * this layout. Keep the values in sync with
+ * src/components/landing/landing.module.css. */
+
+:global(html):has(.root) {
+  --lp-paper: oklch(98.6% 0.005 285);
+  --lp-paper-2: oklch(96.3% 0.009 285);
+  --lp-surface: oklch(99.6% 0.003 285);
+  --lp-ink: oklch(21% 0.025 285);
+  --lp-ink-2: oklch(44% 0.02 285);
+  --lp-ink-3: oklch(52% 0.02 285);
+  --lp-rule: oklch(91% 0.012 285);
+  --lp-rule-2: oklch(78% 0.018 285);
+  --lp-accent: var(--color-primary);
+  --lp-accent-hover: oklch(51% 0.22 284);
+  --lp-accent-soft: oklch(95% 0.03 285);
+  --lp-on-accent: oklch(99.5% 0.004 285);
+  --lp-focus: var(--color-ring);
+  --lp-shadow: oklch(32% 0.09 285 / 0.2);
+  --lp-shadow-soft: oklch(32% 0.05 285 / 0.08);
+  --lp-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --lp-radius: 1.25rem;
+
+  background-color: var(--lp-paper);
+  color-scheme: light;
+}
+
+.root {
+  background: var(--lp-paper);
+  color: var(--lp-ink);
+}

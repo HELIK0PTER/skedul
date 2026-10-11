@@ -30,10 +30,10 @@ const UA = {
 };
 
 test("isTrackedPath keeps public pages and drops back-office, admin and API", () => {
-  for (const p of ["/", "/demo", "/sign-in", "/altinha-paris", "/altinha-paris/book/abc", "/dashboardx"]) {
+  for (const p of ["/", "/demo", "/sign-in", "/aide", "/altinha-paris", "/altinha-paris/book/abc", "/dashboardx"]) {
     assert.equal(isTrackedPath(p), true, p);
   }
-  for (const p of ["/dashboard", "/dashboard/planning", "/onboarding", "/admin", "/admin/users", "/api/track", "relative"]) {
+  for (const p of ["/dashboard", "/dashboard/planning", "/onboarding", "/admin", "/admin/users", "/api/track", "/aide/demandes", "/aide/demandes/abc", "relative"]) {
     assert.equal(isTrackedPath(p), false, p);
   }
 });
@@ -47,10 +47,10 @@ test("proSlugFromPath returns the pro slug of public pro pages only", () => {
 });
 
 test("isReservedSegment flags app routes, never a pro slug", () => {
-  for (const s of ["admin", "api", "dashboard", "demo", "forgot-password", "link-google", "onboarding", "reset-password", "sign-in", "sign-up", "_next"]) {
+  for (const s of ["aide", "admin", "api", "dashboard", "demo", "forgot-password", "link-google", "onboarding", "reset-password", "sign-in", "sign-up", "_next"]) {
     assert.equal(isReservedSegment(s), true, s);
   }
-  for (const s of ["altinha-paris", "admin-2", "administration", "dashboards", ""]) {
+  for (const s of ["altinha-paris", "admin-2", "administration", "aides", "dashboards", ""]) {
     assert.equal(isReservedSegment(s), false, s);
   }
 });
