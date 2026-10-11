@@ -18,7 +18,10 @@ export default async function AdminLayout({
 }) {
   const admin = await requireAdmin();
   const remembered = parseEntryChoice((await cookies()).get(ENTRY_COOKIE)?.value);
-  const supportToHandle = await countSupportToHandle();
+  const supportToHandle = await countSupportToHandle().catch((err) => {
+    console.error("[admin] support counter lookup failed", err);
+    return 0;
+  });
 
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
