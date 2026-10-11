@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
@@ -168,20 +168,36 @@ export async function replyToSupportRequest(formData: FormData): Promise<Support
       body: parsed.data.body,
     });
     const failed = await storeAttachments(me.id, messageId, files);
-    const stage = stageAfterUserReply(request);
     await db
       .update(supportRequest)
-      .set({ stage, unreadByAdmin: true, lastActivityAt: new Date() })
+      .set({ unreadByAdmin: true, lastActivityAt: new Date() })
       .where(eq(supportRequest.id, request.id));
+    const stage = stageAfterUserReply(request);
     if (stage !== request.stage) {
-      // a reply on a resolved request reopens it: show it in the thread
-      await insertMessage({
-        requestId: request.id,
-        authorId: null,
-        authorRole: "system",
-        kind: "stage_change",
-        stage,
-      });
+      // a reply on a resolved request reopens it, guarded on track, stage and
+      // open state: a concurrent admin change wins (the message is saved anyway)
+      const reopened = await db
+        .update(supportRequest)
+        .set({ stage })
+        .where(
+          and(
+            eq(supportRequest.id, request.id),
+            eq(supportRequest.track, request.track),
+            eq(supportRequest.stage, request.stage),
+            isNull(supportRequest.resolution),
+          ),
+        )
+        .returning({ id: supportRequest.id });
+      if (reopened.length > 0) {
+        // show the reopening in the thread
+        await insertMessage({
+          requestId: request.id,
+          authorId: null,
+          authorRole: "system",
+          kind: "stage_change",
+          stage,
+        });
+      }
     }
     await emailAdmins(
       supportUserReplyEmail({
