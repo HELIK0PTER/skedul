@@ -2,13 +2,10 @@ import { put } from "@vercel/blob";
 import { nanoid } from "nanoid";
 import { NextResponse } from "next/server";
 
+import { BRANDING_MAX_BYTES } from "@/lib/branding-upload";
 import { env } from "@/lib/env";
 import { getCurrentProfessional } from "@/lib/session";
 
-const MAX: Record<"banner" | "avatar", number> = {
-  banner: 5_000_000,
-  avatar: 2_000_000,
-};
 const TYPES = ["image/jpeg", "image/png", "image/webp"];
 
 export async function POST(req: Request) {
@@ -33,8 +30,12 @@ export async function POST(req: Request) {
       { status: 415 },
     );
   }
-  if (file.size > MAX[kind]) {
-    return NextResponse.json({ error: "Fichier trop volumineux" }, { status: 413 });
+  if (file.size > BRANDING_MAX_BYTES[kind]) {
+    const mb = BRANDING_MAX_BYTES[kind] / 1_000_000;
+    return NextResponse.json(
+      { error: `Image trop lourde (${mb} Mo maximum).` },
+      { status: 413 },
+    );
   }
 
   const ext = file.type.split("/")[1];
