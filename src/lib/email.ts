@@ -2,6 +2,7 @@ import "server-only";
 import { Resend } from "resend";
 
 import { env } from "@/lib/env";
+import { escapeHtml, layout } from "@/lib/email-layout";
 
 const resend = env.RESEND_ENABLED ? new Resend(env.RESEND_API_KEY!) : null;
 
@@ -51,18 +52,6 @@ const euro = (cents: number) =>
   new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(
     cents / 100,
   );
-
-function layout(title: string, body: string) {
-  return `<!doctype html><html><body style="margin:0;background:#f4f4f5;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#18181b">
-  <div style="max-width:520px;margin:0 auto;padding:32px 16px">
-    <div style="font-weight:700;font-size:20px;color:#6366f1;margin-bottom:16px">Skedul</div>
-    <div style="background:#fff;border-radius:16px;padding:28px;border:1px solid #e4e4e7">
-      <h1 style="font-size:18px;margin:0 0 12px">${title}</h1>
-      ${body}
-    </div>
-    <p style="color:#a1a1aa;font-size:12px;text-align:center;margin-top:20px">Envoyé par Skedul · Réservations & packs prépayés</p>
-  </div></body></html>`;
-}
 
 export function bookingConfirmationEmail(args: {
   customerName: string;
@@ -128,15 +117,6 @@ export function packReceiptEmail(args: {
     <p style="color:#71717a;font-size:13px">Vous pouvez maintenant réserver vos créneaux sans repayer, dans la limite de vos crédits.</p>
   `);
 }
-
-const HTML_ESCAPES: Record<string, string> = {
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-  '"': "&quot;",
-  "'": "&#39;",
-};
-const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
 
 /** Sent by Better Auth's `sendResetPassword`; `url` is its one-hour token link. */
 export function passwordResetEmail(args: { name: string; url: string }) {
