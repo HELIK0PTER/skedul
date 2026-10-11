@@ -67,8 +67,18 @@ export function SupportAdminPanel({ request }: { request: PanelRequest }) {
     });
   }
 
+  // each dialog starts clean: no error or reason left over from another one
+  const openDialog = (next: "accept" | SupportResolution) => {
+    setError(null);
+    setReason("");
+    setDialog(next);
+  };
+
   const closeDialog = () => {
-    if (!pending) setDialog(null);
+    if (pending) return;
+    setDialog(null);
+    setError(null);
+    setReason("");
   };
 
   return (
@@ -156,7 +166,7 @@ export function SupportAdminPanel({ request }: { request: PanelRequest }) {
           </CardHeader>
           <CardContent className="space-y-2">
             {canAcceptForDevelopment(request) && (
-              <Button type="button" className="w-full" disabled={pending} onClick={() => setDialog("accept")}>
+              <Button type="button" className="w-full" disabled={pending} onClick={() => openDialog("accept")}>
                 <Hammer />
                 Accepter en développement
               </Button>
@@ -166,7 +176,7 @@ export function SupportAdminPanel({ request }: { request: PanelRequest }) {
               variant="secondary"
               className="w-full"
               disabled={pending}
-              onClick={() => setDialog("declined")}
+              onClick={() => openDialog("declined")}
             >
               <Ban />
               Ne pas retenir
@@ -176,7 +186,7 @@ export function SupportAdminPanel({ request }: { request: PanelRequest }) {
               variant="ghost"
               className="w-full"
               disabled={pending}
-              onClick={() => setDialog("closed")}
+              onClick={() => openDialog("closed")}
             >
               <Lock />
               Fermer la demande

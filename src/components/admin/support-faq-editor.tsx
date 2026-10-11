@@ -61,6 +61,12 @@ export function FaqEditor({ categories }: { categories: FaqCategory[] }) {
     setEditing(next);
   }
 
+  // a dialog's error must not resurface as the page banner once it is closed
+  function close() {
+    setError(null);
+    setEditing(null);
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -177,7 +183,7 @@ export function FaqEditor({ categories }: { categories: FaqCategory[] }) {
           category={editing.category}
           pending={pending}
           error={error}
-          onClose={() => setEditing(null)}
+          onClose={close}
           onSave={(input) =>
             run(() => saveHelpCategory({ id: editing.category?.id, ...input }), () => setEditing(null))
           }
@@ -190,7 +196,7 @@ export function FaqEditor({ categories }: { categories: FaqCategory[] }) {
           article={editing.article}
           pending={pending}
           error={error}
-          onClose={() => setEditing(null)}
+          onClose={close}
           onSave={(input) =>
             run(() => saveHelpArticle({ id: editing.article?.id, ...input }), () => setEditing(null))
           }
