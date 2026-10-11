@@ -14,6 +14,7 @@ type BoardCard = {
   number: number;
   subject: string;
   authorName: string;
+  age: string;
   eta: string | null;
 };
 
@@ -58,6 +59,7 @@ export function DevBoardCard({
       <p className="mt-1 truncate text-xs text-muted-foreground">
         #{card.number}, {card.authorName}
       </p>
+      <p className="text-xs text-muted-foreground">{card.age}</p>
       {card.eta && (
         <p className="mt-2 inline-flex items-center gap-1 text-xs text-muted-foreground">
           <CalendarClock className="size-3.5" aria-hidden />
@@ -77,7 +79,14 @@ export function DevBoardCard({
           <ArrowLeft />
         </Button>
         {next && (
-          <Button type="button" variant="secondary" size="sm" disabled={pending} onClick={() => move(next)}>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={pending}
+            onClick={() => move(next)}
+            aria-label={`Passer à ${STAGE_LABELS[next]}`}
+          >
             {STAGE_LABELS[next]}
             <ArrowRight />
           </Button>

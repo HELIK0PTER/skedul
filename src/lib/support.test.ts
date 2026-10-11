@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   TRACK_STEPS,
+  ageLabel,
   canAcceptForDevelopment,
   canSetStage,
   canUserReply,
@@ -219,4 +220,14 @@ test("parseAnswer never links javascript: or protocol-relative URLs", () => {
   const [block] = parseAnswer("javascript:alert(1) //evil.com http://plain.example");
   assert.ok(block.kind === "paragraph");
   assert.ok(block.segments.every((s) => s.kind === "text"));
+});
+
+test("ageLabel counts whole days since the request was opened", () => {
+  const now = new Date("2026-10-11T12:00:00Z");
+  const daysAgo = (days: number) => new Date(now.getTime() - days * 86_400_000);
+  assert.equal(ageLabel(daysAgo(0), now), "Ouverte aujourd’hui");
+  assert.equal(ageLabel(new Date("2026-10-11T08:00:00Z"), now), "Ouverte aujourd’hui");
+  assert.equal(ageLabel(daysAgo(1), now), "Ouverte hier");
+  assert.equal(ageLabel(daysAgo(5), now), "Ouverte il y a 5 jours");
+  assert.equal(ageLabel(new Date("2026-10-12T09:00:00Z"), now), "Ouverte aujourd’hui");
 });

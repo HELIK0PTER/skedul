@@ -271,6 +271,16 @@ export function formatEta(value: string): string {
   }).format(new Date(`${value}T00:00:00Z`));
 }
 
+/* ── Age of a request ── */
+
+/** Whole days since `createdAt`, never negative: "Ouverte aujourd’hui", "Ouverte hier", "Ouverte il y a 5 jours". */
+export function ageLabel(createdAt: Date, now: Date = new Date()): string {
+  const days = Math.max(0, Math.floor((now.getTime() - createdAt.getTime()) / 86_400_000));
+  if (days === 0) return "Ouverte aujourd’hui";
+  if (days === 1) return "Ouverte hier";
+  return `Ouverte il y a ${days} jours`;
+}
+
 /* ── FAQ search ── */
 
 export function normalizeSearch(text: string): string {

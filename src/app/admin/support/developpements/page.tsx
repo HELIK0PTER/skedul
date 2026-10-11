@@ -4,7 +4,7 @@ import { DevBoardCard } from "@/components/admin/dev-board-card";
 import { SupportTabs } from "@/components/admin/support-tabs";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { requireAdmin } from "@/lib/admin";
-import { STAGE_LABELS, TRACK_STEPS } from "@/lib/support";
+import { STAGE_LABELS, TRACK_STEPS, ageLabel } from "@/lib/support";
 import { getDevBoard } from "@/server/support-queries";
 
 export const metadata: Metadata = { title: "Développements" };
@@ -49,6 +49,7 @@ export default async function DevBoardPage() {
                             number: c.number,
                             subject: c.subject,
                             authorName: c.authorName,
+                            age: ageLabel(c.createdAt),
                             eta: c.eta,
                           }}
                           prev={COLUMNS[i - 1] ?? null}
