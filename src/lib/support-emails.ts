@@ -4,6 +4,7 @@ import {
   STAGE_LABELS,
   TYPE_LABELS,
   formatEta,
+  isFinalStage,
   stepCount,
   stepIndex,
   type SupportResolution,
@@ -108,7 +109,7 @@ export function supportStageEmail(a: {
       ${hello(a.name)}
       <p>Votre demande <strong>${escapeHtml(a.subject)}</strong> a changé d’étape.</p>
       <p style="font-size:15px"><strong>Étape ${step} sur ${total} : ${label}</strong></p>
-      ${a.eta ? `<p style="color:#71717a;font-size:13px">Livraison estimée : ${formatEta(a.eta)}</p>` : ""}
+      ${a.eta && !isFinalStage(a.track, a.stage) ? `<p style="color:#71717a;font-size:13px">Livraison estimée : ${formatEta(a.eta)}</p>` : ""}
       ${button(a.url, "Suivre ma demande")}`),
   };
 }

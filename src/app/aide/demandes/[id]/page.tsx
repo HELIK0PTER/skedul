@@ -32,7 +32,11 @@ export default async function RequestPage({
   const { request, thread } = data;
   const impersonating = Boolean(session.session.impersonatedBy);
   // an admin looking through the account must not clear the user's "new reply" flag
-  if (request.unreadByUser && !impersonating) await markReadByUser(session.user.id, id);
+  if (request.unreadByUser && !impersonating) {
+    await markReadByUser(session.user.id, id).catch((err) =>
+      console.error("[support] mark read by user failed", err),
+    );
+  }
 
   const disabledReason = impersonating
     ? "Vous consultez ce compte en tant qu’admin : la réponse est désactivée."

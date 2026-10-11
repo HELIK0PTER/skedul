@@ -16,7 +16,9 @@ export default async function NewRequestPage({
   searchParams: Promise<{ sujet?: string | string[]; type?: string | string[] }>;
 }) {
   const params = await searchParams;
-  const subject = typeof params.sujet === "string" ? params.sujet.slice(0, MAX_SUBJECT) : "";
+  // clamped by code points: cutting an emoji in half would break encodeURIComponent below
+  const subject =
+    typeof params.sujet === "string" ? Array.from(params.sujet).slice(0, MAX_SUBJECT).join("") : "";
   const type = parseSupportType(typeof params.type === "string" ? params.type : undefined);
 
   const session = await getSession();

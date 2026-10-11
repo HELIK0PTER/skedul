@@ -43,6 +43,21 @@ test("the stage e-mail spells out the step and the estimate", () => {
   assert.ok(mail.html.includes("Bonjour Ana,"));
 });
 
+test("the stage e-mail drops the estimate once the request is delivered", () => {
+  const mail = supportStageEmail({
+    name: "Ana Souza",
+    number: 42,
+    subject: "Export CSV",
+    track: "development",
+    stage: "delivered",
+    eta: "2026-10-31",
+    url: "https://myskedul.com/aide/demandes/r1",
+  });
+  assert.ok(mail.html.includes("Étape 6 sur 6 : Livrée"));
+  assert.ok(!mail.html.includes("Livraison estimée"));
+  assert.ok(!mail.html.includes("31 octobre"));
+});
+
 test("the resolution e-mail carries the reason, or announces a reopening", () => {
   const declined = supportResolutionEmail({
     name: "Ana",

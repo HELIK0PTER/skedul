@@ -31,7 +31,9 @@ export default async function AdminSupportRequestPage({
   const data = await getSupportRequestForAdmin(id);
   if (!data) notFound();
   const { request, author, thread } = data;
-  if (request.unreadByAdmin) await markReadByAdmin(id);
+  if (request.unreadByAdmin) {
+    await markReadByAdmin(id).catch((err) => console.error("[admin] support mark read failed", err));
+  }
 
   return (
     <>
