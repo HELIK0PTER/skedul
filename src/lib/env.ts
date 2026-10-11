@@ -19,6 +19,8 @@ const schema = z.object({
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().default("Skedul <onboarding@resend.dev>"),
   BLOB_READ_WRITE_TOKEN: z.string().optional(),
+  // dedicated private store for support screenshots (Vercel prefix SUPPORT_BLOB)
+  SUPPORT_BLOB_READ_WRITE_TOKEN: z.string().optional(),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   // Provided automatically by Vercel
@@ -67,6 +69,8 @@ export const env = {
   RESEND_ENABLED: !isPlaceholder(raw.RESEND_API_KEY),
   /** Image uploads use Vercel Blob; disabled (mock) until a token is provided. */
   BLOB_ENABLED: !isPlaceholder(raw.BLOB_READ_WRITE_TOKEN),
+  /** Support screenshots: private Blob store, separate from the public branding one. */
+  SUPPORT_BLOB_ENABLED: !isPlaceholder(raw.SUPPORT_BLOB_READ_WRITE_TOKEN),
   /**
    * A Google OAuth client is configured: enables both "Continuer avec Google"
    * on sign-in/sign-up and the Google Calendar sync (same Better Auth provider).

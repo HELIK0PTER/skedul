@@ -19,6 +19,7 @@ import {
 import { env } from "@/lib/env";
 import { getSession } from "@/lib/session";
 import { isSuspended } from "@/lib/suspension";
+import { deleteSupportFiles } from "@/server/support-core";
 
 export type AdminActionResult = { ok: true } | { ok: false; error: string };
 
@@ -199,8 +200,9 @@ export async function setAdminRole(input: {
  * Permanently deletes an account. One DELETE on "user" cascades to its
  * sessions, accounts and pro page with all its data (services, sessions,
  * availability, packs, clients, bookings, purchases); its client records with
- * other pros are kept but detached (customer.user_id → NULL). Admins must be
- * demoted first, and the account's email must be retyped.
+ * other pros are kept but detached (customer.user_id → NULL). Support requests
+ * cascade too; their images (Blob support/<userId>/) are removed best effort.
+ * Admins must be demoted first, and the account's email must be retyped.
  */
 export async function deleteUser(input: {
   userId: string;
@@ -222,6 +224,7 @@ export async function deleteUser(input: {
   }
   console.info(`[admin] user ${target.id} deleted by admin ${admin.id}`);
   if (target.proId) await deleteBrandingImages(target.proId);
+  await deleteSupportFiles(target.id);
   revalidatePath("/admin");
   revalidatePath("/admin/users");
   redirect("/admin/users?deleted=1");
