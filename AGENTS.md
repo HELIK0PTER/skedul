@@ -83,4 +83,7 @@ services/availability/packs in a back-office; their clients book slots
 - 3 envs map to Neon branches: dev→`development`, preview→`preview`, prod→`main`.
 - **Deploys are manual, CLI-only** (`vercel.ts` sets `git.deploymentEnabled: false`):
   `pnpm deploy:preview` / `pnpm deploy:prod`. Never re-enable auto Git deploys.
-- Demo: `pro@skedul.app` / `password123`, public page `/altinha-paris`.
+- Demo: `pro@skedul.app` / `password123`, public page `/altinha-paris`; admin
+  `admin@skedul.test` (same password, created by the seed). Off production,
+  `/sign-in` shows one-click logins for admin/pro/client (`DemoQuickLogin`).
+  Never display demo credentials in the site UI.

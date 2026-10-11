@@ -2,20 +2,28 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Briefcase, Loader2, User } from "lucide-react";
+import { Briefcase, Loader2, ShieldCheck, User } from "lucide-react";
 
 import { signIn } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 
 /**
  * One-click demo logins, rendered only on non-production deploys
- * (gated by `env.APP_ENV !== "production"` at the call site). Credentials match the seed.
+ * (gated by `env.APP_ENV !== "production"` at the call site). Credentials match
+ * the seed and are never displayed.
  */
 const DEMO_ACCOUNTS = [
   {
+    key: "admin",
+    label: "Admin · espace Skedul",
+    email: "admin@skedul.test",
+    password: "password123",
+    redirectTo: "/admin",
+    icon: ShieldCheck,
+  },
+  {
     key: "pro",
     label: "Pro · back-office",
-    hint: "pro@skedul.app",
     email: "pro@skedul.app",
     password: "password123",
     redirectTo: "/dashboard",
@@ -24,7 +32,6 @@ const DEMO_ACCOUNTS = [
   {
     key: "client",
     label: "Cliente · packs & réservations",
-    hint: "beatriz@example.com",
     email: "beatriz@example.com",
     password: "password123",
     redirectTo: "/altinha-paris",
@@ -79,9 +86,6 @@ export function DemoQuickLogin() {
                 <Icon className="size-4 text-muted-foreground" />
               )}
               <span className="font-medium">{account.label}</span>
-              <span className="ml-auto text-xs text-muted-foreground">
-                {account.hint}
-              </span>
             </Button>
           );
         })}
