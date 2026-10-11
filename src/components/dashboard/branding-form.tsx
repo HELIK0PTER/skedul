@@ -6,6 +6,9 @@ import { Loader2, Upload } from "lucide-react";
 
 import { updateBranding } from "@/server/pro";
 import { AVATAR_PACK, packSrc } from "@/lib/avatar-pack";
+import { uploadErrorMessage, type BrandingKind } from "@/lib/branding-upload";
+import { shrinkImage } from "@/lib/shrink-image";
+import { MAX_SOURCE_IMAGE_BYTES } from "@/lib/support";
 import { THEME_PRESETS, brandThemeVars, presetColor } from "@/lib/color";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -136,15 +139,33 @@ export function BrandingForm({
     );
   }
 
-  async function upload(file: File, kind: "banner" | "avatar"): Promise<string | null> {
+  async function upload(file: File, kind: BrandingKind): Promise<string | null> {
     setError(null);
+    if (file.size > MAX_SOURCE_IMAGE_BYTES) {
+      setError("Image trop lourde (20 Mo maximum).");
+      return null;
+    }
+    // Vercel refuses request bodies over 4.5 MB: large photos are shrunk
+    // (2000 px, WebP) in the browser before they are sent.
+    let ready: File;
+    try {
+      ready = await shrinkImage(file);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Impossible de lire cette image.");
+      return null;
+    }
     const fd = new FormData();
-    fd.set("file", file);
+    fd.set("file", ready);
     fd.set("kind", kind);
-    const res = await fetch("/api/upload", { method: "POST", body: fd });
+    let res: Response;
+    try {
+      res = await fetch("/api/upload", { method: "POST", body: fd });
+    } catch {
+      setError("Connexion perdue. Réessayez.");
+      return null;
+    }
     if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
-      setError(body.error ?? "Upload échoué");
+      setError(uploadErrorMessage(res.status, await res.json().catch(() => null)));
       return null;
     }
     const body = (await res.json()) as { url: string };
