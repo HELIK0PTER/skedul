@@ -17,7 +17,10 @@ export default async function DashboardLayout({
   const pro = await getCurrentProfessional();
   if (!pro) redirect("/onboarding");
 
-  const supportUnread = await hasUnreadSupport(session.user.id);
+  const supportUnread = await hasUnreadSupport(session.user.id).catch((err) => {
+    console.error("[dashboard] support badge lookup failed", err);
+    return false;
+  });
 
   return (
     <>
