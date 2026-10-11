@@ -42,7 +42,13 @@ export function FaqBrowser({
 
   // Deep link /aide#a-<id>: open and reveal that article (DOM only, no state).
   useEffect(() => {
-    const target = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
+    let id: string;
+    try {
+      id = decodeURIComponent(window.location.hash.slice(1));
+    } catch {
+      return; // malformed fragment (e.g. "#%"): nothing to open
+    }
+    const target = document.getElementById(id);
     if (target instanceof HTMLDetailsElement) {
       target.open = true;
       target.scrollIntoView({ block: "center" });
