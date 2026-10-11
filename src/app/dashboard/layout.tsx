@@ -4,6 +4,7 @@ import { ImpersonationBanner } from "@/components/dashboard/impersonation-banner
 import { DashboardSidebar } from "@/components/dashboard/sidebar";
 import { brandThemeVars } from "@/lib/color";
 import { getCurrentProfessional, getSession } from "@/lib/session";
+import { hasUnreadSupport } from "@/server/support-queries";
 
 export default async function DashboardLayout({
   children,
@@ -15,6 +16,8 @@ export default async function DashboardLayout({
 
   const pro = await getCurrentProfessional();
   if (!pro) redirect("/onboarding");
+
+  const supportUnread = await hasUnreadSupport(session.user.id);
 
   return (
     <>
@@ -30,6 +33,7 @@ export default async function DashboardLayout({
           slug={pro.slug}
           // UI hint only — /admin re-checks the role in the database.
           isAdmin={session.user.role === "admin"}
+          supportUnread={supportUnread}
         />
         <main className="flex-1 overflow-y-auto bg-background">
           <div className="mx-auto max-w-5xl px-5 py-8">{children}</div>
