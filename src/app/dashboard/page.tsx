@@ -13,7 +13,7 @@ import { WeekPreview } from "@/components/dashboard/week-preview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatMoney } from "@/lib/utils";
+import { cn, formatMoney } from "@/lib/utils";
 import { dayKeyInTz, formatSlot } from "@/lib/datetime";
 import { env } from "@/lib/env";
 import { getCurrentProfessional } from "@/lib/session";
@@ -51,8 +51,14 @@ export default async function DashboardPage() {
       label: "Crédits actifs",
       value: String(data.creditsLeft),
       icon: Ticket,
+      href: "/dashboard/clients?filter=credits",
     },
-    { label: "Clients", value: String(data.customersCount), icon: Users },
+    {
+      label: "Clients",
+      value: String(data.customersCount),
+      icon: Users,
+      href: "/dashboard/clients",
+    },
     {
       label: "Encaissé",
       value: formatMoney(data.revenueCents, pro.currency),
@@ -91,17 +97,35 @@ export default async function DashboardPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {stats.map((s) => (
-          <Card key={s.label}>
-            <CardContent className="p-5">
-              <s.icon className="size-5 text-primary" />
-              <p className="mt-3 text-2xl font-bold tracking-tight">
-                {s.value}
-              </p>
-              <p className="text-sm text-muted-foreground">{s.label}</p>
-            </CardContent>
-          </Card>
-        ))}
+        {stats.map((s) => {
+          const card = (
+            <Card
+              className={cn(
+                "h-full",
+                s.href && "transition-colors group-hover:border-primary/40",
+              )}
+            >
+              <CardContent className="p-5">
+                <s.icon className="size-5 text-primary" />
+                <p className="mt-3 text-2xl font-bold tracking-tight">
+                  {s.value}
+                </p>
+                <p className="text-sm text-muted-foreground">{s.label}</p>
+              </CardContent>
+            </Card>
+          );
+          return s.href ? (
+            <Link
+              key={s.label}
+              href={s.href}
+              className="group rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+            >
+              {card}
+            </Link>
+          ) : (
+            <div key={s.label}>{card}</div>
+          );
+        })}
       </div>
 
       {/* Week-at-a-glance calendar */}

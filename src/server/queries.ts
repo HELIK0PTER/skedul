@@ -35,6 +35,24 @@ import { loadBookableSlots } from "@/lib/slots";
 import { userNotSuspended } from "@/lib/suspension";
 import { dayKeyInTz, formatTime } from "@/lib/datetime";
 
+/**
+ * A customer row is created as soon as someone starts a booking or a pack
+ * checkout, paid or not. It only counts as a client once a booking is
+ * confirmed (or completed) or a pack is paid.
+ */
+const isClient = sql<boolean>`(
+  exists (
+    select 1 from ${booking}
+    where ${booking.customerId} = ${customer.id}
+      and ${booking.status} in ('confirmed', 'completed')
+  )
+  or exists (
+    select 1 from ${packPurchase}
+    where ${packPurchase.customerId} = ${customer.id}
+      and ${packPurchase.status} = 'paid'
+  )
+)`;
+
 export async function getProDashboardData(proId: string) {
   const now = new Date();
 
@@ -53,7 +71,7 @@ export async function getProDashboardData(proId: string) {
       db
         .select({ value: count() })
         .from(customer)
-        .where(eq(customer.professionalId, proId)),
+        .where(and(eq(customer.professionalId, proId), isClient)),
       db
         .select({
           bookings: sql<number>`coalesce(sum(${booking.amountPaidCents}), 0)`,
@@ -200,6 +218,86 @@ export function getProBookings(proId: string) {
     .innerJoin(customer, eq(customer.id, booking.customerId))
     .where(eq(booking.professionalId, proId))
     .orderBy(desc(booking.startAt));
+}
+
+export type ProClient = Awaited<ReturnType<typeof getProClients>>[number];
+
+/** The pro's clients (see `isClient`), with their unspent pack credits. */
+export async function getProClients(proId: string) {
+  const now = new Date();
+  const [clients, bookingStats, purchases] = await Promise.all([
+    db
+      .select({
+        id: customer.id,
+        name: customer.name,
+        email: customer.email,
+        phone: customer.phone,
+        createdAt: customer.createdAt,
+      })
+      .from(customer)
+      .where(and(eq(customer.professionalId, proId), isClient)),
+    db
+      .select({
+        customerId: booking.customerId,
+        bookings: count(),
+        nextAt: sql<Date | null>`min(${booking.startAt}) filter (where ${gte(booking.startAt, now)})`.mapWith(
+          booking.startAt,
+        ),
+      })
+      .from(booking)
+      .where(
+        and(
+          eq(booking.professionalId, proId),
+          inArray(booking.status, ["confirmed", "completed"]),
+        ),
+      )
+      .groupBy(booking.customerId),
+    db
+      .select({
+        id: packPurchase.id,
+        customerId: packPurchase.customerId,
+        packName: pack.name,
+        creditsRemaining: packPurchase.creditsRemaining,
+        creditsTotal: packPurchase.creditsTotal,
+      })
+      .from(packPurchase)
+      .innerJoin(pack, eq(pack.id, packPurchase.packId))
+      .where(
+        and(
+          eq(packPurchase.professionalId, proId),
+          eq(packPurchase.status, "paid"),
+          gt(packPurchase.creditsRemaining, 0),
+        ),
+      )
+      .orderBy(asc(packPurchase.createdAt)),
+  ]);
+
+  const statsByCustomer = new Map(bookingStats.map((s) => [s.customerId, s]));
+  const packsByCustomer = new Map<string, typeof purchases>();
+  for (const p of purchases) {
+    const list = packsByCustomer.get(p.customerId) ?? [];
+    list.push(p);
+    packsByCustomer.set(p.customerId, list);
+  }
+
+  return clients
+    .map((c) => {
+      const packs = packsByCustomer.get(c.id) ?? [];
+      const stats = statsByCustomer.get(c.id);
+      return {
+        ...c,
+        bookings: stats?.bookings ?? 0,
+        nextBookingAt: stats?.nextAt ?? null,
+        creditsRemaining: packs.reduce((n, p) => n + p.creditsRemaining, 0),
+        packs: packs.map((p) => ({
+          id: p.id,
+          name: p.packName,
+          creditsRemaining: p.creditsRemaining,
+          creditsTotal: p.creditsTotal,
+        })),
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, "fr", { sensitivity: "base" }));
 }
 
 export async function getPublicEventType(slug: string, eventTypeId: string) {

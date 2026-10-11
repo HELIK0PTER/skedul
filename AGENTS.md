@@ -70,6 +70,9 @@ services/availability/packs in a back-office; their clients book slots
 - **Payments/email**: `env.STRIPE_ENABLED` / `env.RESEND_ENABLED` flip between live
   and mock. Mock checkout = `/api/mock-checkout`; both it and the Stripe webhook
   call the shared idempotent fulfillment in `src/lib/payments.ts`.
+- **Clients**: a `customer` row is created as soon as a booking or pack checkout starts,
+  paid or not. `/dashboard/clients` and the dashboard « Clients » KPI only count the ones
+  matching `isClient` in `queries.ts` (a confirmed/completed booking or a paid pack).
 - **UI**: bespoke primitives in `src/components/ui/` (Tailwind v4, violet theme in
   `globals.css`). Use `Button asChild` (custom `Slot`) for links.
 
