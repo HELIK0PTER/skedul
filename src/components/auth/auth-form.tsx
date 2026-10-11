@@ -15,11 +15,14 @@ import { Label } from "@/components/ui/label";
 
 export function AuthForm({
   mode,
+  next = null,
   initialChooser = false,
   googleEnabled = false,
   initialError = null,
 }: {
   mode: "sign-in" | "sign-up";
+  /** Validated path to open after signing in (from `?next=`), else the usual routing. */
+  next?: string | null;
   /** Open the admin entry chooser right away (an admin is already signed in). */
   initialChooser?: boolean;
   /** Show "Continuer avec Google" (a Google OAuth client is configured). */
@@ -34,6 +37,7 @@ export function AuthForm({
   const [error, setError] = useState<string | null>(initialError);
   const [choosing, setChoosing] = useState(initialChooser);
   const busy = loading || googleLoading;
+  const nextQuery = next ? `?next=${encodeURIComponent(next)}` : "";
 
   // Coming back from Google with the browser's Back button restores this page
   // from the back/forward cache with the spinner still on; reset it.
@@ -49,13 +53,14 @@ export function AuthForm({
     setError(null);
     setGoogleLoading(true);
     try {
-      // Better Auth redirects the browser to Google. On return, /sign-in routes
-      // the user (admins get the entry chooser); brand-new users go to onboarding.
+      // Better Auth redirects the browser to Google. On return, /sign-in sends
+      // the user to `next` or routes them (admins get the entry chooser);
+      // brand-new users go to `next` or onboarding.
       const result = await signIn.social({
         provider: "google",
-        callbackURL: "/sign-in",
-        newUserCallbackURL: "/onboarding",
-        errorCallbackURL: isSignUp ? "/sign-up" : "/sign-in",
+        callbackURL: `/sign-in${nextQuery}`,
+        newUserCallbackURL: next ?? "/onboarding",
+        errorCallbackURL: isSignUp ? `/sign-up${nextQuery}` : `/sign-in${nextQuery}`,
       });
       if (result.error) {
         setError("La connexion avec Google a échoué. Réessayez.");
@@ -88,29 +93,35 @@ export function AuthForm({
     }
 
     if (isSignUp) {
-      router.push("/onboarding");
+      router.push(next ?? "/onboarding");
       router.refresh();
       return;
     }
 
+    if (next) {
+      // Push only (see below): the target page reads the fresh session.
+      router.push(next);
+      return;
+    }
+
     // Admins pick Admin vs Client (unless remembered); everyone else → /dashboard.
-    let next: PostSignIn;
+    let target: PostSignIn;
     try {
-      next = await resolvePostSignIn();
+      target = await resolvePostSignIn();
     } catch {
       // Sign-in worked; only the routing lookup failed (network, DB, stale action).
       setLoading(false);
       setError("Connexion réussie, mais la redirection a échoué. Réessayez.");
       return;
     }
-    if (next.kind === "choose") {
+    if (target.kind === "choose") {
       setLoading(false);
       setChoosing(true);
       return;
     }
     // Push only: a router.refresh() queued right after a server action leaves the
     // navigation pending forever (Next 16 router queue). The target is fetched fresh.
-    router.push(next.to);
+    router.push(target.to);
   }
 
   return (
@@ -194,14 +205,14 @@ export function AuthForm({
           {isSignUp ? (
             <>
               Déjà un compte ?{" "}
-              <Link href="/sign-in" className="font-medium text-primary hover:underline">
+              <Link href={`/sign-in${nextQuery}`} className="font-medium text-primary hover:underline">
                 Se connecter
               </Link>
             </>
           ) : (
             <>
               Pas encore de compte ?{" "}
-              <Link href="/sign-up" className="font-medium text-primary hover:underline">
+              <Link href={`/sign-up${nextQuery}`} className="font-medium text-primary hover:underline">
                 Créer un compte
               </Link>
             </>
