@@ -24,6 +24,7 @@
 - Icons: `lucide-react` only (already a dependency). Use `MessageCircleQuestionMark` (not `MessageCircleQuestion`, absent in 1.21).
 - Limits (from the spec, in `src/lib/support.ts`): `MAX_REQUESTS_PER_DAY = 5`, `MAX_MESSAGES_PER_DAY = 30`, `MAX_SUBJECT = 140`, `MAX_BODY = 20_000`, `MAX_ATTACHMENTS = 3`, `MAX_ATTACHMENT_BYTES = 5_000_000`, types png/jpeg/webp.
 - Blob pathnames: `support/<requesterUserId>/<nanoid>.<ext>`, `access: "private"`, served only through `GET /api/support/attachments/[id]`.
+- Support images live in a **dedicated private Blob store** (`skedul-support`, created 2026-10-11, connected to production/preview/development with prefix `SUPPORT_BLOB`). Code reads `env.SUPPORT_BLOB_READ_WRITE_TOKEN` / `env.SUPPORT_BLOB_ENABLED`, never the public store's `BLOB_READ_WRITE_TOKEN` (branding images). The token is already in the worktree's `.env.local`.
 - Server action body limit: `experimental.serverActions.bodySizeLimit = "16mb"` in `next.config.ts`.
 - Next 16.2 router: after `await serverAction()`, use `router.push(...)` **or** `router.refresh()`, never both in a row. Do not call `redirect()` from these actions; return `{ ok, ... }` and navigate on the client.
 - SWC JSX trap: a JSX text node containing an HTML entity (`&apos;`) and a line break loses its leading space. Write apostrophes as `’` or keep such text on one line / in a JS string.
@@ -68,8 +69,8 @@ import { del, get, put } from "@vercel/blob";
 
 /** One-off check: does the configured Blob store accept private blobs? */
 async function main() {
-  const token = process.env.BLOB_READ_WRITE_TOKEN;
-  if (!token) throw new Error("BLOB_READ_WRITE_TOKEN is not set");
+  const token = process.env.SUPPORT_BLOB_READ_WRITE_TOKEN;
+  if (!token) throw new Error("SUPPORT_BLOB_READ_WRITE_TOKEN is not set");
   const blob = await put(`support/_probe/${Date.now()}.txt`, "probe", {
     access: "private",
     token,
@@ -1629,6 +1630,22 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - `requestUrl(id: string): string` (`/aide/demandes/<id>`), `adminRequestUrl(id: string): string` (`/admin/support/<id>`)
 - Produces: `GET /api/support/attachments/<attachmentId>`.
 
+- [ ] **Step 0: Declare the support Blob store in `src/lib/env.ts`**
+
+In the zod `schema`, right after `BLOB_READ_WRITE_TOKEN: z.string().optional(),` add:
+
+```ts
+  // dedicated private store for support screenshots (Vercel prefix SUPPORT_BLOB)
+  SUPPORT_BLOB_READ_WRITE_TOKEN: z.string().optional(),
+```
+
+In the exported `env` object, right after the `BLOB_ENABLED` entry add:
+
+```ts
+  /** Support screenshots: private Blob store, separate from the public branding one. */
+  SUPPORT_BLOB_ENABLED: !isPlaceholder(raw.SUPPORT_BLOB_READ_WRITE_TOKEN),
+```
+
 - [ ] **Step 1: Raise the Server Action body limit**
 
 Replace `next.config.ts` with:
@@ -1746,7 +1763,7 @@ export async function storeAttachments(
   messageId: string,
   files: readonly File[],
 ): Promise<number> {
-  if (!env.BLOB_ENABLED) return files.length;
+  if (!env.SUPPORT_BLOB_ENABLED) return files.length;
   let failed = 0;
   for (const file of files) {
     try {
@@ -1754,7 +1771,7 @@ export async function storeAttachments(
       const blob = await put(`support/${requesterId}/${nanoid()}.${ext}`, file, {
         access: "private",
         contentType: file.type,
-        token: env.BLOB_READ_WRITE_TOKEN,
+        token: env.SUPPORT_BLOB_READ_WRITE_TOKEN,
       });
       await db.insert(supportAttachment).values({
         messageId,
@@ -1779,16 +1796,16 @@ export function uploadWarning(failed: number): string | undefined {
 
 /** Best effort, once the account is deleted: removes support/<userId>/. */
 export async function deleteSupportFiles(userId: string): Promise<void> {
-  if (!env.BLOB_ENABLED) return;
+  if (!env.SUPPORT_BLOB_ENABLED) return;
   try {
     const prefix = `support/${userId}/`;
     let cursor: string | undefined;
     do {
-      const page = await list({ prefix, cursor, token: env.BLOB_READ_WRITE_TOKEN });
+      const page = await list({ prefix, cursor, token: env.SUPPORT_BLOB_READ_WRITE_TOKEN });
       if (page.blobs.length) {
         await del(
           page.blobs.map((b) => b.url),
-          { token: env.BLOB_READ_WRITE_TOKEN },
+          { token: env.SUPPORT_BLOB_READ_WRITE_TOKEN },
         );
       }
       cursor = page.hasMore ? page.cursor : undefined;
@@ -1862,7 +1879,7 @@ export async function GET(
   const notFound = () => new Response("Not found", { status: 404 });
 
   const session = await getSession();
-  if (!session || !env.BLOB_ENABLED) return notFound();
+  if (!session || !env.SUPPORT_BLOB_ENABLED) return notFound();
 
   const [row] = await db
     .select({
@@ -1880,7 +1897,7 @@ export async function GET(
 
   const blob = await get(row.pathname, {
     access: "private",
-    token: env.BLOB_READ_WRITE_TOKEN,
+    token: env.SUPPORT_BLOB_READ_WRITE_TOKEN,
   });
   if (!blob || blob.statusCode !== 200) return notFound();
 
@@ -1921,7 +1938,7 @@ Expected: exit 0, no errors. (If `blob.stream` is reported as possibly null, the
 - [ ] **Step 6: Commit**
 
 ```bash
-git add next.config.ts src/server/support-core.ts "src/app/api/support/attachments/[id]/route.ts" src/server/admin.ts
+git add src/lib/env.ts next.config.ts src/server/support-core.ts "src/app/api/support/attachments/[id]/route.ts" src/server/admin.ts
 git commit -m "feat(support): server core, private image route, cleanup on account deletion
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -2366,7 +2383,7 @@ export async function createSupportRequest(formData: FormData): Promise<CreateRe
   const files = imageFiles(formData);
   const check = checkAttachments(files);
   if (!check.ok) return check;
-  if (files.length && !env.BLOB_ENABLED) {
+  if (files.length && !env.SUPPORT_BLOB_ENABLED) {
     return { ok: false, error: "L’envoi d’images n’est pas disponible." };
   }
 
@@ -2425,7 +2442,7 @@ export async function replyToSupportRequest(formData: FormData): Promise<Support
   }
   const check = checkAttachments(files);
   if (!check.ok) return check;
-  if (files.length && !env.BLOB_ENABLED) {
+  if (files.length && !env.SUPPORT_BLOB_ENABLED) {
     return { ok: false, error: "L’envoi d’images n’est pas disponible." };
   }
 
@@ -2605,7 +2622,7 @@ export async function adminReply(formData: FormData): Promise<AdminSupportResult
   if (body.length > MAX_BODY) return { ok: false, error: "Message trop long." };
   const check = checkAttachments(files);
   if (!check.ok) return check;
-  if (files.length && !env.BLOB_ENABLED) {
+  if (files.length && !env.SUPPORT_BLOB_ENABLED) {
     return { ok: false, error: "L’envoi d’images n’est pas disponible." };
   }
 
@@ -4742,7 +4759,7 @@ export default async function NewRequestPage({
           articles={articles}
           initialSubject={subject}
           initialType={type}
-          imagesEnabled={env.BLOB_ENABLED}
+          imagesEnabled={env.SUPPORT_BLOB_ENABLED}
         />
       )}
     </div>
@@ -4831,7 +4848,7 @@ export default async function RequestPage({
         className="mt-8"
         requestId={request.id}
         action={replyToSupportRequest}
-        imagesEnabled={env.BLOB_ENABLED}
+        imagesEnabled={env.SUPPORT_BLOB_ENABLED}
         disabledReason={disabledReason}
       />
     </div>
@@ -5456,7 +5473,7 @@ export default async function AdminSupportRequestPage({
           <MessageComposer
             requestId={request.id}
             action={adminReply}
-            imagesEnabled={env.BLOB_ENABLED}
+            imagesEnabled={env.SUPPORT_BLOB_ENABLED}
             placeholder={`Répondre à ${author.name}`}
           />
         </div>
@@ -6193,8 +6210,9 @@ In the `## Conventions` list, after the **Traffic** bullet, add:
   to `received`); `resolution` (declined/closed) ends it off-track with the bar frozen. Writes:
   `src/server/support.ts` (user, refused while impersonating), `src/server/support-admin.ts` (admin),
   shared `src/server/support-core.ts`; reads in `src/server/support-queries.ts`. Screenshots are
-  **private** Blobs under `support/<requesterId>/`, served only by `/api/support/attachments/[id]`
-  (owner or admin); `deleteUser` removes that folder. `/sign-in` and `/sign-up` accept `?next=`
+  **private** Blobs under `support/<requesterId>/` in a dedicated store (`skedul-support`, env
+  `SUPPORT_BLOB_READ_WRITE_TOKEN`; the public `BLOB_*` store stays for branding), served only by
+  `/api/support/attachments/[id]` (owner or admin); `deleteUser` removes that folder. `/sign-in` and `/sign-up` accept `?next=`
   (validated by `safeNextPath`). Server Actions accept 16 MB bodies (`next.config.ts`).
 ```
 
@@ -6234,4 +6252,4 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 - [ ] **Step 6: Hand off**
 
-Use `superpowers:finishing-a-development-branch`. PR vs merge and any deploy are the user's call. Remind them: preview/prod get migrations 0008 and 0009 on their next manual deploy (`pnpm db:migrate` runs in the Vercel build), the `aide` slug check of Task 1 must have passed on prod, and the Blob store used in prod must be the one probed in Task 1 (or also accept private blobs).
+Use `superpowers:finishing-a-development-branch`. PR vs merge and any deploy are the user's call. Remind them: preview/prod get migrations 0008 and 0009 on their next manual deploy (`pnpm db:migrate` runs in the Vercel build), the `aide` slug check of Task 1 passed on prod, and `SUPPORT_BLOB_READ_WRITE_TOKEN` is already set on Vercel for all three environments (private store `skedul-support`).

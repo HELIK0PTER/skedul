@@ -203,11 +203,13 @@ Toutes gardées par `getAdminUser()`.
   appartient à l'utilisateur ou s'il est admin (`getAdminUser()`), sinon 404. Stream via
   `get(pathname, { access: "private" })`, `Cache-Control: private, max-age=3600`,
   `X-Content-Type-Options: nosniff`, `Content-Type` = type stocké.
-- **Sans Blob** (`env.BLOB_ENABLED` faux, dev sans jeton) : le champ image est masqué ; le
-  reste fonctionne.
-- **Risque à vérifier en premier** : que le store Blob existant accepte `access: "private"`.
-  Si non, on s'arrête et on demande à l'utilisateur (créer un store privé = nouvelle variable
-  d'environnement).
+- **Store dédié** (décidé le 2026-10-11) : le store existant `skedul` est public et refuse
+  `access: "private"`. Les captures vont dans un second store **privé** `skedul-support`,
+  relié au projet (production, preview, development) avec le préfixe `SUPPORT_BLOB` →
+  variable `SUPPORT_BLOB_READ_WRITE_TOKEN` (`env.SUPPORT_BLOB_ENABLED`). Le store public
+  reste réservé aux images de marque.
+- **Sans store support** (`env.SUPPORT_BLOB_ENABLED` faux, dev sans jeton) : le champ image est
+  masqué ; le reste fonctionne.
 - **Suppression de compte** : `deleteUser` supprime aussi le préfixe `support/<userId>/`
   (best effort, même boucle `list`/`del` que `branding/`).
 
