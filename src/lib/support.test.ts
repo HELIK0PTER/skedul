@@ -158,6 +158,12 @@ test("checkAttachments enforces count, type and size", () => {
   assert.deepEqual(checkAttachments([]), { ok: true });
 });
 
+test("checkAttachments rejects inherited object keys as types", () => {
+  for (const type of ["constructor", "__proto__", "toString"]) {
+    assert.equal(checkAttachments([{ type, size: 10 }]).ok, false, type);
+  }
+});
+
 test("isValidEta accepts real calendar dates only", () => {
   assert.equal(isValidEta("2026-10-31"), true);
   for (const bad of ["2026-02-30", "2026-1-5", "31/10/2026", ""]) {

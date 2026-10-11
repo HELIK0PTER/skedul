@@ -244,7 +244,7 @@ export function checkAttachments(
     return { ok: false, error: `${MAX_ATTACHMENTS} images maximum par message.` };
   }
   for (const file of files) {
-    if (!(file.type in ATTACHMENT_EXTENSIONS)) {
+    if (!Object.hasOwn(ATTACHMENT_EXTENSIONS, file.type)) {
       return { ok: false, error: "Format d’image non pris en charge (png, jpg ou webp)." };
     }
     if (file.size > MAX_ATTACHMENT_BYTES) {
