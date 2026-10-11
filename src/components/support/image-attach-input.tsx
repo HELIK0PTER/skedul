@@ -1,17 +1,19 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { ImagePlus, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ImagePlus, Loader2, X } from "lucide-react";
 
-import { MAX_ATTACHMENTS, checkAttachments } from "@/lib/support";
+import { MAX_ATTACHMENTS, MAX_SOURCE_IMAGE_BYTES, checkAttachments } from "@/lib/support";
+import { shrinkImage } from "@/lib/shrink-image";
 import { cn } from "@/lib/utils";
 
 export type PickedImage = { file: File; url: string };
 
 /**
- * Picks up to 3 screenshots with previews. The parent owns the list and sends
- * the files; previews are revoked when removed or sent (any left are freed by
- * the browser when the page unloads).
+ * Picks up to 3 screenshots with previews; heavy ones are shrunk in the
+ * browser first (Vercel caps request bodies at 4.5 MB). The parent owns the
+ * list and sends the files; previews are revoked when removed or sent (any
+ * left are freed by the browser when the page unloads).
  */
 export function ImageAttachInput({
   images,
@@ -26,19 +28,50 @@ export function ImageAttachInput({
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  // the list may change (sent, removed) while images are being shrunk
+  const latest = useRef(images);
+  useEffect(() => {
+    latest.current = images;
+  }, [images]);
   const tile = compact ? "size-14" : "size-20";
 
-  function add(list: FileList | null) {
+  async function add(list: FileList | null) {
     const picked = Array.from(list ?? []);
     if (inputRef.current) inputRef.current.value = "";
     if (picked.length === 0) return;
-    const check = checkAttachments([...images.map((i) => i.file), ...picked]);
-    if (!check.ok) {
-      setError(check.error);
+    if (images.length + picked.length > MAX_ATTACHMENTS) {
+      setError(`${MAX_ATTACHMENTS} images maximum par message.`);
       return;
     }
+    for (const file of picked) {
+      if (!file.type.startsWith("image/")) {
+        setError("Format d’image non pris en charge (png, jpg ou webp).");
+        return;
+      }
+      if (file.size > MAX_SOURCE_IMAGE_BYTES) {
+        setError(`Image trop lourde (${MAX_SOURCE_IMAGE_BYTES / 1_000_000} Mo maximum).`);
+        return;
+      }
+    }
     setError(null);
-    onChange([...images, ...picked.map((file) => ({ file, url: URL.createObjectURL(file) }))]);
+    setBusy(true);
+    try {
+      const shrunk: File[] = [];
+      // one at a time: each decoded bitmap can weigh hundreds of MB
+      for (const file of picked) shrunk.push(await shrinkImage(file));
+      const current = latest.current;
+      const check = checkAttachments([...current.map((i) => i.file), ...shrunk]);
+      if (!check.ok) {
+        setError(check.error);
+        return;
+      }
+      onChange([...current, ...shrunk.map((file) => ({ file, url: URL.createObjectURL(file) }))]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Impossible de lire cette image.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   function remove(index: number) {
@@ -72,14 +105,19 @@ export function ImageAttachInput({
           <button
             type="button"
             onClick={() => inputRef.current?.click()}
-            disabled={disabled}
-            aria-label="Ajouter une capture d’écran"
+            disabled={disabled || busy}
+            aria-busy={busy}
+            aria-label={busy ? "Préparation de l’image" : "Ajouter une capture d’écran"}
             className={cn(
               "flex flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-border text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground disabled:opacity-50",
               tile,
             )}
           >
-            <ImagePlus className="size-4" aria-hidden />
+            {busy ? (
+              <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden />
+            ) : (
+              <ImagePlus className="size-4" aria-hidden />
+            )}
             {!compact && "Ajouter"}
           </button>
         )}
@@ -90,14 +128,15 @@ export function ImageAttachInput({
         accept="image/png,image/jpeg,image/webp"
         multiple
         hidden
-        onChange={(e) => add(e.target.files)}
+        onChange={(e) => void add(e.target.files)}
       />
       {(error || !compact) && (
         <p
           role={error ? "alert" : undefined}
           className={cn("mt-2 text-xs", error ? "text-destructive" : "text-muted-foreground")}
         >
-          {error ?? `Jusqu’à ${MAX_ATTACHMENTS} captures d’écran (png, jpg ou webp, 5 Mo maximum).`}
+          {error ??
+            `Jusqu’à ${MAX_ATTACHMENTS} captures d’écran (png, jpg ou webp). Les images lourdes sont réduites automatiquement.`}
         </p>
       )}
     </div>

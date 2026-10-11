@@ -29,7 +29,8 @@ ou livrée.
    développement → En test → Livrée. Chaque passage est daté dans le fil.
 6. **Visibilité** : chaque utilisateur ne voit **que ses propres demandes**. Pas de roadmap
    publique.
-7. **Pièces jointes** : images uniquement (png/jpg/webp), 3 par message, 5 Mo chacune, stockées
+7. **Pièces jointes** : images uniquement (png/jpg/webp), 3 par message, réduites dans le
+   navigateur à 1,3 Mo maximum chacune (20 Mo maximum avant réduction), stockées
    en **privé** sur Vercel Blob.
 
 ## Hors périmètre
@@ -194,8 +195,10 @@ Toutes gardées par `getAdminUser()`.
 ### Pièces jointes
 
 - **Envoi** : les images voyagent dans le `FormData` de l'action (création, réponse, réponse
-  admin). `next.config.ts` passe `experimental.serverActions.bodySizeLimit` à `"16mb"`
-  (3 × 5 Mo + texte). Type et taille revérifiés côté serveur.
+  admin). Vercel refuse les corps de requête au-delà de 4,5 Mo : le navigateur réduit d'abord
+  chaque image lourde (`src/lib/shrink-image.ts` : 2000 px de côté au plus, WebP ou JPEG,
+  1,3 Mo au plus) et `next.config.ts` passe `experimental.serverActions.bodySizeLimit` à
+  `"4.5mb"` (3 × 1,3 Mo + texte). Type et taille revérifiés côté serveur.
 - **Stockage** : `put("support/<userId>/<nanoid>.<ext>", file, { access: "private" })`, où
   `userId` est l'**auteur de la demande** (même pour les images d'un admin), pour que la
   suppression du compte emporte tout le dossier.

@@ -2,12 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  MAX_ATTACHMENTS,
+  MAX_ATTACHMENT_BYTES,
+  MAX_BODY,
   TRACK_STEPS,
   ageLabel,
   canAcceptForDevelopment,
   canSetStage,
   canUserReply,
   checkAttachments,
+  fitWithin,
   formatEta,
   isOpen,
   isValidEta,
@@ -155,8 +159,29 @@ test("checkAttachments enforces count, type and size", () => {
   assert.deepEqual(checkAttachments([png, png, png]), { ok: true });
   assert.equal(checkAttachments([png, png, png, png]).ok, false);
   assert.equal(checkAttachments([{ type: "image/gif", size: 10 }]).ok, false);
-  assert.equal(checkAttachments([{ type: "image/jpeg", size: 5_000_001 }]).ok, false);
+  assert.deepEqual(checkAttachments([{ type: "image/jpeg", size: MAX_ATTACHMENT_BYTES }]), { ok: true });
+  assert.deepEqual(checkAttachments([{ type: "image/jpeg", size: MAX_ATTACHMENT_BYTES + 1 }]), {
+    ok: false,
+    error: "Image trop lourde, même après réduction.",
+  });
   assert.deepEqual(checkAttachments([]), { ok: true });
+});
+
+test("three shrunk images and a full message stay under Vercel's 4.5 MB body cap", () => {
+  assert.ok(MAX_ATTACHMENTS * MAX_ATTACHMENT_BYTES + MAX_BODY * 4 < 4_500_000);
+});
+
+test("fitWithin scales the longest side down to maxEdge, keeping the ratio", () => {
+  assert.deepEqual(fitWithin(4000, 3000, 2000), { width: 2000, height: 1500 });
+  assert.deepEqual(fitWithin(3000, 4000, 2000), { width: 1500, height: 2000 });
+  assert.deepEqual(fitWithin(3000, 100, 2000), { width: 2000, height: 67 });
+  assert.deepEqual(fitWithin(2000, 2000, 2000), { width: 2000, height: 2000 });
+});
+
+test("fitWithin never upscales and never returns a zero side", () => {
+  assert.deepEqual(fitWithin(800, 600, 2000), { width: 800, height: 600 });
+  assert.deepEqual(fitWithin(100_000, 1, 2000), { width: 2000, height: 1 });
+  assert.deepEqual(fitWithin(1, 100_000, 1400), { width: 1, height: 1400 });
 });
 
 test("checkAttachments rejects inherited object keys as types", () => {

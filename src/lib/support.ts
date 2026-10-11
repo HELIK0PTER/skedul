@@ -87,7 +87,16 @@ export const MAX_MESSAGES_PER_DAY = 30;
 export const MAX_SUBJECT = 140;
 export const MAX_BODY = 20_000;
 export const MAX_ATTACHMENTS = 3;
-export const MAX_ATTACHMENT_BYTES = 5_000_000;
+/**
+ * One image as the server receives it, after the browser shrank it
+ * (`src/lib/shrink-image.ts`): 3 of them plus a full message stay under
+ * Vercel's 4.5 MB request-body cap.
+ */
+export const MAX_ATTACHMENT_BYTES = 1_300_000;
+/** A picked file before shrinking (checked in the browser only). */
+export const MAX_SOURCE_IMAGE_BYTES = 20_000_000;
+/** Longest side, in px, of a shrunk image. */
+export const MAX_IMAGE_EDGE = 2000;
 
 export const ATTACHMENT_EXTENSIONS = {
   "image/png": "png",
@@ -248,10 +257,23 @@ export function checkAttachments(
       return { ok: false, error: "Format d’image non pris en charge (png, jpg ou webp)." };
     }
     if (file.size > MAX_ATTACHMENT_BYTES) {
-      return { ok: false, error: "Image trop lourde (5 Mo maximum)." };
+      return { ok: false, error: "Image trop lourde, même après réduction." };
     }
   }
   return { ok: true };
+}
+
+/** `width`×`height` scaled so its longest side is at most `maxEdge`; never upscaled, never 0. */
+export function fitWithin(
+  width: number,
+  height: number,
+  maxEdge: number,
+): { width: number; height: number } {
+  const scale = Math.min(1, maxEdge / Math.max(width, height));
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
 }
 
 /* ── Estimated delivery date (YYYY-MM-DD) ── */

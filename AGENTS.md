@@ -61,7 +61,8 @@ services/availability/packs in a back-office; their clients book slots
   **private** Blobs under `support/<requesterId>/` in a dedicated store (`skedul-support`, env
   `SUPPORT_BLOB_READ_WRITE_TOKEN`; the public `BLOB_*` store stays for branding), served only by
   `/api/support/attachments/[id]` (owner or admin); `deleteUser` removes that folder. `/sign-in` and `/sign-up` accept `?next=`
-  (validated by `safeNextPath`). Server Actions accept 16 MB bodies (`next.config.ts`).
+  (validated by `safeNextPath`). Server Actions accept 4.5 MB bodies (Vercel's request cap,
+  `next.config.ts`): screenshots are shrunk in the browser (`src/lib/shrink-image.ts`) to ≤ 1.3 MB each.
 - **Money**: integer cents + `currency` (default `eur`). Format via `formatMoney`.
 - **Time**: availability is wall-clock minutes-from-midnight in the pro's tz.
   Convert to instants with `instantFromWallClock` (`@date-fns/tz`). Slot logic in
