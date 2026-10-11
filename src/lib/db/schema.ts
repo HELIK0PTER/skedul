@@ -1,15 +1,26 @@
 import { relations } from "drizzle-orm";
 import {
   boolean,
+  date,
   index,
   integer,
   pgEnum,
   pgTable,
+  serial,
   text,
   timestamp,
   unique,
 } from "drizzle-orm/pg-core";
 import { nanoid } from "nanoid";
+
+import {
+  SUPPORT_AUTHOR_ROLES,
+  SUPPORT_MESSAGE_KINDS,
+  SUPPORT_RESOLUTIONS,
+  SUPPORT_STAGES,
+  SUPPORT_TRACKS,
+  SUPPORT_TYPES,
+} from "../support";
 
 const id = () =>
   text("id")
@@ -42,6 +53,12 @@ export const purchaseStatus = pgEnum("purchase_status", [
   "refunded",
 ]);
 export const questionType = pgEnum("question_type", ["text", "choice", "boolean"]);
+export const supportType = pgEnum("support_type", SUPPORT_TYPES);
+export const supportTrack = pgEnum("support_track", SUPPORT_TRACKS);
+export const supportStage = pgEnum("support_stage", SUPPORT_STAGES);
+export const supportResolution = pgEnum("support_resolution", SUPPORT_RESOLUTIONS);
+export const supportAuthorRole = pgEnum("support_author_role", SUPPORT_AUTHOR_ROLES);
+export const supportMessageKind = pgEnum("support_message_kind", SUPPORT_MESSAGE_KINDS);
 
 /* ──────────────────────── Better Auth tables ───────────────────── */
 
@@ -429,6 +446,103 @@ export const analyticsSalt = pgTable("analytics_salt", {
   salt: text("salt").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+/* ─────────────────────────── Help center ──────────────────────── */
+
+export const helpCategory = pgTable("help_category", {
+  id: id(),
+  title: text("title").notNull(),
+  slug: text("slug").notNull().unique(),
+  // one of HELP_ICONS (src/lib/support.ts)
+  icon: text("icon").notNull().default("help"),
+  position: integer("position").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const helpArticle = pgTable(
+  "help_article",
+  {
+    id: id(),
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => helpCategory.id, { onDelete: "cascade" }),
+    question: text("question").notNull(),
+    // plain text: blank line = paragraph, "- " = list item (parseAnswer)
+    answer: text("answer").notNull(),
+    position: integer("position").notNull().default(0),
+    published: boolean("published").notNull().default(false),
+    ...timestamps,
+  },
+  (t) => [index("help_article_category_idx").on(t.categoryId, t.position)],
+);
+
+export const supportRequest = pgTable(
+  "support_request",
+  {
+    id: id(),
+    // human-facing "#42"
+    number: serial("number").notNull().unique(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    type: supportType("type").notNull(),
+    subject: text("subject").notNull(),
+    track: supportTrack("track").notNull().default("support"),
+    // always a step of `track` (TRACK_STEPS)
+    stage: supportStage("stage").notNull().default("received"),
+    // set = the request ended off-track (declined / closed); the bar freezes on `stage`
+    resolution: supportResolution("resolution"),
+    // estimated delivery, development track only
+    eta: date("eta", { mode: "string" }),
+    unreadByUser: boolean("unread_by_user").notNull().default(false),
+    unreadByAdmin: boolean("unread_by_admin").notNull().default(true),
+    lastActivityAt: timestamp("last_activity_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("support_request_user_idx").on(t.userId, t.lastActivityAt),
+    index("support_request_unread_idx").on(t.unreadByAdmin),
+  ],
+);
+
+export const supportMessage = pgTable(
+  "support_message",
+  {
+    id: id(),
+    requestId: text("request_id")
+      .notNull()
+      .references(() => supportRequest.id, { onDelete: "cascade" }),
+    // NULL once the author's account is deleted (an admin's messages stay)
+    authorId: text("author_id").references(() => user.id, { onDelete: "set null" }),
+    authorRole: supportAuthorRole("author_role").notNull(),
+    kind: supportMessageKind("kind").notNull().default("message"),
+    body: text("body").notNull().default(""),
+    // kind = stage_change: the step reached
+    stage: supportStage("stage"),
+    // kind = resolution: declined / closed, or NULL when the request was reopened
+    resolution: supportResolution("resolution"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("support_message_request_idx").on(t.requestId, t.createdAt)],
+);
+
+export const supportAttachment = pgTable(
+  "support_attachment",
+  {
+    id: id(),
+    messageId: text("message_id")
+      .notNull()
+      .references(() => supportMessage.id, { onDelete: "cascade" }),
+    // private Blob pathname: support/<requesterUserId>/<nanoid>.<ext>
+    pathname: text("pathname").notNull(),
+    contentType: text("content_type").notNull(),
+    size: integer("size").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("support_attachment_message_idx").on(t.messageId)],
+);
 
 /* ───────────────────────────── Relations ───────────────────────── */
 
