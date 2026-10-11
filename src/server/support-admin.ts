@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, asc, count, eq } from "drizzle-orm";
+import { and, asc, count, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 
 import { getAdminUser, type AdminUser } from "@/lib/admin";
@@ -94,14 +94,32 @@ export async function adminReply(formData: FormData): Promise<AdminSupportResult
   try {
     const stage = stageAfterAdminReply(request);
     if (stage !== request.stage) {
+      // guarded on track, stage and open state: a concurrent step change or
+      // "accept for development" wins, and nothing is written
+      const moved = await db
+        .update(supportRequest)
+        .set({ stage })
+        .where(
+          and(
+            eq(supportRequest.id, id),
+            eq(supportRequest.track, request.track),
+            eq(supportRequest.stage, request.stage),
+            isNull(supportRequest.resolution),
+          ),
+        )
+        .returning({ id: supportRequest.id });
+      if (moved.length === 0) {
+        return { ok: false, error: "La demande a changé entre-temps. Rechargez la page." };
+      }
       // the first answer means the request is being handled
       await insertMessage({ requestId: id, authorId: admin.id, authorRole: "admin", kind: "stage_change", stage });
     }
     const messageId = await insertMessage({ requestId: id, authorId: admin.id, authorRole: "admin", body });
     const failed = await storeAttachments(request.userId, messageId, files);
+    // the stage is never written here: it is set above, guarded, or left alone
     await db
       .update(supportRequest)
-      .set({ stage, unreadByUser: true, lastActivityAt: new Date() })
+      .set({ unreadByUser: true, lastActivityAt: new Date() })
       .where(eq(supportRequest.id, id));
     await sendEmail({
       to: requester.email,
