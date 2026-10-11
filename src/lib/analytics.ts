@@ -13,10 +13,11 @@ export type ReferrerKind =
   | { kind: "internal" }
   | { kind: "external"; host: string };
 
-const UNTRACKED_PREFIXES = ["/dashboard", "/onboarding", "/admin", "/api", "/_next"];
+const UNTRACKED_PREFIXES = ["/dashboard", "/onboarding", "/admin", "/api", "/_next", "/aide/demandes"];
 
 /** Top-level segments that are app routes, never a pro's public slug. */
 const RESERVED_SEGMENTS = new Set([
+  "aide",
   "admin",
   "api",
   "dashboard",

@@ -9,6 +9,7 @@ import {
   Clock,
   ExternalLink,
   LayoutDashboard,
+  LifeBuoy,
   Settings,
   ShieldCheck,
 } from "lucide-react";
@@ -24,16 +25,19 @@ const NAV = [
   { href: "/dashboard/availability", label: "Disponibilités", icon: Clock },
   { href: "/dashboard/unavailability", label: "Indisponibilités", icon: CalendarOff },
   { href: "/dashboard/settings", label: "Réglages", icon: Settings },
+  { href: "/aide", label: "Centre d’aide", icon: LifeBuoy },
 ];
 
 export function DashboardSidebar({
   businessName,
   slug,
   isAdmin = false,
+  supportUnread = false,
 }: {
   businessName: string;
   slug: string;
   isAdmin?: boolean;
+  supportUnread?: boolean;
 }) {
   const pathname = usePathname();
 
@@ -65,7 +69,13 @@ export function DashboardSidebar({
               )}
             >
               <item.icon className="size-4" />
-              {item.label}
+              <span className="flex-1">{item.label}</span>
+              {item.href === "/aide" && supportUnread && (
+                <span className="rounded-full bg-primary px-1.5 py-px text-[0.625rem] font-semibold text-primary-foreground">
+                  Nouveau
+                  <span className="sr-only"> : une réponse vous attend</span>
+                </span>
+              )}
             </Link>
           );
         })}

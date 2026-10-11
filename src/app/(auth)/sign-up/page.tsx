@@ -5,6 +5,7 @@ import { AuthForm } from "@/components/auth/auth-form";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { env } from "@/lib/env";
 import { oauthErrorMessage } from "@/lib/oauth-errors";
+import { safeNextPath } from "@/lib/safe-next";
 import { getCurrentUser } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Créer un compte" };
@@ -12,10 +13,11 @@ export const metadata: Metadata = { title: "Créer un compte" };
 export default async function SignUpPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string | string[] }>;
+  searchParams: Promise<{ error?: string | string[]; next?: string | string[] }>;
 }) {
-  if (await getCurrentUser()) redirect("/dashboard");
-  const { error } = await searchParams;
+  const { error, next: rawNext } = await searchParams;
+  const next = safeNextPath(rawNext);
+  if (await getCurrentUser()) redirect(next ?? "/dashboard");
   // Google found an existing email/password account: offer to link it.
   if (error === "account_not_linked") redirect("/link-google");
 
@@ -30,6 +32,7 @@ export default async function SignUpPage({
       <CardContent>
         <AuthForm
           mode="sign-up"
+          next={next}
           googleEnabled={env.GOOGLE_CALENDAR_ENABLED}
           initialError={oauthErrorMessage(typeof error === "string" ? error : null)}
         />

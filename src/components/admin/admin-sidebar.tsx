@@ -8,6 +8,7 @@ import {
   ArrowLeftRight,
   CreditCard,
   LayoutDashboard,
+  LifeBuoy,
   LineChart,
   Users,
 } from "lucide-react";
@@ -24,15 +25,18 @@ const NAV = [
   { href: "/admin/users", label: "Utilisateurs", icon: Users },
   { href: "/admin/traffic", label: "Trafic", icon: LineChart },
   { href: "/admin/activity", label: "Activité", icon: Activity },
+  { href: "/admin/support", label: "Support", icon: LifeBuoy },
   { href: "/admin/subscriptions", label: "Abonnements", icon: CreditCard },
 ];
 
 export function AdminSidebar({
   adminName,
   remembered,
+  supportToHandle,
 }: {
   adminName: string;
   remembered: EntryChoice | null;
+  supportToHandle: number;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -67,7 +71,13 @@ export function AdminSidebar({
               )}
             >
               <item.icon className="size-4" />
-              {item.label}
+              <span className="flex-1">{item.label}</span>
+              {item.href === "/admin/support" && supportToHandle > 0 && (
+                <span className="rounded-full bg-primary px-1.5 py-px text-[0.625rem] font-semibold tabular-nums text-primary-foreground">
+                  {supportToHandle}
+                  <span className="sr-only"> à traiter</span>
+                </span>
+              )}
             </Link>
           );
         })}

@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { AdminSidebar } from "@/components/admin/admin-sidebar";
 import { requireAdmin } from "@/lib/admin";
 import { ENTRY_COOKIE, parseEntryChoice } from "@/lib/entry";
+import { countSupportToHandle } from "@/server/support-queries";
 
 export const metadata: Metadata = {
   title: { default: "Admin", template: "%s · Admin · Skedul" },
@@ -17,10 +18,18 @@ export default async function AdminLayout({
 }) {
   const admin = await requireAdmin();
   const remembered = parseEntryChoice((await cookies()).get(ENTRY_COOKIE)?.value);
+  const supportToHandle = await countSupportToHandle().catch((err) => {
+    console.error("[admin] support counter lookup failed", err);
+    return 0;
+  });
 
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
-      <AdminSidebar adminName={admin.name} remembered={remembered} />
+      <AdminSidebar
+        adminName={admin.name}
+        remembered={remembered}
+        supportToHandle={supportToHandle}
+      />
       <main className="flex-1 overflow-y-auto bg-background">
         <div className="mx-auto max-w-6xl px-5 py-8">{children}</div>
       </main>

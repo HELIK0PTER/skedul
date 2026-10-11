@@ -286,3 +286,17 @@ body {
     text-wrap: balance;
   }
 }
+
+/* Help center: the progress fill grows in once; a revealed form step fades up. */
+@keyframes progress-grow {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}

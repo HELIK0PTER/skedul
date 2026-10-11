@@ -57,6 +57,20 @@
       "when": 1791415835322,
       "tag": "0007_fast_major_mapleleaf",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791682638064,
+      "tag": "0008_help_center",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791682662372,
+      "tag": "0009_help_faq_seed",
+      "breakpoints": true
     }
   ]
 }

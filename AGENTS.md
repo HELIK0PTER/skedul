@@ -50,6 +50,19 @@ services/availability/packs in a back-office; their clients book slots
   `/api/track`; public pages only (see `isTrackedPath` in `src/lib/analytics.ts`).
   Visitor hash = HMAC with a random per-day salt (`analytics_salt`, deleted after 2
   days); page views older than 25 months are purged (`src/server/analytics-salt.ts`).
+- **Help center**: public `/aide` (FAQ from `help_category`/`help_article`, edited in
+  `/admin/support/faq`; starter content = content migration 0009) and support requests
+  (`support_request` / `support_message` / `support_attachment`). Rules, labels and limits live in
+  `src/lib/support.ts`, which is also the source of the DB enums. A request follows the 3-step
+  `support` track or, once « Accepter en développement », the 6-step `development` track (never back
+  to `received`); `resolution` (declined/closed) ends it off-track with the bar frozen. Writes:
+  `src/server/support.ts` (user, refused while impersonating), `src/server/support-admin.ts` (admin),
+  shared `src/server/support-core.ts`; reads in `src/server/support-queries.ts`. Screenshots are
+  **private** Blobs under `support/<requesterId>/` in a dedicated store (`skedul-support`, env
+  `SUPPORT_BLOB_READ_WRITE_TOKEN`; the public `BLOB_*` store stays for branding), served only by
+  `/api/support/attachments/[id]` (owner or admin); `deleteUser` removes that folder. `/sign-in` and `/sign-up` accept `?next=`
+  (validated by `safeNextPath`). Server Actions accept 4.5 MB bodies (Vercel's request cap,
+  `next.config.ts`): screenshots are shrunk in the browser (`src/lib/shrink-image.ts`) to ≤ 1.3 MB each.
 - **Money**: integer cents + `currency` (default `eur`). Format via `formatMoney`.
 - **Time**: availability is wall-clock minutes-from-midnight in the pro's tz.
   Convert to instants with `instantFromWallClock` (`@date-fns/tz`). Slot logic in
