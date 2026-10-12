@@ -108,3 +108,38 @@ test("a session of another event type blocks this event's overlapping slot", () 
   const s = slots.find((x) => x.start.getTime() === FRI_0900.getTime());
   assert.equal(s, undefined);
 });
+
+test("computeSlots: at 23:30 the night before spring-forward, Sunday is not skipped", () => {
+  const slots = computeSlots(
+    base({
+      rules: [{ dayOfWeek: 0, startMinute: 540, endMinute: 600 }], // Sunday 09:00–10:00
+      now: new Date("2026-03-28T22:30:00.000Z"), // Sat 28 Mar, 23:30 Paris (UTC+1)
+      daysAhead: 2,
+      minNoticeMinutes: 0,
+    }),
+  );
+  // Sun 29 Mar 2026, 09:00 Paris (UTC+2) = 07:00Z
+  assert.deepEqual(slots.map((s) => s.start.toISOString()), ["2026-03-29T07:00:00.000Z"]);
+});
+
+test("computeSlots: just after midnight on fall-back Sunday, Monday is still in the horizon", () => {
+  const slots = computeSlots(
+    base({
+      rules: [
+        { dayOfWeek: 0, startMinute: 540, endMinute: 600 }, // Sunday 09:00
+        { dayOfWeek: 1, startMinute: 540, endMinute: 600 }, // Monday 09:00
+      ],
+      now: new Date("2026-10-24T22:30:00.000Z"), // Sun 25 Oct, 00:30 Paris (UTC+2)
+      daysAhead: 2,
+      minNoticeMinutes: 0,
+    }),
+  );
+  assert.deepEqual(slots.map((s) => s.start.toISOString()), [
+    "2026-10-25T08:00:00.000Z", // Sun 09:00 UTC+1
+    "2026-10-26T08:00:00.000Z", // Mon 09:00 UTC+1
+  ]);
+});
+
+test("computeSlots: a non-positive duration yields no slot (no infinite loop)", () => {
+  assert.deepEqual(computeSlots(base({ durationMinutes: 0 })), []);
+});

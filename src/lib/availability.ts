@@ -1,4 +1,9 @@
-import { dayKeyInTz, instantFromWallClock } from "@/lib/datetime";
+import {
+  addDaysToKey,
+  dayKeyInTz,
+  dayOfWeekForKey,
+  instantFromWallClock,
+} from "@/lib/datetime";
 
 export interface Rule {
   dayOfWeek: number; // 0=Sunday … 6=Saturday
@@ -57,16 +62,19 @@ export function computeSlots({
   now = new Date(),
   minNoticeMinutes = 60,
 }: ComputeArgs): Slot[] {
+  if (durationMinutes <= 0) return [];
   const slots: Slot[] = [];
   const seen = new Set<number>();
   const earliest = now.getTime() + minNoticeMinutes * 60_000;
   const step = durationMinutes;
 
+  // Walk calendar days in the pro's zone. Stepping 24 h from `now` skips or
+  // repeats a day when a DST change falls inside the horizon.
+  const firstKey = dayKeyInTz(now, timezone);
   for (let offset = 0; offset < daysAhead; offset++) {
-    const baseDate = new Date(now.getTime() + offset * 86_400_000);
-    const ymd = dayKeyInTz(baseDate, timezone); // YYYY-MM-DD (local to tz)
+    const ymd = addDaysToKey(firstKey, offset);
     const [year, month, day] = ymd.split("-").map(Number);
-    const dow = new Date(Date.UTC(year, month - 1, day, 12)).getUTCDay();
+    const dow = dayOfWeekForKey(ymd);
 
     for (const rule of rules) {
       if (rule.dayOfWeek !== dow) continue;
