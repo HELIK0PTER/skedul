@@ -13,7 +13,9 @@ import { getProClients } from "@/server/queries";
 
 export const metadata: Metadata = { title: "Clients" };
 
-type ClientFilter = "all" | "credits";
+type ClientFilter = "all" | "credits" | "upcoming";
+
+const FILTERS: readonly ClientFilter[] = ["all", "credits", "upcoming"];
 
 /** Case- and accent-insensitive, so « helene » finds « Hélène ». */
 function fold(s: string) {
@@ -29,14 +31,18 @@ export default async function ClientsPage({
   const params = await searchParams;
   // A repeated ?q=a&q=b arrives as an array: ignore it rather than crash.
   const q = (typeof params.q === "string" ? params.q : "").trim().slice(0, 100);
-  const filter: ClientFilter = params.filter === "credits" ? "credits" : "all";
+  const filter: ClientFilter = FILTERS.find((f) => f === params.filter) ?? "all";
 
   const clients = await getProClients(pro.id);
   const withCredits = clients.filter((c) => c.creditsRemaining > 0);
+  // Soonest first: the order a pro reads their week in.
+  const withUpcoming = clients
+    .filter((c) => c.nextBookingAt)
+    .sort((a, b) => a.nextBookingAt!.getTime() - b.nextBookingAt!.getTime());
   const needle = fold(q);
-  const rows = (filter === "credits" ? withCredits : clients).filter(
-    (c) => !needle || fold(`${c.name} ${c.email}`).includes(needle),
-  );
+  const rows = { all: clients, credits: withCredits, upcoming: withUpcoming }[
+    filter
+  ].filter((c) => !needle || fold(`${c.name} ${c.email}`).includes(needle));
 
   const hrefFor = (f: ClientFilter) => {
     const sp = new URLSearchParams();
@@ -80,6 +86,11 @@ export default async function ClientsPage({
               label: `Avec crédits (${withCredits.length})`,
               href: hrefFor("credits"),
             },
+            {
+              value: "upcoming",
+              label: `Avec un RDV à venir (${withUpcoming.length})`,
+              href: hrefFor("upcoming"),
+            },
           ]}
         />
       </div>
@@ -91,7 +102,9 @@ export default async function ClientsPage({
               ? `Aucun client ne correspond à « ${q} ».`
               : filter === "credits"
                 ? "Aucun client n'a de crédits en cours."
-                : "Pas encore de client. Ils apparaîtront ici dès leur première réservation confirmée ou leur premier pack payé."}
+                : filter === "upcoming"
+                  ? "Aucun client n'a de rendez-vous à venir."
+                  : "Pas encore de client. Ils apparaîtront ici dès leur première réservation confirmée ou leur premier pack payé."}
           </p>
         ) : (
           <div className="overflow-x-auto">
