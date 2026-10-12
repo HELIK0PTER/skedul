@@ -79,8 +79,9 @@ export function BrandingForm({
   const bannerInput = useRef<HTMLInputElement>(null);
   const avatarInput = useRef<HTMLInputElement>(null);
 
-  // Lift the preview with a shadow once it is stuck: its sentinel has passed
-  // the sticky offset (md:top-4 = 16px).
+  // Lift the preview panel with a shadow once it is stuck. The panel starts
+  // 12px above its sentinel (md:-m-3) and sticks at md:top-4 (16px), so it is
+  // stuck once the sentinel has passed 28px.
   const stickSentinel = useRef<HTMLDivElement>(null);
   const [stuck, setStuck] = useState(false);
   useEffect(() => {
@@ -88,8 +89,8 @@ export function BrandingForm({
     if (!el) return;
     const observer = new IntersectionObserver(
       ([entry]) =>
-        setStuck(!entry.isIntersecting && entry.boundingClientRect.top < 16),
-      { rootMargin: "-16px 0px 0px 0px" },
+        setStuck(!entry.isIntersecting && entry.boundingClientRect.top < 28),
+      { rootMargin: "-28px 0px 0px 0px" },
     );
     observer.observe(el);
     return () => observer.disconnect();
@@ -223,64 +224,70 @@ export function BrandingForm({
 
   return (
     <div className="space-y-6">
-      {/* The preview floats at the top of the screen (md+) while the fields
-          below scroll, and stops with this wrapper, above the save buttons. */}
+      {/* The preview and its title float at the top of the screen (md+) while
+          the fields below scroll, and stop with this wrapper, above the save
+          buttons. -m-3 p-3: an opaque panel the fields slide under, with no
+          layout shift. */}
       <div>
-        <div className="mb-2 flex items-center justify-between">
-          <Label>Aperçu en direct</Label>
-          {dirty && (
-            <span className="text-xs font-medium text-warning">
-              Modifications non enregistrées
-            </span>
-          )}
-        </div>
         <div ref={stickSentinel} aria-hidden className="h-px -mb-px" />
         <div
           className={cn(
-            "relative z-10 overflow-hidden rounded-xl border border-border bg-card transition-shadow duration-200 motion-reduce:transition-none md:sticky md:top-4",
-            stuck && "md:shadow-(--shadow-pop)",
+            "relative z-10 rounded-3xl bg-card transition-shadow duration-200 motion-reduce:transition-none md:sticky md:top-4 md:-m-3 md:p-3",
+            stuck && "md:shadow-(--shadow-pop) md:ring-1 md:ring-border",
           )}
-          style={brandThemeVars(activeColor)}
         >
-          {banner ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={banner} alt="" className="h-24 w-full object-cover" />
-          ) : (
-            <div
-              className="h-16"
-              style={{ background: `linear-gradient(180deg, ${activeColor}33, transparent)` }}
-            />
-          )}
-          <div className={cn("px-4 pb-4", centered && "text-center")}>
-            <div
-              className={cn(
-                "-mt-7 flex gap-3",
-                centered ? "flex-col items-center" : "items-end",
-              )}
-            >
-              <span className="size-14 shrink-0 overflow-hidden rounded-2xl border-4 border-card bg-card shadow-sm [&>svg]:size-full">
-                {previewAvatar()}
+          <div className="mb-2 flex items-center justify-between">
+            <Label>Aperçu en direct</Label>
+            {dirty && (
+              <span className="text-xs font-medium text-warning">
+                Modifications non enregistrées
               </span>
-              <div className={cn("min-w-0", centered ? "" : "pb-1")}>
-                <p className="truncate text-sm font-bold">{businessName}</p>
-                {headline && (
-                  <p className="truncate text-xs text-muted-foreground">{headline}</p>
+            )}
+          </div>
+          <div
+            className="overflow-hidden rounded-xl border border-border bg-card"
+            style={brandThemeVars(activeColor)}
+          >
+            {banner ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={banner} alt="" className="h-24 w-full object-cover" />
+            ) : (
+              <div
+                className="h-16"
+                style={{ background: `linear-gradient(180deg, ${activeColor}33, transparent)` }}
+              />
+            )}
+            <div className={cn("px-4 pb-4", centered && "text-center")}>
+              <div
+                className={cn(
+                  "-mt-7 flex gap-3",
+                  centered ? "flex-col items-center" : "items-end",
                 )}
+              >
+                <span className="size-14 shrink-0 overflow-hidden rounded-2xl border-4 border-card bg-card shadow-sm [&>svg]:size-full">
+                  {previewAvatar()}
+                </span>
+                <div className={cn("min-w-0", centered ? "" : "pb-1")}>
+                  <p className="truncate text-sm font-bold">{businessName}</p>
+                  {headline && (
+                    <p className="truncate text-xs text-muted-foreground">{headline}</p>
+                  )}
+                </div>
               </div>
-            </div>
-            <div
-              className={cn(
-                "mt-3 flex flex-wrap items-center gap-2",
-                centered && "justify-center",
-              )}
-            >
-              <span className="inline-flex h-8 items-center rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground">
-                Réserver
-              </span>
-              <span className="inline-flex h-8 items-center rounded-lg bg-accent px-3 text-xs font-medium text-accent-foreground">
-                Pack 5 séances
-              </span>
-              <span className="text-xs font-semibold text-primary">En savoir plus</span>
+              <div
+                className={cn(
+                  "mt-3 flex flex-wrap items-center gap-2",
+                  centered && "justify-center",
+                )}
+              >
+                <span className="inline-flex h-8 items-center rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground">
+                  Réserver
+                </span>
+                <span className="inline-flex h-8 items-center rounded-lg bg-accent px-3 text-xs font-medium text-accent-foreground">
+                  Pack 5 séances
+                </span>
+                <span className="text-xs font-semibold text-primary">En savoir plus</span>
+              </div>
             </div>
           </div>
         </div>
