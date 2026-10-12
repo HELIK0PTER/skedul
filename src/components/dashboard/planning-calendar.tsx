@@ -57,7 +57,10 @@ export function PlanningCalendar(props: {
   nav: { prevParam: string; nextParam: string; todayParam: string };
 }) {
   const { tz, startHour, endHour } = props;
-  const [selected, setSelected] = useState<PlanningSessionVM | null>(null);
+  // Keep the id, not the object: after router.refresh() the dialog then shows
+  // the fresh session (seats, attendees) instead of the one clicked.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = props.sessions.find((s) => s.id === selectedId) ?? null;
   const days = props.days.map((d) => new Date(d));
 
   // Indicateur « maintenant » : minutes depuis minuit (fuseau du pro), rafraîchi
@@ -216,7 +219,7 @@ export function PlanningCalendar(props: {
                       return (
                         <button
                           key={s.id}
-                          onClick={() => setSelected(s)}
+                          onClick={() => setSelectedId(s.id)}
                           className="absolute inset-x-0.5 overflow-hidden rounded-lg border border-black/10 p-1 text-left text-[11px] leading-tight text-white shadow-sm transition-opacity hover:opacity-90"
                           style={{
                             top: topPx(s.startAt, key),
@@ -245,7 +248,7 @@ export function PlanningCalendar(props: {
           session={selected}
           tz={tz}
           allSessions={props.sessions}
-          onClose={() => setSelected(null)}
+          onClose={() => setSelectedId(null)}
         />
       )}
     </div>

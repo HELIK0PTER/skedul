@@ -4,7 +4,6 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Dialog } from "@/components/ui/dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SessionCapacityControl } from "@/components/dashboard/session-capacity-control";
 import type { PlanningSessionVM } from "@/components/dashboard/planning-calendar";
@@ -47,13 +46,18 @@ export function SessionDetailDialog({
         {formatSlot(new Date(session.startAt), new Date(session.endAt), tz)}
       </p>
 
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-        <Badge variant="neutral">
-          {booked}/{session.capacity} inscrits
-        </Badge>
+      <div className="mt-4 flex flex-wrap items-start justify-between gap-3 rounded-xl bg-muted/50 p-3">
+        <div className="grid gap-1">
+          <p className="text-xs text-muted-foreground">Inscrits</p>
+          <p className="flex h-8 items-center text-sm font-semibold tabular-nums">
+            {booked} / {session.capacity}
+          </p>
+        </div>
         <SessionCapacityControl
+          key={session.capacity}
           sessionId={session.id}
           capacity={session.capacity}
+          booked={booked}
         />
       </div>
 
