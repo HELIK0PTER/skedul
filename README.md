@@ -44,11 +44,14 @@ pnpm dev                     # http://localhost:3000
 
 | Rôle | Identifiants |
 |---|---|
+| Admin | `admin@skedul.test` / `password123` |
 | Professionnel | `pro@skedul.app` / `password123` |
 | Client | `beatriz@example.com` / `password123` |
 
-Espace admin : **`/admin`**. Aucun compte admin n'est créé par le seed — créez un
-compte puis `pnpm admin:grant <email>`.
+Espace admin : **`/admin`**. Hors production (`APP_ENV !== "production"`),
+`/sign-in` propose une « Connexion rapide » en un clic vers ces trois comptes ;
+les identifiants ne sont affichés nulle part sur le site. Pour donner le rôle
+admin à un autre compte : `pnpm admin:grant <email>`.
 
 - Page publique de démo : **`/altinha-paris`**
 - Back-office : **`/dashboard`**

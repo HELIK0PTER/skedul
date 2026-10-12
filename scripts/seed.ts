@@ -58,6 +58,14 @@ async function main() {
   console.info("🌱 Seeding Skedul (Neon: development branch)…");
   await wipe();
 
+  /* ── Admin account (no pro page; « Connexion rapide » hors prod) ── */
+  const adminUserId = await createUser(
+    "Admin Skedul",
+    "admin@skedul.test",
+    "password123",
+  );
+  await db.update(user).set({ role: "admin" }).where(eq(user.id, adminUserId));
+
   /* ── Professional account ─────────────────────────────────────── */
   const proUserId = await createUser(
     "Altinha Paris",
@@ -317,6 +325,7 @@ async function main() {
 
   console.info("\n✅ Seed terminé.\n");
   console.info("Comptes de démonstration :");
+  console.info("  • Admin  → admin@skedul.test    / password123");
   console.info("  • Pro    → pro@skedul.app       / password123");
   console.info("  • Client → beatriz@example.com  / password123");
   console.info("\nPage publique : /altinha-paris");
