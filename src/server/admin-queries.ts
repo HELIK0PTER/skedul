@@ -8,46 +8,29 @@ import {
   gt,
   gte,
   ilike,
-  inArray,
   isNotNull,
-  lt,
-  ne,
   or,
   sql,
-  sum,
   type SQL,
 } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
 import { db } from "@/lib/db";
-import {
-  account,
-  booking,
-  customer,
-  eventType,
-  pack,
-  packPurchase,
-  pageView,
-  professional,
-  session,
-  user,
-} from "@/lib/db/schema";
+import { account, pageView, professional, session, user } from "@/lib/db/schema";
 import { env } from "@/lib/env";
 import { ADMIN_TZ } from "@/lib/analytics";
-import { mergeMoney, stripeMode, type MoneyTotal } from "@/lib/admin-metrics";
-import {
-  BOOKING_STATUS_LABELS,
-  USERS_PAGE_SIZE,
-  type BookingStatus,
-  type PurchaseStatus,
-  type UserFilter,
-} from "@/lib/admin-params";
+import { stripeMode, type MoneyTotal } from "@/lib/admin-metrics";
+import { USERS_PAGE_SIZE, type UserFilter } from "@/lib/admin-params";
 import { userIsSuspended } from "@/lib/suspension";
-import { formatMoney } from "@/lib/utils";
+
+/*
+ * Tickets & événements, P2: the booking and pack tables are gone. Revenue,
+ * booking counts, pending payments and the activity lists are stubbed with
+ * their exported shapes unchanged; P3 rebuilds them on ticket_purchase
+ * (src/lib/booking/revenue.ts) and booking.
+ */
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-/** Bookings that actually happened or will (counted as activity / revenue). */
-const CONFIRMED = ["confirmed", "completed"] as const;
 
 /**
  * YYYY-MM-DD of a timestamp in ADMIN_TZ. The zone is inlined as a literal
@@ -62,75 +45,30 @@ function dayOf(column: AnyPgColumn) {
 export async function getOverviewStats(now: Date = new Date()) {
   const since7 = new Date(now.getTime() - 7 * DAY_MS);
   const since30 = new Date(now.getTime() - 30 * DAY_MS);
-  const confirmedRecently = and(
-    gte(booking.createdAt, since30),
-    inArray(booking.status, [...CONFIRMED]),
-  );
 
-  const [users, newUsers, pros, activePros, bookings, revenue30d] =
-    await Promise.all([
-      db.select({ value: count() }).from(user),
-      db.select({ value: count() }).from(user).where(gte(user.createdAt, since7)),
-      db.select({ value: count() }).from(professional),
-      db
-        .select({ value: sql<string>`count(distinct ${booking.professionalId})` })
-        .from(booking)
-        .where(confirmedRecently),
-      db.select({ value: count() }).from(booking).where(confirmedRecently),
-      getRevenue({ since: since30 }),
-    ]);
+  const [users, newUsers, pros, revenue30d] = await Promise.all([
+    db.select({ value: count() }).from(user),
+    db.select({ value: count() }).from(user).where(gte(user.createdAt, since7)),
+    db.select({ value: count() }).from(professional),
+    getRevenue({ since: since30 }),
+  ]);
 
   return {
     users: users[0]?.value ?? 0,
     newUsers7d: newUsers[0]?.value ?? 0,
     pros: pros[0]?.value ?? 0,
-    activePros30d: Number(activePros[0]?.value ?? 0),
-    bookings30d: bookings[0]?.value ?? 0,
+    activePros30d: 0,
+    bookings30d: 0,
     revenue30d,
   };
 }
 
-/** Paid bookings + paid packs, summed per currency (optionally since a date / for one pro). */
+/** Paid purchases summed per currency. Stubbed until P3 (ticket_purchase). */
 export async function getRevenue(
   opts: { since?: Date; professionalId?: string } = {},
 ): Promise<MoneyTotal[]> {
-  const [bookingRows, purchaseRows] = await Promise.all([
-    db
-      .select({
-        currency: professional.currency,
-        cents: sql<string>`coalesce(sum(${booking.amountPaidCents}), 0)`,
-      })
-      .from(booking)
-      .innerJoin(professional, eq(professional.id, booking.professionalId))
-      .where(
-        and(
-          eq(booking.paymentType, "direct"),
-          inArray(booking.status, [...CONFIRMED]),
-          opts.since ? gte(booking.createdAt, opts.since) : undefined,
-          opts.professionalId
-            ? eq(booking.professionalId, opts.professionalId)
-            : undefined,
-        ),
-      )
-      .groupBy(professional.currency),
-    db
-      .select({
-        currency: packPurchase.currency,
-        cents: sql<string>`coalesce(sum(${packPurchase.amountPaidCents}), 0)`,
-      })
-      .from(packPurchase)
-      .where(
-        and(
-          eq(packPurchase.status, "paid"),
-          opts.since ? gte(packPurchase.createdAt, opts.since) : undefined,
-          opts.professionalId
-            ? eq(packPurchase.professionalId, opts.professionalId)
-            : undefined,
-        ),
-      )
-      .groupBy(packPurchase.currency),
-  ]);
-  return mergeMoney([...bookingRows, ...purchaseRows]);
+  void opts;
+  return [];
 }
 
 export function getDailySignups(since: Date) {
@@ -165,9 +103,9 @@ export type ActivityEvent = {
   detail: string;
 };
 
-/** The latest sign-ups, pro pages, bookings and paid packs, merged by date. */
+/** The latest sign-ups and pro pages, merged by date (bookings and purchases return in P3). */
 export async function getRecentActivity(limit = 10): Promise<ActivityEvent[]> {
-  const [signups, pros, bookings, purchases] = await Promise.all([
+  const [signups, pros] = await Promise.all([
     db
       .select({ id: user.id, at: user.createdAt, name: user.name, email: user.email })
       .from(user)
@@ -183,40 +121,6 @@ export async function getRecentActivity(limit = 10): Promise<ActivityEvent[]> {
       })
       .from(professional)
       .orderBy(desc(professional.createdAt))
-      .limit(limit),
-    db
-      .select({
-        id: booking.id,
-        at: booking.createdAt,
-        userId: professional.userId,
-        businessName: professional.businessName,
-        customerName: customer.name,
-        eventTitle: eventType.title,
-        status: booking.status,
-      })
-      .from(booking)
-      .innerJoin(professional, eq(professional.id, booking.professionalId))
-      .innerJoin(customer, eq(customer.id, booking.customerId))
-      .innerJoin(eventType, eq(eventType.id, booking.eventTypeId))
-      .orderBy(desc(booking.createdAt))
-      .limit(limit),
-    db
-      .select({
-        id: packPurchase.id,
-        at: packPurchase.createdAt,
-        userId: professional.userId,
-        businessName: professional.businessName,
-        customerName: customer.name,
-        packName: pack.name,
-        cents: packPurchase.amountPaidCents,
-        currency: packPurchase.currency,
-      })
-      .from(packPurchase)
-      .innerJoin(professional, eq(professional.id, packPurchase.professionalId))
-      .innerJoin(customer, eq(customer.id, packPurchase.customerId))
-      .innerJoin(pack, eq(pack.id, packPurchase.packId))
-      .where(eq(packPurchase.status, "paid"))
-      .orderBy(desc(packPurchase.createdAt))
       .limit(limit),
   ]);
 
@@ -237,58 +141,18 @@ export async function getRecentActivity(limit = 10): Promise<ActivityEvent[]> {
       title: `Page pro créée · ${r.businessName}`,
       detail: `/${r.slug}`,
     })),
-    ...bookings.map((r) => ({
-      id: `booking-${r.id}`,
-      kind: "booking" as const,
-      at: r.at,
-      userId: r.userId,
-      title: `Réservation · ${r.businessName}`,
-      detail: `${r.customerName} · ${r.eventTitle} · ${BOOKING_STATUS_LABELS[r.status]}`,
-    })),
-    ...purchases.map((r) => ({
-      id: `purchase-${r.id}`,
-      kind: "purchase" as const,
-      at: r.at,
-      userId: r.userId,
-      title: `Pack vendu · ${r.businessName}`,
-      detail: `${r.customerName} · ${r.packName} · ${formatMoney(r.cents, r.currency)}`,
-    })),
   ];
   return events.sort((a, b) => b.at.getTime() - a.at.getTime()).slice(0, limit);
 }
 
 export type AppHealth = Awaited<ReturnType<typeof getAppHealth>>;
 
-/** Integration modes, DB latency and recent payments still pending after 1 h. */
+/** Integration modes and DB latency (pending payments return in P3). */
 export async function getAppHealth(now: Date = new Date()) {
+  void now;
   const started = performance.now();
   await db.execute(sql`select 1`);
   const dbLatencyMs = Math.round(performance.now() - started);
-
-  const hourAgo = new Date(now.getTime() - 60 * 60 * 1000);
-  const weekAgo = new Date(now.getTime() - 7 * DAY_MS);
-  const [pendingBookings, pendingPurchases] = await Promise.all([
-    db
-      .select({ value: count() })
-      .from(booking)
-      .where(
-        and(
-          eq(booking.status, "pending"),
-          lt(booking.createdAt, hourAgo),
-          gte(booking.createdAt, weekAgo),
-        ),
-      ),
-    db
-      .select({ value: count() })
-      .from(packPurchase)
-      .where(
-        and(
-          eq(packPurchase.status, "pending"),
-          lt(packPurchase.createdAt, hourAgo),
-          gte(packPurchase.createdAt, weekAgo),
-        ),
-      ),
-  ]);
 
   return {
     appEnv: env.APP_ENV,
@@ -299,8 +163,8 @@ export async function getAppHealth(now: Date = new Date()) {
     blob: env.BLOB_ENABLED,
     google: env.GOOGLE_CALENDAR_ENABLED,
     dbLatencyMs,
-    pendingBookings: pendingBookings[0]?.value ?? 0,
-    pendingPurchases: pendingPurchases[0]?.value ?? 0,
+    pendingBookings: 0,
+    pendingPurchases: 0,
   };
 }
 
@@ -357,52 +221,16 @@ export async function listUsers(opts: {
   return { rows, total: totals[0]?.value ?? 0 };
 }
 
+/** A pro's catalogue and booking counts. Stubbed until P3. */
 async function getProStats(professionalId: string, now: Date) {
-  const [eventTypes, confirmed, upcoming, customers, packsSold] =
-    await Promise.all([
-      db
-        .select({ value: count() })
-        .from(eventType)
-        .where(eq(eventType.professionalId, professionalId)),
-      db
-        .select({ value: count() })
-        .from(booking)
-        .where(
-          and(
-            eq(booking.professionalId, professionalId),
-            inArray(booking.status, [...CONFIRMED]),
-          ),
-        ),
-      db
-        .select({ value: count() })
-        .from(booking)
-        .where(
-          and(
-            eq(booking.professionalId, professionalId),
-            inArray(booking.status, ["pending", "confirmed"]),
-            gte(booking.startAt, now),
-          ),
-        ),
-      db
-        .select({ value: count() })
-        .from(customer)
-        .where(eq(customer.professionalId, professionalId)),
-      db
-        .select({ value: count() })
-        .from(packPurchase)
-        .where(
-          and(
-            eq(packPurchase.professionalId, professionalId),
-            eq(packPurchase.status, "paid"),
-          ),
-        ),
-    ]);
+  void professionalId;
+  void now;
   return {
-    eventTypes: eventTypes[0]?.value ?? 0,
-    bookings: confirmed[0]?.value ?? 0,
-    upcoming: upcoming[0]?.value ?? 0,
-    customers: customers[0]?.value ?? 0,
-    packsSold: packsSold[0]?.value ?? 0,
+    eventTypes: 0,
+    bookings: 0,
+    upcoming: 0,
+    customers: 0,
+    packsSold: 0,
   };
 }
 
@@ -464,94 +292,17 @@ export async function getUserDetail(userId: string, now: Date = new Date()) {
 }
 
 /**
- * What deleting this account changes beyond its own pro page (which the
- * user → professional cascade removes entirely): prepaid credits its clients
- * would lose, and client records it has with other pros, which are kept but
- * detached from the account (customer.user_id is ON DELETE SET NULL).
+ * What deleting this account changes beyond its own pro page: tickets its
+ * clients would lose and client records it has with other pros. Stubbed until
+ * P3 (src/lib/booking/account.ts deletionImpact).
  */
 async function getDeletionImpact(userId: string, professionalId: string | null) {
-  const [credits, elsewhere] = await Promise.all([
-    professionalId
-      ? db
-          .select({ value: sum(packPurchase.creditsRemaining) })
-          .from(packPurchase)
-          .where(
-            and(
-              eq(packPurchase.professionalId, professionalId),
-              eq(packPurchase.status, "paid"),
-            ),
-          )
-      : [{ value: null }],
-    db
-      .select({ value: count() })
-      .from(customer)
-      .where(
-        and(
-          eq(customer.userId, userId),
-          professionalId ? ne(customer.professionalId, professionalId) : undefined,
-        ),
-      ),
-  ]);
+  void userId;
+  void professionalId;
   return {
-    creditsOutstanding: Number(credits[0]?.value ?? 0),
-    clientRecordsElsewhere: elsewhere[0]?.value ?? 0,
+    creditsOutstanding: 0,
+    clientRecordsElsewhere: 0,
   };
-}
-
-/* ───────────────────────────── Activity ───────────────────────────── */
-
-export const ACTIVITY_LIMIT = 50;
-
-export function listRecentBookings(status: BookingStatus | null) {
-  return db
-    .select({
-      id: booking.id,
-      createdAt: booking.createdAt,
-      startAt: booking.startAt,
-      endAt: booking.endAt,
-      status: booking.status,
-      paymentType: booking.paymentType,
-      amountCents: booking.amountPaidCents,
-      proUserId: professional.userId,
-      businessName: professional.businessName,
-      timezone: professional.timezone,
-      currency: professional.currency,
-      customerName: customer.name,
-      customerEmail: customer.email,
-      eventTitle: eventType.title,
-    })
-    .from(booking)
-    .innerJoin(professional, eq(professional.id, booking.professionalId))
-    .innerJoin(customer, eq(customer.id, booking.customerId))
-    .innerJoin(eventType, eq(eventType.id, booking.eventTypeId))
-    .where(status ? eq(booking.status, status) : undefined)
-    .orderBy(desc(booking.createdAt))
-    .limit(ACTIVITY_LIMIT);
-}
-
-export function listRecentPurchases(status: PurchaseStatus | null) {
-  return db
-    .select({
-      id: packPurchase.id,
-      createdAt: packPurchase.createdAt,
-      status: packPurchase.status,
-      amountCents: packPurchase.amountPaidCents,
-      currency: packPurchase.currency,
-      creditsTotal: packPurchase.creditsTotal,
-      creditsRemaining: packPurchase.creditsRemaining,
-      proUserId: professional.userId,
-      businessName: professional.businessName,
-      customerName: customer.name,
-      customerEmail: customer.email,
-      packName: pack.name,
-    })
-    .from(packPurchase)
-    .innerJoin(professional, eq(professional.id, packPurchase.professionalId))
-    .innerJoin(customer, eq(customer.id, packPurchase.customerId))
-    .innerJoin(pack, eq(pack.id, packPurchase.packId))
-    .where(status ? eq(packPurchase.status, status) : undefined)
-    .orderBy(desc(packPurchase.createdAt))
-    .limit(ACTIVITY_LIMIT);
 }
 
 /* ───────────────────────────── Traffic ───────────────────────────── */

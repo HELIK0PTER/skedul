@@ -1,9 +1,14 @@
-// Types only: keeps drizzle out of client bundles that import these labels.
-import type { bookingStatus, purchaseStatus, userRole } from "@/lib/db/schema";
+// Types only from the schema: keeps drizzle out of client bundles that import these labels.
+import type { userRole } from "@/lib/db/schema";
+import {
+  BOOKING_STATUSES,
+  PURCHASE_STATUSES,
+  type BookingStatus,
+  type PurchaseStatus,
+} from "@/lib/tickets";
 
 export type UserRole = (typeof userRole.enumValues)[number];
-export type BookingStatus = (typeof bookingStatus.enumValues)[number];
-export type PurchaseStatus = (typeof purchaseStatus.enumValues)[number];
+export type { BookingStatus, PurchaseStatus };
 
 /* ── Users ── */
 
@@ -29,23 +34,8 @@ export const ROLE_LABELS: Record<UserRole, string> = {
 export const ACTIVITY_TABS = ["bookings", "purchases"] as const;
 export type ActivityTab = (typeof ACTIVITY_TABS)[number];
 
-// Record<…> keeps these in sync with the schema enums at compile time.
-export const BOOKING_STATUS_LABELS: Record<BookingStatus, string> = {
-  pending: "En attente",
-  confirmed: "Confirmée",
-  cancelled: "Annulée",
-  completed: "Terminée",
-};
-export const PURCHASE_STATUS_LABELS: Record<PurchaseStatus, string> = {
-  pending: "En attente",
-  paid: "Payé",
-  refunded: "Remboursé",
-};
-export const PAYMENT_TYPE_LABELS = {
-  direct: "Payé",
-  credit: "Crédit",
-  free: "Offert",
-} as const;
+// The tickets vocabulary (src/lib/tickets.ts) is the single source of these labels.
+export { BOOKING_STATUS_LABELS, COVERAGE_LABELS, PURCHASE_STATUS_LABELS } from "@/lib/tickets";
 
 /* ── Traffic ── */
 
@@ -86,11 +76,11 @@ export function parseActivityTab(value: unknown): ActivityTab {
 }
 
 export function parseBookingStatus(value: unknown): BookingStatus | null {
-  return pick(Object.keys(BOOKING_STATUS_LABELS) as BookingStatus[], value);
+  return pick(BOOKING_STATUSES, value);
 }
 
 export function parsePurchaseStatus(value: unknown): PurchaseStatus | null {
-  return pick(Object.keys(PURCHASE_STATUS_LABELS) as PurchaseStatus[], value);
+  return pick(PURCHASE_STATUSES, value);
 }
 
 export function parseBanDuration(value: unknown): BanDuration | null {
