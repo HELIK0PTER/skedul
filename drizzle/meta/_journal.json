@@ -71,6 +71,13 @@
       "when": 1791682662372,
       "tag": "0009_help_faq_seed",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791837668998,
+      "tag": "0010_domain_drop",
+      "breakpoints": true
     }
   ]
 }
