@@ -9,12 +9,12 @@ import {
 
 import { PageHeader } from "@/components/dashboard/page-header";
 import { CopyLinkButton } from "@/components/dashboard/copy-link-button";
+import { UpcomingBookings } from "@/components/dashboard/upcoming-bookings";
 import { WeekPreview } from "@/components/dashboard/week-preview";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { cn, formatMoney } from "@/lib/utils";
-import { dayKeyInTz, formatSlot } from "@/lib/datetime";
+import { Card, CardContent } from "@/components/ui/card";
+import { formatMoney } from "@/lib/utils";
+import { dayKeyInTz } from "@/lib/datetime";
 import { env } from "@/lib/env";
 import { getCurrentProfessional } from "@/lib/session";
 import { getProDashboardData, getProPlanningWeek } from "@/server/queries";
@@ -46,6 +46,7 @@ export default async function DashboardPage() {
       label: "RDV à venir",
       value: String(data.upcomingCount),
       icon: CalendarClock,
+      href: "/dashboard/planning",
     },
     {
       label: "Crédits actifs",
@@ -63,6 +64,7 @@ export default async function DashboardPage() {
       label: "Encaissé",
       value: formatMoney(data.revenueCents, pro.currency),
       icon: Euro,
+      href: "/dashboard/payments",
     },
   ];
 
@@ -97,14 +99,13 @@ export default async function DashboardPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {stats.map((s) => {
-          const card = (
-            <Card
-              className={cn(
-                "h-full",
-                s.href && "transition-colors group-hover:border-primary/40",
-              )}
-            >
+        {stats.map((s) => (
+          <Link
+            key={s.label}
+            href={s.href}
+            className="group rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+          >
+            <Card className="h-full transition-colors group-hover:border-primary/40">
               <CardContent className="p-5">
                 <s.icon className="size-5 text-primary" />
                 <p className="mt-3 text-2xl font-bold tracking-tight">
@@ -113,19 +114,8 @@ export default async function DashboardPage() {
                 <p className="text-sm text-muted-foreground">{s.label}</p>
               </CardContent>
             </Card>
-          );
-          return s.href ? (
-            <Link
-              key={s.label}
-              href={s.href}
-              className="group rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
-            >
-              {card}
-            </Link>
-          ) : (
-            <div key={s.label}>{card}</div>
-          );
-        })}
+          </Link>
+        ))}
       </div>
 
       {/* Week-at-a-glance calendar */}
@@ -143,6 +133,7 @@ export default async function DashboardPage() {
             seatsRemaining: s.seatsRemaining,
             eventTitle: s.eventTitle,
             eventColor: s.eventColor,
+            attendees: s.attendees,
           }))}
           timeOff={timeOff.map((t) => ({
             id: t.id,
@@ -155,50 +146,19 @@ export default async function DashboardPage() {
         />
       </div>
 
-      {/* Upcoming bookings */}
-      <Card className="mt-6">
-        <CardHeader>
-          <CardTitle>Prochaines réservations</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {data.upcoming.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">
-              Aucune réservation à venir pour le moment.
-            </p>
-          ) : (
-            <ul className="divide-y divide-border">
-              {data.upcoming.map((b) => (
-                <li
-                  key={b.id}
-                  className="flex items-center gap-3 py-3 first:pt-0 last:pb-0"
-                >
-                  <span
-                    className="size-2.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: b.eventColor }}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">
-                      {b.eventTitle} · {b.customerName}
-                    </p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {formatSlot(b.startAt, b.endAt, pro.timezone)}
-                    </p>
-                  </div>
-                  <Badge
-                    variant={b.paymentType === "credit" ? "default" : "neutral"}
-                  >
-                    {b.paymentType === "credit"
-                      ? "Crédit"
-                      : b.paymentType === "free"
-                        ? "Offert"
-                        : "Payé"}
-                  </Badge>
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
+      <UpcomingBookings
+        tz={tz}
+        currency={pro.currency}
+        bookings={data.upcoming.map((b) => ({
+          ...b,
+          startAt: b.startAt.toISOString(),
+          endAt: b.endAt.toISOString(),
+          planningHref: `/dashboard/planning?week=${paramForWeek(
+            weekStartFromParam(undefined, tz, b.startAt),
+            tz,
+          )}`,
+        }))}
+      />
 
       <p className="mt-6 text-center text-xs text-muted-foreground">
         <Copy className="mr-1 inline size-3" />

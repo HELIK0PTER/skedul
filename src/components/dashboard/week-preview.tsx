@@ -7,18 +7,10 @@ import { TZDate } from "@date-fns/tz";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import type { PlanningSessionVM } from "@/components/dashboard/planning-calendar";
+import { SessionDetailDialog } from "@/components/dashboard/session-detail-dialog";
 import { cn } from "@/lib/utils";
 import { DAYS_FR, dayKeyInTz, formatTime } from "@/lib/datetime";
-
-export type WeekPreviewSessionVM = {
-  id: string;
-  startAt: string;
-  endAt: string;
-  capacity: number;
-  seatsRemaining: number;
-  eventTitle: string;
-  eventColor: string;
-};
 
 export type WeekPreviewTimeOffVM = {
   id: string;
@@ -35,17 +27,18 @@ function localMidnightForKey(key: string, tz: string): number {
 }
 
 /**
- * Compact, read-only week/day-at-a-glance grid for the dashboard overview.
- * Mirrors the geometry of {@link PlanningCalendar} but without booking actions —
- * a Jour/Semaine toggle switches between a single day (navigable within the
- * current week) and the full week. The header links to the full planning page.
+ * Compact week/day-at-a-glance grid for the dashboard overview. Mirrors the
+ * geometry of {@link PlanningCalendar}; clicking a session opens the same
+ * detail dialog as the planning. A Jour/Semaine toggle switches between a
+ * single day (navigable within the current week) and the full week. The
+ * header links to the full planning page.
  */
 export function WeekPreview(props: {
   tz: string;
   days: string[];
   startHour: number;
   endHour: number;
-  sessions: WeekPreviewSessionVM[];
+  sessions: PlanningSessionVM[];
   timeOff: WeekPreviewTimeOffVM[];
   weekParam: string;
   todayKey: string;
@@ -58,6 +51,9 @@ export function WeekPreview(props: {
   const [view, setView] = useState<"day" | "week">("week");
   const todayIndex = days.findIndex((d) => dayKeyInTz(d, tz) === props.todayKey);
   const [dayIndex, setDayIndex] = useState(todayIndex >= 0 ? todayIndex : 0);
+  // By id, so the dialog follows the refreshed data after an action.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = props.sessions.find((s) => s.id === selectedId) ?? null;
 
   const topPx = (iso: string, key: string) =>
     ((new Date(iso).getTime() - localMidnightForKey(key, tz)) / 60_000 -
@@ -109,9 +105,11 @@ export function WeekPreview(props: {
             const booked = s.capacity - s.seatsRemaining;
             const group = s.capacity > 1;
             return (
-              <div
+              <button
                 key={s.id}
-                className="absolute inset-x-0.5 overflow-hidden rounded-md border border-black/10 px-1 py-0.5 text-[10px] leading-tight text-white shadow-sm"
+                type="button"
+                onClick={() => setSelectedId(s.id)}
+                className="absolute inset-x-0.5 overflow-hidden rounded-md border border-black/10 px-1 py-0.5 text-left text-[10px] leading-tight text-white shadow-sm transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
                 style={{
                   top: topPx(s.startAt, key),
                   height: heightPx(s.startAt, s.endAt),
@@ -124,7 +122,7 @@ export function WeekPreview(props: {
                 <span className="block truncate font-medium">
                   {formatTime(new Date(s.startAt), tz)} {s.eventTitle}
                 </span>
-              </div>
+              </button>
             );
           })}
         </div>
@@ -220,6 +218,15 @@ export function WeekPreview(props: {
           </div>
         </div>
       </CardContent>
+
+      {selected && (
+        <SessionDetailDialog
+          session={selected}
+          tz={tz}
+          allSessions={props.sessions}
+          onClose={() => setSelectedId(null)}
+        />
+      )}
     </Card>
   );
 }
