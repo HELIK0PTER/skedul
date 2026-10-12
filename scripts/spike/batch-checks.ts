@@ -3,7 +3,7 @@ import { sql } from "drizzle-orm";
 
 import { pgErrorInfo, skedulCode } from "@/lib/db/pg-error";
 
-import { client, db, setupScratch, type SpikeCheck } from "./db";
+import { client, db, setupScratch, sleep, type SpikeCheck } from "./db";
 
 async function count(text: string): Promise<number> {
   const rows = (await client.query(text)) as { c: number }[];
@@ -110,5 +110,60 @@ export const s7: SpikeCheck = {
     const shape = (e: unknown) =>
       `${(e as Error).constructor?.name}${(e as Error).cause ? "+cause" : ""}`;
     return `in batch: ${shape(inBatchCheck)}; outside: ${shape(outside)}`;
+  },
+};
+
+export const s2: SpikeCheck = {
+  id: "S2",
+  title: "a statement after a lock wait sees rows committed during the wait",
+  async run() {
+    await setupScratch();
+    await client.query("insert into spike.parent (id) values ('p2')");
+    const t0 = Date.now();
+    const holder = db.batch([
+      db.execute(sql`select id from spike.parent where id = 'p2' for update`),
+      db.execute(sql`select pg_sleep(2)`),
+    ]);
+    await sleep(300);
+    const waiter = db.batch([
+      db.execute(sql`select id from spike.parent where id = 'p2' for update`),
+      db.execute<{ c: number }>(sql`select count(*)::int as c from spike.child where parent_id = 'p2'`),
+    ]);
+    await sleep(300);
+    const tInsert = Date.now();
+    await client.query("insert into spike.child (parent_id) values ('p2')"); // autocommit, no lock needed
+    const insertMs = Date.now() - tInsert;
+    const [, waited] = await Promise.all([holder, waiter]);
+    const totalMs = Date.now() - t0;
+    const seen = waited[1].rows[0].c;
+    assert.ok(insertMs < 1500, `the concurrent insert should not queue behind the batches (${insertMs} ms)`);
+    assert.ok(totalMs >= 1800, `the waiter should have blocked on the holder's lock (${totalMs} ms)`);
+    assert.equal(seen, 1, "statement 2 of the waiter must see the row committed while it waited");
+    return `waiter blocked ~${totalMs} ms, saw ${seen} row committed mid-wait (insert ${insertMs} ms)`;
+  },
+};
+
+export const s3: SpikeCheck = {
+  id: "S3",
+  title: "FOR UPDATE SKIP LOCKED inside a batch",
+  async run() {
+    await setupScratch();
+    await client.query("insert into spike.ticket (id, status) values ('t1','available'), ('t2','available')");
+    const holder = db.batch([
+      db.execute(sql`select id from spike.ticket where id = 't1' for update`),
+      db.execute(sql`select pg_sleep(2)`),
+    ]);
+    await sleep(300);
+    const t0 = Date.now();
+    const [picked] = await db.batch([
+      db.execute<{ id: string }>(sql`
+        select id from spike.ticket where status = 'available'
+        order by id limit 1 for update skip locked`),
+    ]);
+    const ms = Date.now() - t0;
+    await holder;
+    assert.equal(picked.rows[0]?.id, "t2");
+    assert.ok(ms < 1500, `SKIP LOCKED must not wait for the holder (${ms} ms)`);
+    return `picked t2 in ${ms} ms while t1 was locked`;
   },
 };
