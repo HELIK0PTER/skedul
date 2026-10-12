@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { PlanningSessionVM } from "@/components/dashboard/planning-calendar";
 import { SessionDetailDialog } from "@/components/dashboard/session-detail-dialog";
 import { cn } from "@/lib/utils";
-import { DAYS_FR, dayKeyInTz, formatTime } from "@/lib/datetime";
+import { DAYS_FR, dayKeyInTz, formatTime, wallClockMinutes } from "@/lib/datetime";
 
 export type WeekPreviewTimeOffVM = {
   id: string;
@@ -20,11 +20,6 @@ export type WeekPreviewTimeOffVM = {
 };
 
 const HOUR_PX = 36;
-
-function localMidnightForKey(key: string, tz: string): number {
-  const [y, m, d] = key.split("-").map(Number);
-  return new TZDate(y, m - 1, d, 0, 0, 0, tz).getTime();
-}
 
 /**
  * Compact week/day-at-a-glance grid for the dashboard overview. Mirrors the
@@ -55,10 +50,10 @@ export function WeekPreview(props: {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = props.sessions.find((s) => s.id === selectedId) ?? null;
 
-  const topPx = (iso: string, key: string) =>
-    ((new Date(iso).getTime() - localMidnightForKey(key, tz)) / 60_000 -
-      startHour * 60) *
-    (HOUR_PX / 60);
+  // Wall-clock minutes, not time elapsed since midnight: on a DST Sunday a
+  // 19:00 session must sit on the 19:00 line.
+  const topPx = (iso: string) =>
+    (wallClockMinutes(new Date(iso), tz) - startHour * 60) * (HOUR_PX / 60);
   const heightPx = (a: string, b: string) =>
     Math.max(
       16,
@@ -95,7 +90,7 @@ export function WeekPreview(props: {
               key={t.id}
               className="absolute inset-x-0.5 rounded bg-muted/60 [background-image:repeating-linear-gradient(45deg,transparent,transparent_6px,rgba(0,0,0,0.05)_6px,rgba(0,0,0,0.05)_12px)]"
               style={{
-                top: topPx(t.startAt, key),
+                top: topPx(t.startAt),
                 height: heightPx(t.startAt, t.endAt),
               }}
               title={t.reason ?? "Indisponible"}
@@ -111,7 +106,7 @@ export function WeekPreview(props: {
                 onClick={() => setSelectedId(s.id)}
                 className="absolute inset-x-0.5 overflow-hidden rounded-md border border-black/10 px-1 py-0.5 text-left text-[10px] leading-tight text-white shadow-sm transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
                 style={{
-                  top: topPx(s.startAt, key),
+                  top: topPx(s.startAt),
                   height: heightPx(s.startAt, s.endAt),
                   backgroundColor: s.eventColor,
                 }}

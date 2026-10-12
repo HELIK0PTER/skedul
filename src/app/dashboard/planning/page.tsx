@@ -6,6 +6,7 @@ import { getCurrentProfessional } from "@/lib/session";
 import { dayKeyInTz } from "@/lib/datetime";
 import { getProEventTypes, getProPlanningWeek } from "@/server/queries";
 import {
+  adjacentWeekParam,
   gridRange,
   paramForWeek,
   weekBounds,
@@ -25,13 +26,13 @@ export default async function PlanningPage({
   const tz = pro.timezone;
 
   const weekStart = weekStartFromParam(week, tz, new Date());
-  const { start, end } = weekBounds(weekStart);
+  const { start, end } = weekBounds(weekStart, tz);
   const [{ sessions, timeOff }, eventTypes] = await Promise.all([
     getProPlanningWeek(pro.id, start, end),
     getProEventTypes(pro.id),
   ]);
 
-  const days = weekDays(weekStart);
+  const days = weekDays(weekStart, tz);
   const range = gridRange([...sessions, ...timeOff], tz);
 
   return (
@@ -66,14 +67,8 @@ export default async function PlanningPage({
           .map((e) => ({ id: e.id, title: e.title }))}
         todayKey={dayKeyInTz(new Date(), tz)}
         nav={{
-          prevParam: paramForWeek(
-            new Date(weekStart.getTime() - 7 * 86_400_000),
-            tz,
-          ),
-          nextParam: paramForWeek(
-            new Date(weekStart.getTime() + 7 * 86_400_000),
-            tz,
-          ),
+          prevParam: adjacentWeekParam(weekStart, tz, -1),
+          nextParam: adjacentWeekParam(weekStart, tz, 1),
           todayParam: paramForWeek(weekStartFromParam(undefined, tz, new Date()), tz),
         }}
       />
