@@ -8,8 +8,8 @@
 > les tickets devenus inutilisables.
 >
 > Date : 2026-10-12. Branche : `feat/tickets-events` (worktree `.claude/worktrees/tickets`), créée
-> depuis `main` = `ff24dfd` (PR #10 incluse). Statut : design validé section par section avec le
-> propriétaire ; v2 après relecture adversariale (4 angles, contre-vérifiés).
+> depuis `main` = `ff24dfd` (PR #10 incluse). Statut : **approuvé** par le propriétaire le 2026-10-12 (design validé section par section, v2
+> après relecture adversariale à 4 angles contre-vérifiés).
 
 ## 1. Problème
 
@@ -121,10 +121,9 @@ certains cours.
 - pas d'offre à 0 € : les tickets gratuits passent par « Offrir », les événements gratuits par
   l'inscription libre.
 
-**À confirmer par le propriétaire** (question posée avec la relecture de la spec) :
-- **RDV libre gratuit**, sans ticket ni paiement (ex. « Appel découverte 15 min »). C'est
-  possible aujourd'hui avec une prestation à 0 €. La spec l'**inclut** : option « Gratuit » sur un
-  type RDV libre, § 6.4 `rdv_free`, E4. On le retire si le propriétaire dit non.
+**RDV libre gratuit** (confirmé par le propriétaire le 2026-10-12) : sans ticket ni paiement
+(ex. « Appel découverte 15 min »), comme aujourd'hui avec une prestation à 0 €. C'est l'option
+« Gratuit » sur un type RDV libre : § 6.4 `rdv_free`, E4.
 
 ## 3. Hors périmètre (v1)
 
