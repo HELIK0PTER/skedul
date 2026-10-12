@@ -24,6 +24,7 @@ import { createSkedulCalendar } from "@/lib/google-calendar";
 import { getCurrentProfessional, getCurrentUser } from "@/lib/session";
 import { isHexColor, presetColor } from "@/lib/color";
 import { buildTimeOffInterval } from "@/lib/timeoff";
+import { checkSlug } from "@/lib/slug";
 import { slugify } from "@/lib/utils";
 import { claimSeat, releaseSeat } from "@/lib/sessions";
 import { isSlotAvailable } from "@/lib/slots";
@@ -131,6 +132,44 @@ export async function updateProfile(input: {
     .where(eq(professional.id, pro.id));
   revalidatePath("/dashboard/settings");
   revalidatePath(`/${pro.slug}`);
+}
+
+const SLUG_TAKEN = "Cette adresse est déjà prise.";
+
+/** Changes the public address. The old one stops working (no redirect). */
+export async function updateSlug(input: {
+  slug: string;
+}): Promise<{ ok: true; slug: string } | { ok: false; error: string }> {
+  const pro = await requirePro();
+  const check = checkSlug(input.slug);
+  if (!check.ok) return check;
+  const { slug } = check;
+  if (slug === pro.slug) return { ok: true, slug };
+
+  const [taken] = await db
+    .select({ id: professional.id })
+    .from(professional)
+    .where(eq(professional.slug, slug))
+    .limit(1);
+  if (taken) return { ok: false, error: SLUG_TAKEN };
+
+  try {
+    await db
+      .update(professional)
+      .set({ slug })
+      .where(eq(professional.id, pro.id));
+  } catch (err) {
+    // lost a race against another pro claiming it: the unique index decides
+    const e = err as { code?: string; cause?: { code?: string } };
+    if (e.code === "23505" || e.cause?.code === "23505") {
+      return { ok: false, error: SLUG_TAKEN };
+    }
+    throw err;
+  }
+  revalidatePath("/dashboard", "layout");
+  revalidatePath(`/${pro.slug}`);
+  revalidatePath(`/${slug}`);
+  return { ok: true, slug };
 }
 
 export async function updateBranding(input: {
