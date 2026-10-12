@@ -3,7 +3,8 @@
  * whole days since 1970-01-01, through Date.UTC, which has no time zone and no
  * daylight saving time. Spec § 4: iterate by local date, never by adding
  * n × 86 400 000 ms to an instant. Instants are built only at the edge, by
- * `instantAt` (TZDate through datetime.instantFromWallClock).
+ * `instantAt` (through datetime.instantFromWallClock, which resolves the
+ * wall time with Intl and never looks at the host time zone).
  */
 import {
   addDaysToKey,

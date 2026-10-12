@@ -16,7 +16,84 @@ export function minutesToLabel(minutes: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-/** Build the UTC instant for a wall-clock time on a given calendar day in `tz`. */
+const DAY_MS = 86_400_000;
+
+const wallFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function wallFormatter(tz: string): Intl.DateTimeFormat {
+  let formatter = wallFormatters.get(tz);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+      minute: "numeric",
+      second: "numeric",
+    });
+    wallFormatters.set(tz, formatter);
+  }
+  return formatter;
+}
+
+/**
+ * Wall clock of the instant `t` (whole seconds) in `tz`, read as if it were UTC.
+ * Pure Intl with an explicit time zone: it never looks at the host zone.
+ */
+function wallAsUtcMs(t: number, tz: string): number {
+  let year = 0;
+  let month = 0;
+  let day = 0;
+  let hour = 0;
+  let minute = 0;
+  let second = 0;
+  for (const part of wallFormatter(tz).formatToParts(t)) {
+    switch (part.type) {
+      case "year":
+        year = Number(part.value);
+        break;
+      case "month":
+        month = Number(part.value);
+        break;
+      case "day":
+        day = Number(part.value);
+        break;
+      case "hour":
+        hour = Number(part.value) % 24;
+        break;
+      case "minute":
+        minute = Number(part.value);
+        break;
+      case "second":
+        second = Number(part.value);
+        break;
+    }
+  }
+  return Date.UTC(year, month - 1, day, hour, minute, second);
+}
+
+/** UTC offset of `tz` at the instant `t` (whole seconds), in ms (positive east of Greenwich). */
+function zoneOffsetMs(t: number, tz: string): number {
+  return wallAsUtcMs(t, tz) - t;
+}
+
+/**
+ * Build the UTC instant for a wall-clock time on a given calendar day in `tz`
+ * (minutesFromMidnight may be 1440, the next local midnight).
+ *
+ * Independent of the host time zone (spec § 7). A wall time that does not exist
+ * (spring-forward gap) is shifted forward by the length of the gap (02:30 on
+ * 2026-03-29 in Paris -> 03:30 CEST). A wall time that occurs twice (fall-back
+ * overlap) resolves to the FIRST instant (02:30 on 2026-10-25 in Paris -> 00:30Z).
+ *
+ * The wall time read as UTC is `naive`. The zone offset a day before and a day
+ * after bracket any transition near the answer, and `naive - offset` is the
+ * instant for each of them; the ones that read back as the requested wall time
+ * are valid, and the earliest wins. With no valid one, the time is in a gap and
+ * the offset in force before the transition places it after the gap.
+ */
 export function instantFromWallClock(
   year: number,
   month1: number, // 1-12
@@ -26,8 +103,16 @@ export function instantFromWallClock(
 ): Date {
   const h = Math.floor(minutesFromMidnight / 60);
   const m = minutesFromMidnight % 60;
-  const tzDate = new TZDate(year, month1 - 1, day, h, m, 0, tz);
-  return new Date(tzDate.getTime());
+  const naive = Date.UTC(year, month1 - 1, day, h, m);
+  const before = zoneOffsetMs(naive - DAY_MS, tz);
+  const after = zoneOffsetMs(naive + DAY_MS, tz);
+  // Same offset on both sides: no transition around this day, one candidate.
+  if (before === after) return new Date(naive - before);
+  const candidates = [naive - before, naive - after].sort((a, b) => a - b);
+  for (const t of candidates) {
+    if (wallAsUtcMs(t, tz) === naive) return new Date(t);
+  }
+  return new Date(naive - before);
 }
 
 /** Format a slot range, e.g. "lun. 23 juin 2026 · 14:00 – 15:00". */
