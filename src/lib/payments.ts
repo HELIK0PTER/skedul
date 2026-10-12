@@ -16,12 +16,12 @@ import {
   professional,
   user,
 } from "@/lib/db/schema";
+import { sendEmail } from "@/lib/email";
 import {
   bookingConfirmationEmail,
   packReceiptEmail,
   proNewBookingEmail,
-  sendEmail,
-} from "@/lib/email";
+} from "@/lib/booking-emails";
 import { formatSlot } from "@/lib/datetime";
 
 /** Marks a pack purchase as paid and grants its credits. Idempotent. */
