@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
@@ -8,11 +8,17 @@ import { headers } from "next/headers";
 import { isReservedSegment } from "@/lib/analytics";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { professional, timeOff, user as userTable } from "@/lib/db/schema";
+import {
+  availabilityRule,
+  professional,
+  timeOff,
+  user as userTable,
+} from "@/lib/db/schema";
 import { env } from "@/lib/env";
 import { createSkedulCalendar } from "@/lib/google-calendar";
 import { getCurrentProfessional, getCurrentUser } from "@/lib/session";
 import { isHexColor, presetColor } from "@/lib/color";
+import { availabilityRuleInputSchema } from "@/lib/tickets";
 import { buildTimeOffInterval } from "@/lib/timeoff";
 import { slugify } from "@/lib/utils";
 
@@ -65,20 +71,33 @@ export async function createProfessionalProfile(input: {
 
   const slug = await uniqueSlug(input.businessName);
 
-  await db.insert(professional).values({
-    userId: user.id,
-    slug,
-    businessName: input.businessName,
-    headline: input.headline || null,
-    bio: input.bio || null,
-    timezone: input.timezone || "Europe/Paris",
-  });
+  const [created] = await db
+    .insert(professional)
+    .values({
+      userId: user.id,
+      slug,
+      businessName: input.businessName,
+      headline: input.headline || null,
+      bio: input.bio || null,
+      timezone: input.timezone || "Europe/Paris",
+    })
+    .returning({ id: professional.id });
 
   // Promote plain clients to "pro" — never demote an admin.
   await db
     .update(userTable)
     .set({ role: "pro" })
     .where(and(eq(userTable.id, user.id), eq(userTable.role, "client")));
+
+  // sensible default availability: Mon–Fri 9:00–17:00 (global rules)
+  await db.insert(availabilityRule).values(
+    [1, 2, 3, 4, 5].map((dayOfWeek) => ({
+      professionalId: created.id,
+      dayOfWeek,
+      startMinute: 540,
+      endMinute: 1020,
+    })),
+  );
 
   redirect("/dashboard");
 }
@@ -155,12 +174,37 @@ export async function updateBranding(input: {
 
 /* ───────────────────────────── Availability ────────────────────── */
 
-/** Stubbed until the new availability_rule table exists (P2 Task 4). */
+/** Replaces the pro's global weekly hours (rules of a ticket type are untouched). */
 export async function saveAvailability(
   rules: { dayOfWeek: number; startMinute: number; endMinute: number }[],
 ): Promise<void> {
-  await requirePro();
-  void rules;
+  const pro = await requirePro();
+  // Rows the DB CHECKs would refuse are dropped, like the old `end > start` filter.
+  const valid = rules.flatMap((r) => {
+    const parsed = availabilityRuleInputSchema.safeParse(r);
+    return parsed.success ? [parsed.data] : [];
+  });
+  const clear = db
+    .delete(availabilityRule)
+    .where(
+      and(
+        eq(availabilityRule.professionalId, pro.id),
+        isNull(availabilityRule.ticketTypeId),
+      ),
+    );
+  if (valid.length > 0) {
+    // One batch = one transaction: the old hours never vanish without the new ones.
+    await db.batch([
+      clear,
+      db
+        .insert(availabilityRule)
+        .values(valid.map((r) => ({ ...r, professionalId: pro.id }))),
+    ]);
+  } else {
+    await clear;
+  }
+  revalidatePath("/dashboard/availability");
+  revalidatePath(`/${pro.slug}`);
 }
 
 /* ─────────────────────────── Indisponibilités ──────────────────── */

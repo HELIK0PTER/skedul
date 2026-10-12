@@ -1,8 +1,8 @@
 import "server-only";
-import { and, asc, eq, gte } from "drizzle-orm";
+import { and, asc, eq, gte, isNull } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { account, professional, timeOff, user } from "@/lib/db/schema";
+import { account, availabilityRule, professional, timeOff, user } from "@/lib/db/schema";
 import { env } from "@/lib/env";
 import { userNotSuspended } from "@/lib/suspension";
 
@@ -14,10 +14,22 @@ import { userNotSuspended } from "@/lib/suspension";
 
 export type AvailabilityRow = { dayOfWeek: number; startMinute: number; endMinute: number };
 
-/** The pro's global weekly hours. Stubbed until the new availability_rule table exists (P2 Task 4). */
+/** The pro's global weekly hours (ticket_type_id NULL); a type's own rules replace them for that type. */
 export async function getProAvailability(proId: string): Promise<AvailabilityRow[]> {
-  void proId;
-  return [];
+  return db
+    .select({
+      dayOfWeek: availabilityRule.dayOfWeek,
+      startMinute: availabilityRule.startMinute,
+      endMinute: availabilityRule.endMinute,
+    })
+    .from(availabilityRule)
+    .where(
+      and(
+        eq(availabilityRule.professionalId, proId),
+        isNull(availabilityRule.ticketTypeId),
+      ),
+    )
+    .orderBy(asc(availabilityRule.dayOfWeek), asc(availabilityRule.startMinute));
 }
 
 export function getProTimeOff(proId: string) {

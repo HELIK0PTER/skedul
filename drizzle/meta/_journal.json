@@ -78,6 +78,13 @@
       "when": 1791837668998,
       "tag": "0010_domain_drop",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791838081280,
+      "tag": "0011_tickets_schema",
+      "breakpoints": true
     }
   ]
 }
