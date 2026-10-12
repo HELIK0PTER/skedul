@@ -733,37 +733,42 @@ dans `tickets.ts`.
 ### Résultat du spike P1 (2026-10-12)
 
 Exécuté sur la branche Neon jetable `spike-batch` (enfant de `development`, Postgres 17.11) par
-`scripts/spike/run.ts` (plan P1).
+`scripts/spike/run.ts` (plan P1). Tableau du passage final, après la revue indépendante : S2 prouve
+l'ordre avec les horloges du serveur, S8c lit le cache avant la base, S8d compte les envois.
 
 | Check | Résultat | Durée | Détail |
 |---|---|---|---|
-| S1 a raising assert rolls back the whole batch | PASS | 2342 ms | P0001 skedul:boom rolled back the insert; a 0-row UPDATE alone does not abort |
-| S2 a statement after a lock wait sees rows committed during the wait | PASS | 3628 ms | waiter blocked ~2186 ms, saw 1 row committed mid-wait (insert 550 ms) |
-| S3 FOR UPDATE SKIP LOCKED inside a batch | PASS | 3618 ms | picked t2 in 205 ms while t1 was locked |
-| S4 parameterised data-modifying CTE in a batch, aid-marked guard | PASS | 1975 ms | sql.param(array) binds one text[] param; RETURNING rows come back; replay raises stale |
-| S5 btree_gist + partial EXCLUDE on (pro, tstzrange) | PASS | 1614 ms | 23P01 rdv_excl on overlap; other pro, back-to-back and cancelled rows allowed |
-| S6 NO ACTION FKs survive the deleteUser cascade | PASS | 11698 ms | no action after/before: ok/ok; restrict-before: ok; direct delete: 23503 |
-| S7 SQLSTATE and constraint names reach the caller | PASS | 2149 ms | in batch: NeonDbError; outside: DrizzleQueryError+cause |
-| S8a password sign-up sends an e-mail-verification CODE (no link) | PASS | 1713 ms | one email-verification code sent on sign-up |
-| S8b a logged-in user verifies by code and keeps the password | PASS | 3838 ms | verified; credential kept; hook path=/email-otp/verify-email |
-| S8c OTP sign-in on an unverified password account purges it (takeover fix) | PASS | 5651 ms | purged; victim session kept; attacker with cookie cache: logged out |
-| S8d resend within expiry sends the SAME code (encrypted + reuse) | PASS | 1775 ms | second send reused the first code |
-| S8e a before-hook cap short-circuits without invalidating the live code | PASS | 2491 ms | capped send answered 200 {success:true}, nothing sent, live code still valid |
+| S1 a raising assert rolls back the whole batch | PASS | 2494 ms | P0001 skedul:boom rolled back the insert; a 0-row UPDATE alone does not abort |
+| S2 a statement after a lock wait sees rows committed during the wait | PASS | 3634 ms | server: waiter began, insert committed +666 ms, lock got +1687 ms; saw 1 row (total 2181 ms) |
+| S3 FOR UPDATE SKIP LOCKED inside a batch | PASS | 3638 ms | picked t2 in 185 ms while t1 was locked |
+| S4 parameterised data-modifying CTE in a batch, aid-marked guard | PASS | 2070 ms | sql.param(array) binds one text[] param; RETURNING rows come back; replay raises stale |
+| S5 btree_gist + partial EXCLUDE on (pro, tstzrange) | PASS | 1644 ms | 23P01 rdv_excl on overlap; other pro, back-to-back and cancelled rows allowed |
+| S6 NO ACTION FKs survive the deleteUser cascade | PASS | 13339 ms | no action after/before: ok/ok; restrict-before: ok; direct delete: 23503 |
+| S7 SQLSTATE and constraint names reach the caller | PASS | 2196 ms | in batch: NeonDbError; outside: DrizzleQueryError+cause |
+| S8a password sign-up sends an e-mail-verification CODE (no link) | PASS | 1746 ms | one email-verification code sent on sign-up |
+| S8b a logged-in user verifies by code and keeps the password | PASS | 3884 ms | verified; credential kept; hook path=/email-otp/verify-email |
+| S8c OTP sign-in on an unverified password account purges it (takeover fix) | PASS | 5689 ms | purged; victim session kept; attacker STILL shown by the cookie cache, gone on a no-cache read |
+| S8d resend within expiry sends the SAME code (encrypted + reuse) | PASS | 1790 ms | two e-mails sent, the second reused the first code |
+| S8e a before-hook cap short-circuits without invalidating the live code | PASS | 2532 ms | capped send answered 200 {success:true}, nothing sent, live code still valid |
 
 **Verdict : GO.** Le mécanisme `atomic()` est retenu tel quel ; le plan B (plpgsql, Pool) n'est
 pas nécessaire.
 
 Points à appliquer en P2, établis par le spike :
-- **Tableaux en paramètre** : toujours `= any(${sql.param(ids)}::text[])`. Le gabarit `sql` de
-  drizzle développe un tableau nu en liste `($1, $2)`.
+- **Tableaux en paramètre** : toujours `= any(${sql.param(ids)}::text[])` (S4 : un seul paramètre
+  `text[]`, la ligne hors tableau reste intacte). Un tableau nu, lui, est développé en liste
+  `($1, $2)` par le gabarit `sql` de drizzle (source : `drizzle-orm/sql/sql.js`, pas le spike).
 - **Erreurs** : dans un lot, neon lève un `NeonDbError` brut ; hors lot, drizzle l'enveloppe dans
   un `DrizzleQueryError` (`.cause`). `mapDbError` s'appuie sur `pgErrorInfo` / `skedulCode`
   (`src/lib/db/pg-error.ts`, livré en P1), qui lit les deux formes.
 - **Garde sans assertion** : un UPDATE gardé qui touche 0 ligne n'annule pas le lot (S1). Toute
   garde est donc suivie d'un `skedul_assert`.
-- **FK** : sur Postgres 17.11, même un `RESTRICT` créé avant les cascades a laissé passer la
-  suppression du compte (S6). La règle R1 (aucun `RESTRICT`, NO ACTION dans le domaine) est
-  gardée par prudence : son comportement dépend de l'ordre des déclencheurs.
+- **FK** : `deleteUser` passe parce que **chaque table du domaine a sa propre cascade directe
+  depuis `professional` (règle R2)**. La revue l'a vérifié : si la ligne qui référence (une
+  inscription) n'est atteinte que par une cascade plus profonde (via `customer`), la suppression
+  échoue en 23503, en NO ACTION comme en RESTRICT ; avec une cascade directe, les deux passent
+  (S6). R2 est donc obligatoire pour toute nouvelle table, et T11 le vérifie ; R1 (aucun
+  `RESTRICT`) reste une règle de prudence.
 - **Auth** : voir § 12 (options emailOTP corrigées, hook confirmé).
 
 ## 11. Parcours d'écriture
@@ -1193,8 +1198,10 @@ appelle `stripe.checkout.sessions.expire` pour chacun (au mieux). Ensuite seulem
 `emailVerification: { sendOnSignUp: true }` dans les options de `betterAuth`, et
 `emailOTPClient()` dans `auth-client.ts`.
 - Avec `overrideDefaultEmailVerification`, l'option `sendVerificationOnSignUp` du plugin est
-  **inerte** : le code d'inscription vient de `emailVerification.sendOnSignUp` du cœur, qui
-  appelle l'envoi par code du plugin (spike S8a : exactement un code `email-verification`).
+  **inerte** : son hook d'inscription ne s'active que sans `overrideDefaultEmailVerification`
+  (`better-auth/dist/plugins/email-otp/index.mjs:52`). Le code d'inscription vient de
+  `emailVerification.sendOnSignUp` du cœur, qui appelle l'envoi par code du plugin (spike S8a :
+  exactement un code `email-verification`).
 - `sendVerificationOTP` envoie `loginCodeEmail` pour `type === "sign-in"` et
   `verifyEmailCodeEmail` pour `type === "email-verification"`.
 - Un renvoi dans les 5 minutes renvoie **le même** code, sans rotation.
@@ -1241,8 +1248,11 @@ ip)` (IP seule) avec le sel du jour `analytics_salt` : aucune IP en clair.
 - **T12** passe par `auth.handler(new Request(…))`, pas par `auth.api.*`, et vérifie que la
   nouvelle session survit.
 - **Confirmé par le spike S8c** : en HTTP, `ctx.context.newSession` est bien renseigné quand le hook
-  s'exécute ; le mot de passe de l'intrus est supprimé, la session de la victime survit, et l'intrus
-  est déconnecté (même avec le cache cookie).
+  s'exécute ; le mot de passe de l'intrus est supprimé et la session de la victime survit.
+  **Attention** : le cache cookie (5 min) montre encore l'intrus connecté ; seule une lecture sans
+  cache le voit déconnecté. D'où la règle : `requireWalletOwner` **et toute lecture qui affiche des
+  données client** (portefeuille, `/mon-espace`, `/[slug]/espace`) lisent la session avec
+  `disableCookieCache: true`.
 - Ce hook ne vise **que** la connexion par code d'un visiteur déconnecté. La confirmation d'adresse
   d'un utilisateur connecté passe par `/email-otp/verify-email` et ne le déclenche pas.
 

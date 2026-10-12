@@ -125,21 +125,31 @@ export const s2: SpikeCheck = {
       db.execute(sql`select pg_sleep(2)`),
     ]);
     await sleep(300);
+    // Server clocks (epoch ms) prove the order on the server, whatever the
+    // client or proxy does with the requests.
     const waiter = db.batch([
-      db.execute(sql`select id from spike.parent where id = 'p2' for update`),
-      db.execute<{ c: number }>(sql`select count(*)::int as c from spike.child where parent_id = 'p2'`),
+      db.execute<{ started: number }>(sql`
+        select (extract(epoch from transaction_timestamp()) * 1000)::float8 as started
+        from spike.parent where id = 'p2' for update`),
+      db.execute<{ c: number; locked_at: number }>(sql`
+        select count(*)::int as c, (extract(epoch from clock_timestamp()) * 1000)::float8 as locked_at
+        from spike.child where parent_id = 'p2'`),
     ]);
     await sleep(300);
-    const tInsert = Date.now();
-    await client.query("insert into spike.child (parent_id) values ('p2')"); // autocommit, no lock needed
-    const insertMs = Date.now() - tInsert;
+    const inserted = (await client.query(
+      "insert into spike.child (parent_id) values ('p2') returning (extract(epoch from clock_timestamp()) * 1000)::float8 as t",
+    )) as { t: number }[]; // autocommit, needs no lock
     const [, waited] = await Promise.all([holder, waiter]);
     const totalMs = Date.now() - t0;
+    const started = Number(waited[0].rows[0].started);
+    const insertedAt = Number(inserted[0].t);
+    const lockedAt = Number(waited[1].rows[0].locked_at);
     const seen = waited[1].rows[0].c;
-    assert.ok(insertMs < 1500, `the concurrent insert should not queue behind the batches (${insertMs} ms)`);
-    assert.ok(totalMs >= 1800, `the waiter should have blocked on the holder's lock (${totalMs} ms)`);
+    assert.ok(insertedAt > started, "the waiter's transaction must have started before the insert committed");
+    assert.ok(lockedAt > insertedAt, "the waiter must have got the lock after the insert committed");
+    assert.ok(lockedAt - started >= 1000, `the waiter must have waited server-side (${Math.round(lockedAt - started)} ms)`);
     assert.equal(seen, 1, "statement 2 of the waiter must see the row committed while it waited");
-    return `waiter blocked ~${totalMs} ms, saw ${seen} row committed mid-wait (insert ${insertMs} ms)`;
+    return `server: waiter began, insert committed +${Math.round(insertedAt - started)} ms, lock got +${Math.round(lockedAt - started)} ms; saw ${seen} row (total ${totalMs} ms)`;
   },
 };
 

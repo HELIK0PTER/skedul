@@ -175,14 +175,19 @@ export const s8c: SpikeCheck = {
     assert.equal(u.emailVerified, true);
     assert.equal(await credentialCount(u.id), 0, "the attacker's password must be gone");
 
+    // Cached read FIRST: a no-cache read expires the cookies in the jar and
+    // would hide what a real attacker's browser still sees.
+    const attackerCached = await attacker("/get-session");
+    assert.notEqual(
+      attackerCached.json,
+      null,
+      "expected the 5-min cookie cache to still show the attacker (why wallet reads must bypass it)",
+    );
     const attackerFresh = await attacker("/get-session?disableCookieCache=true");
-    assert.equal(attackerFresh.json, null, "the attacker's session must be revoked");
+    assert.equal(attackerFresh.json, null, "the attacker's session must be revoked in the database");
     const victimFresh = await victim("/get-session?disableCookieCache=true");
     assert.equal((victimFresh.json as { user?: { email?: string } } | null)?.user?.email, email);
-
-    const attackerCached = await attacker("/get-session");
-    const cachedStillLoggedIn = attackerCached.json !== null;
-    return `purged; victim session kept; attacker with cookie cache: ${cachedStillLoggedIn ? "STILL logged in (cache)" : "logged out"}`;
+    return "purged; victim session kept; attacker STILL shown by the cookie cache, gone on a no-cache read";
   },
 };
 
@@ -196,9 +201,10 @@ export const s8d: SpikeCheck = {
     const first = lastCode(email, "sign-in");
     await call("/email-otp/send-verification-otp", { email, type: "sign-in" });
     const second = lastCode(email, "sign-in");
+    assert.equal(sent.filter((s) => s.email === email).length, 2, "the resend must actually send a second e-mail");
     assert.ok(first && second);
     assert.equal(second, first);
-    return "second send reused the first code";
+    return "two e-mails sent, the second reused the first code";
   },
 };
 

@@ -34,6 +34,12 @@ test("ignores Node errno codes and keeps the innermost message", () => {
   assert.deepEqual(pgErrorInfo(err), { message: "socket hang up" });
 });
 
+test("terminates on a self-referencing cause chain", () => {
+  const err = new Error("loop") as Error & { cause?: unknown };
+  err.cause = err;
+  assert.deepEqual(pgErrorInfo(err), { message: "loop" });
+});
+
 test("skedulCode extracts the code of a raised skedul_assert", () => {
   const raised = Object.assign(new Error("skedul:stale"), { code: "P0001" });
   assert.equal(skedulCode(raised), "stale");

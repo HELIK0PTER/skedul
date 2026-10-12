@@ -38,7 +38,10 @@ export function pgErrorInfo(err: unknown): PgErrorInfo {
     cur = typeof cur === "object" ? e.cause : undefined;
   }
   let inner: unknown = err;
-  while (inner instanceof Error && inner.cause instanceof Error) inner = inner.cause;
+  // Bounded like the loop above: a cause chain can be cyclic.
+  for (let depth = 0; depth < 5 && inner instanceof Error && inner.cause instanceof Error; depth++) {
+    inner = inner.cause;
+  }
   return { message: inner instanceof Error ? inner.message : String(inner) };
 }
 
