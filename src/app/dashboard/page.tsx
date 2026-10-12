@@ -30,14 +30,14 @@ export default async function DashboardPage() {
   const pro = (await getCurrentProfessional())!;
   const tz = pro.timezone;
   const weekStart = weekStartFromParam(undefined, tz, new Date());
-  const { start, end } = weekBounds(weekStart);
+  const { start, end } = weekBounds(weekStart, tz);
 
   const [data, { sessions, timeOff }] = await Promise.all([
     getProDashboardData(pro.id),
     getProPlanningWeek(pro.id, start, end),
   ]);
 
-  const days = weekDays(weekStart);
+  const days = weekDays(weekStart, tz);
   const range = gridRange([...sessions, ...timeOff], tz);
   const publicUrl = `${env.APP_URL}/${pro.slug}`;
 
