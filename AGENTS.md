@@ -73,8 +73,12 @@ services/availability/packs in a back-office; their clients book slots
 - **Clients**: a `customer` row is created as soon as a booking or pack checkout starts,
   paid or not. `/dashboard/clients` and the dashboard « Clients » KPI only count the ones
   matching `isClient` in `queries.ts` (a confirmed/completed booking or a paid pack).
+- **Public address**: a pro edits their slug in `/dashboard/settings` (`updateSlug` in
+  `pro.ts`, rules in `src/lib/slug.ts`: 3–60 chars, not a `RESERVED_SEGMENTS` route,
+  globally unique). The old address 404s right away: there is no redirect.
 - **UI**: bespoke primitives in `src/components/ui/` (Tailwind v4, violet theme in
-  `globals.css`). Use `Button asChild` (custom `Slot`) for links.
+  `globals.css`). Use `Button asChild` (custom `Slot`) for links. The window scrolls in
+  the dashboard, not `<main>`: never give it `overflow-auto`/`hidden` (it breaks `sticky`).
 
 ## Workflow
 - `pnpm typecheck` and `pnpm build` must stay green.

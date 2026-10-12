@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { Loader2, Upload } from "lucide-react";
 
 import { updateBranding } from "@/server/pro";
@@ -78,6 +78,22 @@ export function BrandingForm({
   const [error, setError] = useState<string | null>(null);
   const bannerInput = useRef<HTMLInputElement>(null);
   const avatarInput = useRef<HTMLInputElement>(null);
+
+  // Lift the preview with a shadow once it is stuck: its sentinel has passed
+  // the sticky offset (md:top-4 = 16px).
+  const stickSentinel = useRef<HTMLDivElement>(null);
+  const [stuck, setStuck] = useState(false);
+  useEffect(() => {
+    const el = stickSentinel.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) =>
+        setStuck(!entry.isIntersecting && entry.boundingClientRect.top < 16),
+      { rootMargin: "-16px 0px 0px 0px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   const centered = layout === "vitrine";
 
@@ -207,9 +223,10 @@ export function BrandingForm({
 
   return (
     <div className="space-y-6">
-      {/* Aperçu en direct */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
+      {/* The preview floats at the top of the screen (md+) while the fields
+          below scroll, and stops with this wrapper, above the save buttons. */}
+      <div>
+        <div className="mb-2 flex items-center justify-between">
           <Label>Aperçu en direct</Label>
           {dirty && (
             <span className="text-xs font-medium text-warning">
@@ -217,8 +234,12 @@ export function BrandingForm({
             </span>
           )}
         </div>
+        <div ref={stickSentinel} aria-hidden className="h-px -mb-px" />
         <div
-          className="overflow-hidden rounded-xl border border-border bg-card"
+          className={cn(
+            "relative z-10 overflow-hidden rounded-xl border border-border bg-card transition-shadow duration-200 motion-reduce:transition-none md:sticky md:top-4",
+            stuck && "md:shadow-(--shadow-pop)",
+          )}
           style={brandThemeVars(activeColor)}
         >
           {banner ? (
@@ -263,262 +284,264 @@ export function BrandingForm({
             </div>
           </div>
         </div>
-      </div>
 
-      {/* Bannière */}
-      <div className="space-y-2">
-        <Label>Bannière</Label>
-        <div
-          className="relative h-28 overflow-hidden rounded-xl border border-border bg-muted"
-          style={
-            !banner
-              ? { background: `linear-gradient(180deg, ${activeColor}22, #fff)` }
-              : undefined
-          }
-        >
-          {banner && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={banner} alt="" className="size-full object-cover" />
-          )}
-        </div>
-        <div className="flex gap-2">
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            disabled={!blobEnabled || pending}
-            onClick={() => bannerInput.current?.click()}
-          >
-            <Upload className="size-4" /> {banner ? "Changer" : "Ajouter"}
-          </Button>
-          {banner && (
-            <Button type="button" variant="ghost" size="sm" onClick={() => setBanner(null)}>
-              Retirer
-            </Button>
-          )}
-          <input
-            ref={bannerInput}
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            hidden
-            onChange={async (e) => {
-              const f = e.target.files?.[0];
-              if (f) {
-                const url = await upload(f, "banner");
-                if (url) setBanner(url);
-              }
-              e.target.value = "";
-            }}
-          />
-        </div>
-        {!blobEnabled && (
-          <p className="text-xs text-muted-foreground">
-            Upload indisponible (stockage non configuré). La galerie et le pack 3D
-            restent disponibles.
-          </p>
-        )}
-      </div>
-
-      {/* Avatar */}
-      <div className="space-y-2">
-        <Label>Avatar</Label>
-        <div className="flex w-fit gap-1 rounded-xl bg-card p-1">
-          {tabBtn("gallery", "Galerie")}
-          {tabBtn("pack", "3D")}
-          {tabBtn("upload", "Upload")}
-        </div>
-
-        {tab === "gallery" && (
-          <div className="space-y-4">
-            {STYLES.map((style) => (
-              <div key={style}>
-                <p className="mb-1 text-xs capitalize text-muted-foreground">
-                  {style.replace("-", " ")}
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {seeds.map((seed) => {
-                    const active =
-                      avatar.kind === "generated" &&
-                      avatar.style === style &&
-                      avatar.seed === seed;
-                    return (
-                      <button
-                        key={seed}
-                        type="button"
-                        onClick={() =>
-                          setAvatar({ kind: "generated", style, seed, url: null })
-                        }
-                        className={cn(
-                          "size-12 overflow-hidden rounded-xl border-2 bg-card",
-                          active ? "border-primary" : "border-transparent hover:border-border",
-                        )}
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={preview(style, seed)} alt="" className="size-full" />
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() =>
-                setSeeds(
-                  Array.from({ length: 6 }, () => Math.random().toString(36).slice(2, 9)),
-                )
-              }
-            >
-              Régénérer
-            </Button>
-          </div>
-        )}
-
-        {tab === "pack" && (
-          <div className="flex flex-wrap gap-2">
-            {AVATAR_PACK.map((a) => {
-              const url = packSrc(a.id);
-              const active = avatar.kind === "pack" && avatar.url === url;
-              return (
-                <button
-                  key={a.id}
-                  type="button"
-                  title={a.alt}
-                  onClick={() =>
-                    setAvatar({ kind: "pack", style: null, seed: null, url })
-                  }
-                  className={cn(
-                    "size-14 overflow-hidden rounded-xl border-2 bg-card p-1",
-                    active ? "border-primary" : "border-transparent hover:border-border",
-                  )}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={url} alt={a.alt} className="size-full object-contain" />
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {tab === "upload" && (
+        <div className="mt-6 space-y-6">
+          {/* Bannière */}
           <div className="space-y-2">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={!blobEnabled || pending}
-              onClick={() => avatarInput.current?.click()}
+            <Label>Bannière</Label>
+            <div
+              className="relative h-28 overflow-hidden rounded-xl border border-border bg-muted"
+              style={
+                !banner
+                  ? { background: `linear-gradient(180deg, ${activeColor}22, #fff)` }
+                  : undefined
+              }
             >
-              <Upload className="size-4" /> Choisir une image
-            </Button>
-            {avatar.kind === "upload" && avatar.url && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={avatar.url} alt="" className="size-16 rounded-xl object-cover" />
-            )}
-            <input
-              ref={avatarInput}
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              hidden
-              onChange={async (e) => {
-                const f = e.target.files?.[0];
-                if (f) {
-                  const url = await upload(f, "avatar");
-                  if (url) setAvatar({ kind: "upload", style: null, seed: null, url });
-                }
-                e.target.value = "";
-              }}
-            />
+              {banner && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={banner} alt="" className="size-full object-cover" />
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={!blobEnabled || pending}
+                onClick={() => bannerInput.current?.click()}
+              >
+                <Upload className="size-4" /> {banner ? "Changer" : "Ajouter"}
+              </Button>
+              {banner && (
+                <Button type="button" variant="ghost" size="sm" onClick={() => setBanner(null)}>
+                  Retirer
+                </Button>
+              )}
+              <input
+                ref={bannerInput}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                hidden
+                onChange={async (e) => {
+                  const f = e.target.files?.[0];
+                  if (f) {
+                    const url = await upload(f, "banner");
+                    if (url) setBanner(url);
+                  }
+                  e.target.value = "";
+                }}
+              />
+            </div>
             {!blobEnabled && (
               <p className="text-xs text-muted-foreground">
-                Upload indisponible (stockage non configuré).
+                Upload indisponible (stockage non configuré). La galerie et le pack 3D
+                restent disponibles.
               </p>
             )}
           </div>
-        )}
-      </div>
 
-      {/* Thème couleur : presets + preset personnalisé */}
-      <div className="space-y-2">
-        <Label>Thème couleur</Label>
-        <p className="text-xs text-muted-foreground">
-          Teinte boutons, liens, badges et accents de votre page publique.
-        </p>
-        <div className="flex flex-wrap items-center gap-2">
-          {THEME_PRESETS.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              title={p.label}
-              aria-label={p.label}
-              onClick={() => setThemePreset(p.id)}
-              className={cn(
-                "size-9 rounded-full border-2 transition-transform",
-                themePreset === p.id
-                  ? "scale-110 border-foreground"
-                  : "border-transparent hover:scale-105",
-              )}
-              style={{ backgroundColor: p.color }}
-            />
-          ))}
-          <button
-            type="button"
-            title="Couleur personnalisée"
-            aria-label="Couleur personnalisée"
-            onClick={() => setThemePreset("custom")}
-            className={cn(
-              "size-9 rounded-full border-2 transition-transform",
-              themePreset === "custom"
-                ? "scale-110 border-foreground"
-                : "border-input hover:scale-105",
-            )}
-            style={
-              themePreset === "custom"
-                ? { backgroundColor: customColor }
-                : {
-                    background:
-                      "conic-gradient(from 0deg, #ef4444, #f59e0b, #22c55e, #3b82f6, #a855f7, #ef4444)",
+          {/* Avatar */}
+          <div className="space-y-2">
+            <Label>Avatar</Label>
+            <div className="flex w-fit gap-1 rounded-xl bg-card p-1">
+              {tabBtn("gallery", "Galerie")}
+              {tabBtn("pack", "3D")}
+              {tabBtn("upload", "Upload")}
+            </div>
+
+            {tab === "gallery" && (
+              <div className="space-y-4">
+                {STYLES.map((style) => (
+                  <div key={style}>
+                    <p className="mb-1 text-xs capitalize text-muted-foreground">
+                      {style.replace("-", " ")}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {seeds.map((seed) => {
+                        const active =
+                          avatar.kind === "generated" &&
+                          avatar.style === style &&
+                          avatar.seed === seed;
+                        return (
+                          <button
+                            key={seed}
+                            type="button"
+                            onClick={() =>
+                              setAvatar({ kind: "generated", style, seed, url: null })
+                            }
+                            className={cn(
+                              "size-12 overflow-hidden rounded-xl border-2 bg-card",
+                              active ? "border-primary" : "border-transparent hover:border-border",
+                            )}
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={preview(style, seed)} alt="" className="size-full" />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    setSeeds(
+                      Array.from({ length: 6 }, () => Math.random().toString(36).slice(2, 9)),
+                    )
                   }
-            }
-          />
-        </div>
-        {themePreset === "custom" && (
-          <div className="flex items-center gap-2">
-            <input
-              type="color"
-              aria-label="Couleur personnalisée"
-              value={customColor}
-              onChange={(e) => setCustomColor(e.target.value)}
-              className="h-10 w-16 cursor-pointer rounded-xl border border-input bg-card p-1"
-            />
-            <span className="text-xs text-muted-foreground">
-              Votre preset personnalisé — modifiable à volonté.
-            </span>
-          </div>
-        )}
-      </div>
+                >
+                  Régénérer
+                </Button>
+              </div>
+            )}
 
-      {/* Mise en page */}
-      <div className="space-y-1.5">
-        <Label>Mise en page</Label>
-        <div className="flex max-w-xs gap-2">
-          {(["profil", "vitrine"] as const).map((l) => (
-            <button
-              key={l}
-              type="button"
-              onClick={() => setLayout(l)}
-              className={cn(
-                "flex-1 rounded-xl border px-3 py-2 text-sm capitalize transition-colors",
-                layout === l
-                  ? "border-primary bg-primary-muted text-primary"
-                  : "border-input hover:bg-muted",
-              )}
-            >
-              {l}
-            </button>
-          ))}
+            {tab === "pack" && (
+              <div className="flex flex-wrap gap-2">
+                {AVATAR_PACK.map((a) => {
+                  const url = packSrc(a.id);
+                  const active = avatar.kind === "pack" && avatar.url === url;
+                  return (
+                    <button
+                      key={a.id}
+                      type="button"
+                      title={a.alt}
+                      onClick={() =>
+                        setAvatar({ kind: "pack", style: null, seed: null, url })
+                      }
+                      className={cn(
+                        "size-14 overflow-hidden rounded-xl border-2 bg-card p-1",
+                        active ? "border-primary" : "border-transparent hover:border-border",
+                      )}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={url} alt={a.alt} className="size-full object-contain" />
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {tab === "upload" && (
+              <div className="space-y-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={!blobEnabled || pending}
+                  onClick={() => avatarInput.current?.click()}
+                >
+                  <Upload className="size-4" /> Choisir une image
+                </Button>
+                {avatar.kind === "upload" && avatar.url && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={avatar.url} alt="" className="size-16 rounded-xl object-cover" />
+                )}
+                <input
+                  ref={avatarInput}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  hidden
+                  onChange={async (e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      const url = await upload(f, "avatar");
+                      if (url) setAvatar({ kind: "upload", style: null, seed: null, url });
+                    }
+                    e.target.value = "";
+                  }}
+                />
+                {!blobEnabled && (
+                  <p className="text-xs text-muted-foreground">
+                    Upload indisponible (stockage non configuré).
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Thème couleur : presets + preset personnalisé */}
+          <div className="space-y-2">
+            <Label>Thème couleur</Label>
+            <p className="text-xs text-muted-foreground">
+              Teinte boutons, liens, badges et accents de votre page publique.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              {THEME_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  title={p.label}
+                  aria-label={p.label}
+                  onClick={() => setThemePreset(p.id)}
+                  className={cn(
+                    "size-9 rounded-full border-2 transition-transform",
+                    themePreset === p.id
+                      ? "scale-110 border-foreground"
+                      : "border-transparent hover:scale-105",
+                  )}
+                  style={{ backgroundColor: p.color }}
+                />
+              ))}
+              <button
+                type="button"
+                title="Couleur personnalisée"
+                aria-label="Couleur personnalisée"
+                onClick={() => setThemePreset("custom")}
+                className={cn(
+                  "size-9 rounded-full border-2 transition-transform",
+                  themePreset === "custom"
+                    ? "scale-110 border-foreground"
+                    : "border-input hover:scale-105",
+                )}
+                style={
+                  themePreset === "custom"
+                    ? { backgroundColor: customColor }
+                    : {
+                        background:
+                          "conic-gradient(from 0deg, #ef4444, #f59e0b, #22c55e, #3b82f6, #a855f7, #ef4444)",
+                      }
+                }
+              />
+            </div>
+            {themePreset === "custom" && (
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  aria-label="Couleur personnalisée"
+                  value={customColor}
+                  onChange={(e) => setCustomColor(e.target.value)}
+                  className="h-10 w-16 cursor-pointer rounded-xl border border-input bg-card p-1"
+                />
+                <span className="text-xs text-muted-foreground">
+                  Votre preset personnalisé — modifiable à volonté.
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Mise en page */}
+          <div className="space-y-1.5">
+            <Label>Mise en page</Label>
+            <div className="flex max-w-xs gap-2">
+              {(["profil", "vitrine"] as const).map((l) => (
+                <button
+                  key={l}
+                  type="button"
+                  onClick={() => setLayout(l)}
+                  className={cn(
+                    "flex-1 rounded-xl border px-3 py-2 text-sm capitalize transition-colors",
+                    layout === l
+                      ? "border-primary bg-primary-muted text-primary"
+                      : "border-input hover:bg-muted",
+                  )}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
