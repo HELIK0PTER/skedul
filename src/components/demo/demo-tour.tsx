@@ -166,7 +166,9 @@ export function DemoTour() {
   const isOutro = step.chapter === "outro";
 
   return (
-    <div className="mx-auto grid w-full max-w-6xl gap-6 px-5 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
+    // minmax(0,1fr) on phones too: an `auto` column would grow to the frame's
+    // nowrap URL (different at each step), widening the page and the controls.
+    <div className="mx-auto grid w-full max-w-6xl grid-cols-[minmax(0,1fr)] gap-6 px-5 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
       <div className="mx-auto w-full max-w-[min(960px,calc((100dvh-240px)*960/840))]">
         {isOutro ? (
           <Outro
