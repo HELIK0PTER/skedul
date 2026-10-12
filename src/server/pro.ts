@@ -501,11 +501,12 @@ export async function updateSessionCapacity(input: {
   const pro = await requirePro();
   const next = Math.max(1, Math.floor(input.capacity));
   // booked = capacity - seatsRemaining ; new seatsRemaining = max(0, next - booked).
+  // Never below booked, or the count of people already in would be lost.
   // Guarded by professionalId so a pro can only touch their own sessions.
   await db
     .update(classSession)
     .set({
-      capacity: next,
+      capacity: sql`GREATEST(${next}, ${classSession.capacity} - ${classSession.seatsRemaining})`,
       seatsRemaining: sql`GREATEST(0, ${next} - (${classSession.capacity} - ${classSession.seatsRemaining}))`,
     })
     .where(

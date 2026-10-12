@@ -53,6 +53,21 @@ const isClient = sql<boolean>`(
   )
 )`;
 
+/**
+ * Money actually collected: direct bookings whose payment went through and
+ * paid packs (same rule as the admin revenue). A booking stores its price as
+ * soon as checkout starts, so its amount alone does not mean it was paid.
+ */
+const paidBookingOf = (proId: string) =>
+  and(
+    eq(booking.professionalId, proId),
+    eq(booking.paymentType, "direct"),
+    inArray(booking.status, ["confirmed", "completed"]),
+    gt(booking.amountPaidCents, 0),
+  );
+const paidPurchaseOf = (proId: string) =>
+  and(eq(packPurchase.professionalId, proId), eq(packPurchase.status, "paid"));
+
 export async function getProDashboardData(proId: string) {
   const now = new Date();
 
@@ -77,19 +92,14 @@ export async function getProDashboardData(proId: string) {
           bookings: sql<number>`coalesce(sum(${booking.amountPaidCents}), 0)`,
         })
         .from(booking)
-        .where(eq(booking.professionalId, proId)),
+        .where(paidBookingOf(proId)),
       db
         .select({
           packRevenue: sql<number>`coalesce(sum(${packPurchase.amountPaidCents}), 0)`,
           creditsLeft: sql<number>`coalesce(sum(${packPurchase.creditsRemaining}), 0)`,
         })
         .from(packPurchase)
-        .where(
-          and(
-            eq(packPurchase.professionalId, proId),
-            eq(packPurchase.status, "paid"),
-          ),
-        ),
+        .where(paidPurchaseOf(proId)),
       db
         .select({
           id: booking.id,
@@ -97,13 +107,20 @@ export async function getProDashboardData(proId: string) {
           endAt: booking.endAt,
           status: booking.status,
           paymentType: booking.paymentType,
+          amountPaidCents: booking.amountPaidCents,
+          notes: booking.customerNotes,
           eventTitle: eventType.title,
           eventColor: eventType.color,
           customerName: customer.name,
+          customerEmail: customer.email,
+          customerPhone: customer.phone,
+          packName: pack.name,
         })
         .from(booking)
         .innerJoin(eventType, eq(eventType.id, booking.eventTypeId))
         .innerJoin(customer, eq(customer.id, booking.customerId))
+        .leftJoin(packPurchase, eq(packPurchase.id, booking.packPurchaseId))
+        .leftJoin(pack, eq(pack.id, packPurchase.packId))
         .where(
           and(
             eq(booking.professionalId, proId),
@@ -115,6 +132,22 @@ export async function getProDashboardData(proId: string) {
         .limit(6),
     ]);
 
+  const answers = recent.length
+    ? await db
+        .select({
+          bookingId: bookingAnswer.bookingId,
+          label: bookingAnswer.questionLabel,
+          value: bookingAnswer.value,
+        })
+        .from(bookingAnswer)
+        .where(
+          inArray(
+            bookingAnswer.bookingId,
+            recent.map((b) => b.id),
+          ),
+        )
+    : [];
+
   const revenue =
     Number(revenueRow[0]?.bookings ?? 0) +
     Number(creditsRow[0]?.packRevenue ?? 0);
@@ -124,8 +157,59 @@ export async function getProDashboardData(proId: string) {
     customersCount: customersCount[0]?.value ?? 0,
     revenueCents: revenue,
     creditsLeft: Number(creditsRow[0]?.creditsLeft ?? 0),
-    upcoming: recent,
+    upcoming: recent.map((b) => ({
+      ...b,
+      answers: answers
+        .filter((a) => a.bookingId === b.id)
+        .map(({ label, value }) => ({ label, value })),
+    })),
   };
+}
+
+export type ProPayment = Awaited<ReturnType<typeof getProPayments>>[number];
+
+/** Everything the pro has collected (see `paidBookingOf`), newest first. */
+export async function getProPayments(proId: string) {
+  const [bookings, purchases] = await Promise.all([
+    db
+      .select({
+        id: booking.id,
+        at: booking.createdAt,
+        amountCents: booking.amountPaidCents,
+        startAt: booking.startAt,
+        label: eventType.title,
+        customerName: customer.name,
+        customerEmail: customer.email,
+      })
+      .from(booking)
+      .innerJoin(eventType, eq(eventType.id, booking.eventTypeId))
+      .innerJoin(customer, eq(customer.id, booking.customerId))
+      .where(paidBookingOf(proId)),
+    db
+      .select({
+        id: packPurchase.id,
+        at: packPurchase.createdAt,
+        amountCents: packPurchase.amountPaidCents,
+        credits: packPurchase.creditsTotal,
+        label: pack.name,
+        customerName: customer.name,
+        customerEmail: customer.email,
+      })
+      .from(packPurchase)
+      .innerJoin(pack, eq(pack.id, packPurchase.packId))
+      .innerJoin(customer, eq(customer.id, packPurchase.customerId))
+      .where(paidPurchaseOf(proId)),
+  ]);
+
+  return [
+    ...bookings.map((b) => ({
+      ...b,
+      kind: "booking" as const,
+      amountCents: b.amountCents ?? 0,
+      credits: null,
+    })),
+    ...purchases.map((p) => ({ ...p, kind: "pack" as const, startAt: null })),
+  ].sort((a, b) => b.at.getTime() - a.at.getTime());
 }
 
 export function getProEventTypes(proId: string) {
