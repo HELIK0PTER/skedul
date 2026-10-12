@@ -17,3 +17,11 @@ export function visitorHash(input: {
     .digest("hex")
     .slice(0, 32);
 }
+
+/**
+ * The IP alone, hashed with the same daily salt: the per-IP key of the app
+ * rate limits (src/lib/throttle.ts, spec § 12). No IP is ever stored in clear.
+ */
+export function ipHash(salt: string, ip: string): string {
+  return createHmac("sha256", salt).update(ip).digest("hex").slice(0, 32);
+}
