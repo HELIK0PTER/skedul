@@ -1,6 +1,9 @@
 /**
  * DB test harness (spec § 14). Run with:
- *   ./node_modules/.bin/tsx --env-file-if-exists=.env.test --test --test-concurrency=1 'src/**\/*.db.test.ts'
+ *   ./node_modules/.bin/tsx --env-file-if-exists=.env.test --test --test-concurrency=1 --test-isolation=none 'src/**\/*.db.test.ts'
+ * --test-isolation=none: one process for the whole run. A per-file child is
+ * killed or crashes silently during its ~9 s tsx import (no stack, file-level
+ * "test failed"); one process pays that import once. No DB test mocks globals.
  * Skips when DATABASE_URL_TEST is unset; refuses to run when DATABASE_URL and
  * DATABASE_URL_TEST point at different hosts; builds the client only after
  * those guards. Each dbTest creates its own pro and deletes its user at the end
