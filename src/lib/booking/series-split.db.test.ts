@@ -18,6 +18,7 @@ import type { Db } from "../db/atomic";
 import { event } from "../db/schema";
 import { expandDates } from "../recurrence";
 import type { RecurrenceRuleInput } from "../tickets";
+import { cancelOccurrence, restoreOccurrence } from "./cancel";
 import { registerPro } from "./claims";
 import { ensureHorizon, horizonEnd } from "./occurrences";
 import { deleteSeriesFrom, editSeriesFrom, previewSeriesEdit, updateOccurrence } from "./series";
@@ -447,3 +448,207 @@ dbTest(
     }
   },
 );
+
+dbTest("E7 suivantes: a séance planned for delete but moved by « cette séance » meanwhile is kept as reparent-only", async (h) => {
+  const { db, pro } = h;
+  const now = new Date();
+  const { eventId, d } = await pastSeries(h, now);
+  const friday = byStart(await occurrencesOf(db, eventId)).find((o) => (o.seriesDate ?? "") >= d && dayOfWeek(o.seriesDate ?? "") === 5);
+  assert.ok(friday, "a never-booked Friday séance after d");
+  const movedStart = new Date(friday.startsAt.getTime() + 2 * 3_600_000);
+
+  const res = await editSeriesFrom(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, eventId, seenVersion: 1, fromDate: d, rule: weekly(d, [1, 3]), durationMin: 60, orphans: "keep" },
+    now,
+    {
+      afterPlan: async () => {
+        const r = await updateOccurrence(
+          db,
+          { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: friday.id, seenStartsAt: friday.startsAt, patch: { startsAt: movedStart } },
+          now,
+        );
+        must(r, "« cette séance » inside afterPlan");
+      },
+    },
+  );
+  must(res, "split after one re-plan");
+  const kept = (await occurrencesOf(db, res.eventId)).find((o) => o.id === friday.id);
+  assert.ok(kept, "the moved séance survives the split");
+  assert.equal(kept.startsAt.getTime(), movedStart.getTime());
+  assert.equal(kept.timeDetached, true);
+  assert.equal(kept.status, "scheduled");
+});
+
+dbTest("E7 suivantes: an unknown orphans choice is invalid", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await makeType(db, pro);
+  const start = dayIn(pro, 2, now);
+  const { eventId } = await makeEvent(db, pro, { ticketTypeIds: [typeId], rule: weekly(start, [1, 3, 5]) }, now);
+  const res = await editSeriesFrom(
+    db,
+    {
+      professionalId: pro.proId,
+      actorUserId: pro.userId,
+      eventId,
+      seenVersion: 1,
+      fromDate: start,
+      rule: weekly(start, [1, 3, 5], 720),
+      durationMin: 60,
+      orphans: "drop" as unknown as "keep",
+    },
+    now,
+  );
+  assert.equal(res.ok ? "ok" : res.code, "invalid");
+  assert.equal((await getEvent(db, eventId)).version, 1);
+});
+
+/**
+ * A Mon/Wed/Fri series from dayIn(2) whose first séance is booked, re-ruled in
+ * place from that séance with a start one week later: the booked séance stays
+ * on the event as a leftover before start_date (s2).
+ */
+async function leftoverSeries({ db, pro }: DbHarness, now: Date) {
+  const typeId = await makeType(db, pro);
+  const { eventId, occurrences } = await makeEvent(db, pro, { ticketTypeIds: [typeId], rule: weekly(dayIn(pro, 2, now), [1, 3, 5]) }, now);
+  const leftover = occurrences[0];
+  const d1 = leftover.seriesDate ?? "";
+  const customerId = await makeCustomer(db, pro);
+  const reg = await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: leftover.id, customerId, asGuest: true });
+  must(reg, "registerPro");
+  const s2 = addDays(d1, 7);
+  const res = await editSeriesFrom(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, eventId, seenVersion: 1, fromDate: d1, rule: weekly(s2, [1, 3, 5]), durationMin: 60, orphans: "keep" },
+    now,
+  );
+  must(res, "re-rule in place with a later start");
+  assert.equal(res.eventId, eventId);
+  const ev = await getEvent(db, eventId);
+  assert.equal(ev.startDate, s2);
+  return { eventId, leftover, s2 };
+}
+
+dbTest("E7 suivantes: a leftover séance before start_date does not force a split (in place from start_date)", async (h) => {
+  const { db, pro } = h;
+  const now = new Date();
+  const { eventId, leftover, s2 } = await leftoverSeries(h, now);
+  const input = { professionalId: pro.proId, eventId, fromDate: s2, rule: weekly(s2, [1, 3, 5], 720), durationMin: 60 };
+  const preview = await previewSeriesEdit(db, input, now);
+  must(preview, "preview");
+
+  const res = await editSeriesFrom(db, { ...input, actorUserId: pro.userId, seenVersion: 2, orphans: "keep" }, now);
+  must(res, "edit from start_date");
+  assert.equal(preview.inPlace, true);
+  assert.equal(res.eventId, eventId);
+  const ev = await getEvent(db, eventId);
+  assert.equal(ev.version, 3);
+  assert.equal(ev.startMinute, 720);
+  const kept = await getOccurrence(db, leftover.id);
+  assert.equal(kept.eventId, eventId);
+  assert.equal(kept.startsAt.getTime(), leftover.startsAt.getTime());
+  assert.equal(kept.status, "scheduled");
+  assert.equal(kept.timeDetached, true);
+  for (const o of (await occurrencesOf(db, eventId)).filter((x) => x.id !== leftover.id)) {
+    assert.equal(o.startsAt.getTime(), instantAt(o.seriesDate ?? "", 720, pro.tz).getTime(), `${o.seriesDate} retimed`);
+  }
+});
+
+dbTest("E7 supprimer à partir du: from start_date with a booked leftover before it, the delete is refused", async (h) => {
+  const { db, pro } = h;
+  const now = new Date();
+  const { eventId, leftover, s2 } = await leftoverSeries(h, now);
+  const rows = await occurrencesOf(db, eventId);
+  const res = await deleteSeriesFrom(db, { professionalId: pro.proId, actorUserId: pro.userId, eventId, seenVersion: 2, fromDate: s2 }, now);
+  assert.deepEqual(res.ok ? "ok" : [res.code, res.message], [
+    "invalid",
+    "Une séance isolée avec inscrits reste avant cette date. Annulez-la d'abord.",
+  ]);
+  const ev = await getEvent(db, eventId);
+  assert.equal(ev.version, 2);
+  assert.equal(ev.archivedAt, null);
+  assert.deepEqual(
+    (await occurrencesOf(db, eventId)).map((o) => [o.id, o.status]),
+    rows.map((o) => [o.id, o.status]),
+  );
+  assert.equal((await getOccurrence(db, leftover.id)).status, "scheduled");
+});
+
+dbTest("E7 supprimer à partir du: a never-booked series keeps its séances before d and ends at d − 1", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await makeType(db, pro);
+  const start = dayIn(pro, 2, now);
+  const { eventId, occurrences } = await makeEvent(db, pro, { ticketTypeIds: [typeId], rule: weekly(start, [1, 3, 5]) }, now);
+  const d = addDays(start, 14);
+  const before = occurrences.filter((o) => (o.seriesDate ?? "") < d);
+  const after = occurrences.filter((o) => (o.seriesDate ?? "") >= d);
+  assert.ok(before.length >= 5);
+
+  const res = await deleteSeriesFrom(db, { professionalId: pro.proId, actorUserId: pro.userId, eventId, seenVersion: 1, fromDate: d }, now);
+  must(res, "delete from d");
+  assert.equal(res.deletedEvent, false);
+  assert.equal(res.deletedOccurrences, after.length);
+  assert.equal(res.cancelledOccurrences, 0);
+  const ev = await getEvent(db, eventId);
+  assert.ok(ev, "the event still exists");
+  assert.equal(ev.untilDate, addDays(d, -1));
+  assert.equal(ev.archivedAt, null);
+  assert.deepEqual(
+    sorted((await occurrencesOf(db, eventId)).map((o) => o.id)),
+    sorted(before.map((o) => o.id)),
+  );
+});
+
+dbTest("E7 supprimer à partir du: a never-booked root still used by a later segment is archived, not deleted", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await makeType(db, pro);
+  const start = dayIn(pro, 2, now);
+  const { eventId } = await makeEvent(db, pro, { ticketTypeIds: [typeId], rule: weekly(start, [1, 3, 5]) }, now);
+  const d = addDays(start, 14);
+  const split = await editSeriesFrom(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, eventId, seenVersion: 1, fromDate: d, rule: weekly(d, [1, 3, 5], 720), durationMin: 60, orphans: "keep" },
+    now,
+  );
+  must(split, "split");
+  assert.notEqual(split.eventId, eventId);
+
+  const res = await deleteSeriesFrom(db, { professionalId: pro.proId, actorUserId: pro.userId, eventId, seenVersion: 2, fromDate: start }, now);
+  must(res, "delete the root from its first date");
+  assert.equal(res.deletedEvent, false);
+  const root = await getEvent(db, eventId);
+  assert.ok(root, "the root still exists");
+  assert.equal(root.archivedAt?.getTime(), now.getTime());
+  assert.equal((await occurrencesOf(db, eventId)).length, 0);
+  const next = await getEvent(db, split.eventId);
+  assert.equal(next.seriesRootId, eventId);
+  assert.equal(next.archivedAt, null);
+  assert.ok((await occurrencesOf(db, split.eventId)).length > 0);
+});
+
+dbTest("E7 supprimer à partir du: a cancelled séance restored before the batch is cancelled after the re-plan", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await makeType(db, pro);
+  const start = dayIn(pro, 2, now);
+  const { eventId, occurrences } = await makeEvent(db, pro, { ticketTypeIds: [typeId], rule: weekly(start, [1, 3, 5]) }, now);
+  const target = occurrences[1];
+  const customerId = await makeCustomer(db, pro);
+  const reg = await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: target.id, customerId, asGuest: true });
+  must(reg, "registerPro");
+  must(await cancelOccurrence(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: target.id }, now), "cancel the séance");
+
+  const res = await deleteSeriesFrom(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, eventId, seenVersion: 1, fromDate: start },
+    now,
+    {
+      afterPlan: async () => {
+        must(await restoreOccurrence(db, { professionalId: pro.proId, occurrenceId: target.id }, now), "rétablir inside afterPlan");
+      },
+    },
+  );
+  must(res, "delete after one re-plan");
+  assert.equal(res.cancelledOccurrences, 1);
+  assert.equal((await getOccurrence(db, target.id)).status, "cancelled");
+  assert.equal((await occurrencesOf(db, eventId)).filter((o) => o.status === "scheduled").length, 0);
+});

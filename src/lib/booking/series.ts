@@ -478,15 +478,19 @@ type SeriesContext = {
   oldRule: RecurrenceRule;
   /** rows with series_date ≥ d, as the planner wants them */
   rows: SeriesRow[];
-  /** false = no row before d: the edit is applied in place */
+  /**
+   * true = rows exist before d AND d > start_date: the edit splits. Otherwise it
+   * is applied in place; rows before d can then only be leftovers kept by an
+   * earlier edit before the current start_date, and they stay on the event untouched.
+   */
   split: boolean;
-  /** rows of the segment (all dates): used by delete */
-  totalRows: number;
+  /** rows of the segment with series_date < d */
+  rowsBefore: number;
 };
 
 /**
  * Plan reads shared by preview, edit and delete: the pro's tz, the segment,
- * its rows ≥ d (with activity) and whether rows exist before d. Throws
+ * its rows ≥ d (with activity) and the count of rows before d. Throws
  * PlanError: not_found (unknown or archived event), invalid (d before local
  * today or a row ≥ d already started).
  */
@@ -543,8 +547,8 @@ async function loadSeriesContext(
     ev,
     oldRule: ruleOf(ev),
     rows: rows.map((r) => ({ ...r, seriesDate: String(r.seriesDate), hasHistory: r.hasHistory === true })),
-    split: before_ > 0,
-    totalRows: before_ + rows.length,
+    split: before_ > 0 && args.fromDate > ev.startDate,
+    rowsBefore: before_,
   };
 }
 
@@ -621,8 +625,9 @@ export async function previewSeriesEdit(
 
 /**
  * « Cette séance et les suivantes » (spec § 11 E7, contract § 5.20 batch
- * order). Split when rows exist before d, else in place on the same event.
- * Re-plans once on stale (a concurrent claim, ensureHorizon rows, a version bump).
+ * order). Split when rows exist before d and d > start_date, else in place on
+ * the same event. Re-plans once on stale (a concurrent claim, ensureHorizon
+ * rows, a version bump, a planned row moved by « cette séance »).
  */
 export async function editSeriesFrom(
   db: Db,
@@ -634,6 +639,7 @@ export async function editSeriesFrom(
   const res = await tryAtomic(
     db,
     async () => {
+      if (input.orphans !== "keep" && input.orphans !== "cancel") throw new PlanError("invalid");
       const ctx = await loadSeriesContext(db, input, now);
       const { plan, newRule } = planEdit(ctx, input, now);
       const { ev } = ctx;
@@ -732,9 +738,16 @@ export async function editSeriesFrom(
             G(db, sql`(select count(*)::int from occurrence where ${segmentRows}) = ${ctx.rows.length}::int`, "stale"),
           );
         }
+        // Every row planned as not detached must still be: one moved by « cette séance » since
+        // the plan (no version bump) makes the batch stale, and the re-plan reparents it only.
+        const plannedAttached = [...plan.retime.map((r) => r.id), ...plan.delete, ...plan.cancelEmpty, ...plan.orphanBooked];
+        if (plannedAttached.length > 0) {
+          queries.push(
+            G(db, sql`not exists (select 1 from occurrence where id = any(${textArray(plannedAttached)}) and time_detached)`, "stale"),
+          );
+        }
 
-        // 5. retime. A row moved by « cette séance » since the plan (time_detached, no version
-        // bump) is skipped, and the guard turns it into stale: the re-plan reparents it only.
+        // 5. retime, never a detached row, then G(every planned row has its planned times)
         if (plan.retime.length > 0) {
           const retime = sql`unnest(${textArray(plan.retime.map((r) => r.id))}, ${tsArray(plan.retime.map((r) => r.startsAt))},
             ${tsArray(plan.retime.map((r) => r.endsAt))}) as v(id, s, e)`;
@@ -825,15 +838,19 @@ export async function editSeriesFrom(
 /* ───────────────────────── « Supprimer à partir du » ───────────────────────── */
 
 /**
- * Never-booked event: DELETE event (cascade; a 23503 from a booking taken
- * meanwhile → stale → re-plan). Else: version-guarded end (until = d − 1, or
- * archived_at when d ≤ start_date), lock rows ≥ d, G(row count), delete the
- * rows without history, cancel (E6b) the scheduled ones with history, RET.
+ * Never-booked event with no séance before d and no later segment rooted on
+ * it: DELETE event (cascade; a 23503 from a booking taken meanwhile → stale →
+ * re-plan). Else: version-guarded end (until = d − 1, or archived_at when
+ * d ≤ start_date, refused while a scheduled future leftover remains before d),
+ * lock rows ≥ d, G(row count), delete the rows without history, cancel (E6b)
+ * the scheduled ones with history, RET, G(no scheduled row ≥ d left).
+ * `opts.afterPlan` is test-only: it runs between the plan and its batch.
  */
 export async function deleteSeriesFrom(
   db: Db,
   input: { professionalId: string; actorUserId: string; eventId: string; seenVersion: number; fromDate: DateKey },
   now: Date = new Date(),
+  opts: { afterPlan?: () => Promise<void> } = {},
 ): Promise<EngineResult<{ deletedEvent: boolean; cancelledOccurrences: number; deletedOccurrences: number }>> {
   const outcome = { deletedEvent: false, toCancel: [] as string[], deleted: 0 };
   const res = await tryAtomic(
@@ -841,17 +858,28 @@ export async function deleteSeriesFrom(
     async () => {
       const ctx = await loadSeriesContext(db, input, now);
       const { ev } = ctx;
-      const booked = await db.execute<{ yes: boolean }>(
-        sql`select exists (select 1 from booking b join occurrence o on o.id = b.occurrence_id where o.event_id = ${ev.id}) as yes`,
-      );
+      // d ≤ start_date: the whole segment ends (archived). Rows before d can then only be
+      // leftovers kept by an earlier edit; a scheduled future one must be cancelled first.
+      const archive = input.fromDate <= ev.startDate;
+      const liveBefore = sql`event_id = ${ev.id} and series_date < ${input.fromDate}::date
+        and status = 'scheduled' and starts_at > ${ts(now)}`;
+      const flags = await db.execute<{ booked: boolean; root_in_use: boolean; live_before: boolean }>(sql`select
+        exists (select 1 from booking b join occurrence o on o.id = b.occurrence_id where o.event_id = ${ev.id}) as booked,
+        exists (select 1 from event e where e.series_root_id = ${ev.id} and e.id <> ${ev.id}) as root_in_use,
+        exists (select 1 from occurrence where ${liveBefore}) as live_before`);
+      const f = flags.rows[0];
 
-      if (booked.rows[0]?.yes !== true) {
-        Object.assign(outcome, { deletedEvent: true, toCancel: [], deleted: ctx.totalRows });
+      // Never booked, no séance before d, no later segment rooted on it: physical delete.
+      if (f?.booked !== true && ctx.rowsBefore === 0 && f?.root_in_use !== true) {
+        Object.assign(outcome, { deletedEvent: true, toCancel: [], deleted: ctx.rows.length });
         return () => [
           db.execute(sql`delete from event where id = ${ev.id} and professional_id = ${input.professionalId}
             and version = ${input.seenVersion}::int`),
           G(db, sql`not exists (select 1 from event where id = ${ev.id})`, "stale"),
         ];
+      }
+      if (archive && f?.live_before === true) {
+        throw new PlanError("invalid", "Une séance isolée avec inscrits reste avant cette date. Annulez-la d'abord.");
       }
 
       const del = ctx.rows.filter((r) => !r.hasHistory).map((r) => r.id);
@@ -861,16 +889,19 @@ export async function deleteSeriesFrom(
         const c: BatchCtx = { db, aid, now };
         const by: ActorRef = { actor: "pro", userId: input.actorUserId };
         const segmentRows = sql`event_id = ${ev.id} and series_date >= ${input.fromDate}::date`;
-        const end = input.fromDate <= ev.startDate ? [sql`archived_at = ${ts(now)}`] : endOldSegmentSets(ctx.oldRule, input.fromDate);
+        const end = archive ? [sql`archived_at = ${ts(now)}`] : endOldSegmentSets(ctx.oldRule, input.fromDate);
         const queries: Query[] = [
           db.execute(sql`update event set ${sql.join(
             [sql`version = version + 1`, sql`last_action_id = ${aid}`, sql`updated_at = ${ts(now)}`, ...end],
             sql`, `,
           )} where id = ${ev.id} and professional_id = ${input.professionalId} and version = ${input.seenVersion}::int`),
           G(db, sql`(select last_action_id from event where id = ${ev.id}) = ${aid}`, "stale"),
+        ];
+        if (archive) queries.push(G(db, sql`not exists (select 1 from occurrence where ${liveBefore})`, "stale"));
+        queries.push(
           db.execute(sql`select id from occurrence where ${segmentRows} order by id for no key update`),
           G(db, sql`(select count(*)::int from occurrence where ${segmentRows}) = ${ctx.rows.length}::int`, "stale"),
-        ];
+        );
         if (del.length > 0) {
           queries.push(
             db.execute(sql`
@@ -891,10 +922,12 @@ export async function deleteSeriesFrom(
             RET(c, by),
           );
         }
+        // End state: nothing ≥ d stays bookable (a séance restored since the plan → stale → re-plan).
+        queries.push(G(db, sql`not exists (select 1 from occurrence where ${segmentRows} and status = 'scheduled')`, "stale"));
         return queries;
       };
     },
-    { replanOnStale: true },
+    { replanOnStale: true, afterPlan: opts.afterPlan },
   );
   if (!res.ok) return failOf(res);
   const effects =
