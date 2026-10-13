@@ -1,12 +1,13 @@
 /**
  * Taking a seat (spec § 11): E1 buy + book, E2 held ticket and pro « Inscrire »,
  * E3 free registration, E4 RDV libre. Every write is ONE tryAtomic batch:
- * lock first (professional → occurrence → customer), R + SEAT once per
- * occurrence, every guard followed by an assert, ids made in the plan. The
+ * lock first, in the global order of spec § 10 (E1 locks occurrence →
+ * customer; only E4 and E6c also take the professional lock), R + SEAT once
+ * per occurrence, every guard followed by an assert, ids made in the plan. The
  * engine never calls Stripe: E1 and E4 « buy » return the pending purchase;
  * the P4/P5 action creates the Checkout session, then attachCheckoutSession.
  */
-import { and, eq, gt, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
 import { effectiveWindow, onlineBookability, type BookingWindow } from "@/lib/booking-window";
@@ -312,6 +313,22 @@ function unchangedStart(occurrenceId: string, seenStartsAt: Date): SQL {
   return sql`(select starts_at from occurrence where id = ${occurrenceId}) = ${ts(seenStartsAt)}`;
 }
 
+/**
+ * G(no active booking of this customer on o, 'already_booked'). Race-free:
+ * every booking on o is inserted under o's lock. Place it after R(o) (so the
+ * customer's own elapsed hold no longer counts) and before SEAT: otherwise a
+ * double submit for the last seat would hit occurrence_seats_chk (« full »)
+ * on the customer's own hold instead of reaching « already_booked ».
+ */
+export function assertNotBooked(c: BatchCtx, occurrenceId: string, customerId: string): Query {
+  return G(
+    c.db,
+    sql`not exists (select 1 from booking
+      where occurrence_id = ${occurrenceId} and customer_id = ${customerId} and status in ('pending', 'confirmed'))`,
+    "already_booked",
+  );
+}
+
 /** The offer's type is accepted by the séance's event (live link). */
 async function offerLinkedToEvent(db: Db, offerId: string, eventId: string): Promise<boolean> {
   const rows = await db
@@ -356,8 +373,9 @@ function insertBooking(c: BatchCtx, b: NewBooking): Query {
  * E1. Plan: séance scheduled and open online (tickets mode, public, not
  * archived, notice, horizon), seen start, offer on sale and linked, offer
  * validity covers the séance, answers. Batch: lock occurrence → customer,
- * R(o), SEAT(o, +1), G(ONLINE_OK), G(CHANGED), G(offer unchanged), hold
- * quota, INSERT purchase (pending) and booking (pending, hold), answers.
+ * R(o), G(not already booked), SEAT(o, +1), G(ONLINE_OK), G(CHANGED),
+ * G(offer unchanged), hold quota, INSERT purchase (pending) and booking
+ * (pending, hold), answers.
  * Effects: none (the action creates the Checkout session).
  */
 export async function startBuyAndBook(
@@ -409,6 +427,7 @@ export async function startBuyAndBook(
           lockRows(db, "occurrence", [occurrenceId]),
           lockRows(db, "customer", [customerId]),
           R(c, occurrenceId),
+          assertNotBooked(c, occurrenceId, customerId),
           SEAT(c, occurrenceId, 1),
           G(db, onlineOk(c, { professionalId, occurrenceId, mode: "tickets" }), "unavailable"),
           G(db, unchangedStart(occurrenceId, input.seenStartsAt), "changed"),
@@ -440,7 +459,13 @@ export async function startBuyAndBook(
 
 /**
  * After Stripe answered (E1, E4 buy, E9): one guarded UPDATE. A purchase that
- * is no longer pending → stale (the action then expires the session).
+ * is no longer pending → stale (the action then expires the session), and so
+ * is one that already carries a DIFFERENT session: an attached session is
+ * never replaced, re-attaching the same id is idempotent.
+ *
+ * Precondition: takes no professionalId, so `purchaseId` must come from the
+ * engine result of this very action (startBuyAndBook, E4, E9), never from
+ * client input.
  */
 export async function attachCheckoutSession(
   db: Db,
@@ -450,7 +475,13 @@ export async function attachCheckoutSession(
   const rows = await db
     .update(ticketPurchase)
     .set({ checkoutSessionId: input.checkoutSessionId, checkoutUrl: input.checkoutUrl, updatedAt: now })
-    .where(and(eq(ticketPurchase.id, input.purchaseId), eq(ticketPurchase.status, "pending")))
+    .where(
+      and(
+        eq(ticketPurchase.id, input.purchaseId),
+        eq(ticketPurchase.status, "pending"),
+        or(isNull(ticketPurchase.checkoutSessionId), eq(ticketPurchase.checkoutSessionId, input.checkoutSessionId)),
+      ),
+    )
     .returning({ id: ticketPurchase.id });
   return rows.length === 1 ? { ok: true, effects: [] } : fail("stale");
 }
@@ -462,6 +493,11 @@ export async function attachCheckoutSession(
  * pending AND its Checkout session is still open (checkout_expires_at > now).
  * The session closes at 31 min but the hold lasts 45 min: in between the URL
  * would be dead, so it is withheld.
+ *
+ * Precondition: takes no professionalId, so both ids must be server-derived
+ * (the occurrence from the page being rendered, the customer from the
+ * verified session or wallet owner), never a customerId resolved from an
+ * e-mail typed by an anonymous visitor: the result exposes the Checkout URL.
  */
 export async function activeBookingOf(
   db: Db,

@@ -5,7 +5,7 @@ import { setTicketTypeArchived } from "@/lib/booking/catalog";
 import { activeBookingOf, attachCheckoutSession, startBuyAndBook, type BuyAndBookInput } from "@/lib/booking/claims";
 import { bookingAnswer, question, ticketPurchase, timeOff } from "@/lib/db/schema";
 import type { OfferInput } from "@/lib/tickets";
-import { addMinutes, dbTest, type DbHarness } from "@/test/db";
+import { addMinutes, dbTest, inParallel, type DbHarness } from "@/test/db";
 import { getBooking, getOccurrence, makeCustomer, makeEvent, makeOffer, makeType } from "@/test/fixtures";
 
 const codeOf = (r: { ok: true } | { ok: false; code: string }): string => (r.ok ? "ok" : r.code);
@@ -263,4 +263,76 @@ dbTest("attachCheckoutSession and activeBookingOf", async (h) => {
     checkoutUrl: url,
   });
   assert.equal(codeOf(late), "stale");
+});
+
+dbTest("attachCheckoutSession never replaces a different attached session", async (h) => {
+  const s = await setup(h);
+  const res = await startBuyAndBook(h.db, buyInput(h, s));
+  assert.ok(res.ok, JSON.stringify(res));
+  const sessionA = `cs_test_a_${res.purchaseId}`;
+  const sessionB = `cs_test_b_${res.purchaseId}`;
+  const urlA = "https://checkout.stripe.com/c/pay/cs_test_a";
+  const urlB = "https://checkout.stripe.com/c/pay/cs_test_b";
+
+  assert.ok((await attachCheckoutSession(h.db, { purchaseId: res.purchaseId, checkoutSessionId: sessionA, checkoutUrl: urlA })).ok);
+
+  // Another session for the same purchase is refused and A stays attached.
+  const other = await attachCheckoutSession(h.db, { purchaseId: res.purchaseId, checkoutSessionId: sessionB, checkoutUrl: urlB });
+  assert.equal(codeOf(other), "stale");
+  const [p] = await h.db.select().from(ticketPurchase).where(eq(ticketPurchase.id, res.purchaseId));
+  assert.equal(p.checkoutSessionId, sessionA);
+  assert.equal(p.checkoutUrl, urlA);
+
+  // Re-attaching the SAME session is idempotent.
+  assert.ok((await attachCheckoutSession(h.db, { purchaseId: res.purchaseId, checkoutSessionId: sessionA, checkoutUrl: urlA })).ok);
+});
+
+dbTest("E1 a double submit for the last seat is already_booked, not full", async (h) => {
+  const now = new Date();
+  const s = await setup(h, { capacity: 1 });
+  const first = await startBuyAndBook(h.db, buyInput(h, s), now);
+  assert.ok(first.ok, JSON.stringify(first));
+
+  // The same customer again (two tabs): their own hold is what fills the séance.
+  const again = await startBuyAndBook(h.db, buyInput(h, s), now);
+  assert.deepEqual(again, { ok: false, code: "already_booked" });
+  assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 1);
+
+  // Once their hold has elapsed, R releases it first: the same customer can book again.
+  const later = await startBuyAndBook(h.db, buyInput(h, s), addMinutes(now, 46));
+  assert.ok(later.ok, JSON.stringify(later));
+  assert.equal((await getBooking(h.db, first.bookingId)).status, "expired");
+  assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 1);
+});
+
+dbTest("E1 parallel holds of one customer cannot all pass the quota (customer lock)", async (h) => {
+  const now = new Date();
+  const s = await setup(h);
+  assert.equal(codeOf(await startBuyAndBook(h.db, buyInput(h, s), now)), "ok");
+
+  // One live hold already and MAX_PENDING_HOLDS is 2: of 4 simultaneous holds, exactly one can start.
+  const contenders = 4;
+  const others = [];
+  for (let i = 0; i < contenders; i++) {
+    const { occurrences: [o] } = await makeEvent(h.db, h.pro, { ticketTypeIds: [s.typeId] });
+    others.push(o);
+  }
+  // Barrier between the plans and the batches: every batch is sent in the same tick, so only the
+  // customer lock (the séances differ, so their occurrence locks never meet) can order them.
+  let planned = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const barrier = async () => {
+    if (++planned === contenders) release();
+    await gate;
+  };
+  const results = await inParallel(
+    others.map((o) => () =>
+      startBuyAndBook(h.db, buyInput(h, s, { occurrenceId: o.id, seenStartsAt: o.startsAt }), now, { afterPlan: barrier }),
+    ),
+  );
+  const codes = results.map((r) => (r.status === "fulfilled" ? codeOf(r.value) : `rejected: ${String(r.reason)}`));
+  assert.deepEqual([...codes].sort(), ["ok", "too_many_holds", "too_many_holds", "too_many_holds"]);
 });
