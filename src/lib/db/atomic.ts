@@ -138,7 +138,10 @@ export type LockTable = "professional" | "event" | "occurrence" | "customer" | "
  * that conflicts with it. Those implicit locks come AFTER the batch's explicit
  * ones, out of the declared order, so FOR UPDATE would reintroduce deadlocks.
  * NO KEY UPDATE still conflicts with itself and with UPDATE, so two engine
- * actions exclude each other as before. No engine statement changes a key.
+ * actions exclude each other as before. An UPDATE that changes a column of a
+ * non-partial unique index (the spend and RET set `ticket.booking_id`) does
+ * take FOR UPDATE on that row; that is safe only because every transaction
+ * that inserts a child of the row (a `ticket_movement`) locks the row first.
  */
 export function lockRows(db: Db, table: LockTable, ids: readonly string[]): Query {
   const sorted = [...new Set(ids)].sort();
