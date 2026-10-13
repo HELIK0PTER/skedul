@@ -426,7 +426,7 @@ et ce cas doit aussi lever une erreur.
 - `MATERIALIZE_DAYS = 400`, une constante. Un test vérifie `365 (horizon max) + 30 <
   MATERIALIZE_DAYS`.
 - `ensureHorizon(proId, now)` ramène `generated_until` à aujourd'hui + 400 j, en un lot par pro :
-  1. verrouiller les événements concernés (`FOR UPDATE`, premier rang de l'ordre des verrous) ;
+  1. verrouiller les événements concernés (`FOR NO KEY UPDATE`, premier rang de l'ordre des verrous) ;
   2. `INSERT … SELECT … FROM unnest($dates) WHERE EXISTS (SELECT 1 FROM event WHERE id = $e AND
      version = $v AND archived_at IS NULL AND (until_date IS NULL OR date ≤ until_date))` ;
   3. mettre à jour `generated_until` sous la même condition de version.
@@ -596,7 +596,7 @@ dépense et l'affichage « utilisable ici ». Un ticket est éligible si :
 
 Les liens sont lus en direct. C'est une jointure interne : une liste vide n'accepte personne.
 
-**Ordre de consommation** : `ORDER BY expires_at ASC NULLS LAST, created_at, id`, avec `FOR UPDATE
+**Ordre de consommation** : `ORDER BY expires_at ASC NULLS LAST, created_at, id`, avec `FOR NO KEY UPDATE
 OF t SKIP LOCKED`.
 
 **Expiration.**
@@ -672,7 +672,9 @@ expiré, ou une place échue pour T5.
 **Verrouiller d'abord.**
 - Ordre global des verrous : **professional → event → occurrence (id croissant) → customer →
   booking → purchase → ticket**. Seuls E4 et E6c prennent le verrou `professional` : ils
-  sérialisent les RDV face aux indisponibilités.
+  sérialisent les RDV face aux indisponibilités. Les verrous explicites sont des
+  `FOR NO KEY UPDATE` : un `FOR UPDATE` bloquerait le `FOR KEY SHARE` que prend chaque contrôle de
+  clé étrangère à l'insertion, et réintroduirait des verrous hors ordre.
 - En READ COMMITTED, chaque requête suivante prend un instantané neuf. Elle voit tout ce qui a été
   validé avant l'obtention des verrous, plus les écritures du lot. Une écriture en éventail
   (annuler une séance) ne peut donc pas rater une inscription validée pendant l'attente du
@@ -790,7 +792,7 @@ excluded.user_id)`.
 - Le nom n'est **jamais** écrasé par une saisie anonyme.
 
 **Lot :**
-1. verrouiller la séance (`FOR UPDATE`), puis le client ;
+1. verrouiller la séance (`FOR NO KEY UPDATE`), puis le client ;
 2. `R(o)`, puis `SEAT(o, +1)` ;
 3. `G(scheduled ∧ réservable ∧ aucun time_off ∧ mode tickets ∧ non privé ∧ non archivé,
    'unavailable')`, puis `G(starts_at = $vu, 'changed')` ;
@@ -842,7 +844,7 @@ ou email) ou crée un « Nouveau client » (`createCustomer`, E8).
    - `guest` : « Sans ticket / Invité », pro seulement, sur tout mode ;
 5. couverture `ticket` uniquement :
    - `WITH u AS (UPDATE ticket SET status = 'booked', booking_id = $bid WHERE id = (choix éligible
-     … FOR UPDATE SKIP LOCKED) RETURNING …) INSERT INTO ticket_movement (spend) …` ;
+     … FOR NO KEY UPDATE SKIP LOCKED) RETURNING …) INSERT INTO ticket_movement (spend) …` ;
    - le pro peut imposer un ticket précis, toujours soumis à l'éligibilité ;
    - puis `G(EXISTS ticket WHERE booking_id = $bid, 'no_ticket')` ;
 6. les réponses. Les questions obligatoires ne sont pas exigées du pro.
@@ -877,7 +879,7 @@ quand c'est le client qui réserve.
 **Lot :**
 1. verrouiller le pro ;
 2. `SELECT id FROM occurrence WHERE professional_id = $p AND event_id IS NULL AND status =
-   'scheduled' AND tstzrange(block_start, block_end) && $range ORDER BY id FOR UPDATE` ;
+   'scheduled' AND tstzrange(block_start, block_end) && $range ORDER BY id FOR NO KEY UPDATE` ;
 3. expirer leurs places en attente échues, puis libérer les places en agrégat, par N et non
    par 1. Un RDV retombé à 0 devient `cancelled` ;
 4. `INSERT occurrence` (RDV, capacité 1, `seats_taken` 1). L'EXCLUDE lève `slot_taken` contre

@@ -164,6 +164,54 @@ dbTest("textArray binds ONE text[] parameter; lockRows dedupes and sorts", async
   assert.deepEqual(names, { [a]: "Renamed", [b]: "Renamed", [c]: "C" });
 });
 
+dbTest("lockRows blocks other lockers but not the FK checks of inserts", async ({ db, pro }) => {
+  const serverMs = sql`(extract(epoch from clock_timestamp()) * 1000)::float8`;
+  // A holds the professional lock for ~2.5 s (server clocks prove the order,
+  // whatever the client or the proxy does with the requests).
+  const holder = atomic(db, async () => () => [
+    lockRows(db, "professional", [pro.proId]),
+    db.execute(sql`select (extract(epoch from transaction_timestamp()) * 1000)::float8 as started`),
+    db.execute(sql`select pg_sleep(2.5)`),
+  ]);
+  await new Promise((r) => setTimeout(r, 300));
+
+  // B wants the same lock: it must wait for A's commit.
+  const locker = atomic(db, async () => () => [
+    lockRows(db, "professional", [pro.proId]),
+    db.execute(sql`select ${serverMs} as locked_at`),
+  ]);
+  await new Promise((r) => setTimeout(r, 300));
+
+  // An insert of a child row only takes FOR KEY SHARE on the professional (its
+  // FK check): it must not wait for A. FOR UPDATE would make it wait. The FK
+  // check is an AFTER trigger that fires at the end of the INSERT statement, so
+  // the clock is read by the NEXT statement of the batch (a RETURNING clause
+  // would be evaluated before the check).
+  const at = new Date();
+  const inserter = atomic(db, async () => () => [
+    db.insert(schema.customer).values({
+      id: nanoid(),
+      professionalId: pro.proId,
+      email: testEmail(),
+      name: "FK check",
+      createdAt: at,
+      updatedAt: at,
+    }),
+    db.execute(sql`select ${serverMs} as inserted_at`),
+  ]);
+
+  const [heldBy, lockedBy, insertedBy] = await Promise.all([holder, locker, inserter]);
+  const started = Number((heldBy.results[1] as { rows: { started: number }[] }).rows[0].started);
+  const lockedAt = Number((lockedBy.results[1] as { rows: { locked_at: number }[] }).rows[0].locked_at);
+  const insertedAt = Number((insertedBy.results[1] as { rows: { inserted_at: number }[] }).rows[0].inserted_at);
+
+  assert.ok(lockedAt - started >= 2000, `B must get the lock only after A commits (+${Math.round(lockedAt - started)} ms)`);
+  assert.ok(
+    insertedAt - started < 2000,
+    `an FK check must not wait for A's lock (insert committed +${Math.round(insertedAt - started)} ms)`,
+  );
+});
+
 dbTest("R + SEAT(o, 0): an elapsed hold expires and an RDV left with 0 seats is cancelled", async ({ db, pro }) => {
   const now = new Date();
   const typeId = await rowRdvType(db, pro);

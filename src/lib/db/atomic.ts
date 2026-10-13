@@ -85,7 +85,9 @@ export async function tryAtomic(
       const done = await atomic(db, plan, { afterPlan: attempt === 0 ? opts.afterPlan : undefined });
       return { ok: true, ...done };
     } catch (err) {
-      if (err instanceof PlanError) return { ok: false, code: err.code, message: err.detail };
+      if (err instanceof PlanError) {
+        return err.detail === undefined ? { ok: false, code: err.code } : { ok: false, code: err.code, message: err.detail };
+      }
       const mapped = mapDbError(err, ctx);
       if (mapped.type === "duplicate") return { ok: false, code: "duplicate" };
       if (mapped.type !== "code") throw err;
@@ -127,14 +129,21 @@ export function G(db: Db, pred: SQL, code: AssertCode): Query {
 export type LockTable = "professional" | "event" | "occurrence" | "customer" | "booking" | "ticket_purchase";
 
 /**
- * `select id from <table> where id = any($ids) order by id for update`.
+ * `select id from <table> where id = any($ids) order by id for no key update`.
  * Global order (spec § 10): professional → event → occurrence → customer →
  * booking → purchase → ticket; ascending id inside a table.
+ *
+ * NO KEY UPDATE, never UPDATE: every INSERT into a child table takes FOR KEY
+ * SHARE on its parent rows (the FK check), and FOR UPDATE is the only row lock
+ * that conflicts with it. Those implicit locks come AFTER the batch's explicit
+ * ones, out of the declared order, so FOR UPDATE would reintroduce deadlocks.
+ * NO KEY UPDATE still conflicts with itself and with UPDATE, so two engine
+ * actions exclude each other as before. No engine statement changes a key.
  */
 export function lockRows(db: Db, table: LockTable, ids: readonly string[]): Query {
   const sorted = [...new Set(ids)].sort();
   return db.execute(
-    sql`select id from ${sql.identifier(table)} where id = any(${textArray(sorted)}) order by id for update`,
+    sql`select id from ${sql.identifier(table)} where id = any(${textArray(sorted)}) order by id for no key update`,
   );
 }
 
