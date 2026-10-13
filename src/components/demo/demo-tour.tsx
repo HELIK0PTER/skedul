@@ -17,9 +17,10 @@ import { TourControls } from "./tour-controls";
 
 const TYPE_MS = 45;
 
-export function DemoTour() {
-  const [index, setIndex] = useState(0);
-  const [state, setState] = useState<DemoState>(() => stateEntering(0));
+/** `initialStep` : index de l'étape d'ouverture (lien profond `/demo?step=…`). */
+export function DemoTour({ initialStep = 0 }: { initialStep?: number }) {
+  const [index, setIndex] = useState(initialStep);
+  const [state, setState] = useState<DemoState>(() => stateEntering(initialStep));
   const [playing, setPlaying] = useState(false);
   const [cursor, setCursor] = useState({ x: FRAME_W / 2, y: 260, visible: false, clickCount: 0 });
 
@@ -132,9 +133,9 @@ export function DemoTour() {
   const goToRef = useRef(goTo);
   goToRef.current = goTo;
 
-  // Joue l'étape 1 au montage ; nettoie tout au démontage.
+  // Joue l'étape d'ouverture au montage ; nettoie tout au démontage.
   useEffect(() => {
-    goToRef.current(0);
+    goToRef.current(initialStep);
     return clearTimers;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -335,6 +335,17 @@ export const DEMO_STEPS: DemoStep[] = [
   },
 ];
 
+/** Lien vers la visite, ouverte sur l'étape `id` (`/demo?step=packs`). */
+export function demoHref(id?: string): string {
+  return id ? `/demo?step=${encodeURIComponent(id)}` : "/demo";
+}
+
+/** Index de l'étape `?step=` ; la première si le paramètre est absent ou inconnu. */
+export function stepIndex(id: string | string[] | undefined): number {
+  if (typeof id !== "string") return 0;
+  return Math.max(DEMO_STEPS.findIndex((s) => s.id === id), 0);
+}
+
 /** Fusion de tous les patches d'une timeline (les saisies comptent comme leur texte final). */
 export function endPatch(step: DemoStep): Patch {
   const merged: Patch = {};

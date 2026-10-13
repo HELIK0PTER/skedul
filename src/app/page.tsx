@@ -9,6 +9,7 @@ import { ClientProfile } from "@/components/demo/screens/client-profile";
 import { ProPacks } from "@/components/demo/screens/pro-packs";
 import { HeroDeck } from "@/components/landing/hero-deck";
 import { ctaPrimary, ctaSecondary } from "@/components/landing/cta";
+import { DemoLink } from "@/components/landing/demo-link";
 import styles from "@/components/landing/landing.module.css";
 import { PlanningScreen } from "@/components/landing/planning-screen";
 import { ProductShot } from "@/components/landing/product-shot";
@@ -108,7 +109,7 @@ const STEPS = [
   },
 ];
 
-const FAQ = [
+const FAQ: { q: string; a: ReactNode }[] = [
   {
     q: "Mes clients doivent-ils créer un compte ?",
     a: "Non. Un nom et une adresse e-mail suffisent pour réserver une séance ou acheter un carnet.",
@@ -124,6 +125,16 @@ const FAQ = [
   {
     q: "Combien ça coûte ?",
     a: "Créer votre page est gratuit et sans engagement.",
+  },
+  {
+    q: "Puis-je voir l’outil avant de créer ma page ?",
+    a: (
+      <>
+        Oui. La démo guidée déroule une réservation côté client, puis le
+        back-office côté pro, sans inscription.
+        <DemoLink className="mt-3">Voir la démo</DemoLink>
+      </>
+    ),
   },
 ];
 
@@ -233,6 +244,9 @@ export default function Home() {
                   Un back-office qui vend pour vous
                 </h3>
                 <Points items={PRO_POINTS} className="mt-6" />
+                <DemoLink step="planning" className="mt-7">
+                  Voir le planning en démo
+                </DemoLink>
               </article>
 
               <article className="lg:col-span-5 lg:mt-36">
@@ -248,6 +262,9 @@ export default function Home() {
                   Une boutique où réserver est simple
                 </h3>
                 <Points items={CLIENT_POINTS} className="mt-6" />
+                <DemoLink step="profile" className="mt-7">
+                  Voir la réservation en démo
+                </DemoLink>
               </article>
             </div>
           </div>
@@ -279,7 +296,13 @@ export default function Home() {
                 <ProPacks state={PACKS_STATE} />
               </ProductShot>
             </div>
-            <Points items={PACK_POINTS} className={cn(styles.packsText, "space-y-7")} />
+            <div className={styles.packsText}>
+              <Points items={PACK_POINTS} className="space-y-7" />
+              {/* The client buys a carnet, then books with a credit: 10 → 9. */}
+              <DemoLink step="buy-pack" className="mt-8">
+                Voir un carnet en démo
+              </DemoLink>
+            </div>
           </div>
         </section>
 
@@ -304,6 +327,14 @@ export default function Home() {
                 </li>
               ))}
             </ol>
+            {/* Under the last step, so the CTA ends the staircase. */}
+            <div className="mt-12 grid gap-x-8 md:grid-cols-3">
+              <div className="md:col-start-3">
+                <Button asChild size="lg" variant="outline" className={ctaSecondary}>
+                  <Link href="/demo">Voir la démo</Link>
+                </Button>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -365,6 +396,9 @@ export default function Home() {
                     <ArrowRight />
                   </Link>
                 </Button>
+                <DemoLink tone="ticket" className="text-sm">
+                  Voir la démo
+                </DemoLink>
               </div>
             </div>
           </div>
