@@ -4,8 +4,6 @@ import { Resend } from "resend";
 import { env } from "@/lib/env";
 import { redactSubject } from "@/lib/emails/redact-subject";
 
-export { passwordResetEmail } from "@/lib/emails/password-reset";
-
 const resend = env.RESEND_ENABLED ? new Resend(env.RESEND_API_KEY!) : null;
 
 interface SendArgs {

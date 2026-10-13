@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 
 import { ADMIN_HTTP_ENDPOINTS } from "./auth-admin";
 import {
@@ -8,10 +10,18 @@ import {
   CORE_DISABLED_PATHS,
   OTP_DISABLED_PATHS,
   OTP_HTTP_PATHS,
+  OTP_SEND_PATH,
+  OTP_SIGN_IN_PATH,
+  OTP_VERIFY_EMAIL_PATH,
+  RESET_REQUEST_ANSWER,
+  RESET_REQUEST_PATH,
   buildAuthOptions,
+  buildOtpMailer,
+  isOtpVerificationTransition,
   type AuthMail,
 } from "./auth-options";
 import type { Db } from "./db/atomic";
+import { otpThrottleKey, resetThrottleKey } from "./throttle";
 
 test("every emailOTP endpoint except send, sign-in and verify-email is closed over HTTP", () => {
   for (const path of [
@@ -50,7 +60,15 @@ test("the Better Auth rate limits are the ones of spec § 12", () => {
     "/email-otp/send-verification-otp": { window: 600, max: 5 },
     "/sign-in/email-otp": { window: 600, max: 10 },
     "/email-otp/verify-email": { window: 600, max: 10 },
+    // The two other endpoints that mail someone: Better Auth's own per-IP defaults
+    // (3 per 10 s and 3 per 60 s) are too short to protect the e-mail quota.
+    "/sign-up/email": { window: 600, max: 3 },
+    "/request-password-reset": { window: 600, max: 3 },
   });
+  // Better Auth purges its rows after the global window: no rule may outlive it.
+  for (const [path, rule] of Object.entries(AUTH_RATE_LIMIT.customRules)) {
+    assert.ok(rule.window <= AUTH_RATE_LIMIT.window, path);
+  }
 });
 
 test("buildAuthOptions wires the plugins, the closed paths and the sign-up code", () => {
@@ -86,4 +104,208 @@ test("Google is configured only when credentials are given", () => {
   });
   assert.equal(options.socialProviders?.google.clientId, "id");
   assert.equal(options.socialProviders?.google.accessType, "offline");
+});
+
+/* ───────────── hooks, with a stub db that records the SQL it receives ───────────── */
+
+const SECRET = "test-secret-0123456789abcdefghijklmnop";
+
+/** `execute` answers `rows`, or throws when given an Error; every query is recorded as rendered SQL + params. */
+function stubDb(answer: Array<Record<string, unknown>> | Error) {
+  const queries: { sql: string; params: unknown[] }[] = [];
+  const dialect = new PgDialect();
+  const db = {
+    execute: async (query: SQL) => {
+      queries.push(dialect.sqlToQuery(query));
+      if (answer instanceof Error) throw answer;
+      return { rows: answer };
+    },
+  } as unknown as Db;
+  return { db, queries };
+}
+
+function build(db: Db, sendEmail?: (mail: AuthMail) => Promise<unknown>) {
+  const sent: AuthMail[] = [];
+  const options = buildAuthOptions({
+    db,
+    baseURL: "http://localhost:3000",
+    secret: SECRET,
+    sendEmail:
+      sendEmail ??
+      (async (mail) => {
+        sent.push(mail);
+      }),
+  });
+  return { options, sent };
+}
+
+type HookCtx = { path: string; body: Record<string, unknown>; context: object };
+
+/** `hooks.before` is a plain function of the endpoint context when called in process. */
+async function runBefore(options: ReturnType<typeof build>["options"], ctx: HookCtx): Promise<unknown> {
+  return (options.hooks.before as unknown as (ctx: HookCtx) => Promise<unknown>)(ctx);
+}
+const ctxOf = (path: string, body: Record<string, unknown>): HookCtx => ({ path, body, context: {} });
+
+test("the password purge reacts to the emailVerified update of the code sign-in only", () => {
+  assert.equal(isOtpVerificationTransition({ emailVerified: true }, { path: OTP_SIGN_IN_PATH }), true);
+  // What the admin plugin writes during the same request when a timed ban has expired.
+  assert.equal(
+    isOtpVerificationTransition({ banned: false, banReason: null, banExpires: null }, { path: OTP_SIGN_IN_PATH }),
+    false,
+  );
+  assert.equal(isOtpVerificationTransition({ emailVerified: false }, { path: OTP_SIGN_IN_PATH }), false);
+  assert.equal(isOtpVerificationTransition({}, { path: OTP_SIGN_IN_PATH }), false);
+  // Confirming one's own address while logged in must keep the password.
+  assert.equal(isOtpVerificationTransition({ emailVerified: true }, { path: OTP_VERIFY_EMAIL_PATH }), false);
+  assert.equal(isOtpVerificationTransition({ emailVerified: true }, { path: "/reset-password" }), false);
+  assert.equal(isOtpVerificationTransition({ emailVerified: true }, {}), false);
+  assert.equal(isOtpVerificationTransition({ emailVerified: true }, null), false);
+  assert.equal(isOtpVerificationTransition({ emailVerified: true }, undefined), false);
+});
+
+test("an expired-ban update during a code sign-in touches neither the database nor the mailbox", async () => {
+  const { db, queries } = stubDb([{ purged: 1 }]);
+  const { options, sent } = build(db);
+  const before = options.databaseHooks.user.update.before;
+  await before(
+    { banned: false, banReason: null, banExpires: null },
+    { path: OTP_SIGN_IN_PATH, body: { email: "a@b.com" } } as never,
+  );
+  await before({ emailVerified: true }, { path: OTP_VERIFY_EMAIL_PATH, body: { email: "a@b.com" } } as never);
+  assert.equal(queries.length, 0);
+  assert.equal(sent.length, 0);
+});
+
+test("the OTP verification purges the password and every session in one statement, then mails", async () => {
+  const { db, queries } = stubDb([{ purged: 1 }]);
+  const { options, sent } = build(db);
+  await options.databaseHooks.user.update.before(
+    { emailVerified: true },
+    { path: OTP_SIGN_IN_PATH, body: { email: "Lea@Example.com", otp: "123456" } } as never,
+  );
+  assert.equal(queries.length, 1);
+  const [query] = queries;
+  assert.deepEqual(query.params, ["lea@example.com"]);
+  // One statement: the credential account and the sessions go together, or not at all.
+  assert.match(query.sql, /delete from account/);
+  assert.match(query.sql, /delete from session/);
+  assert.match(query.sql, /email_verified = false/);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, "lea@example.com");
+  assert.equal(sent[0].subject, "Votre mot de passe Skedul a été désactivé");
+  assert.ok(sent[0].html.includes("http://localhost:3000/forgot-password"));
+});
+
+test("no password account to purge: no mail", async () => {
+  const { db, queries } = stubDb([{ purged: 0 }]);
+  const { options, sent } = build(db);
+  await options.databaseHooks.user.update.before(
+    { emailVerified: true },
+    { path: OTP_SIGN_IN_PATH, body: { email: "a@b.com" } } as never,
+  );
+  assert.equal(queries.length, 1);
+  assert.equal(sent.length, 0);
+});
+
+test("a purge failure aborts the verification and mails nothing; a mail failure does not", async () => {
+  const failing = stubDb(new Error("boom"));
+  const a = build(failing.db);
+  await assert.rejects(
+    a.options.databaseHooks.user.update.before(
+      { emailVerified: true },
+      { path: OTP_SIGN_IN_PATH, body: { email: "a@b.com" } } as never,
+    ),
+    /boom/,
+  );
+  assert.equal(a.sent.length, 0);
+
+  const ok = stubDb([{ purged: 1 }]);
+  const b = build(ok.db, async () => {
+    throw new Error("resend down");
+  });
+  const logged: unknown[][] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => void logged.push(args);
+  try {
+    await b.options.databaseHooks.user.update.before(
+      { emailVerified: true },
+      { path: OTP_SIGN_IN_PATH, body: { email: "a@b.com" } } as never,
+    );
+  } finally {
+    console.error = original;
+  }
+  assert.equal(logged.length, 1);
+});
+
+test("password-reset requests are capped per address, answered exactly like a sent one", async () => {
+  const { db, queries } = stubDb([{ hits: 6 }]);
+  const { options } = build(db);
+  const answer = await runBefore(options, ctxOf(RESET_REQUEST_PATH, { email: "Lea@Example.com" }));
+  // The shape of /request-password-reset on success (better-auth api/routes/password.mjs).
+  assert.deepEqual(answer, {
+    status: true,
+    message: "If this email exists in our system, check your email for the reset link",
+  });
+  assert.deepEqual(answer, RESET_REQUEST_ANSWER);
+  assert.equal(queries.length, 1);
+  assert.ok(queries[0].params.includes(resetThrottleKey("lea@example.com")));
+  assert.ok(!queries[0].params.includes(otpThrottleKey("lea@example.com")));
+
+  const under = stubDb([{ hits: 5 }]);
+  assert.equal(
+    await runBefore(build(under.db).options, ctxOf(RESET_REQUEST_PATH, { email: "lea@example.com" })),
+    undefined,
+  );
+  // No string e-mail: the endpoint's own validation answers, nothing is counted.
+  const none = stubDb([{ hits: 99 }]);
+  assert.equal(await runBefore(build(none.db).options, ctxOf(RESET_REQUEST_PATH, {})), undefined);
+  assert.equal(none.queries.length, 0);
+});
+
+test("sign-in code requests keep their own counter; reset by code is never mailed; other paths are untouched", async () => {
+  const over = stubDb([{ hits: 6 }]);
+  const answer = await runBefore(
+    build(over.db).options,
+    ctxOf(OTP_SEND_PATH, { email: "Lea@Example.com", type: "sign-in" }),
+  );
+  assert.deepEqual(answer, { success: true });
+  assert.ok(over.queries[0].params.includes(otpThrottleKey("lea@example.com")));
+
+  const under = stubDb([{ hits: 1 }]);
+  assert.equal(
+    await runBefore(build(under.db).options, ctxOf(OTP_SEND_PATH, { email: "lea@example.com", type: "sign-in" })),
+    undefined,
+  );
+
+  const forget = stubDb([{ hits: 1 }]);
+  assert.deepEqual(
+    await runBefore(build(forget.db).options, ctxOf(OTP_SEND_PATH, { email: "a@b.com", type: "forget-password" })),
+    { success: true },
+  );
+  assert.equal(forget.queries.length, 0);
+
+  const other = stubDb([{ hits: 99 }]);
+  assert.equal(await runBefore(build(other.db).options, ctxOf("/sign-in/email", { email: "a@b.com" })), undefined);
+  assert.equal(other.queries.length, 0);
+});
+
+test("only sign-in and email-verification codes are mailed, with their own template", async () => {
+  const sent: AuthMail[] = [];
+  const mailer = buildOtpMailer(async (mail) => {
+    sent.push(mail);
+  });
+  await mailer({ email: "a@b.com", otp: "111111", type: "forget-password" });
+  await mailer({ email: "a@b.com", otp: "222222", type: "change-email" });
+  assert.equal(sent.length, 0);
+
+  await mailer({ email: "a@b.com", otp: "333333", type: "sign-in" });
+  await mailer({ email: "a@b.com", otp: "444444", type: "email-verification" });
+  assert.deepEqual(
+    sent.map((mail) => [mail.to, mail.subject]),
+    [
+      ["a@b.com", "333333 est votre code de connexion Skedul"],
+      ["a@b.com", "444444 est votre code de confirmation Skedul"],
+    ],
+  );
 });

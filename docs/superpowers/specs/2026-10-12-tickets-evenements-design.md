@@ -1210,6 +1210,12 @@ appelle `stripe.checkout.sessions.expire` pour chacun (au mieux). Ensuite seulem
 - **Limite par email** : 5 envois par heure, appliquée dans un `hooks.before` sur
   `/email-otp/send-verification-otp`. Au-delà, le hook répond `{ success: true }` **avant** que
   Better Auth génère un code : le code déjà envoyé reste valide.
+- **Demandes de réinitialisation** : même plafond (5 par heure et par adresse), avec **son propre
+  compteur** (`t:reset:e:…`, distinct de `t:otp:e:…`) : un spam de réinitialisation ne doit pas
+  bloquer les codes de connexion de l'adresse. Le même `hooks.before` le applique sur
+  `/request-password-reset`. Au-delà, il répond exactement ce que l'endpoint répond en cas de
+  succès (`{ status: true, message: "If this email exists in our system, check your email for the
+  reset link" }`) : rien n'est envoyé, et le refus ne se distingue pas d'un envoi.
 - L'UI affiche toujours « Si l'adresse est valide, un code a été envoyé ».
 - Le premier code de connexion crée un utilisateur `client`. Le hook admin pose le rôle, le hook
   de bannissement s'applique toujours, et `emailVerified` est vrai. Le nom saisi est envoyé.
@@ -1221,7 +1227,11 @@ liste est dérivée de `plugin.endpoints`, comme dans `auth-admin.ts`, avec un t
 **Limites de débit Better Auth.**
 - `rateLimit: { enabled: true, storage: "database", window: 600, max: 6000, customRules: {
   "/email-otp/send-verification-otp": { window: 600, max: 5 }, "/sign-in/email-otp": { window:
-  600, max: 10 }, "/email-otp/verify-email": { window: 600, max: 10 } } }`.
+  600, max: 10 }, "/email-otp/verify-email": { window: 600, max: 10 }, "/sign-up/email": {
+  window: 600, max: 3 }, "/request-password-reset": { window: 600, max: 3 } } }`. Les deux
+  dernières règles couvrent les autres endpoints qui envoient un email : les règles par défaut de
+  Better Auth (3 par 10 s pour l'inscription, 3 par 60 s pour la réinitialisation, par IP) sont
+  trop courtes pour protéger le quota d'envoi.
 - `enabled: true` est explicite, pour que dev et tests passent par le même chemin que la prod. La
   fenêtre globale de 600 s fait que la purge de Better Auth respecte les fenêtres personnalisées.
 - Modèle `rateLimit` déclaré (§ 6.4) et ajouté à la map du `drizzleAdapter`, dans `auth.ts` et
@@ -1234,29 +1244,47 @@ ip)` (IP seule) avec le sel du jour `analytics_salt` : aucune IP en clair.
 |---|---|---|
 | Inscription libre (`free`), achat + réservation (`buybook`), RDV (`rdv`), boutique (`shop`) | 20 / h | 6 / h |
 
+Deux plafonds par adresse, sans plafond par IP applicatif (la règle Better Auth ci-dessus s'en
+charge), passent par la même table `throttle` : les codes de connexion et de confirmation
+(`otp`) et les demandes de réinitialisation (`reset`), chacun à 5 par heure
+(`OTP_EMAIL_LIMIT`). La clé est le hachage de l'email normalisé.
+
 **Faille de pré-compte, fermée.**
 - **Le scénario** : quelqu'un crée un compte à mot de passe sur l'email d'un client. Cet email
   n'est jamais vérifié. Le premier code de connexion du vrai client marque ce compte « vérifié »,
   et la session à mot de passe de l'intrus peut alors dépenser les tickets.
-- **Correctif** : un hook `databaseHooks.user.update.after`. Quand `emailVerified` passe à vrai,
-  que `ctx.path === "/sign-in/email-otp"` et que l'utilisateur a un compte `credential`, le hook :
-  - supprime ce compte `credential` ;
-  - supprime les sessions de l'utilisateur **sauf** `ctx.context.newSession?.session.id`. En HTTP,
-    le hook s'exécute après la création de la session ;
-  - envoie « Pour votre sécurité, le mot de passe associé à cette adresse a été désactivé ;
-    utilisez « Mot de passe oublié » pour en choisir un ».
+- **Correctif** : un hook `databaseHooks.user.update.before`. Il ne réagit qu'à la mise à jour qui
+  passe `emailVerified` à vrai pendant `/sign-in/email-otp` : la route ne l'émet que pour un
+  utilisateur non vérifié, après avoir consommé le code et **avant** de créer la session. Le hook
+  retrouve l'utilisateur par l'email du corps de la requête, comme la route, puis, en **une seule
+  requête SQL** (les deux suppressions passent ensemble ou pas du tout) :
+  - supprime son compte `credential`, seulement si l'adresse n'est pas encore vérifiée ;
+  - supprime **toutes** les sessions de l'utilisateur : celle de cette connexion n'existe pas
+    encore, il n'y a rien à épargner ;
+  - une fois la suppression réussie, envoie « Pour votre sécurité, le mot de passe associé à
+    cette adresse a été désactivé ; utilisez « Mot de passe oublié » pour en choisir un ». L'envoi
+    est au mieux : un échec est journalisé et n'annule rien.
+- **Échec fermé** : si la suppression lève une erreur, la mise à jour est abandonnée. L'utilisateur
+  reste non vérifié, la connexion échoue, et le code suivant relance la purge.
+- **Pourquoi `before` et pas `after`** : une autre mise à jour de l'utilisateur a lieu dans la même
+  requête, pour un utilisateur déjà vérifié. À la création de la session, le plugin admin écrit
+  `{ banned: false, … }` quand un bannissement à durée (`banExpiresIn`) a expiré. Un hook `after`
+  qui teste seulement que `emailVerified` est vrai supprimerait alors le mot de passe et les
+  sessions d'un client légitime.
 - Après un code réussi, le client appelle `authClient.getSession({ query: { disableCookieCache:
   true } })` avant `router.refresh()`. Sinon, le cache cookie garde `emailVerified: false`.
 - **T12** passe par `auth.handler(new Request(…))`, pas par `auth.api.*`, et vérifie que la
   nouvelle session survit.
-- **Confirmé par le spike S8c** : en HTTP, `ctx.context.newSession` est bien renseigné quand le hook
-  s'exécute ; le mot de passe de l'intrus est supprimé et la session de la victime survit.
+- **Confirmé par le spike S8c** : le mot de passe de l'intrus est supprimé et la session de la
+  victime survit (le spike l'a fait dans `user.update.after` avec `ctx.context.newSession` ; le
+  code final purge avant la création de la session, voir plus haut).
   **Attention** : le cache cookie (5 min) montre encore l'intrus connecté ; seule une lecture sans
   cache le voit déconnecté. D'où la règle : `requireWalletOwner` **et toute lecture qui affiche des
   données client** (portefeuille, `/mon-espace`, `/[slug]/espace`) lisent la session avec
   `disableCookieCache: true`.
 - Ce hook ne vise **que** la connexion par code d'un visiteur déconnecté. La confirmation d'adresse
-  d'un utilisateur connecté passe par `/email-otp/verify-email` et ne le déclenche pas.
+  d'un utilisateur connecté passe par `/email-otp/verify-email` et ne le déclenche pas, pas plus
+  que la levée d'un bannissement expiré pendant une connexion par code.
 
 **Mot de passe comme preuve.**
 - L'inscription par mot de passe envoie un **code** de vérification
@@ -1643,8 +1671,9 @@ part en prod avant le plan 6, sauf le plan 0.
 - S6 : les FK NO ACTION survivent à la cascade de `deleteUser` ;
 - S7 : `code` et `constraint` remontent dans les erreurs neon-http ;
 - S8 : les options emailOTP (`storeOTP: "encrypted"`, `resendStrategy`,
-  `overrideDefaultEmailVerification`) et `ctx.context.newSession` dans `user.update.after` se
-  comportent comme décrit.
+  `overrideDefaultEmailVerification`) se comportent comme décrit, et une connexion par code purge
+  le mot de passe d'un compte non vérifié. Le spike le faisait dans `user.update.after`, avec
+  `ctx.context.newSession` ; le code final purge dans `user.update.before` (§ 12).
 
 Plan B si un point S1 à S7 échoue : une fonction plpgsql par parcours, puis un Pool par requête.
 

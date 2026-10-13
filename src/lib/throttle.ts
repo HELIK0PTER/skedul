@@ -30,8 +30,8 @@ export function nextWindow(prev: ThrottleState | null, now: Date, windowSec: num
   return { windowStart: prev.windowStart, hits: prev.hits + 1 };
 }
 
-/** `t:<action>:ip:<ipHash>` / `t:<action>:e:<sha256(normalizedEmail) first 32 hex>`; action "otp" for the auth code cap. */
-export function throttleKey(action: ThrottleAction | "otp", kind: "ip" | "email", value: string): string {
+/** `t:<action>:ip:<ipHash>` / `t:<action>:e:<sha256(normalizedEmail) first 32 hex>`; actions "otp" and "reset" are the auth mail caps. */
+export function throttleKey(action: ThrottleAction | "otp" | "reset", kind: "ip" | "email", value: string): string {
   if (kind === "ip") return `t:${action}:ip:${value}`;
   const digest = createHash("sha256").update(normalizeEmail(value)).digest("hex").slice(0, 32);
   return `t:${action}:e:${digest}`;
@@ -39,6 +39,11 @@ export function throttleKey(action: ThrottleAction | "otp", kind: "ip" | "email"
 
 export function otpThrottleKey(email: string): string {
   return throttleKey("otp", "email", email);
+}
+
+/** Password-reset mails per address; its own counter, so reset spam cannot use up the sign-in codes of the same address. */
+export function resetThrottleKey(email: string): string {
+  return throttleKey("reset", "email", email);
 }
 
 /** Atomic upsert on `throttle` (one statement); true while hits ≤ limit. */
