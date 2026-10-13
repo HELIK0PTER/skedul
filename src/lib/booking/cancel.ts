@@ -4,6 +4,7 @@
  * RET once per action. Effects are descriptors run after commit (P3/P4).
  */
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { nanoid } from "nanoid";
 
 import {
   G,
@@ -19,7 +20,7 @@ import {
   type Db,
   type Query,
 } from "@/lib/db/atomic";
-import { booking, occurrence, ticketPurchase } from "@/lib/db/schema";
+import { booking, event, occurrence, ticketPurchase, ticketType, timeOff } from "@/lib/db/schema";
 import { BOUNDS } from "@/lib/tickets";
 
 import { fail, failOf, syncEffects, type Effect, type EngineResult } from "./types";
@@ -316,4 +317,129 @@ export async function restoreOccurrence(
   });
   if (!res.ok) return failOf(res);
   return { ok: true, effects: [] };
+}
+
+/* ───────────────────────── E6c: time off ───────────────────────── */
+
+export type TimeOffConflict = { occurrenceId: string; startsAt: Date; endsAt: Date; title: string; activeBookings: number };
+
+/** Block range of a scheduled occurrence overlaps [startAt, endAt). */
+function overlapsRange(startAt: Date, endAt: Date) {
+  return sql`tstzrange(${occurrence.blockStart}, ${occurrence.blockEnd}) && tstzrange(${ts(startAt)}, ${ts(endAt)})`;
+}
+
+/** E6c preview: scheduled occurrences (séances and RDV) overlapping the range that have seats taken, id asc. */
+export async function previewTimeOffConflicts(
+  db: Db,
+  input: { professionalId: string; startAt: Date; endAt: Date },
+): Promise<TimeOffConflict[]> {
+  const rows = await db
+    .select({
+      occurrenceId: occurrence.id,
+      startsAt: occurrence.startsAt,
+      endsAt: occurrence.endsAt,
+      eventTitle: event.title,
+      typeName: ticketType.name,
+      activeBookings: sql<number>`(select count(*)::int from booking b where b.occurrence_id = ${occurrence.id} and b.status in ('pending', 'confirmed'))`.mapWith(
+        Number,
+      ),
+    })
+    .from(occurrence)
+    .leftJoin(event, eq(event.id, occurrence.eventId))
+    .leftJoin(ticketType, eq(ticketType.id, occurrence.ticketTypeId))
+    .where(
+      and(
+        eq(occurrence.professionalId, input.professionalId),
+        eq(occurrence.status, "scheduled"),
+        sql`${occurrence.seatsTaken} > 0`,
+        overlapsRange(input.startAt, input.endAt),
+      ),
+    )
+    .orderBy(occurrence.id);
+  return rows.map((r) => ({
+    occurrenceId: r.occurrenceId,
+    startsAt: r.startsAt,
+    endsAt: r.endsAt,
+    title: r.eventTitle ?? r.typeName ?? "",
+    activeBookings: r.activeBookings,
+  }));
+}
+
+/**
+ * E6c. Batch: lock professional; lock every scheduled occurrence overlapping
+ * the range (empty ones too, id asc); INSERT time_off; G(set of overlapping
+ * scheduled occurrences with seats taken = seen set, 'stale'); cancelBooked →
+ * E6b on that set. Returns `stale` to the UI (new preview), never re-plans.
+ */
+export async function createTimeOffWithConflicts(
+  db: Db,
+  input: {
+    professionalId: string;
+    actorUserId: string;
+    startAt: Date;
+    endAt: Date;
+    allDay: boolean;
+    reason: string | null;
+    seenOccurrenceIds: string[];
+    cancelBooked: boolean;
+  },
+  now: Date = new Date(),
+  opts: { afterPlan?: () => Promise<void> } = {},
+): Promise<EngineResult<{ timeOffId: string; cancelledOccurrences: number }>> {
+  const reason = input.reason?.trim() || null;
+  const seen = [...new Set(input.seenOccurrenceIds)];
+  if (!(input.endAt.getTime() > input.startAt.getTime())) {
+    return fail("invalid", "La fin de l'indisponibilité doit être après son début.");
+  }
+  if (reason !== null && reason.length > BOUNDS.note) return fail("invalid");
+  const timeOffId = nanoid();
+  const toCancel = input.cancelBooked ? seen : [];
+
+  const res = await tryAtomic(
+    db,
+    async () => (aid) => {
+      const c: BatchCtx = { db, aid, now };
+      const by: ActorRef = { actor: "pro", userId: input.actorUserId };
+      const overlap = sql`professional_id = ${input.professionalId} and status = 'scheduled'
+        and tstzrange(block_start, block_end) && tstzrange(${ts(input.startAt)}, ${ts(input.endAt)})`;
+      const queries: Query[] = [
+        lockRows(db, "professional", [input.professionalId]),
+        db.execute(sql`select id from occurrence where ${overlap} order by id for no key update`),
+        db.insert(timeOff).values({
+          id: timeOffId,
+          professionalId: input.professionalId,
+          startAt: input.startAt,
+          endAt: input.endAt,
+          allDay: input.allDay,
+          reason,
+          createdAt: now,
+          updatedAt: now,
+        }),
+        // Both sides sorted by the database collation: an order-free set comparison.
+        G(
+          db,
+          sql`(select coalesce(array_agg(id order by id), '{}'::text[]) from occurrence where ${overlap} and seats_taken > 0)
+            = (select coalesce(array_agg(x order by x), '{}'::text[]) from unnest(${textArray(seen)}) as x)`,
+          "stale",
+        ),
+      ];
+      if (toCancel.length > 0) {
+        queries.push(
+          cancelOccurrencesQuery(c, { professionalId: input.professionalId, occurrenceIds: toCancel }),
+          G(
+            db,
+            sql`(select count(*)::int from occurrence where id = any(${textArray(toCancel)}) and status = 'cancelled') = ${toCancel.length}::int`,
+            "stale",
+          ),
+          endBookings(c, { professionalId: input.professionalId, scope: { occurrenceIds: toCancel }, by }),
+          RET(c, by),
+        );
+      }
+      return queries;
+    },
+    { afterPlan: opts.afterPlan },
+  );
+  if (!res.ok) return failOf(res);
+  const effects = toCancel.length > 0 ? (await occurrenceCancelledEffects(db, res.aid, toCancel)).effects : [];
+  return { ok: true, effects, timeOffId, cancelledOccurrences: toCancel.length };
 }
