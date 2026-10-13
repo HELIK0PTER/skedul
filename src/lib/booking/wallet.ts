@@ -9,7 +9,7 @@ import { z } from "zod";
 
 import { G, PlanError, R, SEAT, lockRows, textArray, tryAtomic, ts, type BatchCtx, type Db, type Query } from "@/lib/db/atomic";
 import { booking, customer, event, eventTicketType, occurrence, ticket, ticketType } from "@/lib/db/schema";
-import { BOUNDS, customerInputSchema, normalizeEmail, type MovementKind, type TicketCloseReason, type TicketStatus } from "@/lib/tickets";
+import { BOUNDS, TICKET_CLOSE_REASONS, customerInputSchema, normalizeEmail, type MovementKind, type TicketCloseReason, type TicketStatus } from "@/lib/tickets";
 import { consumptionOrder, type TypeFacts } from "@/lib/wallet-rules";
 
 import { assertNotBooked } from "./claims";
@@ -387,7 +387,9 @@ export async function convertTickets(
 
 /**
  * Clore (rembourse | compense | autre + note) or Retirer (reason retire):
- * available → closed. A type selection picks only offered tickets for retire;
+ * available and valid at now (like convert and point: a ticket past expires_at
+ * that the sweep has not flipped yet is skipped) → closed. A type selection
+ * picks only offered tickets for retire;
  * an explicit paid id with retire hits ticket_retire_paid_chk → retire_paid.
  */
 export async function closeTickets(
@@ -402,6 +404,7 @@ export async function closeTickets(
   },
   now: Date = new Date(),
 ): Promise<EngineResult<{ ticketIds: string[] }>> {
+  if (!(TICKET_CLOSE_REASONS as readonly string[]).includes(input.reason)) return fail("invalid");
   const note = input.note?.trim() || null;
   if (note !== null && note.length > BOUNDS.note) return fail("invalid");
   if (input.reason === "autre" && note === null) return fail("invalid", "Précisez le motif.");
@@ -412,7 +415,7 @@ export async function closeTickets(
     customerId: input.customerId,
     selection: input.selection,
     now,
-    qualifies: (t) => t.status === "available" && (!offeredOnly || t.purchaseId === null),
+    qualifies: (t) => t.status === "available" && e8Valid(t, now) && (!offeredOnly || t.purchaseId === null),
     order: consumptionOrder,
     statement: (c, picked) =>
       db.execute(sql`
@@ -421,6 +424,7 @@ export async function closeTickets(
             status_changed_at = ${ts(now)}, updated_at = ${ts(now)}
           where professional_id = ${input.professionalId} and customer_id = ${input.customerId}
             and id = any(${textArray(picked.map((t) => t.id))}) and status = 'available'
+            and (expires_at is null or expires_at > ${ts(now)})
             ${offeredOnly ? sql`and purchase_id is null` : sql``}
           returning id, professional_id, customer_id, purchase_id, ticket_type_id
         )

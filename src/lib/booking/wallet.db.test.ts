@@ -15,6 +15,7 @@ import {
   ticketsOf,
 } from "../../test/fixtures";
 import { instantAt } from "../civil-date";
+import type { TicketCloseReason } from "../tickets";
 import { cancelByClient } from "./cancel";
 import { setTicketTypeArchived } from "./catalog";
 import { bookWithHeldTicket } from "./claims";
@@ -26,6 +27,7 @@ import {
   moveAttendee,
   pointTickets,
   unpointTickets,
+  walletBalance,
 } from "./wallet";
 
 type Outcome = { ok: boolean; code?: string };
@@ -158,6 +160,59 @@ dbTest("T9c: a paid ticket cannot be « retiré »; it can be closed with a reas
   assert.equal(closed?.closedNote, "Remboursé en espèces");
   const kinds = (await movementsOf(db, paidId)).map((m) => `${m.kind}:${m.toStatus}`);
   assert.deepEqual(kinds, ["purchase:available", "close:closed"]);
+});
+
+dbTest("Clore: a ticket past expires_at that the sweep has not flipped is skipped, like convert and point", async ({ db, pro }) => {
+  const typeA = await makeType(db, pro);
+  const customerId = await makeCustomer(db, pro);
+  const now = new Date();
+  const [unswept] = await giveTickets(db, pro, customerId, typeA, 1, {
+    now: addMinutes(now, -3 * 24 * 60),
+    expiresAt: addMinutes(now, -24 * 60),
+  });
+  const [valid] = await giveTickets(db, pro, customerId, typeA, 1);
+  const usable = async () => (await walletBalance(db, { professionalId: pro.proId, customerId })).find((b) => b.ticketTypeId === typeA)?.usable ?? 0;
+  assert.equal(await usable(), 1, "only the valid ticket is usable");
+  assert.equal((await ticketsOf(db, customerId)).find((t) => t.id === unswept)?.status, "available", "not swept yet");
+
+  const closed = await closeTickets(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    customerId,
+    selection: { ticketTypeId: typeA, quantity: 1 },
+    reason: "rembourse",
+  });
+  must(closed, "close by type");
+  assert.deepEqual(closed.ticketIds, [valid], "the valid ticket is closed, not the one past its expiry");
+  assert.equal(await usable(), 0, "the balance dropped by one");
+  const after = await ticketsOf(db, customerId);
+  assert.equal(after.find((t) => t.id === unswept)?.status, "available");
+  assert.equal(after.find((t) => t.id === valid)?.status, "closed");
+
+  const explicit = await closeTickets(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    customerId,
+    selection: { ticketIds: [unswept] },
+    reason: "compense",
+  });
+  assert.equal(explicit.ok ? "ok" : explicit.code, "no_ticket", "an explicit id past its expiry is not closed either");
+});
+
+dbTest("Clore: an unknown reason is invalid, never a database error", async ({ db, pro }) => {
+  const typeA = await makeType(db, pro);
+  const customerId = await makeCustomer(db, pro);
+  const [ticketId] = await giveTickets(db, pro, customerId, typeA, 1);
+  const res = await closeTickets(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    customerId,
+    selection: { ticketIds: [ticketId] },
+    reason: "bogus" as unknown as TicketCloseReason,
+    note: "x",
+  });
+  assert.equal(res.ok ? "ok" : res.code, "invalid");
+  assert.equal((await ticketsOf(db, customerId))[0]?.status, "available");
 });
 
 dbTest("Pointer / annuler le pointage: available ↔ used, an expired ticket goes back to expired", async ({ db, pro }) => {
