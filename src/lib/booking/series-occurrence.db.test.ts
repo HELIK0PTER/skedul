@@ -289,3 +289,107 @@ dbTest("E5 after « cette séance »: once the pro moved the séance, the client
   must(res, "late cancel after the pro's change");
   assert.equal(res.ticketReturned, true);
 });
+
+dbTest("E7 cette séance: moving a séance into the past is invalid and changes nothing", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithBookings(h, 1);
+  const res = await updateOccurrence(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    occurrenceId: s.occ.id,
+    seenStartsAt: s.occ.startsAt,
+    patch: { startsAt: addMinutes(new Date(), -60) },
+  });
+  assert.equal(res.ok ? "ok" : res.code, "invalid");
+  assert.equal(res.ok ? null : res.message, "La nouvelle date serait déjà passée.");
+  const o = await getOccurrence(db, s.occ.id);
+  assert.equal(o.startsAt.getTime(), s.occ.startsAt.getTime());
+  assert.equal(o.endsAt.getTime(), s.occ.endsAt.getTime());
+  assert.equal(o.timeDetached, false);
+  assert.equal(o.changedAt, null);
+});
+
+dbTest("E7 cette séance: a séance that already started cannot be re-timed, but its capacity can change", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithBookings(h, 1);
+  const afterStart = addMinutes(s.occ.startsAt, 5);
+  const base = { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: s.occ.id, seenStartsAt: s.occ.startsAt };
+
+  const moved = await updateOccurrence(db, { ...base, patch: { startsAt: addMinutes(s.occ.startsAt, 24 * 60) } }, afterStart);
+  assert.equal(moved.ok ? "ok" : moved.code, "invalid");
+  assert.equal(moved.ok ? null : moved.message, "Une séance concernée a déjà commencé.");
+  const longer = await updateOccurrence(db, { ...base, patch: { durationMin: 120 } }, afterStart);
+  assert.equal(longer.ok ? "ok" : longer.code, "invalid");
+  const untouched = await getOccurrence(db, s.occ.id);
+  assert.equal(untouched.startsAt.getTime(), s.occ.startsAt.getTime());
+  assert.equal(untouched.endsAt.getTime(), s.occ.endsAt.getTime());
+  assert.equal(untouched.timeDetached, false);
+  assert.equal(untouched.changedAt, null);
+
+  must(await updateOccurrence(db, { ...base, patch: { capacity: 7 } }, afterStart), "capacity on a started séance");
+  assert.equal((await getOccurrence(db, s.occ.id)).capacity, 7);
+});
+
+dbTest("E7 cette séance: a duration edit committed between the read and the batch makes a start-only move 'changed'", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithBookings(h, 0);
+  const newStart = instantAt(dayIn(pro, 4), 660, pro.tz);
+  const res = await updateOccurrence(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: s.occ.id, seenStartsAt: s.occ.startsAt, patch: { startsAt: newStart } },
+    new Date(),
+    {
+      afterPlan: async () => {
+        await db.execute(
+          sql`update occurrence set ends_at = ends_at + interval '30 minutes', block_end = block_end + interval '30 minutes'
+            where id = ${s.occ.id}`,
+        );
+      },
+    },
+  );
+  assert.equal(res.ok ? "ok" : res.code, "changed");
+  const o = await getOccurrence(db, s.occ.id);
+  assert.equal(o.startsAt.getTime(), s.occ.startsAt.getTime());
+  assert.equal(o.endsAt.getTime(), s.occ.endsAt.getTime() + 30 * 60_000);
+  assert.equal(o.timeDetached, false);
+});
+
+dbTest("E7 éditeur: a repeated question id is kept once and the repeat becomes a new question", async ({ db, pro }) => {
+  const typeId = await makeType(db, pro);
+  const { eventId } = await makeEvent(db, pro, { ticketTypeIds: [typeId] });
+  const base = { professionalId: pro.proId, actorUserId: pro.userId, eventId };
+  must(
+    await editEventInPlace(db, { ...base, seenVersion: 1, patch: { questions: [{ label: "Niveau ?", type: "text", required: false }] } }),
+    "first question",
+  );
+  const rows = (await db.execute<{ id: string }>(sql`select id from question where event_id = ${eventId}`)).rows;
+  assert.equal(rows.length, 1);
+  const keptId = rows[0].id;
+
+  const res = await editEventInPlace(db, {
+    ...base,
+    seenVersion: 2,
+    patch: {
+      questions: [
+        { id: keptId, label: "A", type: "text", required: false },
+        { id: keptId, label: "B", type: "text", required: true },
+      ],
+    },
+  });
+  must(res, "repeated id");
+  assert.equal(res.version, 3);
+  const after = (
+    await db.execute<{ id: string; label: string; position: number }>(
+      sql`select id, label, position from question where event_id = ${eventId} order by position`,
+    )
+  ).rows;
+  assert.deepEqual(
+    after.map((r) => [r.label, r.position]),
+    [
+      ["A", 0],
+      ["B", 1],
+    ],
+  );
+  assert.equal(after[0].id, keptId);
+  assert.notEqual(after[1].id, keptId);
+});

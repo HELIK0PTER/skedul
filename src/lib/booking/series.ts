@@ -74,6 +74,9 @@ export type OccurrencePatch = { startsAt?: Date; durationMin?: number; capacity?
  * (time_detached + changed_at when date/time/duration change; capacity =
  * GREATEST(cap, seats_taken) + capacity_override; location_override); G(the
  * row has the planned times, 'changed'); RET(pro) when bookings ended.
+ * A time change is refused once the séance has started, and into the past
+ * (checked at plan time against `now`); capacity and place stay editable.
+ * `opts.afterPlan` is test-only: it runs between the plan and its batch.
  */
 export async function updateOccurrence(
   db: Db,
@@ -86,6 +89,7 @@ export async function updateOccurrence(
     unenrollBookingIds?: string[];
   },
   now: Date = new Date(),
+  opts: { afterPlan?: () => Promise<void> } = {},
 ): Promise<EngineResult<{ timeChanged: boolean }>> {
   const { patch } = input;
   const unenroll = [...new Set(input.unenrollBookingIds ?? [])];
@@ -136,6 +140,12 @@ export async function updateOccurrence(
     const durationMs = patch.durationMin !== undefined ? patch.durationMin * 60_000 : o.endsAt.getTime() - o.startsAt.getTime();
     const newEnds = new Date(newStarts.getTime() + durationMs);
     const timeChanged = newStarts.getTime() !== o.startsAt.getTime() || newEnds.getTime() !== o.endsAt.getTime();
+    if (timeChanged && o.startsAt.getTime() <= now.getTime()) {
+      throw new PlanError("invalid", "Une séance concernée a déjà commencé.");
+    }
+    if (timeChanged && newStarts.getTime() <= now.getTime()) {
+      throw new PlanError("invalid", "La nouvelle date serait déjà passée.");
+    }
     outcome.timeChanged = timeChanged;
     const oldPlace = o.locationOverride ?? o.eventLocation;
     const newPlace = (location === undefined ? o.locationOverride : location) ?? o.eventLocation;
@@ -165,7 +175,8 @@ export async function updateOccurrence(
         G(
           db,
           sql`exists (select 1 from occurrence where id = ${o.id} and professional_id = ${input.professionalId}
-            and status = 'scheduled' and event_id is not null and starts_at = ${ts(input.seenStartsAt)})`,
+            and status = 'scheduled' and event_id is not null and starts_at = ${ts(input.seenStartsAt)}
+            and ends_at = ${ts(o.endsAt)})`,
           "changed",
         ),
       ];
@@ -193,7 +204,7 @@ export async function updateOccurrence(
       if (unenroll.length > 0) queries.push(RET(c, by));
       return queries;
     };
-  });
+  }, { afterPlan: opts.afterPlan });
   if (!res.ok) return failOf(res);
 
   const effects: Effect[] = [];
@@ -301,11 +312,15 @@ export async function editEventInPlace(
       ? await db.select({ id: question.id }).from(question).where(eq(question.eventId, ev.id))
       : [];
     const existingIds = new Set(existing.map((q) => q.id));
+    // A repeated id is kept once; each repeat becomes a new question (same as catalog.setTypeQuestions).
+    const seen = new Set<string>();
     const questions = (p.questions ?? []).map((q, position) => {
       if (q.id !== undefined && !existingIds.has(q.id)) throw new PlanError("invalid", "Question inconnue.");
-      return { ...q, position, newId: q.id ?? nanoid() };
+      const keep = q.id !== undefined && !seen.has(q.id);
+      if (keep && q.id !== undefined) seen.add(q.id);
+      return { ...q, position, keep, newId: keep && q.id !== undefined ? q.id : nanoid() };
     });
-    const keptIds = questions.filter((q) => q.id !== undefined).map((q) => q.newId);
+    const keptIds = questions.filter((q) => q.keep).map((q) => q.newId);
 
     return (aid) => {
       const sets: SQL[] = [
@@ -351,7 +366,7 @@ export async function editEventInPlace(
         queries.push(
           db.execute(sql`delete from question where event_id = ${ev.id} and not (id = any(${textArray(keptIds)}))`),
         );
-        for (const q of questions.filter((x) => x.id !== undefined)) {
+        for (const q of questions.filter((x) => x.keep)) {
           const v = questionValues(q);
           queries.push(
             db.execute(sql`
@@ -361,7 +376,7 @@ export async function editEventInPlace(
               where id = ${q.newId} and event_id = ${ev.id}`),
           );
         }
-        const fresh = questions.filter((x) => x.id === undefined);
+        const fresh = questions.filter((x) => !x.keep);
         if (fresh.length > 0) {
           queries.push(
             db.insert(question).values(
