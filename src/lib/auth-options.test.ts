@@ -288,7 +288,7 @@ test("sendResetPassword counts only the mails it sends: past the cap it sends no
   assert.equal(over.queries.length, 1);
 });
 
-test("a failing counter sends no reset mail (Better Auth catches the throw, so the answer is unchanged)", async () => {
+test("a failing counter makes sendResetPassword throw before any mail is sent (the HTTP answer is checked in auth.db.test.ts)", async () => {
   const { db } = stubDb(new Error("db down"));
   const { options, sent } = build(db);
   await assert.rejects(options.emailAndPassword.sendResetPassword(resetData("lea@example.com") as never), /db down/);

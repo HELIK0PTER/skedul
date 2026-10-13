@@ -4,9 +4,9 @@
  * unique addresses and random IPs (rate-limit and throttle rows persist) and
  * deletes its users in a finally.
  */
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, sql, type Query } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { nanoid } from "nanoid";
 
@@ -81,43 +81,51 @@ function mixedCase(email: string): string {
   return [...email].map((c, i) => (i % 2 === 0 ? c.toUpperCase() : c)).join("");
 }
 
-/** Makes the next Better Auth window of `ip` on `path` look 2 minutes older (past a 60 s window, inside the 600 s one). */
+/** Makes the Better Auth window of `ip` on `path` look 2 minutes older (past a 60 s window, inside the 600 s one). */
 async function ageRateLimit(db: Db, ip: string, path: string): Promise<void> {
-  await db.execute(sql`update rate_limit set last_request = last_request - 120000 where key = ${`${ip}|${path}`}`);
+  const key = `${ip}|${path}`;
+  const res = await db.execute(sql`update rate_limit set last_request = last_request - 120000 where key = ${key} returning key`);
+  assert.equal(res.rows.length, 1, `exactly one rate_limit row to age for ${key}`);
 }
 
-/** Captures what Better Auth logs through console.warn / console.error (expected here: rejected requests, a simulated failure). */
-function muteLogs() {
-  const { warn, error } = console;
+/**
+ * Captures what Better Auth logs through console.warn / console.error during this test (expected: rejected
+ * requests, unknown addresses, a simulated failure). node:test restores both methods when the test ends.
+ */
+function captureLogs(ctx: TestContext): string[] {
   const lines: string[] = [];
   const grab = (...args: unknown[]) => void lines.push(args.map(String).join(" "));
-  console.warn = grab;
-  console.error = grab;
-  return {
-    lines,
-    restore() {
-      console.warn = warn;
-      console.error = error;
-    },
-  };
+  ctx.mock.method(console, "warn", grab);
+  ctx.mock.method(console, "error", grab);
+  return lines;
 }
 
-/** The same db, except that the first takeover-purge statement (`with gone as …`) throws. */
-function failingFirstPurge(db: Db): Db {
+/**
+ * The same db, except that the first `execute` whose statement satisfies `matches` rejects with
+ * "simulated failure: <what>". `assertFired()` fails with a message naming the statement when it never
+ * matched, so a renamed CTE or a changed key reads as that, not as an unrelated assertion.
+ */
+function failingDb(db: Db, what: string, matches: (statement: Query) => boolean) {
   const dialect = new PgDialect();
-  let armed = true;
-  return new Proxy(db, {
+  let fired = false;
+  const proxy = new Proxy(db, {
     get(target, prop, receiver) {
       if (prop !== "execute") return Reflect.get(target, prop, receiver);
       return (query: Parameters<Db["execute"]>[0]) => {
-        if (armed && typeof query !== "string" && dialect.sqlToQuery(query.getSQL()).sql.includes("with gone as")) {
-          armed = false;
-          return Promise.reject(new Error("simulated purge failure"));
+        if (!fired && typeof query !== "string" && matches(dialect.sqlToQuery(query.getSQL()))) {
+          fired = true;
+          return Promise.reject(new Error(`simulated failure: ${what}`));
         }
         return target.execute(query);
       };
     },
   });
+  return {
+    db: proxy,
+    assertFired() {
+      assert.ok(fired, `the failing db never saw ${what}: did that statement change?`);
+    },
+  };
 }
 
 test("T12 a sign-in code on an unverified password account deletes the password and the other sessions", OPTS, async () => {
@@ -385,19 +393,21 @@ test("a code sign-in on an unverified address with no password account deletes n
   }
 });
 
-test("a purge that fails aborts the sign-in, leaves everything in place, and the next code retries it", OPTS, async () => {
+test("a purge that fails aborts the sign-in, leaves everything in place, and the next code retries it", OPTS, async (ctx) => {
   const db = await getTestDb();
-  const t = makeTestAuth(failingFirstPurge(db));
   const email = testEmail("failclosed");
-  const logs = muteLogs();
+  const failing = failingDb(db, "the takeover purge (`with gone as …`)", (q) => q.sql.includes("with gone as") && q.params.includes(email));
+  const t = makeTestAuth(failing.db);
+  const logs = captureLogs(ctx);
   try {
     await signUp(t, email);
     const user = await userByEmail(db, email);
     const before = await sessionIds(db, user.id);
 
     const failed = await codeSignIn(t, browser(t), email);
+    failing.assertFired();
     assert.equal(failed.status, 500, "the sign-in fails instead of verifying the address");
-    assert.ok(logs.lines.some((l) => l.includes("simulated purge failure")), "the failure is logged, not swallowed");
+    assert.ok(logs.some((l) => l.includes("simulated failure")), "the failure is logged, not swallowed");
     assert.equal((await userByEmail(db, email)).emailVerified, false, "the address stays unverified");
     assert.equal(await credentialCount(db, user.id), 1, "the password account is still there");
     assert.deepEqual(await sessionIds(db, user.id), before, "no session was created or deleted");
@@ -413,14 +423,13 @@ test("a purge that fails aborts the sign-in, leaves everything in place, and the
     assert.ok(!before.includes(now[0]));
     assert.equal(t.mails.filter((m) => m.subject === PASSWORD_DISABLED).length, 1);
   } finally {
-    logs.restore();
     await deleteUsersByEmail(db, [email]);
   }
 });
 
 /* ───────── mail caps ───────── */
 
-test("password-reset mails are capped per address: counted when sent, not when rejected, same answer past the cap", OPTS, async () => {
+test("password-reset mails are capped per address: counted when sent, not when rejected, same answer past the cap", OPTS, async (ctx) => {
   const db = await getTestDb();
   const t = makeTestAuth(db);
   const email = testEmail("resetcap");
@@ -429,7 +438,7 @@ test("password-reset mails are capped per address: counted when sent, not when r
   const hits = () => throttleHits(db, resetThrottleKey(email));
   // A new browser (new IP) per request: only the per-address cap can bite.
   const reset = (typed: string, redirectTo: string = RESET_REDIRECT) => browser(t)("/request-password-reset", { email: typed, redirectTo });
-  const logs = muteLogs(); // Better Auth logs the rejected redirect and the unknown address
+  const logs = captureLogs(ctx);
   try {
     await signUp(t, email);
     const user = await userByEmail(db, email);
@@ -468,34 +477,116 @@ test("password-reset mails are capped per address: counted when sent, not when r
     const last = t.mails[t.mails.length - 1];
     assert.equal(last.to, email);
     assert.ok(last.subject.endsWith("est votre code de connexion Skedul"), last.subject);
+
+    // Better Auth logged the two rejected-or-empty requests, and nothing else.
+    assert.equal(logs.length, 2, logs.join("\n"));
+    assert.ok(logs.some((l) => l.includes("Invalid redirectURL")), "the redirect on another origin");
+    assert.ok(logs.some((l) => l.includes("User not found")), "the unknown address");
   } finally {
-    logs.restore();
     await deleteUsersByEmail(db, [email]);
   }
 });
 
-test("a password-reset request is limited to 3 per IP in 10 minutes", OPTS, async () => {
+test("a failing reset counter sends no mail, and the request still gets the usual answer", OPTS, async (ctx) => {
+  const db = await getTestDb();
+  const email = testEmail("resetfail");
+  const unknown = testEmail("nobody");
+  const failing = failingDb(
+    db,
+    "the reset counter of the address",
+    (q) => q.sql.includes("insert into throttle") && q.params.includes(resetThrottleKey(email)),
+  );
+  const t = makeTestAuth(failing.db);
+  const logs = captureLogs(ctx);
+  const resetMails = () => t.mails.filter((m) => m.to === email && m.subject === RESET_SUBJECT);
+  const reset = (typed: string) => browser(t)("/request-password-reset", { email: typed, redirectTo: RESET_REDIRECT });
+  try {
+    await signUp(t, email);
+    const user = await userByEmail(db, email);
+    await db.update(schema.user).set({ emailVerified: true }).where(eq(schema.user.id, user.id));
+
+    const usual = await reset(unknown);
+    assert.equal(usual.status, 200);
+
+    // Better Auth awaits sendResetPassword inside a try/catch (runInBackgroundOrAwait): the throw is logged, not answered.
+    const failed = await reset(email);
+    failing.assertFired();
+    assert.equal(failed.status, 200);
+    assert.deepEqual(failed.json, usual.json, "the same answer as for an unknown address");
+    assert.equal(resetMails().length, 0, "closed: no counter, no mail");
+    assert.equal(await throttleHits(db, resetThrottleKey(email)), null);
+
+    // Per request, not for good: the next request counts and mails.
+    assert.equal((await reset(email)).status, 200);
+    assert.equal(resetMails().length, 1);
+    assert.equal(await throttleHits(db, resetThrottleKey(email)), 1);
+
+    assert.equal(logs.length, 2, logs.join("\n"));
+    assert.ok(logs.some((l) => l.includes("User not found")), "the unknown address");
+    assert.ok(
+      logs.some((l) => l.includes("Failed to run background task") && l.includes("simulated failure")),
+      "the counter failure is logged by Better Auth",
+    );
+  } finally {
+    await deleteUsersByEmail(db, [email]);
+  }
+});
+
+test("a failing sign-in code counter answers 500 and neither mails nor stores a code", OPTS, async (ctx) => {
+  const db = await getTestDb();
+  const email = testEmail("otpfail");
+  const failing = failingDb(
+    db,
+    "the sign-in code counter of the address",
+    (q) => q.sql.includes("insert into throttle") && q.params.includes(otpThrottleKey(email)),
+  );
+  const t = makeTestAuth(failing.db);
+  const logs = captureLogs(ctx);
+  const request = () => browser(t)("/email-otp/send-verification-otp", { email, type: "sign-in" });
+  const stored = async () =>
+    (await db.select({ id: schema.verification.id }).from(schema.verification).where(eq(schema.verification.identifier, `sign-in-otp-${email}`)))
+      .length;
+
+  const failed = await request();
+  failing.assertFired();
+  assert.equal(failed.status, 500, "hooks.before throws before the endpoint runs");
+  assert.equal(t.mails.length, 0, "no code mailed");
+  assert.equal(await stored(), 0, "no code stored");
+  assert.equal(await throttleHits(db, otpThrottleKey(email)), null);
+  assert.ok(logs.some((l) => l.includes("simulated failure")), "the failure is logged");
+
+  // Per request, not for good: the next request counts, stores and mails a code.
+  assert.equal((await request()).status, 200);
+  assert.equal(t.mails.length, 1);
+  assert.ok(t.lastCode(email));
+  assert.equal(await stored(), 1);
+  assert.equal(await throttleHits(db, otpThrottleKey(email)), 1);
+});
+
+// The exact 600 s window is pinned by the pure config test (auth-options.test.ts); these prove the rule is
+// installed: max 3, and a window longer than the 2 minutes the bucket is aged by (Better Auth's defaults are 10 and 60 s).
+test("a password-reset request is limited to 3 per IP over a window longer than 2 minutes", OPTS, async (ctx) => {
   const db = await getTestDb();
   const t = makeTestAuth(db);
   const ip = testIp();
   const call = browser(t, ip);
   const request = (c: BrowserCall, tag: string) =>
     c("/request-password-reset", { email: testEmail(tag), redirectTo: RESET_REDIRECT });
-  const logs = muteLogs(); // Better Auth warns about each unknown address
-  try {
-    for (let i = 1; i <= 3; i++) assert.equal((await request(call, `rl${i}`)).status, 200, `request ${i}`);
-    assert.equal((await request(call, "rl4")).status, 429);
-    assert.equal((await request(browser(t, testIp()), "other")).status, 200, "another IP has its own bucket");
+  const logs = captureLogs(ctx);
+  for (let i = 1; i <= 3; i++) assert.equal((await request(call, `rl${i}`)).status, 200, `request ${i}`);
+  assert.equal((await request(call, "rl4")).status, 429);
+  assert.equal((await request(browser(t, testIp()), "other")).status, 200, "another IP has its own bucket");
 
-    // The window is 10 minutes: aged by 2 minutes (past Better Auth's default 60 s) the bucket still blocks.
-    await ageRateLimit(db, ip, "/request-password-reset");
-    assert.equal((await request(call, "rl5")).status, 429);
-  } finally {
-    logs.restore();
-  }
+  // Aged by 2 minutes (past Better Auth's default 60 s) the bucket still blocks.
+  await ageRateLimit(db, ip, "/request-password-reset");
+  assert.equal((await request(call, "rl5")).status, 429);
+
+  // Only the 4 requests that reached the endpoint (unknown addresses) logged anything.
+  assert.equal(logs.length, 4, logs.join("\n"));
+  assert.ok(logs.every((l) => l.includes("User not found")));
 });
 
-test("a sign-up is limited to 3 per IP in 10 minutes", OPTS, async () => {
+test("a sign-up is limited to 3 per IP over a window longer than 2 minutes", OPTS, async () => {
   const db = await getTestDb();
   const t = makeTestAuth(db);
   const ip = testIp();
@@ -508,7 +599,7 @@ test("a sign-up is limited to 3 per IP in 10 minutes", OPTS, async () => {
     assert.equal((await attempt(emails[3], ip)).status, 429);
     assert.equal((await attempt(other, testIp())).status, 200, "another IP has its own bucket");
 
-    // The window is 10 minutes: aged by 2 minutes (past Better Auth's default 10 s) the bucket still blocks.
+    // Aged by 2 minutes (past Better Auth's default 10 s) the bucket still blocks.
     await ageRateLimit(db, ip, "/sign-up/email");
     assert.equal((await attempt(emails[4], ip)).status, 429);
 
