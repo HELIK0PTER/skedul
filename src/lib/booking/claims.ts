@@ -10,13 +10,14 @@
 import { and, eq, gt, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
-import { effectiveWindow, onlineBookability, type BookingWindow } from "@/lib/booking-window";
+import { effectiveWindow, fitsAvailability, onlineBookability, type BookingWindow } from "@/lib/booking-window";
 import {
   G,
   PlanError,
   R,
   SEAT,
   lockRows,
+  releaseEndedSeats,
   ts,
   tryAtomic,
   type BatchCtx,
@@ -24,6 +25,7 @@ import {
   type Query,
 } from "@/lib/db/atomic";
 import {
+  availabilityRule,
   booking,
   customer,
   event,
@@ -50,7 +52,7 @@ import {
 
 import { buildAnswers, insertAnswers, loadQuestions } from "./answers";
 import { assertSpent, spendTicket, usableTickets } from "./eligibility";
-import { assertHoldQuota, checkoutExpiry, holdExpiry } from "./holds";
+import { assertHoldQuota, checkoutExpiry, expireElapsedHolds, holdExpiry } from "./holds";
 import { fail, failOf, syncEffects, type Effect, type EngineResult } from "./types";
 
 /* ───────────────────────── Shared types ───────────────────────── */
@@ -788,4 +790,267 @@ export async function registerPro(
     coverage,
     ticketId: coverage === "ticket" ? await bookedTicketOf(db, bookingId) : null,
   };
+}
+
+/* ───────────────────────── E4: RDV libre ───────────────────────── */
+
+export type BookRdvInput = {
+  professionalId: string;
+  ticketTypeId: string;
+  /** a slot start the P5 action took from the RDV slot loader */
+  startsAt: Date;
+  /**
+   * For « held_ticket » (it spends this customer's ticket) this must be the
+   * verified wallet owner (P4 requireWalletOwner), never a customer resolved
+   * from an e-mail typed by an anonymous visitor (upsertCustomer).
+   */
+  customerId: string;
+  answers?: AnswerInput[];
+  customerNotes?: string | null;
+  actorUserId: string | null;
+} & ({ mode: "held_ticket" } | { mode: "free" } | { mode: "buy"; offerId: string });
+
+export type BookRdvData = {
+  occurrenceId: string;
+  bookingId: string;
+  purchaseId: string | null;
+  checkoutExpiresAt: Date | null;
+  amountCents: number | null;
+};
+
+/** An RDV type of this pro with its duration, buffers and effective window (type overrides, else the pro's). */
+async function readRdvType(db: Db, professionalId: string, ticketTypeId: string) {
+  const [row] = await db
+    .select({
+      rdvEnabled: ticketType.rdvEnabled,
+      rdvFree: ticketType.rdvFree,
+      durationMin: ticketType.rdvDurationMin,
+      bufferBeforeMin: ticketType.rdvBufferBeforeMin,
+      bufferAfterMin: ticketType.rdvBufferAfterMin,
+      archivedAt: ticketType.archivedAt,
+      typeHorizonDays: ticketType.rdvBookingHorizonDays,
+      typeNoticeMinutes: ticketType.rdvMinNoticeMinutes,
+      typeCancelHours: ticketType.rdvCancelDeadlineHours,
+      tz: professional.timezone,
+      bookingHorizonDays: professional.bookingHorizonDays,
+      minNoticeMinutes: professional.minNoticeMinutes,
+      cancelDeadlineHours: professional.cancelDeadlineHours,
+    })
+    .from(ticketType)
+    .innerJoin(professional, eq(professional.id, ticketType.professionalId))
+    .where(and(eq(ticketType.id, ticketTypeId), eq(ticketType.professionalId, professionalId)));
+  if (!row) throw new PlanError("not_found");
+  return {
+    rdvEnabled: row.rdvEnabled,
+    rdvFree: row.rdvFree,
+    durationMin: row.durationMin,
+    bufferBeforeMin: row.bufferBeforeMin,
+    bufferAfterMin: row.bufferAfterMin,
+    archived: row.archivedAt !== null,
+    tz: row.tz,
+    window: effectiveWindow(
+      {
+        bookingHorizonDays: row.bookingHorizonDays,
+        minNoticeMinutes: row.minNoticeMinutes,
+        cancelDeadlineHours: row.cancelDeadlineHours,
+      },
+      {
+        bookingHorizonDays: row.typeHorizonDays,
+        minNoticeMinutes: row.typeNoticeMinutes,
+        cancelDeadlineHours: row.typeCancelHours,
+      },
+    ),
+  };
+}
+
+/** The type's own weekly hours when it has any, else the global ones (spec § 6.4 availability_rule). */
+async function rdvRules(db: Db, professionalId: string, ticketTypeId: string) {
+  const rows = await db
+    .select({
+      ticketTypeId: availabilityRule.ticketTypeId,
+      dayOfWeek: availabilityRule.dayOfWeek,
+      startMinute: availabilityRule.startMinute,
+      endMinute: availabilityRule.endMinute,
+    })
+    .from(availabilityRule)
+    .where(
+      and(
+        eq(availabilityRule.professionalId, professionalId),
+        or(eq(availabilityRule.ticketTypeId, ticketTypeId), isNull(availabilityRule.ticketTypeId)),
+      ),
+    );
+  const own = rows.filter((r) => r.ticketTypeId === ticketTypeId);
+  return own.length > 0 ? own : rows.filter((r) => r.ticketTypeId === null);
+}
+
+/** E4 type guard: still RDV-enabled, not archived, same free/paid nature. Asserted 'unavailable'. */
+function rdvTypeOk(a: { professionalId: string; ticketTypeId: string; isFree: boolean }): SQL {
+  return sql`exists (select 1 from ticket_type tt
+    where tt.id = ${a.ticketTypeId} and tt.professional_id = ${a.professionalId}
+      and tt.rdv_enabled and tt.archived_at is null and tt.rdv_free = ${a.isFree}::boolean)`;
+}
+
+/**
+ * E4 slot guard: no scheduled event séance (private, `none` and empty ones
+ * included) overlaps the block, no time off overlaps it, notice and local-date
+ * horizon (type overrides, else the pro's). Asserted 'slot_taken'.
+ */
+function rdvSlotFree(
+  c: BatchCtx,
+  a: { professionalId: string; ticketTypeId: string; startsAt: Date; blockStart: Date; blockEnd: Date },
+): SQL {
+  return sql`not exists (select 1 from occurrence o
+      where o.professional_id = ${a.professionalId} and o.event_id is not null and o.status = 'scheduled'
+        and tstzrange(o.block_start, o.block_end) && tstzrange(${ts(a.blockStart)}, ${ts(a.blockEnd)}))
+    and not exists (select 1 from time_off t
+      where t.professional_id = ${a.professionalId} and t.start_at < ${ts(a.blockEnd)} and t.end_at > ${ts(a.blockStart)})
+    and exists (select 1 from ticket_type tt join professional p on p.id = tt.professional_id
+      where tt.id = ${a.ticketTypeId}
+        and ${ts(a.startsAt)} >= ${ts(c.now)} + make_interval(mins => coalesce(tt.rdv_min_notice_minutes, p.min_notice_minutes))
+        and (${ts(a.startsAt)} at time zone p.timezone)::date
+            <= (${ts(c.now)} at time zone p.timezone)::date + coalesce(tt.rdv_booking_horizon_days, p.booking_horizon_days))`;
+}
+
+/**
+ * E4. Plan: type rdv_enabled, not archived, free iff mode free; start
+ * bookable (notice, horizon) and inside the weekly hours (fitsAvailability:
+ * the type's rules, else the global ones); « buy »: offer of this type on
+ * sale whose validity covers the start; answers (type questions, required
+ * enforced). The slot-grid membership (computeSlots) is the P5 action's job.
+ * Batch: lock professional → the overlapping scheduled RDVs (block range, id
+ * asc) [→ customer for « buy »]; expire their elapsed holds and release the
+ * seats in aggregate (an RDV at 0 is cancelled and leaves the EXCLUDE);
+ * INSERT the RDV occurrence (capacity 1, seats_taken 1, block ± buffers:
+ * occurrence_rdv_excl → slot_taken); G(type); G(slot); then held ticket
+ * (booking confirmed + spend), free (booking confirmed, free) or buy (offer
+ * unchanged, hold quota, purchase + pending booking). Answers.
+ * Effects: held/free: confirmation, pro notice, Google; buy: none.
+ */
+export async function bookRdv(
+  db: Db,
+  input: BookRdvInput,
+  now: Date = new Date(),
+  opts: RaceOpts = {},
+): Promise<EngineResult<BookRdvData>> {
+  const planned: { data?: BookRdvData } = {};
+  const res = await tryAtomic(
+    db,
+    async () => {
+      const notes = cleanNotes(input.customerNotes);
+      const [type] = await Promise.all([
+        readRdvType(db, input.professionalId, input.ticketTypeId),
+        assertCustomer(db, input.professionalId, input.customerId),
+      ]);
+      const isFree = input.mode === "free";
+      if (!type.rdvEnabled || type.archived || type.rdvFree !== isFree || type.durationMin === null) {
+        throw new PlanError("unavailable");
+      }
+      const startsAt = input.startsAt;
+      const endsAt = new Date(startsAt.getTime() + type.durationMin * 60_000);
+      const blockStart = new Date(startsAt.getTime() - type.bufferBeforeMin * 60_000);
+      const blockEnd = new Date(endsAt.getTime() + type.bufferAfterMin * 60_000);
+      if (!onlineBookability({ startsAt, now, tz: type.tz, window: type.window }).ok) {
+        throw new PlanError("unavailable");
+      }
+      const [rules, questions, offer] = await Promise.all([
+        rdvRules(db, input.professionalId, input.ticketTypeId),
+        loadQuestions(db, { ticketTypeId: input.ticketTypeId }),
+        input.mode === "buy" ? readOffer(db, input.professionalId, input.offerId) : Promise.resolve(null),
+      ]);
+      if (!fitsAvailability(rules, startsAt, endsAt, type.tz)) throw new PlanError("unavailable");
+      let buy: OfferRow | null = null;
+      if (input.mode === "buy") {
+        if (!offer) throw new PlanError("not_found");
+        if (!offer.onSale || offer.ticketTypeId !== input.ticketTypeId) throw new PlanError("unavailable");
+        if (!offerCovers(now, validityOf(offer), type.tz, startsAt)) throw new PlanError("offer_too_short");
+        buy = offer;
+      }
+      const answers = buildAnswers(questions, input.answers, { enforceRequired: true });
+      if (!answers.ok) throw new PlanError("invalid", answers.message);
+      const answerRows = answers.rows;
+
+      const occurrenceId = nanoid();
+      const bookingId = nanoid();
+      const purchaseId = buy ? nanoid() : null;
+      const checkoutExpiresAt = buy ? checkoutExpiry(now, "buybook") : null;
+      planned.data = {
+        occurrenceId,
+        bookingId,
+        purchaseId,
+        checkoutExpiresAt,
+        amountCents: buy ? buy.priceCents : null,
+      };
+
+      return (aid) => {
+        const c: BatchCtx = { db, aid, now };
+        const { professionalId, ticketTypeId, customerId } = input;
+        const overlappingRdvs = sql`select id from occurrence
+          where professional_id = ${professionalId} and event_id is null and status = 'scheduled'
+            and tstzrange(block_start, block_end) && tstzrange(${ts(blockStart)}, ${ts(blockEnd)})`;
+        const queries: Query[] = [
+          lockRows(db, "professional", [professionalId]),
+          db.execute(sql`${overlappingRdvs} order by id for no key update`),
+        ];
+        if (buy) queries.push(lockRows(db, "customer", [customerId]));
+        queries.push(
+          expireElapsedHolds(c, overlappingRdvs),
+          releaseEndedSeats(c),
+          db.insert(occurrence).values({
+            id: occurrenceId,
+            professionalId,
+            eventId: null,
+            ticketTypeId,
+            seriesDate: null,
+            startsAt,
+            endsAt,
+            blockStart,
+            blockEnd,
+            capacity: 1,
+            seatsTaken: 1,
+            status: "scheduled",
+            createdAt: now,
+            updatedAt: now,
+          }),
+          G(db, rdvTypeOk({ professionalId, ticketTypeId, isFree }), "unavailable"),
+          G(db, rdvSlotFree(c, { professionalId, ticketTypeId, startsAt, blockStart, blockEnd }), "slot_taken"),
+        );
+        const base = { id: bookingId, professionalId, occurrenceId, customerId, createdBy: "client" as const, customerNotes: notes };
+        if (input.mode === "held_ticket") {
+          queries.push(
+            insertBooking(c, { ...base, status: "confirmed", coverage: "ticket" }),
+            spendTicket(c, {
+              bookingId,
+              customerId,
+              occurrenceId,
+              by: { actor: "client", userId: input.actorUserId },
+            }),
+            assertSpent(c, bookingId),
+          );
+        } else if (input.mode === "free") {
+          queries.push(insertBooking(c, { ...base, status: "confirmed", coverage: "free" }));
+        } else if (buy && purchaseId && checkoutExpiresAt) {
+          queries.push(
+            G(db, offerUnchanged(buy, professionalId, { kind: "rdv", ticketTypeId }), "stale"),
+            assertHoldQuota(c, customerId),
+            insertPurchase(c, { id: purchaseId, professionalId, customerId, offer: buy, checkoutExpiresAt }),
+            insertBooking(c, {
+              ...base,
+              status: "pending",
+              coverage: "ticket",
+              purchaseId,
+              holdExpiresAt: holdExpiry(now),
+            }),
+          );
+        }
+        queries.push(...insertAnswers(c, { professionalId, bookingId, rows: answerRows }));
+        return queries;
+      };
+    },
+    { afterPlan: opts.afterPlan },
+  );
+  if (!res.ok) return failOf(res);
+  if (!planned.data) throw new Error("bookRdv: the plan produced no data");
+  const data = planned.data;
+  const effects = input.mode === "buy" ? [] : confirmedEffects(data.bookingId, data.occurrenceId, true);
+  return { ok: true, effects, ...data };
 }
