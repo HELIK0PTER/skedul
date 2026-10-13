@@ -6,6 +6,7 @@
  * those guards. Each dbTest creates its own pro and deletes its user at the end
  * (the deleteUser cascade, rule R2), after checking I1–I6 for that pro.
  */
+import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { nanoid } from "nanoid";
 import type { NeonHttpDatabase } from "drizzle-orm/neon-http";
@@ -92,11 +93,10 @@ export function dbTest(
     const pro = await createTestPro(db);
     try {
       await fn({ db, pro }, t);
-      // Task 15 inserts here:
-      // if (opts.invariants !== false) {
-      //   const { checkInvariants } = await import("../lib/booking/invariants");
-      //   assert.deepEqual(await checkInvariants(db, { proId: pro.proId }), [], "invariants I1–I6");
-      // }
+      if (opts.invariants !== false) {
+        const { checkInvariants } = await import("../lib/booking/invariants");
+        assert.deepEqual(await checkInvariants(db, { proId: pro.proId }), [], "invariants I1–I6");
+      }
     } finally {
       await deleteTestUser(db, pro.userId);
     }
