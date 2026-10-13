@@ -39,15 +39,6 @@ export const OTP_SIGN_IN_PATH = "/sign-in/email-otp";
 export const OTP_VERIFY_EMAIL_PATH = "/email-otp/verify-email";
 export const SIGN_UP_PATH = "/sign-up/email";
 export const RESET_REQUEST_PATH = "/request-password-reset";
-/**
- * What /request-password-reset answers on success, whether or not the address
- * has an account (better-auth api/routes/password.mjs). A capped request gets
- * exactly this, so the cap cannot be told apart from a sent mail.
- */
-export const RESET_REQUEST_ANSWER = {
-  status: true,
-  message: "If this email exists in our system, check your email for the reset link",
-} as const;
 /** The only emailOTP endpoints served over HTTP. */
 export const OTP_HTTP_PATHS = [OTP_SEND_PATH, OTP_SIGN_IN_PATH, OTP_VERIFY_EMAIL_PATH] as const;
 
@@ -189,7 +180,16 @@ export function buildAuthOptions(deps: AuthDeps) {
       // the email has an account; sendEmail never throws, so a send failure
       // cannot reveal which addresses exist either.
       resetPasswordTokenExpiresIn: 60 * 60,
+      // Per-address cap (5 reset mails an hour, own counter so that reset spam
+      // cannot block the sign-in codes), taken HERE and not in hooks.before: this
+      // runs only once the endpoint has validated the request and found the
+      // account, so only real mails count and a bad request cannot burn the
+      // victim's cap. Past the cap nothing is sent and nothing is thrown, so the
+      // endpoint answers like for any valid request. If the counter itself
+      // throws, no mail goes out (closed); Better Auth's runInBackgroundOrAwait
+      // catches and logs the error, so the answer does not change either.
       sendResetPassword: async ({ user, url }) => {
+        if (!(await consumeThrottle(db, resetThrottleKey(user.email), OTP_EMAIL_LIMIT, now()))) return;
         await deps.sendEmail({
           to: user.email,
           subject: "Réinitialisez votre mot de passe Skedul",
@@ -230,20 +230,12 @@ export function buildAuthOptions(deps: AuthDeps) {
     session: { cookieCache: { enabled: true, maxAge: 5 * 60 } },
     rateLimit: AUTH_RATE_LIMIT,
     hooks: {
-      // Per-address caps on the mails an anonymous caller can trigger (5 an
-      // hour each, OTP_EMAIL_LIMIT). Past a cap, answer like a send BEFORE the
-      // endpoint runs: nothing is generated or mailed, and a live code stays valid.
+      // Per-address cap on sign-in / confirmation codes (5 an hour). Past it,
+      // answer like a send BEFORE the endpoint runs: no new code is generated,
+      // the live one stays valid. (The reset-mail cap is in sendResetPassword.)
       before: createAuthMiddleware(async (ctx) => {
-        const body = ctx.body as { email?: unknown; type?: unknown } | undefined;
-        if (ctx.path === RESET_REQUEST_PATH) {
-          // Own counter: reset spam must not block the sign-in codes of that address.
-          const raw = body?.email;
-          if (typeof raw !== "string") return;
-          const allowed = await consumeThrottle(db, resetThrottleKey(raw), OTP_EMAIL_LIMIT, now());
-          if (!allowed) return ctx.json(RESET_REQUEST_ANSWER);
-          return;
-        }
         if (ctx.path !== OTP_SEND_PATH) return;
+        const body = ctx.body as { email?: unknown; type?: unknown } | undefined;
         // Reset by code is closed (OTP_DISABLED_PATHS): never mail a forget-password code.
         if (body?.type === "forget-password") return ctx.json({ success: true });
         const raw = body?.email;
@@ -294,9 +286,10 @@ export function buildAuthOptions(deps: AuthDeps) {
           // only once the purge succeeded.
           before: async (data, ctx) => {
             if (!isOtpVerificationTransition(data, ctx)) return;
-            // The route itself looks the user up by `email.toLowerCase()`.
+            // The route itself looks the user up by `email.toLowerCase()`. Without
+            // an e-mail the purge cannot target anyone: fail closed, never skip it.
             const raw = (ctx?.body as { email?: unknown } | undefined)?.email;
-            if (typeof raw !== "string") return;
+            if (typeof raw !== "string") throw new Error("[auth] code sign-in without an e-mail: refusing to verify the address");
             const email = raw.toLowerCase();
             const purged = await purgeUnverifiedPassword(db, email);
             if (purged === 0) return;

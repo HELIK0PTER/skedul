@@ -1212,10 +1212,15 @@ appelle `stripe.checkout.sessions.expire` pour chacun (au mieux). Ensuite seulem
   Better Auth génère un code : le code déjà envoyé reste valide.
 - **Demandes de réinitialisation** : même plafond (5 par heure et par adresse), avec **son propre
   compteur** (`t:reset:e:…`, distinct de `t:otp:e:…`) : un spam de réinitialisation ne doit pas
-  bloquer les codes de connexion de l'adresse. Le même `hooks.before` le applique sur
-  `/request-password-reset`. Au-delà, il répond exactement ce que l'endpoint répond en cas de
-  succès (`{ status: true, message: "If this email exists in our system, check your email for the
-  reset link" }`) : rien n'est envoyé, et le refus ne se distingue pas d'un envoi.
+  bloquer les codes de connexion de l'adresse. Le plafond compte les mails de réinitialisation
+  **réellement envoyés** : `sendResetPassword` l'applique, et non un `hooks.before`, qui s'exécute
+  avant la validation. Une requête que l'endpoint rejette (adresse mal formée, `redirectTo`
+  refusé) ou qui vise une adresse sans compte ne compte donc pas, et ne peut pas priver la victime
+  de son lien. Au-delà, `sendResetPassword` n'envoie rien et rend la main sans erreur : la
+  réponse de l'endpoint reste la sienne, identique à celle de toute requête valide (`{ status:
+  true, message: "If this email exists in our system, check your email for the reset link" }`).
+  Si le compteur lui-même échoue, le mail n'est pas envoyé : Better Auth attrape l'erreur et la
+  journalise (`runInBackgroundOrAwait`), et la réponse de l'endpoint ne change pas.
 - L'UI affiche toujours « Si l'adresse est valide, un code a été envoyé ».
 - Le premier code de connexion crée un utilisateur `client`. Le hook admin pose le rôle, le hook
   de bannissement s'applique toujours, et `emailVerified` est vrai. Le nom saisi est envoyé.
@@ -1246,7 +1251,7 @@ ip)` (IP seule) avec le sel du jour `analytics_salt` : aucune IP en clair.
 
 Deux plafonds par adresse, sans plafond par IP applicatif (la règle Better Auth ci-dessus s'en
 charge), passent par la même table `throttle` : les codes de connexion et de confirmation
-(`otp`) et les demandes de réinitialisation (`reset`), chacun à 5 par heure
+(`otp`) et les mails de réinitialisation envoyés (`reset`), chacun à 5 par heure
 (`OTP_EMAIL_LIMIT`). La clé est le hachage de l'email normalisé.
 
 **Faille de pré-compte, fermée.**
@@ -1257,15 +1262,18 @@ charge), passent par la même table `throttle` : les codes de connexion et de co
   passe `emailVerified` à vrai pendant `/sign-in/email-otp` : la route ne l'émet que pour un
   utilisateur non vérifié, après avoir consommé le code et **avant** de créer la session. Le hook
   retrouve l'utilisateur par l'email du corps de la requête, comme la route, puis, en **une seule
-  requête SQL** (les deux suppressions passent ensemble ou pas du tout) :
-  - supprime son compte `credential`, seulement si l'adresse n'est pas encore vérifiée ;
+  requête SQL** (les deux suppressions passent ensemble ou pas du tout). Le hook n'agit que si
+  l'utilisateur a un compte `credential` et que l'adresse n'est pas encore vérifiée ; sans compte
+  `credential`, il ne supprime aucune session et n'envoie aucun mail. Dans ce cas, il :
+  - supprime ce compte `credential` ;
   - supprime **toutes** les sessions de l'utilisateur : celle de cette connexion n'existe pas
     encore, il n'y a rien à épargner ;
   - une fois la suppression réussie, envoie « Pour votre sécurité, le mot de passe associé à
     cette adresse a été désactivé ; utilisez « Mot de passe oublié » pour en choisir un ». L'envoi
     est au mieux : un échec est journalisé et n'annule rien.
 - **Échec fermé** : si la suppression lève une erreur, la mise à jour est abandonnée. L'utilisateur
-  reste non vérifié, la connexion échoue, et le code suivant relance la purge.
+  reste non vérifié, la connexion échoue, et le code suivant relance la purge. Il en va de même si
+  la requête ne porte pas d'email : le hook lève au lieu de sauter la purge.
 - **Pourquoi `before` et pas `after`** : une autre mise à jour de l'utilisateur a lieu dans la même
   requête, pour un utilisateur déjà vérifié. À la création de la session, le plugin admin écrit
   `{ banned: false, … }` quand un bannissement à durée (`banExpiresIn`) a expiré. Un hook `after`

@@ -13,7 +13,6 @@ import {
   OTP_SEND_PATH,
   OTP_SIGN_IN_PATH,
   OTP_VERIFY_EMAIL_PATH,
-  RESET_REQUEST_ANSWER,
   RESET_REQUEST_PATH,
   buildAuthOptions,
   buildOtpMailer,
@@ -124,7 +123,7 @@ function stubDb(answer: Array<Record<string, unknown>> | Error) {
   return { db, queries };
 }
 
-function build(db: Db, sendEmail?: (mail: AuthMail) => Promise<unknown>) {
+function build(db: Db, sendEmail?: (mail: AuthMail) => Promise<unknown>, logResetLink?: boolean) {
   const sent: AuthMail[] = [];
   const options = buildAuthOptions({
     db,
@@ -135,8 +134,24 @@ function build(db: Db, sendEmail?: (mail: AuthMail) => Promise<unknown>) {
       (async (mail) => {
         sent.push(mail);
       }),
+    logResetLink,
   });
   return { options, sent };
+}
+
+/** Runs `fn` with console.info / console.error captured, so the test output stays clean. */
+async function captureConsole(fn: () => Promise<void>): Promise<{ info: unknown[][]; error: unknown[][] }> {
+  const captured = { info: [] as unknown[][], error: [] as unknown[][] };
+  const { info, error } = console;
+  console.info = (...args: unknown[]) => void captured.info.push(args);
+  console.error = (...args: unknown[]) => void captured.error.push(args);
+  try {
+    await fn();
+  } finally {
+    console.info = info;
+    console.error = error;
+  }
+  return captured;
 }
 
 type HookCtx = { path: string; body: Record<string, unknown>; context: object };
@@ -238,29 +253,73 @@ test("a purge failure aborts the verification and mails nothing; a mail failure 
   assert.equal(logged.length, 1);
 });
 
-test("password-reset requests are capped per address, answered exactly like a sent one", async () => {
-  const { db, queries } = stubDb([{ hits: 6 }]);
+const resetData = (email: string) => ({ user: { email, name: "Léa Martin" }, url: "http://localhost:3000/reset-password/t0k3n-secret?callbackURL=", token: "t0k3n-secret" });
+
+test("a reset request is not counted before the endpoint has validated it", async () => {
+  // hooks.before runs before validation: a bad redirectTo (403) or a padded e-mail (400) must not use up the victim's cap.
+  const { db, queries } = stubDb([{ hits: 99 }]);
   const { options } = build(db);
-  const answer = await runBefore(options, ctxOf(RESET_REQUEST_PATH, { email: "Lea@Example.com" }));
-  // The shape of /request-password-reset on success (better-auth api/routes/password.mjs).
-  assert.deepEqual(answer, {
-    status: true,
-    message: "If this email exists in our system, check your email for the reset link",
-  });
-  assert.deepEqual(answer, RESET_REQUEST_ANSWER);
-  assert.equal(queries.length, 1);
-  assert.ok(queries[0].params.includes(resetThrottleKey("lea@example.com")));
-  assert.ok(!queries[0].params.includes(otpThrottleKey("lea@example.com")));
+  for (const body of [{ email: "Lea@Example.com" }, { email: " lea@example.com " }, { email: "lea@example.com", redirectTo: "https://evil.test" }, {}]) {
+    assert.equal(await runBefore(options, ctxOf(RESET_REQUEST_PATH, body)), undefined);
+  }
+  assert.equal(queries.length, 0);
+});
+
+test("sendResetPassword counts only the mails it sends: past the cap it sends nothing and does not throw", async () => {
+  const sendReset = (options: ReturnType<typeof build>["options"], email: string) =>
+    options.emailAndPassword.sendResetPassword(resetData(email) as never);
 
   const under = stubDb([{ hits: 5 }]);
-  assert.equal(
-    await runBefore(build(under.db).options, ctxOf(RESET_REQUEST_PATH, { email: "lea@example.com" })),
-    undefined,
-  );
-  // No string e-mail: the endpoint's own validation answers, nothing is counted.
-  const none = stubDb([{ hits: 99 }]);
-  assert.equal(await runBefore(build(none.db).options, ctxOf(RESET_REQUEST_PATH, {})), undefined);
-  assert.equal(none.queries.length, 0);
+  const a = build(under.db);
+  await sendReset(a.options, "Lea@Example.com");
+  assert.equal(a.sent.length, 1);
+  assert.equal(a.sent[0].to, "Lea@Example.com");
+  assert.equal(a.sent[0].subject, "Réinitialisez votre mot de passe Skedul");
+  assert.ok(a.sent[0].html.includes("reset-password/t0k3n-secret"));
+  // Own counter, keyed on the account's address (however the request spelled it).
+  assert.equal(under.queries.length, 1);
+  assert.ok(under.queries[0].params.includes(resetThrottleKey("lea@example.com")));
+  assert.ok(!under.queries[0].params.includes(otpThrottleKey("lea@example.com")));
+
+  const over = stubDb([{ hits: 6 }]);
+  const b = build(over.db);
+  await sendReset(b.options, "lea@example.com");
+  assert.equal(b.sent.length, 0);
+  assert.equal(over.queries.length, 1);
+});
+
+test("a failing counter sends no reset mail (Better Auth catches the throw, so the answer is unchanged)", async () => {
+  const { db } = stubDb(new Error("db down"));
+  const { options, sent } = build(db);
+  await assert.rejects(options.emailAndPassword.sendResetPassword(resetData("lea@example.com") as never), /db down/);
+  assert.equal(sent.length, 0);
+});
+
+test("the reset link is printed in mock mode only for a mail that is actually sent", async () => {
+  const sentCase = build(stubDb([{ hits: 1 }]).db, undefined, true);
+  const printed = await captureConsole(async () => {
+    await sentCase.options.emailAndPassword.sendResetPassword(resetData("lea@example.com") as never);
+  });
+  assert.equal(printed.info.length, 1);
+  assert.ok(String(printed.info[0][0]).includes("reset-password/t0k3n-secret"));
+
+  const cappedCase = build(stubDb([{ hits: 6 }]).db, undefined, true);
+  const silent = await captureConsole(async () => {
+    await cappedCase.options.emailAndPassword.sendResetPassword(resetData("lea@example.com") as never);
+  });
+  assert.equal(silent.info.length, 0);
+});
+
+test("a code verification that carries no e-mail fails closed instead of skipping the purge", async () => {
+  const { db, queries } = stubDb([{ purged: 1 }]);
+  const { options, sent } = build(db);
+  const before = options.databaseHooks.user.update.before;
+  for (const body of [{}, { email: 42 }, { email: null }]) {
+    await assert.rejects(before({ emailVerified: true }, { path: OTP_SIGN_IN_PATH, body } as never), /e-mail/);
+  }
+  await assert.rejects(before({ emailVerified: true }, { path: OTP_SIGN_IN_PATH } as never), /e-mail/);
+  assert.equal(queries.length, 0);
+  assert.equal(sent.length, 0);
 });
 
 test("sign-in code requests keep their own counter; reset by code is never mailed; other paths are untouched", async () => {
