@@ -30,6 +30,7 @@ import {
   eventTicketType,
   occurrence,
   professional,
+  ticket,
   ticketOffer,
   ticketPurchase,
   ticketType,
@@ -48,8 +49,9 @@ import {
 } from "@/lib/tickets";
 
 import { buildAnswers, insertAnswers, loadQuestions } from "./answers";
+import { assertSpent, spendTicket, usableTickets } from "./eligibility";
 import { assertHoldQuota, checkoutExpiry, holdExpiry } from "./holds";
-import { fail, failOf, type EngineResult } from "./types";
+import { fail, failOf, syncEffects, type Effect, type EngineResult } from "./types";
 
 /* ───────────────────────── Shared types ───────────────────────── */
 
@@ -532,5 +534,258 @@ export async function activeBookingOf(
     status: row.status,
     purchaseId: pendingPurchase ? row.purchaseId : null,
     checkoutUrl: resumable ? row.checkoutUrl : null,
+  };
+}
+
+/* ───────────────── E2 / E3: held ticket, free registration, pro « Inscrire » ───────────────── */
+
+/** Effects of a confirmed booking: the client always; the pro only when the client booked (spec § 13.6). */
+function confirmedEffects(bookingId: string, occurrenceId: string, byClient: boolean): Effect[] {
+  const effects: Effect[] = [{ type: "email.booking_confirmed", bookingId }];
+  if (byClient) effects.push({ type: "email.pro_new_booking", bookingId });
+  return [...effects, ...syncEffects([occurrenceId])];
+}
+
+async function bookedTicketOf(db: Db, bookingId: string): Promise<string> {
+  const [row] = await db.select({ id: ticket.id }).from(ticket).where(eq(ticket.bookingId, bookingId));
+  if (!row) throw new Error(`booking ${bookingId}: no booked ticket after a committed spend`);
+  return row.id;
+}
+
+/**
+ * E2 client: spend a held ticket on an event séance in `tickets` mode
+ * (requireWalletOwner is the P4 action's job). Batch: lock occurrence, R,
+ * G(not already booked), SEAT(+1), G(ONLINE_OK 'tickets'), G(CHANGED), INSERT
+ * booking (confirmed, ticket), spend (SKIP LOCKED pick) + assertSpent, answers.
+ */
+export async function bookWithHeldTicket(
+  db: Db,
+  input: ClientClaimBase & { actorUserId: string | null },
+  now: Date = new Date(),
+): Promise<EngineResult<{ bookingId: string; ticketId: string }>> {
+  const planned: { bookingId?: string } = {};
+  const res = await tryAtomic(db, async () => {
+    const notes = cleanNotes(input.customerNotes);
+    const [target] = await Promise.all([
+      readEventTarget(db, input.professionalId, input.occurrenceId),
+      assertCustomer(db, input.professionalId, input.customerId),
+    ]);
+    assertOnline(target, "tickets", input.seenStartsAt, now);
+    const answers = buildAnswers(await loadQuestions(db, { eventId: target.eventId }), input.answers, {
+      enforceRequired: true,
+    });
+    if (!answers.ok) throw new PlanError("invalid", answers.message);
+    const answerRows = answers.rows;
+    const bookingId = nanoid();
+    planned.bookingId = bookingId;
+
+    return (aid) => {
+      const c: BatchCtx = { db, aid, now };
+      const { professionalId, occurrenceId, customerId } = input;
+      return [
+        lockRows(db, "occurrence", [occurrenceId]),
+        R(c, occurrenceId),
+        assertNotBooked(c, occurrenceId, customerId),
+        SEAT(c, occurrenceId, 1),
+        G(db, onlineOk(c, { professionalId, occurrenceId, mode: "tickets" }), "unavailable"),
+        G(db, unchangedStart(occurrenceId, input.seenStartsAt), "changed"),
+        insertBooking(c, {
+          id: bookingId,
+          professionalId,
+          occurrenceId,
+          customerId,
+          status: "confirmed",
+          coverage: "ticket",
+          createdBy: "client",
+          customerNotes: notes,
+        }),
+        spendTicket(c, {
+          bookingId,
+          customerId,
+          occurrenceId,
+          by: { actor: "client", userId: input.actorUserId },
+        }),
+        assertSpent(c, bookingId),
+        ...insertAnswers(c, { professionalId, bookingId, rows: answerRows }),
+      ];
+    };
+  });
+  if (!res.ok) return failOf(res);
+  if (!planned.bookingId) throw new Error("bookWithHeldTicket: the plan produced no booking");
+  const bookingId = planned.bookingId;
+  return {
+    ok: true,
+    effects: confirmedEffects(bookingId, input.occurrenceId, true),
+    bookingId,
+    ticketId: await bookedTicketOf(db, bookingId),
+  };
+}
+
+/**
+ * E3: an event séance in `free` mode. Batch: lock occurrence, R,
+ * G(not already booked), SEAT(+1), G(ONLINE_OK 'free'), G(CHANGED), INSERT
+ * booking (confirmed, free), answers. One live registration per séance and
+ * customer: booking_active_uq backs the guard.
+ */
+export async function registerFree(
+  db: Db,
+  input: ClientClaimBase,
+  now: Date = new Date(),
+): Promise<EngineResult<{ bookingId: string }>> {
+  const planned: { bookingId?: string } = {};
+  const res = await tryAtomic(db, async () => {
+    const notes = cleanNotes(input.customerNotes);
+    const [target] = await Promise.all([
+      readEventTarget(db, input.professionalId, input.occurrenceId),
+      assertCustomer(db, input.professionalId, input.customerId),
+    ]);
+    assertOnline(target, "free", input.seenStartsAt, now);
+    const answers = buildAnswers(await loadQuestions(db, { eventId: target.eventId }), input.answers, {
+      enforceRequired: true,
+    });
+    if (!answers.ok) throw new PlanError("invalid", answers.message);
+    const answerRows = answers.rows;
+    const bookingId = nanoid();
+    planned.bookingId = bookingId;
+
+    return (aid) => {
+      const c: BatchCtx = { db, aid, now };
+      const { professionalId, occurrenceId, customerId } = input;
+      return [
+        lockRows(db, "occurrence", [occurrenceId]),
+        R(c, occurrenceId),
+        assertNotBooked(c, occurrenceId, customerId),
+        SEAT(c, occurrenceId, 1),
+        G(db, onlineOk(c, { professionalId, occurrenceId, mode: "free" }), "unavailable"),
+        G(db, unchangedStart(occurrenceId, input.seenStartsAt), "changed"),
+        insertBooking(c, {
+          id: bookingId,
+          professionalId,
+          occurrenceId,
+          customerId,
+          status: "confirmed",
+          coverage: "free",
+          createdBy: "client",
+          customerNotes: notes,
+        }),
+        ...insertAnswers(c, { professionalId, bookingId, rows: answerRows }),
+      ];
+    };
+  });
+  if (!res.ok) return failOf(res);
+  if (!planned.bookingId) throw new Error("registerFree: the plan produced no booking");
+  const bookingId = planned.bookingId;
+  return { ok: true, effects: confirmedEffects(bookingId, input.occurrenceId, true), bookingId };
+}
+
+/** Coverage of a pro registration: guest on any mode, else the event's mode (`none` needs « Invité »). */
+function proCoverage(asGuest: boolean, mode: BookingMode): BookingCoverage {
+  if (asGuest) return "guest";
+  if (mode === "tickets") return "ticket";
+  if (mode === "free") return "free";
+  throw new PlanError("not_eligible");
+}
+
+/** registerPro guard: a scheduled séance of this pro whose mode still matches the coverage. */
+function proRegistrationOk(a: { professionalId: string; occurrenceId: string; coverage: BookingCoverage }): SQL {
+  return sql`exists (select 1 from occurrence o join event e on e.id = o.event_id
+    where o.id = ${a.occurrenceId} and o.professional_id = ${a.professionalId} and o.status = 'scheduled'
+      and (${a.coverage}::text = 'guest'
+           or (${a.coverage}::text = 'ticket' and e.booking_mode = 'tickets')
+           or (${a.coverage}::text = 'free' and e.booking_mode = 'free')))`;
+}
+
+/**
+ * E2 pro « Inscrire » on an EVENT séance: past, private, outside notice and
+ * horizon or under a time off are allowed; a cancelled séance is not. The pro
+ * may force a ticket (still eligible) and add « +1 place » (extraSeat).
+ * Required questions are not enforced. Effects: the client's confirmation and
+ * the Google sync, never « nouvelle inscription » to the pro. Whatever the
+ * coverage (guest included: booking_active_uq allows one live booking per
+ * séance and customer), a customer already registered is already_booked, and
+ * « +1 place » is not applied for them (guard before SEAT).
+ */
+export async function registerPro(
+  db: Db,
+  input: {
+    professionalId: string;
+    actorUserId: string;
+    occurrenceId: string;
+    customerId: string;
+    asGuest: boolean;
+    ticketId?: string | null;
+    extraSeat?: boolean;
+    answers?: AnswerInput[];
+  },
+  now: Date = new Date(),
+): Promise<EngineResult<{ bookingId: string; coverage: BookingCoverage; ticketId: string | null }>> {
+  const planned: { bookingId?: string; coverage?: BookingCoverage } = {};
+  const res = await tryAtomic(db, async () => {
+    const [target] = await Promise.all([
+      readEventTarget(db, input.professionalId, input.occurrenceId),
+      assertCustomer(db, input.professionalId, input.customerId),
+    ]);
+    if (target.status !== "scheduled") throw new PlanError("unavailable");
+    const coverage = proCoverage(input.asGuest, target.bookingMode);
+    const forced = input.ticketId ?? null;
+    if (forced !== null) {
+      if (coverage !== "ticket") throw new PlanError("invalid");
+      const usable = await usableTickets(db, { customerId: input.customerId, occurrenceId: input.occurrenceId });
+      if (!usable.some((t) => t.id === forced)) throw new PlanError("not_eligible");
+    }
+    const answers = buildAnswers(await loadQuestions(db, { eventId: target.eventId }), input.answers, {
+      enforceRequired: false,
+    });
+    if (!answers.ok) throw new PlanError("invalid", answers.message);
+    const answerRows = answers.rows;
+    const bookingId = nanoid();
+    planned.bookingId = bookingId;
+    planned.coverage = coverage;
+
+    return (aid) => {
+      const c: BatchCtx = { db, aid, now };
+      const { professionalId, occurrenceId, customerId } = input;
+      const queries: Query[] = [
+        lockRows(db, "occurrence", [occurrenceId]),
+        R(c, occurrenceId),
+        assertNotBooked(c, occurrenceId, customerId),
+        SEAT(c, occurrenceId, 1, { extraSeat: input.extraSeat ?? false }),
+        G(db, proRegistrationOk({ professionalId, occurrenceId, coverage }), "unavailable"),
+        insertBooking(c, {
+          id: bookingId,
+          professionalId,
+          occurrenceId,
+          customerId,
+          status: "confirmed",
+          coverage,
+          createdBy: "pro",
+          customerNotes: null,
+        }),
+      ];
+      if (coverage === "ticket") {
+        queries.push(
+          spendTicket(c, {
+            bookingId,
+            customerId,
+            occurrenceId,
+            ticketId: forced,
+            by: { actor: "pro", userId: input.actorUserId },
+          }),
+          assertSpent(c, bookingId),
+        );
+      }
+      queries.push(...insertAnswers(c, { professionalId, bookingId, rows: answerRows }));
+      return queries;
+    };
+  });
+  if (!res.ok) return failOf(res);
+  const { bookingId, coverage } = planned;
+  if (!bookingId || !coverage) throw new Error("registerPro: the plan produced no booking");
+  return {
+    ok: true,
+    effects: confirmedEffects(bookingId, input.occurrenceId, false),
+    bookingId,
+    coverage,
+    ticketId: coverage === "ticket" ? await bookedTicketOf(db, bookingId) : null,
   };
 }
