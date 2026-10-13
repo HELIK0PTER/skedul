@@ -335,6 +335,73 @@ dbTest("setTypeQuestions keeps known ids, inserts new ones, deletes the rest; an
   );
 });
 
+dbTest("setTypeQuestions fails stale when a kept question vanished meanwhile, and changes nothing", async ({ db, pro }) => {
+  const { ticketTypeId } = must(
+    await createTicketType(db, { professionalId: pro.proId, type: { name: "Particulier", rdvEnabled: true, rdvDurationMin: 60 } }),
+  );
+  must(
+    await setTypeQuestions(db, {
+      professionalId: pro.proId,
+      ticketTypeId,
+      questions: [
+        { label: "Objectif ?", type: "text" },
+        { label: "Niveau ?", type: "text" },
+      ],
+    }),
+  );
+  const [kept, other] = await db
+    .select()
+    .from(question)
+    .where(eq(question.ticketTypeId, ticketTypeId))
+    .orderBy(asc(question.position));
+
+  // Another save (a second tab) removes the question this save wants to keep, after this save read its state.
+  const res = await setTypeQuestions(
+    db,
+    {
+      professionalId: pro.proId,
+      ticketTypeId,
+      questions: [
+        { id: kept.id, label: "Votre objectif ?", type: "text" },
+        { label: "Matériel ?", type: "boolean" },
+      ],
+    },
+    new Date(),
+    {
+      afterPlan: async () => {
+        await db.delete(question).where(eq(question.id, kept.id));
+      },
+    },
+  );
+  assert.deepEqual(res, { ok: false, code: "stale" });
+
+  const rows = await db.select().from(question).where(eq(question.ticketTypeId, ticketTypeId));
+  assert.deepEqual(
+    rows.map((q) => [q.id, q.label]),
+    [[other.id, "Niveau ?"]],
+    "the batch rolled back: the dropped question is still there and nothing was inserted",
+  );
+});
+
+dbTest("setAvailabilityRules never treats an empty type id as the global scope", async ({ db, pro }) => {
+  must(
+    await setAvailabilityRules(db, {
+      professionalId: pro.proId,
+      ticketTypeId: null,
+      rules: [{ dayOfWeek: 1, startMinute: 540, endMinute: 720 }],
+    }),
+  );
+  assert.deepEqual(await setAvailabilityRules(db, { professionalId: pro.proId, ticketTypeId: "", rules: [] }), {
+    ok: false,
+    code: "not_found",
+  });
+  const rules = await db
+    .select({ d: availabilityRule.dayOfWeek, s: availabilityRule.startMinute, e: availabilityRule.endMinute })
+    .from(availabilityRule)
+    .where(and(eq(availabilityRule.professionalId, pro.proId), isNull(availabilityRule.ticketTypeId)));
+  assert.deepEqual(rules, [{ d: 1, s: 540, e: 720 }], "the global hours are untouched");
+});
+
 dbTest("updateBookingSettings validates the bounds; hasDomainData sees the catalog", async ({ db, pro }) => {
   assert.equal(await hasDomainData(db, pro.proId), false);
   must(

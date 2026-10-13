@@ -276,7 +276,7 @@ export async function setAvailabilityRules(
   if (!parsed.ok) return parsed;
   const { professionalId, ticketTypeId } = input;
   const res = await tryAtomic(db, async () => {
-    if (ticketTypeId) {
+    if (ticketTypeId !== null) {
       const [type] = await db
         .select({ id: ticketType.id })
         .from(ticketType)
@@ -294,9 +294,9 @@ export async function setAvailabilityRules(
       updatedAt: now,
     }));
     return () => {
-      const scope = ticketTypeId ? eq(availabilityRule.ticketTypeId, ticketTypeId) : isNull(availabilityRule.ticketTypeId);
+      const scope = ticketTypeId !== null ? eq(availabilityRule.ticketTypeId, ticketTypeId) : isNull(availabilityRule.ticketTypeId);
       const qs: Query[] = [db.delete(availabilityRule).where(and(eq(availabilityRule.professionalId, professionalId), scope))];
-      if (ticketTypeId) qs.push(G(db, typeExists(professionalId, ticketTypeId), "not_found"));
+      if (ticketTypeId !== null) qs.push(G(db, typeExists(professionalId, ticketTypeId), "not_found"));
       if (rows.length > 0) qs.push(db.insert(availabilityRule).values(rows));
       return qs;
     };
@@ -310,12 +310,15 @@ const questionsSchema = z.array(questionInputSchema).max(BOUNDS.questions);
  * Replaces the RDV questions of a type, in one batch: questions sent with a
  * known id are updated in place, the others inserted, the missing ones
  * deleted. Position = list order. Past answers keep question_label (their
- * question_id is SET NULL). Errors: invalid, not_found.
+ * question_id is SET NULL). Errors: invalid, not_found, stale (a kept question
+ * was deleted by another save in between: nothing is written). `opts` is
+ * test-only (stages that race).
  */
 export async function setTypeQuestions(
   db: Db,
   input: { professionalId: string; ticketTypeId: string; questions: QuestionInput[] },
   now: Date = new Date(),
+  opts: { afterPlan?: () => Promise<void> } = {},
 ): Promise<EngineResult> {
   const parsed = parse(questionsSchema, input.questions);
   if (!parsed.ok) return parsed;
@@ -371,6 +374,16 @@ export async function setTypeQuestions(
             .where(and(eq(question.id, r.id), eq(question.ticketTypeId, ticketTypeId))),
         );
       }
+      // A kept question deleted since plan() (a second save) updates 0 rows without aborting: the whole save is stale.
+      if (kept.length > 0) {
+        qs.push(
+          G(
+            db,
+            sql`(select count(*)::int from question where id = any(${textArray(kept)}) and ticket_type_id = ${ticketTypeId} and professional_id = ${professionalId}) = ${kept.length}::int`,
+            "stale",
+          ),
+        );
+      }
       const added = rows.filter((x) => !x.keep);
       if (added.length > 0) {
         qs.push(
@@ -389,7 +402,7 @@ export async function setTypeQuestions(
       qs.push(G(db, typeExists(professionalId, ticketTypeId), "not_found"));
       return qs;
     };
-  });
+  }, { afterPlan: opts.afterPlan });
   return res.ok ? { ok: true, effects: [] } : failOf(res);
 }
 
