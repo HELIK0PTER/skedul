@@ -183,8 +183,9 @@ export function buildAuthOptions(deps: AuthDeps) {
       // Per-address cap (5 reset mails an hour, own counter so that reset spam
       // cannot block the sign-in codes), taken HERE and not in hooks.before: this
       // runs only once the endpoint has validated the request and found the
-      // account, so only real mails count and a bad request cannot burn the
-      // victim's cap. Past the cap nothing is sent and nothing is thrown, so the
+      // account, so only the mails we try to send count (a Resend failure counts
+      // too) and a bad request cannot burn the victim's cap. Past the cap
+      // nothing is sent and nothing is thrown, so the
       // endpoint answers like for any valid request. If the counter itself
       // throws, no mail goes out (closed); Better Auth's runInBackgroundOrAwait
       // catches and logs the error, so the answer does not change either.

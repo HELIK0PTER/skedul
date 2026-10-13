@@ -1213,8 +1213,8 @@ appelle `stripe.checkout.sessions.expire` pour chacun (au mieux). Ensuite seulem
 - **Demandes de réinitialisation** : même plafond (5 par heure et par adresse), avec **son propre
   compteur** (`t:reset:e:…`, distinct de `t:otp:e:…`) : un spam de réinitialisation ne doit pas
   bloquer les codes de connexion de l'adresse. Le plafond compte les mails de réinitialisation
-  **réellement envoyés** : `sendResetPassword` l'applique, et non un `hooks.before`, qui s'exécute
-  avant la validation. Une requête que l'endpoint rejette (adresse mal formée, `redirectTo`
+  **que l'on tente d'envoyer** (un échec Resend compte aussi) : `sendResetPassword` l'applique,
+  et non un `hooks.before`, qui s'exécute avant la validation. Une requête que l'endpoint rejette (adresse mal formée, `redirectTo`
   refusé) ou qui vise une adresse sans compte ne compte donc pas, et ne peut pas priver la victime
   de son lien. Au-delà, `sendResetPassword` n'envoie rien et rend la main sans erreur : la
   réponse de l'endpoint reste la sienne, identique à celle de toute requête valide (`{ status:
@@ -1261,9 +1261,9 @@ charge), passent par la même table `throttle` : les codes de connexion et de co
 - **Correctif** : un hook `databaseHooks.user.update.before`. Il ne réagit qu'à la mise à jour qui
   passe `emailVerified` à vrai pendant `/sign-in/email-otp` : la route ne l'émet que pour un
   utilisateur non vérifié, après avoir consommé le code et **avant** de créer la session. Le hook
-  retrouve l'utilisateur par l'email du corps de la requête, comme la route, puis, en **une seule
-  requête SQL** (les deux suppressions passent ensemble ou pas du tout). Le hook n'agit que si
-  l'utilisateur a un compte `credential` et que l'adresse n'est pas encore vérifiée ; sans compte
+  retrouve l'utilisateur par l'email du corps de la requête, comme la route, puis fait ce qui suit
+  en **une seule requête SQL** (les deux suppressions passent ensemble ou pas du tout). Il n'agit
+  que si l'utilisateur a un compte `credential` et que l'adresse n'est pas encore vérifiée ; sans compte
   `credential`, il ne supprime aucune session et n'envoie aucun mail. Dans ce cas, il :
   - supprime ce compte `credential` ;
   - supprime **toutes** les sessions de l'utilisateur : celle de cette connexion n'existe pas
