@@ -8,7 +8,13 @@ import { TZDate } from "@date-fns/tz";
 import { Button } from "@/components/ui/button";
 import { SessionDetailDialog } from "@/components/dashboard/session-detail-dialog";
 import { ManualBookingButton } from "@/components/dashboard/manual-booking-form";
-import { DAYS_FR, dayKeyInTz, formatTime, minutesToLabel } from "@/lib/datetime";
+import {
+  DAYS_FR,
+  dayKeyInTz,
+  formatTime,
+  minutesToLabel,
+  wallClockMinutes,
+} from "@/lib/datetime";
 import { cn } from "@/lib/utils";
 
 export type PlanningAttendeeVM = {
@@ -39,11 +45,6 @@ export type PlanningTimeOffVM = {
 };
 
 const HOUR_PX = 60;
-
-function localMidnightForKey(key: string, tz: string): number {
-  const [y, m, d] = key.split("-").map(Number);
-  return new TZDate(y, m - 1, d, 0, 0, 0, tz).getTime();
-}
 
 export function PlanningCalendar(props: {
   tz: string;
@@ -106,10 +107,10 @@ export function PlanningCalendar(props: {
       : fmt({ day: "numeric", month: "long", year: "numeric" }).format(first);
   const weekLabel = `${startLabel} – ${fmt({ day: "numeric", month: "long", year: "numeric" }).format(last)}`;
 
-  const topPx = (iso: string, key: string) =>
-    ((new Date(iso).getTime() - localMidnightForKey(key, tz)) / 60_000 -
-      startHour * 60) *
-    (HOUR_PX / 60);
+  // Wall-clock minutes, not time elapsed since midnight: on a DST Sunday a
+  // 19:00 session must sit on the 19:00 line.
+  const topPx = (iso: string) =>
+    (wallClockMinutes(new Date(iso), tz) - startHour * 60) * (HOUR_PX / 60);
   const heightPx = (a: string, b: string) =>
     Math.max(
       22,
@@ -119,7 +120,7 @@ export function PlanningCalendar(props: {
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-1">
             <Button asChild variant="ghost" size="sm">
               <Link href={`/dashboard/planning?week=${props.nav.prevParam}`} aria-label="Semaine précédente">
@@ -207,7 +208,7 @@ export function PlanningCalendar(props: {
                         key={t.id}
                         className="absolute inset-x-0.5 rounded bg-muted/60 [background-image:repeating-linear-gradient(45deg,transparent,transparent_6px,rgba(0,0,0,0.05)_6px,rgba(0,0,0,0.05)_12px)]"
                         style={{
-                          top: topPx(t.startAt, key),
+                          top: topPx(t.startAt),
                           height: heightPx(t.startAt, t.endAt),
                         }}
                         title={t.reason ?? "Indisponible"}
@@ -222,7 +223,7 @@ export function PlanningCalendar(props: {
                           onClick={() => setSelectedId(s.id)}
                           className="absolute inset-x-0.5 overflow-hidden rounded-lg border border-black/10 p-1 text-left text-[11px] leading-tight text-white shadow-sm transition-opacity hover:opacity-90"
                           style={{
-                            top: topPx(s.startAt, key),
+                            top: topPx(s.startAt),
                             height: heightPx(s.startAt, s.endAt),
                             backgroundColor: s.eventColor,
                           }}

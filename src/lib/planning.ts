@@ -1,13 +1,15 @@
 import { TZDate } from "@date-fns/tz";
 
-import { dayKeyInTz } from "@/lib/datetime";
+import {
+  addDaysToKey,
+  dayKeyInTz,
+  dayOfWeekForKey,
+  startOfDayKey,
+} from "@/lib/datetime";
 
-/** Local midnight (as a UTC instant) of the calendar day `instant` falls on, in `tz`. */
-function localMidnight(instant: Date, tz: string): Date {
-  const z = new TZDate(instant.getTime(), tz);
-  return new Date(
-    new TZDate(z.getFullYear(), z.getMonth(), z.getDate(), 0, 0, 0, tz).getTime(),
-  );
+/** The Monday (YYYY-MM-DD) of the week that contains `key`. */
+function mondayKeyOf(key: string): string {
+  return addDaysToKey(key, -((dayOfWeekForKey(key) + 6) % 7));
 }
 
 /** Monday 00:00 (local) of the week containing `param` (YYYY-MM-DD) or `now`. */
@@ -16,36 +18,34 @@ export function weekStartFromParam(
   tz: string,
   now: Date,
 ): Date {
-  let base: Date;
-  if (param && /^\d{4}-\d{2}-\d{2}$/.test(param)) {
-    const [y, m, d] = param.split("-").map(Number);
-    base = new Date(new TZDate(y, m - 1, d, 12, 0, 0, tz).getTime());
-  } else {
-    base = now;
-  }
-  const midnight = localMidnight(base, tz);
-  const z = new TZDate(midnight.getTime(), tz);
-  const dow = z.getDay(); // 0=Sun..6=Sat
-  const backToMonday = (dow + 6) % 7; // days since Monday
-  return new Date(midnight.getTime() - backToMonday * 86_400_000);
+  const key =
+    param && /^\d{4}-\d{2}-\d{2}$/.test(param)
+      ? addDaysToKey(param, 0) // normalizes an overflowing date like 2026-02-31
+      : dayKeyInTz(now, tz);
+  return startOfDayKey(mondayKeyOf(key), tz);
 }
 
-export function weekBounds(weekStart: Date): { start: Date; end: Date } {
-  return {
-    start: weekStart,
-    end: new Date(weekStart.getTime() + 7 * 86_400_000),
-  };
+/** [Monday 00:00, next Monday 00:00) in local time — 167 h or 169 h on DST weeks. */
+export function weekBounds(weekStart: Date, tz: string): { start: Date; end: Date } {
+  const monday = dayKeyInTz(weekStart, tz);
+  return { start: weekStart, end: startOfDayKey(addDaysToKey(monday, 7), tz) };
 }
 
-export function weekDays(weekStart: Date): Date[] {
-  return Array.from(
-    { length: 7 },
-    (_, i) => new Date(weekStart.getTime() + i * 86_400_000),
+/** The 7 local midnights Monday → Sunday. */
+export function weekDays(weekStart: Date, tz: string): Date[] {
+  const monday = dayKeyInTz(weekStart, tz);
+  return Array.from({ length: 7 }, (_, i) =>
+    startOfDayKey(addDaysToKey(monday, i), tz),
   );
 }
 
-export function minutesIntoDay(instant: Date, dayStart: Date): number {
-  return Math.round((instant.getTime() - dayStart.getTime()) / 60_000);
+/** The `?week=` param of the week `deltaWeeks` away from `weekStart`. */
+export function adjacentWeekParam(
+  weekStart: Date,
+  tz: string,
+  deltaWeeks: number,
+): string {
+  return addDaysToKey(dayKeyInTz(weekStart, tz), 7 * deltaWeeks);
 }
 
 export function gridRange(

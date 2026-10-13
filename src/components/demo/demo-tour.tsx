@@ -17,9 +17,10 @@ import { TourControls } from "./tour-controls";
 
 const TYPE_MS = 45;
 
-export function DemoTour() {
-  const [index, setIndex] = useState(0);
-  const [state, setState] = useState<DemoState>(() => stateEntering(0));
+/** `initialStep` : index de l'étape d'ouverture (lien profond `/demo?step=…`). */
+export function DemoTour({ initialStep = 0 }: { initialStep?: number }) {
+  const [index, setIndex] = useState(initialStep);
+  const [state, setState] = useState<DemoState>(() => stateEntering(initialStep));
   const [playing, setPlaying] = useState(false);
   const [cursor, setCursor] = useState({ x: FRAME_W / 2, y: 260, visible: false, clickCount: 0 });
 
@@ -132,9 +133,9 @@ export function DemoTour() {
   const goToRef = useRef(goTo);
   goToRef.current = goTo;
 
-  // Joue l'étape 1 au montage ; nettoie tout au démontage.
+  // Joue l'étape d'ouverture au montage ; nettoie tout au démontage.
   useEffect(() => {
-    goToRef.current(0);
+    goToRef.current(initialStep);
     return clearTimers;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -166,7 +167,9 @@ export function DemoTour() {
   const isOutro = step.chapter === "outro";
 
   return (
-    <div className="mx-auto grid w-full max-w-6xl gap-6 px-5 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
+    // minmax(0,1fr) on phones too: an `auto` column would grow to the frame's
+    // nowrap URL (different at each step), widening the page and the controls.
+    <div className="mx-auto grid w-full max-w-6xl grid-cols-[minmax(0,1fr)] gap-6 px-5 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
       <div className="mx-auto w-full max-w-[min(960px,calc((100dvh-240px)*960/840))]">
         {isOutro ? (
           <Outro

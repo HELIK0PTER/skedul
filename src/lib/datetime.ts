@@ -97,3 +97,31 @@ export function formatDateTimeShort(d: Date, tz: string): string {
     timeZone: tz,
   }).format(d);
 }
+
+/** Adds `n` calendar days to a YYYY-MM-DD key (civil arithmetic, no time zone). */
+export function addDaysToKey(key: string, n: number): string {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
+/** 0 = Sunday … 6 = Saturday, for a YYYY-MM-DD key. */
+export function dayOfWeekForKey(key: string): number {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+}
+
+/** Local midnight of the calendar day `key` in `tz`, as an instant. */
+export function startOfDayKey(key: string, tz: string): Date {
+  const [y, m, d] = key.split("-").map(Number);
+  return instantFromWallClock(y, m, d, 0, tz);
+}
+
+/**
+ * Minutes on the wall clock (hours × 60 + minutes) of `instant` in `tz`.
+ * Unlike "time elapsed since local midnight", 19:00 is 1140 even on a
+ * 23- or 25-hour DST day.
+ */
+export function wallClockMinutes(instant: Date, tz: string): number {
+  const z = new TZDate(instant.getTime(), tz);
+  return z.getHours() * 60 + z.getMinutes();
+}

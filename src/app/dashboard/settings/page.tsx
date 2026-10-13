@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { ProfileForm } from "@/components/dashboard/profile-form";
 import { BrandingForm } from "@/components/dashboard/branding-form";
 import { GoogleCalendarCard } from "@/components/dashboard/google-calendar-card";
+import { SlugEditor } from "@/components/dashboard/slug-editor";
 import { SignOutButton } from "@/components/sign-out-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { env } from "@/lib/env";
@@ -26,12 +27,7 @@ export default async function SettingsPage() {
       <Card className="mb-6">
         <CardHeader>
           <CardTitle>Profil public</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Adresse :{" "}
-            <span className="font-mono text-foreground">
-              {env.APP_URL}/{pro.slug}
-            </span>
-          </p>
+          <SlugEditor appUrl={env.APP_URL} slug={pro.slug} />
         </CardHeader>
         <CardContent>
           <ProfileForm
