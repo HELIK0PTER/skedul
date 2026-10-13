@@ -1,0 +1,500 @@
+/**
+ * Taking a seat (spec § 11): E1 buy + book, E2 held ticket and pro « Inscrire »,
+ * E3 free registration, E4 RDV libre. Every write is ONE tryAtomic batch:
+ * lock first (professional → occurrence → customer), R + SEAT once per
+ * occurrence, every guard followed by an assert, ids made in the plan. The
+ * engine never calls Stripe: E1 and E4 « buy » return the pending purchase;
+ * the P4/P5 action creates the Checkout session, then attachCheckoutSession.
+ */
+import { and, eq, gt, inArray, or, sql, type SQL } from "drizzle-orm";
+import { nanoid } from "nanoid";
+
+import { effectiveWindow, onlineBookability, type BookingWindow } from "@/lib/booking-window";
+import {
+  G,
+  PlanError,
+  R,
+  SEAT,
+  lockRows,
+  ts,
+  tryAtomic,
+  type BatchCtx,
+  type Db,
+  type Query,
+} from "@/lib/db/atomic";
+import {
+  booking,
+  customer,
+  event,
+  eventTicketType,
+  occurrence,
+  professional,
+  ticketOffer,
+  ticketPurchase,
+  ticketType,
+} from "@/lib/db/schema";
+import { offerCovers, validityOf } from "@/lib/ticket-expiry";
+import {
+  BOUNDS,
+  offerLabel,
+  type Actor,
+  type AnswerInput,
+  type BookingCoverage,
+  type BookingMode,
+  type BookingStatus,
+  type OccurrenceStatus,
+  type ValidityUnit,
+} from "@/lib/tickets";
+
+import { buildAnswers, insertAnswers, loadQuestions } from "./answers";
+import { assertHoldQuota, checkoutExpiry, holdExpiry } from "./holds";
+import { fail, failOf, type EngineResult } from "./types";
+
+/* ───────────────────────── Shared types ───────────────────────── */
+
+/** What every client claim on an event séance carries. */
+type ClientClaimBase = {
+  professionalId: string;
+  occurrenceId: string;
+  /** from upsertCustomer (or the verified wallet owner) */
+  customerId: string;
+  /** occurrence.starts_at the client saw: G(starts_at = seen, 'changed') */
+  seenStartsAt: Date;
+  answers?: AnswerInput[];
+  customerNotes?: string | null;
+};
+
+export type BuyAndBookInput = ClientClaimBase & { offerId: string };
+export type BuyAndBookData = {
+  purchaseId: string;
+  bookingId: string;
+  checkoutExpiresAt: Date;
+  amountCents: number;
+  currency: string;
+  label: string;
+  quantity: number;
+  ticketTypeName: string;
+};
+
+/** Test-only hook: runs once between the first plan and its batch (deterministic races). */
+type RaceOpts = { afterPlan?: () => Promise<void> };
+
+/* ─────────────── Engine-internal helpers (also used by fulfillment.ts) ─────────────── */
+
+/** Customer ids are per pro: a customer of another pro is not_found. */
+export async function assertCustomer(db: Db, professionalId: string, customerId: string): Promise<void> {
+  const [row] = await db
+    .select({ id: customer.id })
+    .from(customer)
+    .where(and(eq(customer.id, customerId), eq(customer.professionalId, professionalId)));
+  if (!row) throw new PlanError("not_found");
+}
+
+/** An offer of this pro with its type, read for a purchase snapshot. */
+export type OfferRow = {
+  offerId: string;
+  ticketTypeId: string;
+  ticketTypeName: string;
+  /** offerLabel(): « À l'unité », « Carnet de 10 » or the pro's label */
+  label: string;
+  quantity: number;
+  priceCents: number;
+  validityCount: number | null;
+  validityUnit: ValidityUnit | null;
+  /** active, not archived, type not archived */
+  onSale: boolean;
+  rdvEnabled: boolean;
+  rdvFree: boolean;
+  /** the pro's currency and zone */
+  currency: string;
+  tz: string;
+};
+
+export async function readOffer(db: Db, professionalId: string, offerId: string): Promise<OfferRow | null> {
+  const [row] = await db
+    .select({
+      offerId: ticketOffer.id,
+      ticketTypeId: ticketOffer.ticketTypeId,
+      ticketTypeName: ticketType.name,
+      label: ticketOffer.label,
+      quantity: ticketOffer.quantity,
+      priceCents: ticketOffer.priceCents,
+      validityCount: ticketOffer.validityCount,
+      validityUnit: ticketOffer.validityUnit,
+      isActive: ticketOffer.isActive,
+      archivedAt: ticketOffer.archivedAt,
+      typeArchivedAt: ticketType.archivedAt,
+      rdvEnabled: ticketType.rdvEnabled,
+      rdvFree: ticketType.rdvFree,
+      currency: professional.currency,
+      tz: professional.timezone,
+    })
+    .from(ticketOffer)
+    .innerJoin(ticketType, eq(ticketType.id, ticketOffer.ticketTypeId))
+    .innerJoin(professional, eq(professional.id, ticketOffer.professionalId))
+    .where(and(eq(ticketOffer.id, offerId), eq(ticketOffer.professionalId, professionalId)));
+  if (!row) return null;
+  return {
+    offerId: row.offerId,
+    ticketTypeId: row.ticketTypeId,
+    ticketTypeName: row.ticketTypeName,
+    label: offerLabel({ label: row.label, quantity: row.quantity }),
+    quantity: row.quantity,
+    priceCents: row.priceCents,
+    validityCount: row.validityCount,
+    validityUnit: row.validityUnit,
+    onSale: row.isActive && row.archivedAt === null && row.typeArchivedAt === null,
+    rdvEnabled: row.rdvEnabled,
+    rdvFree: row.rdvFree,
+    currency: row.currency,
+    tz: row.tz,
+  };
+}
+
+/** Where the offer is used: linked to the séance's event (E1), the RDV type itself (E4), or the shop (E9). */
+export type OfferScope =
+  | { kind: "event"; occurrenceId: string }
+  | { kind: "rdv"; ticketTypeId: string }
+  | { kind: "shop" };
+
+/**
+ * The offer is still on sale with the snapshot the plan read (price,
+ * quantity, validity) and still usable in `scope`. Asserted with 'stale'.
+ */
+export function offerUnchanged(o: OfferRow, professionalId: string, scope: OfferScope): SQL {
+  const link =
+    scope.kind === "event"
+      ? sql`join occurrence o on o.id = ${scope.occurrenceId}
+        join event_ticket_type l on l.event_id = o.event_id and l.ticket_type_id = f.ticket_type_id`
+      : sql``;
+  const rdv =
+    scope.kind === "rdv"
+      ? sql`and f.ticket_type_id = ${scope.ticketTypeId} and tt.rdv_enabled and not tt.rdv_free`
+      : sql``;
+  return sql`exists (
+    select 1 from ticket_offer f
+    join ticket_type tt on tt.id = f.ticket_type_id
+    ${link}
+    where f.id = ${o.offerId} and f.professional_id = ${professionalId}
+      and f.is_active and f.archived_at is null and tt.archived_at is null
+      and f.price_cents = ${o.priceCents}::int and f.quantity = ${o.quantity}::int
+      and f.validity_count is not distinct from ${o.validityCount}::int
+      and f.validity_unit is not distinct from ${o.validityUnit}::validity_unit
+      ${rdv}
+  )`;
+}
+
+/** INSERT ticket_purchase: pending, snapshot of the offer, the pro's currency. */
+export function insertPurchase(
+  c: BatchCtx,
+  p: { id: string; professionalId: string; customerId: string; offer: OfferRow; checkoutExpiresAt: Date },
+): Query {
+  return c.db.insert(ticketPurchase).values({
+    id: p.id,
+    professionalId: p.professionalId,
+    customerId: p.customerId,
+    offerId: p.offer.offerId,
+    ticketTypeId: p.offer.ticketTypeId,
+    label: p.offer.label,
+    quantity: p.offer.quantity,
+    amountCents: p.offer.priceCents,
+    currency: p.offer.currency,
+    validityCount: p.offer.validityCount,
+    validityUnit: p.offer.validityUnit,
+    status: "pending",
+    checkoutExpiresAt: p.checkoutExpiresAt,
+    createdAt: c.now,
+    updatedAt: c.now,
+  });
+}
+
+/* ───────────────────────── Claim helpers ───────────────────────── */
+
+/** Customer notes: trimmed, empty → null, at most BOUNDS.note characters. */
+function cleanNotes(notes: string | null | undefined): string | null {
+  const value = notes?.trim() ?? "";
+  if (value.length > BOUNDS.note) throw new PlanError("invalid", "Votre message est trop long.");
+  return value === "" ? null : value;
+}
+
+/** An EVENT séance of this pro, its event and the pro's settings. An RDV occurrence is not_found here. */
+type EventTarget = {
+  occurrenceId: string;
+  eventId: string;
+  startsAt: Date;
+  status: OccurrenceStatus;
+  bookingMode: BookingMode;
+  isPrivate: boolean;
+  archived: boolean;
+  tz: string;
+  window: BookingWindow;
+};
+
+async function readEventTarget(db: Db, professionalId: string, occurrenceId: string): Promise<EventTarget> {
+  const [row] = await db
+    .select({
+      eventId: event.id,
+      startsAt: occurrence.startsAt,
+      status: occurrence.status,
+      bookingMode: event.bookingMode,
+      isPrivate: event.isPrivate,
+      archivedAt: event.archivedAt,
+      eventHorizonDays: event.bookingHorizonDays,
+      eventNoticeMinutes: event.minNoticeMinutes,
+      eventCancelHours: event.cancelDeadlineHours,
+      tz: professional.timezone,
+      bookingHorizonDays: professional.bookingHorizonDays,
+      minNoticeMinutes: professional.minNoticeMinutes,
+      cancelDeadlineHours: professional.cancelDeadlineHours,
+    })
+    .from(occurrence)
+    .innerJoin(event, eq(event.id, occurrence.eventId))
+    .innerJoin(professional, eq(professional.id, occurrence.professionalId))
+    .where(and(eq(occurrence.id, occurrenceId), eq(occurrence.professionalId, professionalId)));
+  if (!row) throw new PlanError("not_found");
+  return {
+    occurrenceId,
+    eventId: row.eventId,
+    startsAt: row.startsAt,
+    status: row.status,
+    bookingMode: row.bookingMode,
+    isPrivate: row.isPrivate,
+    archived: row.archivedAt !== null,
+    tz: row.tz,
+    window: effectiveWindow(
+      {
+        bookingHorizonDays: row.bookingHorizonDays,
+        minNoticeMinutes: row.minNoticeMinutes,
+        cancelDeadlineHours: row.cancelDeadlineHours,
+      },
+      {
+        bookingHorizonDays: row.eventHorizonDays,
+        minNoticeMinutes: row.eventNoticeMinutes,
+        cancelDeadlineHours: row.eventCancelHours,
+      },
+    ),
+  };
+}
+
+/** Plan-time twin of ONLINE_OK + CHANGED; the batch re-asserts both under the lock. */
+function assertOnline(t: EventTarget, mode: "tickets" | "free", seenStartsAt: Date, now: Date): void {
+  if (t.status !== "scheduled" || t.bookingMode !== mode || t.isPrivate || t.archived) {
+    throw new PlanError("unavailable");
+  }
+  if (t.startsAt.getTime() !== seenStartsAt.getTime()) throw new PlanError("changed");
+  if (!onlineBookability({ startsAt: t.startsAt, now, tz: t.tz, window: t.window }).ok) {
+    throw new PlanError("unavailable");
+  }
+}
+
+/**
+ * ONLINE_OK(mode): the séance is open to online claims in `mode` (spec § 7):
+ * scheduled, public, not archived, notice and local-date horizon (event
+ * overrides, else the pro's), no overlapping time off. Asserted 'unavailable'.
+ */
+function onlineOk(c: BatchCtx, a: { professionalId: string; occurrenceId: string; mode: "tickets" | "free" }): SQL {
+  return sql`exists (
+    select 1 from occurrence o
+    join event e on e.id = o.event_id
+    join professional p on p.id = o.professional_id
+    where o.id = ${a.occurrenceId} and o.professional_id = ${a.professionalId} and o.status = 'scheduled'
+      and e.booking_mode = ${a.mode}::booking_mode and not e.is_private and e.archived_at is null
+      and o.starts_at >= ${ts(c.now)} + make_interval(mins => coalesce(e.min_notice_minutes, p.min_notice_minutes))
+      and (o.starts_at at time zone p.timezone)::date
+          <= (${ts(c.now)} at time zone p.timezone)::date + coalesce(e.booking_horizon_days, p.booking_horizon_days)
+      and not exists (select 1 from time_off t where t.professional_id = o.professional_id
+                      and t.start_at < o.ends_at and t.end_at > o.starts_at)
+  )`;
+}
+
+/** CHANGED: the séance still starts when the client saw it. Asserted 'changed'. */
+function unchangedStart(occurrenceId: string, seenStartsAt: Date): SQL {
+  return sql`(select starts_at from occurrence where id = ${occurrenceId}) = ${ts(seenStartsAt)}`;
+}
+
+/** The offer's type is accepted by the séance's event (live link). */
+async function offerLinkedToEvent(db: Db, offerId: string, eventId: string): Promise<boolean> {
+  const rows = await db
+    .select({ eventId: eventTicketType.eventId })
+    .from(eventTicketType)
+    .innerJoin(ticketOffer, eq(ticketOffer.ticketTypeId, eventTicketType.ticketTypeId))
+    .where(and(eq(ticketOffer.id, offerId), eq(eventTicketType.eventId, eventId)));
+  return rows.length > 0;
+}
+
+type NewBooking = {
+  id: string;
+  professionalId: string;
+  occurrenceId: string;
+  customerId: string;
+  coverage: BookingCoverage;
+  createdBy: Actor;
+  customerNotes: string | null;
+} & ({ status: "confirmed" } | { status: "pending"; purchaseId: string; holdExpiresAt: Date });
+
+function insertBooking(c: BatchCtx, b: NewBooking): Query {
+  return c.db.insert(booking).values({
+    id: b.id,
+    professionalId: b.professionalId,
+    occurrenceId: b.occurrenceId,
+    customerId: b.customerId,
+    status: b.status,
+    coverage: b.coverage,
+    purchaseId: b.status === "pending" ? b.purchaseId : null,
+    createdBy: b.createdBy,
+    holdExpiresAt: b.status === "pending" ? b.holdExpiresAt : null,
+    confirmedAt: b.status === "confirmed" ? c.now : null,
+    customerNotes: b.customerNotes,
+    createdAt: c.now,
+    updatedAt: c.now,
+  });
+}
+
+/* ───────────────────────── E1: buy + book ───────────────────────── */
+
+/**
+ * E1. Plan: séance scheduled and open online (tickets mode, public, not
+ * archived, notice, horizon), seen start, offer on sale and linked, offer
+ * validity covers the séance, answers. Batch: lock occurrence → customer,
+ * R(o), SEAT(o, +1), G(ONLINE_OK), G(CHANGED), G(offer unchanged), hold
+ * quota, INSERT purchase (pending) and booking (pending, hold), answers.
+ * Effects: none (the action creates the Checkout session).
+ */
+export async function startBuyAndBook(
+  db: Db,
+  input: BuyAndBookInput,
+  now: Date = new Date(),
+  opts: RaceOpts = {},
+): Promise<EngineResult<BuyAndBookData>> {
+  const planned: { data?: BuyAndBookData } = {};
+  const res = await tryAtomic(
+    db,
+    async () => {
+      const notes = cleanNotes(input.customerNotes);
+      const [target] = await Promise.all([
+        readEventTarget(db, input.professionalId, input.occurrenceId),
+        assertCustomer(db, input.professionalId, input.customerId),
+      ]);
+      assertOnline(target, "tickets", input.seenStartsAt, now);
+      const [offer, linked, questions] = await Promise.all([
+        readOffer(db, input.professionalId, input.offerId),
+        offerLinkedToEvent(db, input.offerId, target.eventId),
+        loadQuestions(db, { eventId: target.eventId }),
+      ]);
+      if (!offer) throw new PlanError("not_found");
+      if (!offer.onSale || !linked) throw new PlanError("unavailable");
+      if (!offerCovers(now, validityOf(offer), target.tz, target.startsAt)) throw new PlanError("offer_too_short");
+      const answers = buildAnswers(questions, input.answers, { enforceRequired: true });
+      if (!answers.ok) throw new PlanError("invalid", answers.message);
+      const answerRows = answers.rows;
+
+      const purchaseId = nanoid();
+      const bookingId = nanoid();
+      const checkoutExpiresAt = checkoutExpiry(now, "buybook");
+      planned.data = {
+        purchaseId,
+        bookingId,
+        checkoutExpiresAt,
+        amountCents: offer.priceCents,
+        currency: offer.currency,
+        label: offer.label,
+        quantity: offer.quantity,
+        ticketTypeName: offer.ticketTypeName,
+      };
+
+      return (aid) => {
+        const c: BatchCtx = { db, aid, now };
+        const { professionalId, occurrenceId, customerId } = input;
+        return [
+          lockRows(db, "occurrence", [occurrenceId]),
+          lockRows(db, "customer", [customerId]),
+          R(c, occurrenceId),
+          SEAT(c, occurrenceId, 1),
+          G(db, onlineOk(c, { professionalId, occurrenceId, mode: "tickets" }), "unavailable"),
+          G(db, unchangedStart(occurrenceId, input.seenStartsAt), "changed"),
+          G(db, offerUnchanged(offer, professionalId, { kind: "event", occurrenceId }), "stale"),
+          assertHoldQuota(c, customerId),
+          insertPurchase(c, { id: purchaseId, professionalId, customerId, offer, checkoutExpiresAt }),
+          insertBooking(c, {
+            id: bookingId,
+            professionalId,
+            occurrenceId,
+            customerId,
+            status: "pending",
+            coverage: "ticket",
+            purchaseId,
+            holdExpiresAt: holdExpiry(now),
+            createdBy: "client",
+            customerNotes: notes,
+          }),
+          ...insertAnswers(c, { professionalId, bookingId, rows: answerRows }),
+        ];
+      };
+    },
+    { afterPlan: opts.afterPlan },
+  );
+  if (!res.ok) return failOf(res);
+  if (!planned.data) throw new Error("startBuyAndBook: the plan produced no data");
+  return { ok: true, effects: [], ...planned.data };
+}
+
+/**
+ * After Stripe answered (E1, E4 buy, E9): one guarded UPDATE. A purchase that
+ * is no longer pending → stale (the action then expires the session).
+ */
+export async function attachCheckoutSession(
+  db: Db,
+  input: { purchaseId: string; checkoutSessionId: string; checkoutUrl: string },
+  now: Date = new Date(),
+): Promise<EngineResult> {
+  const rows = await db
+    .update(ticketPurchase)
+    .set({ checkoutSessionId: input.checkoutSessionId, checkoutUrl: input.checkoutUrl, updatedAt: now })
+    .where(and(eq(ticketPurchase.id, input.purchaseId), eq(ticketPurchase.status, "pending")))
+    .returning({ id: ticketPurchase.id });
+  return rows.length === 1 ? { ok: true, effects: [] } : fail("stale");
+}
+
+/**
+ * « Reprendre le paiement »: the customer's active booking on the occurrence
+ * (confirmed, or pending with a live hold at `now`). `purchaseId` while that
+ * purchase is pending (« Libérer ma place »); `checkoutUrl` only while it is
+ * pending AND its Checkout session is still open (checkout_expires_at > now).
+ * The session closes at 31 min but the hold lasts 45 min: in between the URL
+ * would be dead, so it is withheld.
+ */
+export async function activeBookingOf(
+  db: Db,
+  input: { occurrenceId: string; customerId: string },
+  now: Date = new Date(),
+): Promise<{ bookingId: string; status: BookingStatus; purchaseId: string | null; checkoutUrl: string | null } | null> {
+  const [row] = await db
+    .select({
+      bookingId: booking.id,
+      status: booking.status,
+      purchaseId: ticketPurchase.id,
+      purchaseStatus: ticketPurchase.status,
+      checkoutUrl: ticketPurchase.checkoutUrl,
+      checkoutExpiresAt: ticketPurchase.checkoutExpiresAt,
+    })
+    .from(booking)
+    .leftJoin(ticketPurchase, eq(ticketPurchase.id, booking.purchaseId))
+    .where(
+      and(
+        eq(booking.occurrenceId, input.occurrenceId),
+        eq(booking.customerId, input.customerId),
+        inArray(booking.status, ["pending", "confirmed"]),
+        or(eq(booking.status, "confirmed"), gt(booking.holdExpiresAt, now)),
+      ),
+    );
+  if (!row) return null;
+  const pendingPurchase = row.purchaseStatus === "pending";
+  const resumable =
+    pendingPurchase && row.checkoutExpiresAt !== null && row.checkoutExpiresAt.getTime() > now.getTime();
+  return {
+    bookingId: row.bookingId,
+    status: row.status,
+    purchaseId: pendingPurchase ? row.purchaseId : null,
+    checkoutUrl: resumable ? row.checkoutUrl : null,
+  };
+}
