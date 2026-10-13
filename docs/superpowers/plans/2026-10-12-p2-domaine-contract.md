@@ -1849,14 +1849,14 @@ export function G(db: Db, pred: SQL, code: AssertCode): Query {
 export type LockTable = "professional" | "event" | "occurrence" | "customer" | "booking" | "ticket_purchase";
 
 /**
- * `select id from <table> where id = any($ids) order by id for update`.
+ * `select id from <table> where id = any($ids) order by id for no key update`.
  * Global order (spec § 10): professional → event → occurrence → customer →
  * booking → purchase → ticket; ascending id inside a table.
  */
 export function lockRows(db: Db, table: LockTable, ids: readonly string[]): Query {
   const sorted = [...new Set(ids)].sort();
   return db.execute(
-    sql`select id from ${sql.identifier(table)} where id = any(${textArray(sorted)}) order by id for update`,
+    sql`select id from ${sql.identifier(table)} where id = any(${textArray(sorted)}) order by id for no key update`,
   );
 }
 
@@ -2082,7 +2082,7 @@ and (
   where t.customer_id = $customerId and <ELIGIBLE> [and t.id = $ticketId]
   order by t.expires_at asc nulls last, t.created_at, t.id
   limit 1
-  for update of t skip locked)
+  for no key update of t skip locked)
 ```
 
 `spendTicket`:
@@ -2362,10 +2362,10 @@ export declare function expireStalePurchases(db: Db, now?: Date): Promise<{ expi
 select o.id from occurrence o
 where exists (select 1 from booking b where b.occurrence_id = o.id and b.status = 'pending' and b.hold_expires_at < $now)
 order by o.id
-for update
+for no key update
 ```
 
-Postgres refuses `FOR UPDATE` with `DISTINCT`, hence the `EXISTS`. Then `expireElapsedHolds(c, <same id subquery>)` and `releaseEndedSeats(c)`.
+Postgres refuses `FOR NO KEY UPDATE` with `DISTINCT`, hence the `EXISTS`. Then `expireElapsedHolds(c, <same id subquery>)` and `releaseEndedSeats(c)`.
 
 ### 5.19 `src/lib/booking/cancel.ts` (Tasks 25, 26), decl
 
@@ -2437,7 +2437,7 @@ export declare function deleteSeriesFrom(db: Db, input: { professionalId: string
 
 1. `update event set version = version + 1, last_action_id = $aid, end_mode = 'until', until_date = $dMinus1::date, occurrence_count = null, updated_at = $now where id = $e and version = $v::int` → `G((select last_action_id from event where id = $e) = $aid, 'stale')`.
 2. `INSERT event` for the new segment (id `$ne`, same `series_root_id`, new rule, `generated_until = plan.generatedUntil`, version 1, `last_action_id = $aid`). Copy links with `INSERT … SELECT … FROM event_ticket_type WHERE event_id = $e`. Insert questions with JS ids read in the plan.
-3. `lockRows`-style: `select id from occurrence where event_id = $e and series_date >= $d::date order by id for update`.
+3. `lockRows`-style: `select id from occurrence where event_id = $e and series_date >= $d::date order by id for no key update`.
 4. `update occurrence set event_id = $ne, updated_at = $now where event_id = $e and series_date >= $d::date` → `G((select count(*)::int from occurrence where event_id = $ne) = $plannedRowCount, 'stale')`.
 5. Retime from `unnest($ids, $starts, $ends)`:
    - set `starts_at`, `ends_at`, `block_start`, `block_end`;
