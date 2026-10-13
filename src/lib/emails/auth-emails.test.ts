@@ -52,12 +52,19 @@ test("the password-disabled link is escaped", () => {
 });
 
 test("the password-reset e-mail keeps its content after the move", () => {
-  const html = passwordResetEmail({ name: "  Ana <b>Souza</b> ", url: "https://myskedul.com/reset?a=1&b=2" });
+  const html = passwordResetEmail({ name: "  Ana Souza ", url: "https://myskedul.com/reset?a=1&b=2" });
   assert.ok(html.includes("Choisissez un nouveau mot de passe"));
   assert.ok(html.includes("<p>Bonjour Ana,</p>"));
+  assert.ok(!html.includes("Souza"));
   assert.ok(html.includes('href="https://myskedul.com/reset?a=1&amp;b=2"'));
   assert.ok(html.includes("Ce lien est valable 1 heure et ne sert qu'une fois."));
-  assert.ok(!html.includes("<b>Souza</b>"));
+});
+
+test("the first name is escaped in the password-reset e-mail", () => {
+  // The first token is the one that gets printed, so it is the one that must be escaped.
+  const html = passwordResetEmail({ name: "<b>Ana</b> Souza", url: "https://x.test" });
+  assert.ok(html.includes("&lt;b&gt;Ana&lt;/b&gt;"));
+  assert.ok(!html.includes("<b>Ana</b>"));
 });
 
 test("an empty name gives a plain « Bonjour, »", () => {

@@ -2,6 +2,7 @@ import "server-only";
 import { Resend } from "resend";
 
 import { env } from "@/lib/env";
+import { redactSubject } from "@/lib/emails/redact-subject";
 
 export { passwordResetEmail } from "@/lib/emails/password-reset";
 
@@ -37,12 +38,12 @@ export async function sendEmail({ to, subject, html }: SendArgs): Promise<SendRe
       html,
     });
     if (error) {
-      console.error(`[email] Resend rejected "${subject}":`, error);
+      console.error(`[email] Resend rejected "${redactSubject(subject)}":`, error);
       return { id: null, mocked: false, failed: true };
     }
     return { id: data?.id ?? "unknown", mocked: false };
   } catch (err) {
-    console.error(`[email] Resend request failed for "${subject}":`, err);
+    console.error(`[email] Resend request failed for "${redactSubject(subject)}":`, err);
     return { id: null, mocked: false, failed: true };
   }
 }
