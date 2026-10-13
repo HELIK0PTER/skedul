@@ -3,10 +3,11 @@
  * séance et les suivantes » and « supprimer à partir du ». One tryAtomic
  * batch per action; series edits are version-guarded and re-plan once on stale.
  */
-import { and, asc, eq, gt, inArray, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, lt, sql, type SQL } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 
+import { addDays, minKey, todayKey, type DateKey } from "@/lib/civil-date";
 import {
   G,
   PlanError,
@@ -15,26 +16,39 @@ import {
   lockRows,
   textArray,
   ts,
+  tsArray,
   tryAtomic,
   type ActorRef,
   type BatchCtx,
   type Db,
   type Query,
 } from "@/lib/db/atomic";
-import { booking, customer, event, occurrence, question, ticket } from "@/lib/db/schema";
+import { booking, customer, event, occurrence, professional, question, ticket } from "@/lib/db/schema";
+import { lastSeriesDate, type RecurrenceRule } from "@/lib/recurrence";
+import { planSeriesEdit, type SeriesEditPlan, type SeriesEditSummary, type SeriesRow } from "@/lib/series-plan";
 import {
   BOOKING_MODES,
   BOUNDS,
+  dateKeySchema,
   hexColorSchema,
   idSchema,
   questionInputSchema,
+  recurrenceRuleSchema,
   windowOverridesSchema,
   type BookingMode,
   type QuestionInput,
+  type RecurrenceRuleInput,
   type WindowOverrides,
 } from "@/lib/tickets";
 
-import { endBookings, expireSessionEffects, readEndedByAction } from "./cancel";
+import {
+  cancelOccurrencesQuery,
+  endBookings,
+  expireSessionEffects,
+  occurrenceCancelledEffects,
+  readEndedByAction,
+} from "./cancel";
+import { horizonEnd, insertOccurrences, ruleOf, type EventRow, type OccurrenceDraft } from "./occurrences";
 import { fail, failOf, syncEffects, type Effect, type EngineResult } from "./types";
 
 /* ───────────────────────── Shared helpers ───────────────────────── */
@@ -434,4 +448,462 @@ export async function editEventInPlace(
     effects.push(...syncEffects([...byOcc.keys()]));
   }
   return { ok: true, effects, version: input.seenVersion + 1 };
+}
+
+/* ───────────────────── « Cette séance et les suivantes » ───────────────────── */
+
+/** « Séance modifiée » e-mails + Google sync for the occurrences that still have active bookings. */
+function changedEffects(byOcc: Map<string, string[]>): Effect[] {
+  const effects: Effect[] = [];
+  for (const [occurrenceId, bookingIds] of byOcc) {
+    effects.push({ type: "email.occurrence_changed", occurrenceId, bookingIds });
+  }
+  return [...effects, ...syncEffects([...byOcc.keys()])];
+}
+
+export type SeriesEditInput = {
+  professionalId: string;
+  actorUserId: string;
+  eventId: string;
+  seenVersion: number;
+  fromDate: DateKey;
+  rule: RecurrenceRuleInput;
+  durationMin: number;
+  orphans: "keep" | "cancel";
+};
+
+type SeriesContext = {
+  tz: string;
+  ev: EventRow;
+  oldRule: RecurrenceRule;
+  /** rows with series_date ≥ d, as the planner wants them */
+  rows: SeriesRow[];
+  /** false = no row before d: the edit is applied in place */
+  split: boolean;
+  /** rows of the segment (all dates): used by delete */
+  totalRows: number;
+};
+
+/**
+ * Plan reads shared by preview, edit and delete: the pro's tz, the segment,
+ * its rows ≥ d (with activity) and whether rows exist before d. Throws
+ * PlanError: not_found (unknown or archived event), invalid (d before local
+ * today or a row ≥ d already started).
+ */
+async function loadSeriesContext(
+  db: Db,
+  args: { professionalId: string; eventId: string; fromDate: DateKey },
+  now: Date,
+): Promise<SeriesContext> {
+  const [pro] = await db.select({ tz: professional.timezone }).from(professional).where(eq(professional.id, args.professionalId));
+  if (!pro) throw new PlanError("not_found");
+  const [ev] = await db
+    .select()
+    .from(event)
+    .where(and(eq(event.id, args.eventId), eq(event.professionalId, args.professionalId)));
+  if (!ev || ev.archivedAt) throw new PlanError("not_found");
+  if (!dateKeySchema.safeParse(args.fromDate).success) throw new PlanError("invalid");
+  if (args.fromDate < todayKey(now, pro.tz)) {
+    throw new PlanError("invalid", "La modification doit partir d'aujourd'hui ou d'une date future.");
+  }
+
+  // `occurrence.id` is written as plain SQL on purpose: in a single-table select, drizzle
+  // renders a column inside a sql`` field unqualified ("id"), which the subquery would
+  // resolve to b.id.
+  const rows = await db
+    .select({
+      id: occurrence.id,
+      seriesDate: occurrence.seriesDate,
+      startsAt: occurrence.startsAt,
+      endsAt: occurrence.endsAt,
+      status: occurrence.status,
+      timeDetached: occurrence.timeDetached,
+      activeBookings: sql<number>`(select count(*)::int from booking b where b.occurrence_id = occurrence.id and b.status in ('pending', 'confirmed'))`.mapWith(
+        Number,
+      ),
+      ticketBookings: sql<number>`(select count(*)::int from booking b where b.occurrence_id = occurrence.id and b.status = 'confirmed' and b.coverage = 'ticket')`.mapWith(
+        Number,
+      ),
+      hasHistory: sql<boolean>`exists (select 1 from booking b where b.occurrence_id = occurrence.id)`,
+    })
+    .from(occurrence)
+    .where(and(eq(occurrence.eventId, ev.id), gte(occurrence.seriesDate, args.fromDate)))
+    .orderBy(asc(occurrence.seriesDate));
+  if (rows.some((r) => r.startsAt.getTime() <= now.getTime())) {
+    throw new PlanError("invalid", "Une séance concernée a déjà commencé.");
+  }
+  const [before] = await db
+    .select({ n: sql<number>`count(*)::int`.mapWith(Number) })
+    .from(occurrence)
+    .where(and(eq(occurrence.eventId, ev.id), lt(occurrence.seriesDate, args.fromDate)));
+  const before_ = before?.n ?? 0;
+
+  return {
+    tz: pro.tz,
+    ev,
+    oldRule: ruleOf(ev),
+    rows: rows.map((r) => ({ ...r, seriesDate: String(r.seriesDate), hasHistory: r.hasHistory === true })),
+    split: before_ > 0,
+    totalRows: before_ + rows.length,
+  };
+}
+
+/** Validates the new rule and runs the pure planner. */
+function planEdit(
+  ctx: SeriesContext,
+  args: { fromDate: DateKey; rule: RecurrenceRuleInput; durationMin: number },
+  now: Date,
+): { plan: SeriesEditPlan; newRule: RecurrenceRule } {
+  const parsed = recurrenceRuleSchema.safeParse(args.rule);
+  if (!parsed.success) throw new PlanError("invalid", parsed.error.issues[0]?.message);
+  if (!durationOk(args.durationMin)) throw new PlanError("invalid", "Durée invalide.");
+  if (parsed.data.startDate < args.fromDate) {
+    throw new PlanError("invalid", "La nouvelle règle doit commencer à la date choisie ou après.");
+  }
+  const newRule: RecurrenceRule = { ...parsed.data, durationMin: args.durationMin };
+  const plan = planSeriesEdit({
+    tz: ctx.tz,
+    fromDate: args.fromDate,
+    horizonEnd: horizonEnd(now, ctx.tz),
+    oldRule: ctx.oldRule,
+    newRule,
+    rows: ctx.rows,
+  });
+  if (plan.retime.some((r) => r.startsAt.getTime() <= now.getTime()) || plan.insert.some((r) => r.startsAt.getTime() <= now.getTime())) {
+    throw new PlanError("invalid", "Une séance de la nouvelle règle serait déjà passée.");
+  }
+  return { plan, newRule };
+}
+
+/** Rule columns of `event` for a new rule (SET list). */
+function ruleSets(r: RecurrenceRule): SQL[] {
+  return [
+    sql`start_date = ${r.startDate}::date`,
+    sql`start_minute = ${r.startMinute}::int`,
+    sql`duration_min = ${r.durationMin}::int`,
+    sql`freq = ${r.freq}::recurrence_freq`,
+    sql`"interval" = ${r.interval}::smallint`,
+    sql`weekdays = ${r.weekdays ? sql`${sql.param(r.weekdays)}::smallint[]` : null}`,
+    sql`monthly_by = ${r.monthlyBy}::monthly_by`,
+    sql`month_week = ${r.monthWeek}::smallint`,
+    sql`end_mode = ${r.endMode}::recurrence_end`,
+    sql`until_date = ${r.untilDate}::date`,
+    sql`occurrence_count = ${r.occurrenceCount}::int`,
+  ];
+}
+
+/**
+ * The end of the old segment at d: until = min(d − 1, its last date), unless
+ * the old rule already stops before d (then its rule columns stay as they are).
+ */
+function endOldSegmentSets(oldRule: RecurrenceRule, fromDate: DateKey): SQL[] {
+  const last = lastSeriesDate(oldRule);
+  if (last !== null && last < fromDate) return [];
+  const until = last === null ? addDays(fromDate, -1) : minKey(addDays(fromDate, -1), last);
+  return [sql`end_mode = 'until'`, sql`until_date = ${until}::date`, sql`occurrence_count = null`];
+}
+
+/** Same reads as editSeriesFrom, no write: the preview the editor shows. */
+export async function previewSeriesEdit(
+  db: Db,
+  input: Omit<SeriesEditInput, "actorUserId" | "seenVersion" | "orphans">,
+  now: Date = new Date(),
+): Promise<EngineResult<{ summary: SeriesEditSummary; remainingCount: number | null; inPlace: boolean }>> {
+  try {
+    const ctx = await loadSeriesContext(db, input, now);
+    const { plan } = planEdit(ctx, input, now);
+    return { ok: true, effects: [], summary: plan.summary, remainingCount: plan.remainingCount, inPlace: !ctx.split };
+  } catch (err) {
+    if (err instanceof PlanError) return fail(err.code, err.detail);
+    throw err;
+  }
+}
+
+/**
+ * « Cette séance et les suivantes » (spec § 11 E7, contract § 5.20 batch
+ * order). Split when rows exist before d, else in place on the same event.
+ * Re-plans once on stale (a concurrent claim, ensureHorizon rows, a version bump).
+ */
+export async function editSeriesFrom(
+  db: Db,
+  input: SeriesEditInput,
+  now: Date = new Date(),
+  opts: { afterPlan?: () => Promise<void> } = {},
+): Promise<EngineResult<{ eventId: string; summary: SeriesEditSummary }>> {
+  const committed: { plan: SeriesEditPlan | null; targetId: string } = { plan: null, targetId: "" };
+  const res = await tryAtomic(
+    db,
+    async () => {
+      const ctx = await loadSeriesContext(db, input, now);
+      const { plan, newRule } = planEdit(ctx, input, now);
+      const { ev } = ctx;
+      const targetId = ctx.split ? nanoid() : ev.id;
+      const oldQuestions = ctx.split
+        ? await db.select().from(question).where(eq(question.eventId, ev.id)).orderBy(asc(question.position))
+        : [];
+      const drafts: OccurrenceDraft[] = plan.insert.map((d) => ({ id: nanoid(), ...d }));
+      committed.plan = plan;
+      committed.targetId = targetId;
+
+      return (aid) => {
+        const c: BatchCtx = { db, aid, now };
+        const by: ActorRef = { actor: "pro", userId: input.actorUserId };
+        const segmentRows = sql`event_id = ${ev.id} and series_date >= ${input.fromDate}::date`;
+        const queries: Query[] = [];
+
+        // 1. version guard; the old segment ends at d − 1 (split) or takes the new rule (in place)
+        const sets: SQL[] = [sql`version = version + 1`, sql`last_action_id = ${aid}`, sql`updated_at = ${ts(now)}`];
+        if (ctx.split) sets.push(...endOldSegmentSets(ctx.oldRule, input.fromDate));
+        else sets.push(...ruleSets(newRule), sql`generated_until = ${plan.generatedUntil}::date`);
+        queries.push(
+          db.execute(sql`update event set ${sql.join(sets, sql`, `)}
+            where id = ${ev.id} and professional_id = ${input.professionalId} and version = ${input.seenVersion}::int
+              and archived_at is null`),
+          G(db, sql`(select last_action_id from event where id = ${ev.id}) = ${aid}`, "stale"),
+        );
+
+        // 2. the new segment, its links and its questions (split only)
+        if (ctx.split) {
+          queries.push(
+            db.insert(event).values({
+              id: targetId,
+              professionalId: input.professionalId,
+              title: ev.title,
+              description: ev.description,
+              location: ev.location,
+              color: ev.color,
+              bookingMode: ev.bookingMode,
+              isPrivate: ev.isPrivate,
+              capacity: ev.capacity,
+              durationMin: newRule.durationMin,
+              startDate: newRule.startDate,
+              startMinute: newRule.startMinute,
+              freq: newRule.freq,
+              interval: newRule.interval,
+              weekdays: newRule.weekdays,
+              monthlyBy: newRule.monthlyBy,
+              monthWeek: newRule.monthWeek,
+              endMode: newRule.endMode,
+              untilDate: newRule.untilDate,
+              occurrenceCount: newRule.occurrenceCount,
+              bookingHorizonDays: ev.bookingHorizonDays,
+              minNoticeMinutes: ev.minNoticeMinutes,
+              cancelDeadlineHours: ev.cancelDeadlineHours,
+              generatedUntil: plan.generatedUntil,
+              seriesRootId: ev.seriesRootId ?? ev.id,
+              version: 1,
+              lastActionId: aid,
+              createdAt: now,
+              updatedAt: now,
+            }),
+            db.execute(sql`
+              insert into event_ticket_type (event_id, ticket_type_id, professional_id, created_at)
+              select ${targetId}, ticket_type_id, professional_id, ${ts(now)} from event_ticket_type where event_id = ${ev.id}`),
+          );
+          if (oldQuestions.length > 0) {
+            queries.push(
+              db.insert(question).values(
+                oldQuestions.map((q) => ({
+                  id: nanoid(),
+                  professionalId: input.professionalId,
+                  eventId: targetId,
+                  label: q.label,
+                  type: q.type,
+                  options: q.options,
+                  required: q.required,
+                  position: q.position,
+                  createdAt: now,
+                  updatedAt: now,
+                })),
+              ),
+            );
+          }
+        }
+
+        // 3. lock the rows ≥ d; 4. reparent them (split), then the planned-row-count guard
+        queries.push(db.execute(sql`select id from occurrence where ${segmentRows} order by id for no key update`));
+        if (ctx.split) {
+          queries.push(
+            db.execute(sql`update occurrence set event_id = ${targetId}, updated_at = ${ts(now)} where ${segmentRows}`),
+            G(db, sql`(select count(*)::int from occurrence where event_id = ${targetId}) = ${ctx.rows.length}::int`, "stale"),
+          );
+        } else {
+          queries.push(
+            G(db, sql`(select count(*)::int from occurrence where ${segmentRows}) = ${ctx.rows.length}::int`, "stale"),
+          );
+        }
+
+        // 5. retime. A row moved by « cette séance » since the plan (time_detached, no version
+        // bump) is skipped, and the guard turns it into stale: the re-plan reparents it only.
+        if (plan.retime.length > 0) {
+          const retime = sql`unnest(${textArray(plan.retime.map((r) => r.id))}, ${tsArray(plan.retime.map((r) => r.startsAt))},
+            ${tsArray(plan.retime.map((r) => r.endsAt))}) as v(id, s, e)`;
+          queries.push(
+            db.execute(sql`
+              update occurrence o set starts_at = v.s, ends_at = v.e, block_start = v.s, block_end = v.e,
+                changed_at = case when o.starts_at <> v.s or o.ends_at <> v.e then ${ts(now)} else o.changed_at end,
+                capacity = case when o.capacity_override then o.capacity else greatest(${ev.capacity}::int, o.seats_taken) end,
+                updated_at = ${ts(now)}
+              from ${retime}
+              where o.id = v.id and o.event_id = ${targetId} and not o.time_detached`),
+            G(
+              db,
+              sql`(select count(*)::int from occurrence o join ${retime} on o.id = v.id
+                where o.starts_at = v.s and o.ends_at = v.e and not o.time_detached) = ${plan.retime.length}::int`,
+              "stale",
+            ),
+          );
+        }
+
+        // 6. delete the never-booked rows whose date disappears
+        if (plan.delete.length > 0) {
+          queries.push(
+            db.execute(sql`
+              delete from occurrence where id = any(${textArray(plan.delete)}) and seats_taken = 0
+                and not exists (select 1 from booking b where b.occurrence_id = occurrence.id)`),
+            G(db, sql`not exists (select 1 from occurrence where id = any(${textArray(plan.delete)}))`, "stale"),
+          );
+        }
+
+        // 7. empty rows with history → cancelled; booked orphans → isolated, or E6b
+        if (plan.cancelEmpty.length > 0) {
+          queries.push(
+            db.execute(sql`
+              update occurrence set status = 'cancelled', cancelled_at = coalesce(cancelled_at, ${ts(now)}), updated_at = ${ts(now)}
+              where id = any(${textArray(plan.cancelEmpty)}) and seats_taken = 0`),
+            G(
+              db,
+              sql`(select count(*)::int from occurrence where id = any(${textArray(plan.cancelEmpty)}) and status = 'cancelled') = ${plan.cancelEmpty.length}::int`,
+              "stale",
+            ),
+          );
+        }
+        if (plan.orphanBooked.length > 0 && input.orphans === "keep") {
+          queries.push(
+            db.execute(sql`update occurrence set time_detached = true, updated_at = ${ts(now)}
+              where id = any(${textArray(plan.orphanBooked)})`),
+          );
+        }
+        if (plan.orphanBooked.length > 0 && input.orphans === "cancel") {
+          queries.push(
+            cancelOccurrencesQuery(c, { professionalId: input.professionalId, occurrenceIds: plan.orphanBooked }),
+            G(
+              db,
+              sql`(select count(*)::int from occurrence where id = any(${textArray(plan.orphanBooked)}) and status = 'cancelled') = ${plan.orphanBooked.length}::int`,
+              "stale",
+            ),
+            endBookings(c, { professionalId: input.professionalId, scope: { occurrenceIds: plan.orphanBooked }, by }),
+          );
+        }
+
+        // 8. new dates (generated_until was set with the segment in step 1 or 2)
+        if (drafts.length > 0) {
+          queries.push(
+            insertOccurrences(c, { professionalId: input.professionalId, eventId: targetId, capacity: ev.capacity, drafts }),
+          );
+        }
+
+        // 9. tickets of cancelled orphans come back
+        if (plan.orphanBooked.length > 0 && input.orphans === "cancel") queries.push(RET(c, by));
+        return queries;
+      };
+    },
+    { replanOnStale: true, afterPlan: opts.afterPlan },
+  );
+  if (!res.ok) return failOf(res);
+  const plan = committed.plan;
+  if (!plan) throw new Error("editSeriesFrom: no committed plan");
+
+  const changedIds = plan.retime.filter((r) => r.timeChanged).map((r) => r.id);
+  const effects = changedEffects(await activeBookingsByOccurrence(db, changedIds));
+  if (plan.orphanBooked.length > 0 && input.orphans === "cancel") {
+    effects.push(...(await occurrenceCancelledEffects(db, res.aid, plan.orphanBooked)).effects);
+  }
+  return { ok: true, effects, eventId: committed.targetId, summary: plan.summary };
+}
+
+/* ───────────────────────── « Supprimer à partir du » ───────────────────────── */
+
+/**
+ * Never-booked event: DELETE event (cascade; a 23503 from a booking taken
+ * meanwhile → stale → re-plan). Else: version-guarded end (until = d − 1, or
+ * archived_at when d ≤ start_date), lock rows ≥ d, G(row count), delete the
+ * rows without history, cancel (E6b) the scheduled ones with history, RET.
+ */
+export async function deleteSeriesFrom(
+  db: Db,
+  input: { professionalId: string; actorUserId: string; eventId: string; seenVersion: number; fromDate: DateKey },
+  now: Date = new Date(),
+): Promise<EngineResult<{ deletedEvent: boolean; cancelledOccurrences: number; deletedOccurrences: number }>> {
+  const outcome = { deletedEvent: false, toCancel: [] as string[], deleted: 0 };
+  const res = await tryAtomic(
+    db,
+    async () => {
+      const ctx = await loadSeriesContext(db, input, now);
+      const { ev } = ctx;
+      const booked = await db.execute<{ yes: boolean }>(
+        sql`select exists (select 1 from booking b join occurrence o on o.id = b.occurrence_id where o.event_id = ${ev.id}) as yes`,
+      );
+
+      if (booked.rows[0]?.yes !== true) {
+        Object.assign(outcome, { deletedEvent: true, toCancel: [], deleted: ctx.totalRows });
+        return () => [
+          db.execute(sql`delete from event where id = ${ev.id} and professional_id = ${input.professionalId}
+            and version = ${input.seenVersion}::int`),
+          G(db, sql`not exists (select 1 from event where id = ${ev.id})`, "stale"),
+        ];
+      }
+
+      const del = ctx.rows.filter((r) => !r.hasHistory).map((r) => r.id);
+      const toCancel = ctx.rows.filter((r) => r.hasHistory && r.status === "scheduled").map((r) => r.id);
+      Object.assign(outcome, { deletedEvent: false, toCancel, deleted: del.length });
+      return (aid) => {
+        const c: BatchCtx = { db, aid, now };
+        const by: ActorRef = { actor: "pro", userId: input.actorUserId };
+        const segmentRows = sql`event_id = ${ev.id} and series_date >= ${input.fromDate}::date`;
+        const end = input.fromDate <= ev.startDate ? [sql`archived_at = ${ts(now)}`] : endOldSegmentSets(ctx.oldRule, input.fromDate);
+        const queries: Query[] = [
+          db.execute(sql`update event set ${sql.join(
+            [sql`version = version + 1`, sql`last_action_id = ${aid}`, sql`updated_at = ${ts(now)}`, ...end],
+            sql`, `,
+          )} where id = ${ev.id} and professional_id = ${input.professionalId} and version = ${input.seenVersion}::int`),
+          G(db, sql`(select last_action_id from event where id = ${ev.id}) = ${aid}`, "stale"),
+          db.execute(sql`select id from occurrence where ${segmentRows} order by id for no key update`),
+          G(db, sql`(select count(*)::int from occurrence where ${segmentRows}) = ${ctx.rows.length}::int`, "stale"),
+        ];
+        if (del.length > 0) {
+          queries.push(
+            db.execute(sql`
+              delete from occurrence where id = any(${textArray(del)}) and seats_taken = 0
+                and not exists (select 1 from booking b where b.occurrence_id = occurrence.id)`),
+            G(db, sql`not exists (select 1 from occurrence where id = any(${textArray(del)}))`, "stale"),
+          );
+        }
+        if (toCancel.length > 0) {
+          queries.push(
+            cancelOccurrencesQuery(c, { professionalId: input.professionalId, occurrenceIds: toCancel }),
+            G(
+              db,
+              sql`(select count(*)::int from occurrence where id = any(${textArray(toCancel)}) and status = 'cancelled') = ${toCancel.length}::int`,
+              "stale",
+            ),
+            endBookings(c, { professionalId: input.professionalId, scope: { occurrenceIds: toCancel }, by }),
+            RET(c, by),
+          );
+        }
+        return queries;
+      };
+    },
+    { replanOnStale: true },
+  );
+  if (!res.ok) return failOf(res);
+  const effects =
+    outcome.toCancel.length > 0 ? (await occurrenceCancelledEffects(db, res.aid, outcome.toCancel)).effects : [];
+  return {
+    ok: true,
+    effects,
+    deletedEvent: outcome.deletedEvent,
+    cancelledOccurrences: outcome.toCancel.length,
+    deletedOccurrences: outcome.deleted,
+  };
 }
