@@ -328,11 +328,19 @@ function overlapsRange(startAt: Date, endAt: Date) {
   return sql`tstzrange(${occurrence.blockStart}, ${occurrence.blockEnd}) && tstzrange(${ts(startAt)}, ${ts(endAt)})`;
 }
 
-/** E6c preview: scheduled occurrences (séances and RDV) overlapping the range that have seats taken, id asc. */
+/**
+ * E6c preview: scheduled occurrences (séances and RDV) overlapping the range
+ * that have seats taken and have NOT started yet (`starts_at > now`), id asc.
+ * A started séance is never a conflict: it took place, and E6c never offers nor
+ * cancels it (the pro uses cancelOccurrence for that). An empty or inverted
+ * range has no conflict.
+ */
 export async function previewTimeOffConflicts(
   db: Db,
   input: { professionalId: string; startAt: Date; endAt: Date },
+  now: Date = new Date(),
 ): Promise<TimeOffConflict[]> {
+  if (!(input.endAt.getTime() > input.startAt.getTime())) return [];
   const rows = await db
     .select({
       occurrenceId: occurrence.id,
@@ -352,6 +360,7 @@ export async function previewTimeOffConflicts(
         eq(occurrence.professionalId, input.professionalId),
         eq(occurrence.status, "scheduled"),
         sql`${occurrence.seatsTaken} > 0`,
+        sql`${occurrence.startsAt} > ${ts(now)}`,
         overlapsRange(input.startAt, input.endAt),
       ),
     )
@@ -367,9 +376,11 @@ export async function previewTimeOffConflicts(
 
 /**
  * E6c. Batch: lock professional; lock every scheduled occurrence overlapping
- * the range (empty ones too, id asc); INSERT time_off; G(set of overlapping
- * scheduled occurrences with seats taken = seen set, 'stale'); cancelBooked →
- * E6b on that set. Returns `stale` to the UI (new preview), never re-plans.
+ * the range (empty and started ones too, id asc: harmless); INSERT time_off;
+ * G(set of overlapping scheduled occurrences with seats taken that have not
+ * started (`starts_at > now`) = seen set, 'stale'); cancelBooked → E6b on that
+ * set. A started séance is never in the set, so E6c never cancels it. Returns
+ * `stale` to the UI (new preview), never re-plans.
  */
 export async function createTimeOffWithConflicts(
   db: Db,
@@ -418,7 +429,7 @@ export async function createTimeOffWithConflicts(
         // Both sides sorted by the database collation: an order-free set comparison.
         G(
           db,
-          sql`(select coalesce(array_agg(id order by id), '{}'::text[]) from occurrence where ${overlap} and seats_taken > 0)
+          sql`(select coalesce(array_agg(id order by id), '{}'::text[]) from occurrence where ${overlap} and seats_taken > 0 and starts_at > ${ts(now)})
             = (select coalesce(array_agg(x order by x), '{}'::text[]) from unnest(${textArray(seen)}) as x)`,
           "stale",
         ),

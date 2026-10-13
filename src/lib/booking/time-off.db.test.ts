@@ -217,3 +217,92 @@ dbTest("E6c: « Les garder » keeps the booked séance; a bad range is invalid",
   });
   assert.equal(bad.ok ? "ok" : bad.code, "invalid");
 });
+
+dbTest("E6c: a séance that already started inside the time-off range is neither a conflict nor cancelled", async ({ db, pro }) => {
+  const typeId = await makeType(db, pro);
+  const day = dayIn(pro, 4);
+  const {
+    occurrences: [started],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeId], rule: { startDate: day, startMinute: 600 } });
+  const {
+    occurrences: [future],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeId], rule: { startDate: day, startMinute: 840 } });
+  const earlyBird = await makeCustomer(db, pro);
+  const lateComer = await makeCustomer(db, pro);
+  await giveTickets(db, pro, earlyBird, typeId, 1);
+  await giveTickets(db, pro, lateComer, typeId, 1);
+  const bStarted = await bookWithHeldTicket(db, {
+    professionalId: pro.proId,
+    occurrenceId: started.id,
+    customerId: earlyBird,
+    seenStartsAt: started.startsAt,
+    actorUserId: null,
+  });
+  must(bStarted, "book the séance that will have started");
+  const bFuture = await bookWithHeldTicket(db, {
+    professionalId: pro.proId,
+    occurrenceId: future.id,
+    customerId: lateComer,
+    seenStartsAt: future.startsAt,
+    actorUserId: null,
+  });
+  must(bFuture, "book the future séance");
+
+  // Noon on that day: the 10:00 séance has started, the 14:00 one has not.
+  const noon = instantAt(day, 720, pro.tz);
+  const range = { startAt: instantAt(day, 0, pro.tz), endAt: instantAt(addDays(day, 1), 0, pro.tz) };
+  const preview = await previewTimeOffConflicts(db, { professionalId: pro.proId, ...range }, noon);
+  assert.deepEqual(
+    preview.map((p) => p.occurrenceId),
+    [future.id],
+  );
+
+  const res = await createTimeOffWithConflicts(
+    db,
+    {
+      professionalId: pro.proId,
+      actorUserId: pro.userId,
+      ...range,
+      allDay: true,
+      reason: null,
+      seenOccurrenceIds: [future.id],
+      cancelBooked: true,
+    },
+    noon,
+  );
+  must(res, "time off + cancel the future séance only");
+  assert.equal(res.cancelledOccurrences, 1);
+  assert.ok(res.effects.every((e) => e.type !== "email.occurrence_cancelled" || e.occurrenceId === future.id));
+
+  const o = await getOccurrence(db, started.id);
+  assert.equal(o.status, "scheduled");
+  assert.equal(o.seatsTaken, 1);
+  assert.equal((await getBooking(db, bStarted.bookingId)).status, "confirmed");
+  assert.equal((await ticketsOf(db, earlyBird))[0].status, "booked");
+
+  assert.equal((await getOccurrence(db, future.id)).status, "cancelled");
+  assert.equal((await getBooking(db, bFuture.bookingId)).status, "cancelled");
+  assert.equal((await ticketsOf(db, lateComer))[0].status, "available");
+  assert.equal(await timeOffCount(db, pro.proId), 1);
+});
+
+dbTest("E6c: the preview of an empty or inverted range has no conflict and does not throw", async ({ db, pro }) => {
+  const typeId = await makeType(db, pro);
+  const {
+    occurrences: [occ],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeId] });
+  const customerId = await makeCustomer(db, pro);
+  await giveTickets(db, pro, customerId, typeId, 1);
+  must(
+    await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: null }),
+    "book",
+  );
+  assert.deepEqual(
+    await previewTimeOffConflicts(db, { professionalId: pro.proId, startAt: occ.endsAt, endAt: occ.startsAt }),
+    [],
+  );
+  assert.deepEqual(
+    await previewTimeOffConflicts(db, { professionalId: pro.proId, startAt: occ.startsAt, endAt: occ.startsAt }),
+    [],
+  );
+});
