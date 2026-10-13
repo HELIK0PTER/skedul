@@ -93,6 +93,13 @@ function noop(outcome: "duplicate" | "orphan"): EngineOk<FulfillData> {
   return { ok: true, effects: [], outcome, ticketIds: [], bookingConfirmed: false };
 }
 
+/** Money for a purchase that does not exist (pro deleted, session from before the refonte): logged and counted for the admin; refunded by hand in Stripe. */
+async function orphan(db: Db, payment: PaymentFacts, now: Date): Promise<EngineOk<FulfillData>> {
+  console.warn(`[stripe] orphan payment ${payment.sessionId ?? "-"}/${payment.paymentIntentId ?? "-"}`);
+  await bumpHealth(db, HEALTH_KEYS.orphanPayments, 1, now);
+  return noop("orphan");
+}
+
 /**
  * The purchase's N tickets and their N `purchase` movements in ONE statement.
  * Ticket n° 1 is `booked` to the purchase's booking when that booking is
@@ -137,6 +144,7 @@ export async function fulfillPurchase(
   purchaseId: string,
   payment: PaymentFacts,
   now: Date = new Date(),
+  opts: { afterPlan?: () => Promise<void> } = {},
 ): Promise<EngineOk<FulfillData>> {
   const [purchase] = await db
     .select({
@@ -149,17 +157,15 @@ export async function fulfillPurchase(
     .from(ticketPurchase)
     .innerJoin(professional, eq(professional.id, ticketPurchase.professionalId))
     .where(eq(ticketPurchase.id, purchaseId));
-  if (!purchase) {
-    console.warn(`[stripe] orphan payment ${payment.sessionId ?? "-"}/${payment.paymentIntentId ?? "-"}`);
-    await bumpHealth(db, HEALTH_KEYS.orphanPayments, 1, now);
-    return noop("orphan");
-  }
+  if (!purchase) return orphan(db, payment, now);
   if (purchase.status === "paid") return noop("duplicate");
 
   const [held] = await db.select({ id: booking.id }).from(booking).where(eq(booking.purchaseId, purchaseId));
   const ticketIds = Array.from({ length: purchase.quantity }, () => nanoid());
   const expiresAt = ticketExpiry(now, validityOf(purchase), purchase.tz);
 
+  // Position of the booking confirmation in the batch: its RETURNING rows say whether THIS batch confirmed it.
+  let confirmAt = -1;
   const res = await tryAtomic(db, async () => (aid) => {
     const c: BatchCtx = { db, aid, now };
     const queries: Query[] = [];
@@ -171,35 +177,41 @@ export async function fulfillPurchase(
           payment_intent_id = ${payment.paymentIntentId}::text, fulfilled_action_id = ${aid}, updated_at = ${ts(now)}
         where id = ${purchaseId} and status in ('pending', 'expired')`),
       G(db, sql`(select fulfilled_action_id from ticket_purchase where id = ${purchaseId}) = ${aid}`, "already_paid"),
+    );
+    confirmAt = queries.length;
+    queries.push(
       db.execute(sql`
         update booking set status = 'confirmed', confirmed_at = ${ts(now)}, updated_at = ${ts(now)}
-        where purchase_id = ${purchaseId} and status = 'pending'`),
+        where purchase_id = ${purchaseId} and status = 'pending'
+        returning id, occurrence_id`),
       insertPurchasedTickets(c, purchaseId, ticketIds, expiresAt),
     );
     return queries;
-  });
+  }, { afterPlan: opts.afterPlan });
   if (!res.ok) {
-    if (res.code === "duplicate") return noop("duplicate");
+    if (res.code === "duplicate") {
+      // `already_paid` is also how a purchase deleted since the pre-read looks: the guarded UPDATE matches no row.
+      const [still] = await db.select({ id: ticketPurchase.id }).from(ticketPurchase).where(eq(ticketPurchase.id, purchaseId));
+      return still ? noop("duplicate") : orphan(db, payment, now);
+    }
     throw new Error(`fulfillPurchase ${purchaseId}: unexpected ${res.code}`);
   }
 
-  const [after] = await db
-    .select({ id: booking.id, confirmedAt: booking.confirmedAt, occurrenceId: booking.occurrenceId })
-    .from(booking)
-    .where(eq(booking.purchaseId, purchaseId));
-  // Confirmed by THIS fulfillment (step 4 stamps confirmed_at = now), even if a cancellation already followed.
-  const bookingConfirmed = after?.confirmedAt?.getTime() === now.getTime();
+  // Effects come from the batch itself, never from a read after the commit: if such a read failed, Stripe's
+  // retry would find the purchase paid (`duplicate`, no effects) and the e-mails would be lost for good.
+  const [confirmed] = (res.results[confirmAt] as { rows: { id: string; occurrence_id: string }[] }).rows;
   const effects: Effect[] = [{ type: "email.purchase_receipt", purchaseId }];
-  if (after && bookingConfirmed) {
+  if (confirmed) {
     effects.push(
-      { type: "email.booking_confirmed", bookingId: after.id },
-      { type: "email.pro_new_booking", bookingId: after.id },
-      ...syncEffects([after.occurrenceId]),
+      { type: "email.booking_confirmed", bookingId: confirmed.id },
+      { type: "email.pro_new_booking", bookingId: confirmed.id },
+      ...syncEffects([confirmed.occurrence_id]),
     );
-  } else if (after) {
+  } else if (held) {
+    // The purchase has a booking (read before the batch) that this batch did not confirm: it had already ended.
     effects.push({ type: "email.late_payment", purchaseId });
   }
-  return { ok: true, effects, outcome: "fulfilled", ticketIds, bookingConfirmed };
+  return { ok: true, effects, outcome: "fulfilled", ticketIds, bookingConfirmed: confirmed !== undefined };
 }
 
 /**
