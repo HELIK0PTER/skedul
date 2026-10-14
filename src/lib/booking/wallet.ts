@@ -237,6 +237,8 @@ type E8Spec = {
   statement: (c: BatchCtx, picked: E8Ticket[]) => Query;
   /** runs at the start of every plan (re-plan included) */
   check?: () => Promise<void>;
+  /** runs on the tickets of an explicit-id selection, before the qualification (may throw a PlanError) */
+  checkSelected?: (rows: E8Ticket[]) => void;
   extraGuards?: (c: BatchCtx) => Query[];
   afterPlan?: () => Promise<void>;
 };
@@ -289,6 +291,7 @@ async function e8Run(db: Db, spec: E8Spec): Promise<EngineResult<{ ticketIds: st
           ),
         );
       if ("ticketIds" in sel && rows.length !== sel.ticketIds.length) throw new PlanError("not_found");
+      if ("ticketIds" in sel) spec.checkSelected?.(rows);
       const want = "ticketIds" in sel ? sel.ticketIds.length : sel.quantity;
       const chosen = spec.order(rows.filter(spec.qualifies)).slice(0, want);
       if (chosen.length < want) throw new PlanError("no_ticket");
@@ -389,8 +392,11 @@ export async function convertTickets(
  * Clore (rembourse | compense | autre + note) or Retirer (reason retire):
  * available and valid at now (like convert and point: a ticket past expires_at
  * that the sweep has not flipped yet is skipped) → closed. A type selection
- * picks only offered tickets for retire;
- * an explicit paid id with retire hits ticket_retire_paid_chk → retire_paid.
+ * picks only offered tickets for retire, and only paid tickets for rembourse
+ * and compense (a refund closes the refunded paid ticket, never a gift);
+ * an explicit paid id with retire hits ticket_retire_paid_chk → retire_paid,
+ * an explicit offered id with rembourse or compense is invalid. « autre »
+ * closes any ticket.
  */
 export async function closeTickets(
   db: Db,
@@ -410,12 +416,20 @@ export async function closeTickets(
   if (input.reason === "autre" && note === null) return fail("invalid", "Précisez le motif.");
   const byType = !("ticketIds" in input.selection);
   const offeredOnly = input.reason === "retire" && byType;
+  const paidOnly = input.reason === "rembourse" || input.reason === "compense";
   return e8Run(db, {
     professionalId: input.professionalId,
     customerId: input.customerId,
     selection: input.selection,
     now,
-    qualifies: (t) => t.status === "available" && e8Valid(t, now) && (!offeredOnly || t.purchaseId === null),
+    checkSelected: (rows) => {
+      if (paidOnly && rows.some((t) => t.purchaseId === null)) throw new PlanError("invalid", "Un ticket offert se retire.");
+    },
+    qualifies: (t) =>
+      t.status === "available" &&
+      e8Valid(t, now) &&
+      (!offeredOnly || t.purchaseId === null) &&
+      (!paidOnly || t.purchaseId !== null),
     order: consumptionOrder,
     statement: (c, picked) =>
       db.execute(sql`
@@ -426,6 +440,7 @@ export async function closeTickets(
             and id = any(${textArray(picked.map((t) => t.id))}) and status = 'available'
             and (expires_at is null or expires_at > ${ts(now)})
             ${offeredOnly ? sql`and purchase_id is null` : sql``}
+            ${paidOnly ? sql`and purchase_id is not null` : sql``}
           returning id, professional_id, customer_id, purchase_id, ticket_type_id
         )
         ${e8Movement(c, input.actorUserId, {

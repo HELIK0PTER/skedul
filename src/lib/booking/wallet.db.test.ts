@@ -175,12 +175,14 @@ dbTest("Clore: a ticket past expires_at that the sweep has not flipped is skippe
   assert.equal(await usable(), 1, "only the valid ticket is usable");
   assert.equal((await ticketsOf(db, customerId)).find((t) => t.id === unswept)?.status, "available", "not swept yet");
 
+  // Offered tickets: « autre » (rembourse / compense close paid tickets only, SPE2).
   const closed = await closeTickets(db, {
     professionalId: pro.proId,
     actorUserId: pro.userId,
     customerId,
     selection: { ticketTypeId: typeA, quantity: 1 },
-    reason: "rembourse",
+    reason: "autre",
+    note: "Geste commercial",
   });
   must(closed, "close by type");
   assert.deepEqual(closed.ticketIds, [valid], "the valid ticket is closed, not the one past its expiry");
@@ -194,9 +196,43 @@ dbTest("Clore: a ticket past expires_at that the sweep has not flipped is skippe
     actorUserId: pro.userId,
     customerId,
     selection: { ticketIds: [unswept] },
-    reason: "compense",
+    reason: "autre",
+    note: "Geste commercial",
   });
   assert.equal(explicit.ok ? "ok" : explicit.code, "no_ticket", "an explicit id past its expiry is not closed either");
+});
+
+dbTest("Clore (SPE2): « remboursé » / « compensé » close a paid ticket, never an offered one", async ({ db, pro }) => {
+  const typeA = await makeType(db, pro);
+  const offerId = await makeOffer(db, pro, typeA);
+  const customerId = await makeCustomer(db, pro);
+  const purchase = await startPurchase(db, { professionalId: pro.proId, offerId, customerId });
+  must(purchase, "startPurchase");
+  const paid = await fulfillPurchase(db, purchase.purchaseId, { sessionId: null, paymentIntentId: null, livemode: false });
+  assert.equal(paid.outcome, "fulfilled");
+  const [paidId] = paid.ticketIds;
+  // The gift expires first, so the consumption order alone would pick it.
+  const [offeredId] = await giveTickets(db, pro, customerId, typeA, 1, { expiresAt: addMinutes(new Date(), 30 * 24 * 60) });
+  const close = (selection: { ticketIds: string[] } | { ticketTypeId: string; quantity: number }, reason: TicketCloseReason) =>
+    closeTickets(db, { professionalId: pro.proId, actorUserId: pro.userId, customerId, selection, reason, note: "Remboursé en espèces" });
+
+  const refunded = await close({ ticketTypeId: typeA, quantity: 1 }, "rembourse");
+  must(refunded, "close 1 by type, rembourse");
+  assert.deepEqual(refunded.ticketIds, [paidId]);
+  const rows = new Map((await ticketsOf(db, customerId)).map((t) => [t.id, t]));
+  assert.deepEqual([rows.get(paidId)?.status, rows.get(paidId)?.closedReason], ["closed", "rembourse"]);
+  assert.equal(rows.get(offeredId)?.status, "available", "the gift stays usable");
+
+  const explicit = await close({ ticketIds: [offeredId] }, "compense");
+  assert.deepEqual(explicit.ok ? "ok" : [explicit.code, explicit.message], ["invalid", "Un ticket offert se retire."]);
+  const noPaidLeft = await close({ ticketTypeId: typeA, quantity: 1 }, "compense");
+  assert.equal(noPaidLeft.ok ? "ok" : noPaidLeft.code, "no_ticket");
+  assert.equal((await ticketsOf(db, customerId)).find((t) => t.id === offeredId)?.status, "available");
+
+  // « autre » and « Retirer » still take the gift.
+  const other = await close({ ticketIds: [offeredId] }, "autre");
+  must(other, "close the gift with autre");
+  assert.deepEqual(other.ticketIds, [offeredId]);
 });
 
 dbTest("Clore: an unknown reason is invalid, never a database error", async ({ db, pro }) => {

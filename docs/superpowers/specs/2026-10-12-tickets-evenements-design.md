@@ -1062,7 +1062,7 @@ Un `stale` refait le choix et relance une fois. Les boutons sont désactivés pe
 | Nouveau client | `createCustomer({name, email, phone?})` : upsert sur `(professional_id, email)` ; le pro peut écraser nom et téléphone |
 | Offrir N | `INSERT ticket` (N ids JS, `purchase_id NULL`, expiration optionnelle) depuis `customer WHERE id AND professional_id`, type actif ; mouvements `offer` dans la même requête ; `G(N)` ; email optionnel |
 | Convertir N, A → B | transition `type A → B` sur des tickets `available` valides ; `G(N)` ; `G(B actif)` ; mouvements `convert` avec `from_ticket_type_id` |
-| Clore N (motif) / Retirer N | → `closed` avec `closed_reason` et note ; « Retirer » filtre aussi `purchase_id IS NULL` (et le CHECK l'impose) |
+| Clore N (motif) / Retirer N | → `closed` avec `closed_reason` et note ; « Retirer » filtre aussi `purchase_id IS NULL` (et le CHECK l'impose) ; « Remboursé » et « Compensé » filtrent `purchase_id IS NOT NULL` (un remboursement clôt le ticket payé, jamais un ticket offert ; un ticket offert désigné → `invalid` « Un ticket offert se retire. ») ; « Autre » prend tout ticket |
 | Pointer / Annuler le pointage | `available` ↔ `used` ; mouvements `pointage` / `unpoint` |
 | Modifier nom / téléphone | UPDATE simple sur `customer` |
 | Déconnecter ses liens | `link_version = link_version + 1` |
