@@ -2,7 +2,7 @@ import "server-only";
 import Stripe from "stripe";
 
 import { env } from "@/lib/env";
-import { logSafeMessage } from "@/lib/notify-core";
+import { logSafeMessage } from "@/lib/log-safe";
 
 /**
  * Stripe client. `null` when no real key is configured — the app then runs in

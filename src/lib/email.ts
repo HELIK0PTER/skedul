@@ -4,6 +4,7 @@ import { Resend } from "resend";
 import { env } from "@/lib/env";
 import { mockLinks } from "@/lib/emails/mock-links";
 import { redactSubject } from "@/lib/emails/redact-subject";
+import { logSafeMessage } from "@/lib/log-safe";
 
 const resend = env.RESEND_ENABLED ? new Resend(env.RESEND_API_KEY!) : null;
 
@@ -42,12 +43,12 @@ export async function sendEmail({ to, subject, html }: SendArgs): Promise<SendRe
       html,
     });
     if (error) {
-      console.error(`[email] Resend rejected "${redactSubject(subject)}":`, error);
+      console.error(`[email] Resend rejected "${redactSubject(subject)}": ${logSafeMessage(error)}`);
       return { id: null, mocked: false, failed: true };
     }
     return { id: data?.id ?? "unknown", mocked: false };
   } catch (err) {
-    console.error(`[email] Resend request failed for "${redactSubject(subject)}":`, err);
+    console.error(`[email] Resend request failed for "${redactSubject(subject)}": ${logSafeMessage(err)}`);
     return { id: null, mocked: false, failed: true };
   }
 }

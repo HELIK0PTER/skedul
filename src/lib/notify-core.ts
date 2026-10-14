@@ -64,20 +64,9 @@ export function dedupeEffects(effects: readonly Effect[]): Effect[] {
 
 /* ───────────────────────────── Log safety ───────────────────────────── */
 
-/**
- * One line of an error for the server log: no e-mail address, no personal-link
- * token, no Checkout session id; whitespace collapsed; 200 characters at most.
- */
-export function logSafeMessage(err: unknown): string {
-  const raw = err instanceof Error ? err.message : "unknown error";
-  return raw
-    .replace(/[^\s@<>"'()]+@[^\s@<>"'()]+/g, "[email]")
-    .replace(/\/api\/c\/[A-Za-z0-9._-]+/g, "/api/c/[token]")
-    .replace(/\bcs_(?:test|live)_[A-Za-z0-9]+/g, "[session]")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 200);
-}
+// The formatter lives in src/lib/log-safe.ts (pure, no import) so the Stripe, Google and Resend
+// wrappers can use it without loading this module; the export stays here for the executor.
+export { logSafeMessage } from "@/lib/log-safe";
 
 /* ───────────────────────────── Reads ───────────────────────────── */
 
@@ -109,14 +98,22 @@ const bookingFacts = {
   ),
 };
 
-/** Bookings with their customer, pro and occurrence, oldest first. Every join follows the booking's own professional_id. */
+/**
+ * Bookings with their customer, pro and occurrence, oldest first. The customer
+ * and the occurrence are joined through the booking's own professional_id (no
+ * composite FK enforces it): a row that crosses two pros finds no customer or
+ * no occurrence, so it plans no e-mail and never mixes two pros' data.
+ */
 async function readBookings(db: Db, where: SQL | undefined) {
   return db
     .select(bookingFacts)
     .from(booking)
-    .innerJoin(customer, eq(customer.id, booking.customerId))
+    .innerJoin(customer, and(eq(customer.id, booking.customerId), eq(customer.professionalId, booking.professionalId)))
     .innerJoin(professional, eq(professional.id, booking.professionalId))
-    .innerJoin(occurrence, eq(occurrence.id, booking.occurrenceId))
+    .innerJoin(
+      occurrence,
+      and(eq(occurrence.id, booking.occurrenceId), eq(occurrence.professionalId, booking.professionalId)),
+    )
     .leftJoin(event, eq(event.id, occurrence.eventId))
     .leftJoin(ticketType, eq(ticketType.id, occurrence.ticketTypeId))
     .where(where)

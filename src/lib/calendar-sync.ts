@@ -6,6 +6,7 @@ import { loadOccurrenceForSync, saveGoogleEventId } from "@/lib/calendar-sync-lo
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { deleteEvent, insertEvent, patchEvent } from "@/lib/google-calendar";
+import { logSafeMessage } from "@/lib/log-safe";
 
 /**
  * Best-effort Google sync of one occurrence, with the real dependencies. It
@@ -27,7 +28,7 @@ export async function syncOccurrence(occurrenceId: string): Promise<void> {
       saveEventId: (id, eventId) => saveGoogleEventId(db, id, eventId),
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[calendar-sync] occurrence ${occurrenceId} failed: ${message}`);
+    // Google's error body can echo an attendee address: only the formatted message is logged.
+    console.error(`[calendar-sync] occurrence ${occurrenceId} failed: ${logSafeMessage(err)}`);
   }
 }

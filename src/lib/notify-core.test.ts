@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { Effect } from "./booking/types";
+import { logSafeMessage as logSafeMessageOfLogSafe } from "./log-safe";
 import { dedupeEffects, logSafeMessage } from "./notify-core";
 
 const changed = (bookingIds: string[]): Effect => ({ type: "email.occurrence_changed", occurrenceId: "o1", bookingIds });
@@ -42,21 +43,6 @@ test("dedupeEffects does not touch its input and accepts an empty list", () => {
   assert.deepEqual(dedupeEffects([]), []);
 });
 
-test("logSafeMessage hides e-mail addresses, personal-link tokens and Checkout session ids", () => {
-  assert.equal(logSafeMessage(new Error("boom for marie@example.com")), "boom for [email]");
-  assert.equal(
-    logSafeMessage(new Error("GET https://app.test/api/c/abc.1.def_ghi failed")),
-    "GET https://app.test/api/c/[token] failed",
-  );
-  assert.equal(
-    logSafeMessage(new Error("No such checkout.session: 'cs_test_a1B2c3'")),
-    "No such checkout.session: '[session]'",
-  );
-});
-
-test("logSafeMessage gives one short line and survives a non-Error", () => {
-  assert.equal(logSafeMessage(new Error("a\n  b\tc")), "a b c");
-  assert.equal(logSafeMessage(new Error("x".repeat(500))).length, 200);
-  assert.equal(logSafeMessage("plain string"), "unknown error");
-  assert.equal(logSafeMessage(undefined), "unknown error");
+test("notify-core keeps exporting logSafeMessage, the one of log-safe.ts (its tests live in log-safe.test.ts)", () => {
+  assert.equal(logSafeMessage, logSafeMessageOfLogSafe);
 });
