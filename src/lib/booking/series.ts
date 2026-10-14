@@ -7,7 +7,7 @@ import { and, asc, eq, gt, gte, inArray, lt, sql, type SQL } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 
-import { addDays, minKey, todayKey, type DateKey } from "@/lib/civil-date";
+import { addDays, formatDayMonthYear, minKey, todayKey, type DateKey } from "@/lib/civil-date";
 import {
   G,
   PlanError,
@@ -486,11 +486,20 @@ type SeriesContext = {
   split: boolean;
   /** rows of the segment with series_date < d */
   rowsBefore: number;
+  /** the earliest start_date of a later non-archived segment of the same series, if any */
+  laterSegmentStart: DateKey | null;
 };
+
+/** `event` rows that are later non-archived segments of ev's series (same root, start_date after ev's). */
+function laterSegments(ev: Pick<EventRow, "id" | "professionalId" | "seriesRootId" | "startDate">): SQL {
+  return sql`professional_id = ${ev.professionalId} and coalesce(series_root_id, id) = ${ev.seriesRootId ?? ev.id}
+    and id <> ${ev.id} and archived_at is null and start_date > ${ev.startDate}::date`;
+}
 
 /**
  * Plan reads shared by preview, edit and delete: the pro's tz, the segment,
- * its rows ≥ d (with activity) and the count of rows before d. Throws
+ * its rows ≥ d (with activity), the count of rows before d and the start of
+ * the next later segment of the series (planEdit refuses to reach it). Throws
  * PlanError: not_found (unknown or archived event), invalid (d before local
  * today or a row ≥ d already started).
  */
@@ -541,6 +550,12 @@ async function loadSeriesContext(
     .from(occurrence)
     .where(and(eq(occurrence.eventId, ev.id), lt(occurrence.seriesDate, args.fromDate)));
   const before_ = before?.n ?? 0;
+  const [later] = await db
+    .select({ startDate: event.startDate })
+    .from(event)
+    .where(laterSegments(ev))
+    .orderBy(asc(event.startDate))
+    .limit(1);
 
   return {
     tz: pro.tz,
@@ -549,6 +564,7 @@ async function loadSeriesContext(
     rows: rows.map((r) => ({ ...r, seriesDate: String(r.seriesDate), hasHistory: r.hasHistory === true })),
     split: before_ > 0 && args.fromDate > ev.startDate,
     rowsBefore: before_,
+    laterSegmentStart: later?.startDate ?? null,
   };
 }
 
@@ -557,7 +573,7 @@ function planEdit(
   ctx: SeriesContext,
   args: { fromDate: DateKey; rule: RecurrenceRuleInput; durationMin: number },
   now: Date,
-): { plan: SeriesEditPlan; newRule: RecurrenceRule } {
+): { plan: SeriesEditPlan; newRule: RecurrenceRule; last: DateKey | null } {
   const parsed = recurrenceRuleSchema.safeParse(args.rule);
   if (!parsed.success) throw new PlanError("invalid", parsed.error.issues[0]?.message);
   if (!durationOk(args.durationMin)) throw new PlanError("invalid", "Durée invalide.");
@@ -565,6 +581,14 @@ function planEdit(
     throw new PlanError("invalid", "La nouvelle règle doit commencer à la date choisie ou après.");
   }
   const newRule: RecurrenceRule = { ...parsed.data, durationMin: args.durationMin };
+  // A later segment already holds the dates from its start: the new rule must stop before it.
+  const last = lastSeriesDate(newRule);
+  if (ctx.laterSegmentStart !== null && (last === null || last >= ctx.laterSegmentStart)) {
+    throw new PlanError(
+      "invalid",
+      `La série change déjà à partir du ${formatDayMonthYear(ctx.laterSegmentStart)} : modifiez-la depuis cette date, ou terminez celle-ci avant.`,
+    );
+  }
   const plan = planSeriesEdit({
     tz: ctx.tz,
     fromDate: args.fromDate,
@@ -576,7 +600,7 @@ function planEdit(
   if (plan.retime.some((r) => r.startsAt.getTime() <= now.getTime()) || plan.insert.some((r) => r.startsAt.getTime() <= now.getTime())) {
     throw new PlanError("invalid", "Une séance de la nouvelle règle serait déjà passée.");
   }
-  return { plan, newRule };
+  return { plan, newRule, last };
 }
 
 /** Rule columns of `event` for a new rule (SET list). */
@@ -641,7 +665,7 @@ export async function editSeriesFrom(
     async () => {
       if (input.orphans !== "keep" && input.orphans !== "cancel") throw new PlanError("invalid");
       const ctx = await loadSeriesContext(db, input, now);
-      const { plan, newRule } = planEdit(ctx, input, now);
+      const { plan, newRule, last } = planEdit(ctx, input, now);
       const { ev } = ctx;
       const targetId = ctx.split ? nanoid() : ev.id;
       const oldQuestions = ctx.split
@@ -666,6 +690,13 @@ export async function editSeriesFrom(
             where id = ${ev.id} and professional_id = ${input.professionalId} and version = ${input.seenVersion}::int
               and archived_at is null`),
           G(db, sql`(select last_action_id from event where id = ${ev.id}) = ${aid}`, "stale"),
+          // no later segment inside the new rule's dates appeared since the plan (re-plan → invalid)
+          G(
+            db,
+            sql`not exists (select 1 from event where ${laterSegments(ev)}
+              ${last === null ? sql`` : sql`and start_date <= ${last}::date`})`,
+            "stale",
+          ),
         );
 
         // 2. the new segment, its links and its questions (split only)

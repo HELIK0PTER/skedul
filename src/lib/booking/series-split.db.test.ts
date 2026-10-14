@@ -652,3 +652,157 @@ dbTest("E7 supprimer à partir du: a cancelled séance restored before the batch
   assert.equal((await getOccurrence(db, target.id)).status, "cancelled");
   assert.equal((await occurrencesOf(db, eventId)).filter((o) => o.status === "scheduled").length, 0);
 });
+
+/* ───────────── TIM1: an edit never reaches a later segment of the series ───────────── */
+
+const ending = (rule: RecurrenceRuleInput, end: { untilDate?: string; occurrenceCount?: number }): RecurrenceRuleInput =>
+  end.untilDate !== undefined
+    ? { ...rule, endMode: "until", untilDate: end.untilDate, occurrenceCount: null }
+    : { ...rule, endMode: "count", untilDate: null, occurrenceCount: end.occurrenceCount ?? null };
+
+/** Scheduled séances on or after `from`, grouped by date across these segments: the dates held by 2+. */
+async function doubledDates(db: Db, eventIds: readonly string[], from: string): Promise<string[]> {
+  const byDate = new Map<string, number>();
+  for (const id of eventIds) {
+    for (const o of await occurrencesOf(db, id)) {
+      if (o.status !== "scheduled" || (o.seriesDate ?? "") < from) continue;
+      byDate.set(o.seriesDate ?? "", (byDate.get(o.seriesDate ?? "") ?? 0) + 1);
+    }
+  }
+  return [...byDate].filter(([, n]) => n > 1).map(([d]) => d);
+}
+
+const laterSegmentMessage = (d: string) =>
+  `La série change déjà à partir du ${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)} : modifiez-la depuis cette date, ou terminez celle-ci avant.`;
+
+dbTest("TIM1: after a future split, extending the earlier segment (split path) is refused and doubles no date", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await makeType(db, pro);
+  const term = dayIn(pro, 90, now);
+  const { eventId: rId } = await makeEvent(
+    db,
+    pro,
+    { ticketTypeIds: [typeId], rule: ending(weekly(dayIn(pro, -14, now), [1, 3, 5]), { untilDate: term }) },
+    addDaysMs(now, -14),
+  );
+  // « cette séance et les suivantes » ~6 weeks ahead: 11:00 from d1 on (segment C).
+  const d1 = dayIn(pro, 42, now);
+  const split = await editSeriesFrom(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, eventId: rId, seenVersion: 1, fromDate: d1, rule: ending(weekly(d1, [1, 3, 5], 660), { untilDate: term }), durationMin: 60, orphans: "keep" },
+    now,
+  );
+  must(split, "future split");
+  const cId = split.eventId;
+
+  // The editor then edits R (it carries the next séance) from tomorrow: « Jamais », until past d1, count reaching d1.
+  const d2 = dayIn(pro, 1, now);
+  const base = { professionalId: pro.proId, eventId: rId, fromDate: d2, durationMin: 60 };
+  for (const rule of [
+    weekly(d2, [1, 3, 5]),
+    ending(weekly(d2, [1, 3, 5]), { untilDate: dayIn(pro, 180, now) }),
+    ending(weekly(d2, [1, 3, 5]), { untilDate: d1 }),
+    ending(weekly(d2, [1, 3, 5]), { occurrenceCount: 40 }),
+  ]) {
+    const preview = await previewSeriesEdit(db, { ...base, rule }, now);
+    assert.deepEqual(preview.ok ? "ok" : [preview.code, preview.message], ["invalid", laterSegmentMessage(d1)], `preview ${JSON.stringify(rule)}`);
+    const res = await editSeriesFrom(db, { ...base, rule, actorUserId: pro.userId, seenVersion: 2, orphans: "keep" }, now);
+    assert.deepEqual(res.ok ? "ok" : [res.code, res.message], ["invalid", laterSegmentMessage(d1)], `edit ${JSON.stringify(rule)}`);
+  }
+  const segments = await db.select({ id: event.id }).from(event).where(eq(event.seriesRootId, rId));
+  assert.deepEqual(sorted(segments.map((s) => s.id)), sorted([rId, cId]), "no new segment");
+  assert.equal((await getEvent(db, rId)).version, 2);
+  assert.deepEqual(await doubledDates(db, [rId, cId], d1), []);
+
+  // Stopping before d1 is still a normal split.
+  const ok = await editSeriesFrom(
+    db,
+    { ...base, rule: ending(weekly(d2, [1, 3, 5], 720), { untilDate: addDays(d1, -1) }), actorUserId: pro.userId, seenVersion: 2, orphans: "keep" },
+    now,
+  );
+  must(ok, "an edit that ends before the later segment");
+  assert.notEqual(ok.eventId, rId);
+  assert.deepEqual(await doubledDates(db, [rId, cId, ok.eventId], d2), []);
+});
+
+dbTest("TIM1: after a future split, an in-place edit of the earlier segment reaching it is refused", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await makeType(db, pro);
+  const start = dayIn(pro, 2, now);
+  const { eventId: rId } = await makeEvent(db, pro, { ticketTypeIds: [typeId], rule: weekly(start, [1, 3, 5]) }, now);
+  const d1 = addDays(start, 28);
+  const split = await editSeriesFrom(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, eventId: rId, seenVersion: 1, fromDate: d1, rule: weekly(d1, [1, 3, 5], 660), durationMin: 60, orphans: "keep" },
+    now,
+  );
+  must(split, "future split");
+  const cId = split.eventId;
+
+  // From R's own start_date: no row before it, so the edit would apply in place.
+  const base = { professionalId: pro.proId, eventId: rId, fromDate: start, durationMin: 60 };
+  for (const rule of [weekly(start, [1, 3, 5], 720), ending(weekly(start, [1, 3, 5], 720), { untilDate: addDays(d1, 10) })]) {
+    const preview = await previewSeriesEdit(db, { ...base, rule }, now);
+    assert.deepEqual(preview.ok ? "ok" : [preview.code, preview.message], ["invalid", laterSegmentMessage(d1)]);
+    const res = await editSeriesFrom(db, { ...base, rule, actorUserId: pro.userId, seenVersion: 2, orphans: "keep" }, now);
+    assert.deepEqual(res.ok ? "ok" : [res.code, res.message], ["invalid", laterSegmentMessage(d1)]);
+  }
+  assert.equal((await getEvent(db, rId)).version, 2);
+  assert.deepEqual(await doubledDates(db, [rId, cId], start), []);
+
+  const rule = ending(weekly(start, [1, 3, 5], 720), { untilDate: addDays(d1, -1) });
+  const preview = await previewSeriesEdit(db, { ...base, rule }, now);
+  must(preview, "preview of an in-place edit ending before the later segment");
+  assert.equal(preview.inPlace, true);
+  const ok = await editSeriesFrom(db, { ...base, rule, actorUserId: pro.userId, seenVersion: 2, orphans: "keep" }, now);
+  must(ok, "in-place edit ending before the later segment");
+  assert.equal(ok.eventId, rId);
+  assert.deepEqual(await doubledDates(db, [rId, cId], start), []);
+});
+
+dbTest("TIM1: a later segment moved inside the new rule's dates between the plan and the batch makes the edit refused", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await makeType(db, pro);
+  const start = dayIn(pro, 2, now);
+  const { eventId: rId } = await makeEvent(db, pro, { ticketTypeIds: [typeId], rule: weekly(start, [1, 3, 5]) }, now);
+  const d1 = addDays(start, 28);
+  const split = await editSeriesFrom(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, eventId: rId, seenVersion: 1, fromDate: d1, rule: weekly(d1, [1, 3, 5], 660), durationMin: 60, orphans: "keep" },
+    now,
+  );
+  must(split, "future split");
+  const cId = split.eventId;
+  const moved = addDays(start, 14);
+
+  // R (in place) until start + 20 is fine at plan time; meanwhile C is re-ruled to start at start + 14.
+  const res = await editSeriesFrom(
+    db,
+    {
+      professionalId: pro.proId,
+      actorUserId: pro.userId,
+      eventId: rId,
+      seenVersion: 2,
+      fromDate: start,
+      rule: ending(weekly(start, [1, 3, 5], 720), { untilDate: addDays(start, 20) }),
+      durationMin: 60,
+      orphans: "keep",
+    },
+    now,
+    {
+      afterPlan: async () => {
+        must(
+          await editSeriesFrom(
+            db,
+            { professionalId: pro.proId, actorUserId: pro.userId, eventId: cId, seenVersion: 1, fromDate: moved, rule: weekly(moved, [1, 3, 5], 660), durationMin: 60, orphans: "keep" },
+            now,
+          ),
+          "C re-ruled earlier inside afterPlan",
+        );
+      },
+    },
+  );
+  assert.deepEqual(res.ok ? "ok" : [res.code, res.message], ["invalid", laterSegmentMessage(moved)]);
+  const r = await getEvent(db, rId);
+  assert.deepEqual([r.version, r.startMinute, r.untilDate], [2, 600, addDays(d1, -1)], "R unchanged");
+});
