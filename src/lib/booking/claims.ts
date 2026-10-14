@@ -917,7 +917,9 @@ function rdvSlotFree(
  * the type's rules, else the global ones); « buy »: offer of this type on
  * sale whose validity covers the start; answers (type questions, required
  * enforced). The slot-grid membership (computeSlots) is the P5 action's job.
- * Batch: lock professional → the overlapping scheduled RDVs (block range, id
+ * Batch: lock professional, G(time zone still the planned one, 'stale': an
+ * updateProfile committed since the plan would have changed the hours) → the
+ * overlapping scheduled RDVs (block range, id
  * asc) [→ customer for « buy »]; expire their elapsed holds and release the
  * seats in aggregate (an RDV at 0 is cancelled and leaves the EXCLUDE);
  * INSERT the RDV occurrence (capacity 1, seats_taken 1, block ± buffers:
@@ -989,6 +991,8 @@ export async function bookRdv(
             and tstzrange(block_start, block_end) && tstzrange(${ts(blockStart)}, ${ts(blockEnd)})`;
         const queries: Query[] = [
           lockRows(db, "professional", [professionalId]),
+          // the hours and the notice were planned in type.tz: a zone change committed since (updateProfile locks this row) is stale
+          G(db, sql`(select timezone from professional where id = ${professionalId}) = ${type.tz}`, "stale"),
           db.execute(sql`${overlappingRdvs} order by id for no key update`),
         ];
         if (buy) queries.push(lockRows(db, "customer", [customerId]));

@@ -6,7 +6,7 @@ import { setAvailabilityRules, setTicketTypeArchived } from "@/lib/booking/catal
 import { bookRdv, type BookRdvInput } from "@/lib/booking/claims";
 import { fulfillPurchase } from "@/lib/booking/fulfillment";
 import { instantAt } from "@/lib/civil-date";
-import { occurrence, timeOff } from "@/lib/db/schema";
+import { booking, occurrence, professional, timeOff } from "@/lib/db/schema";
 import type { TicketTypeInput } from "@/lib/tickets";
 import { addMinutes, dbTest, inParallel, type DbHarness } from "@/test/db";
 import {
@@ -221,4 +221,22 @@ dbTest("E4 an elapsed RDV hold frees the slot for the next client", async (h) =>
   assert.equal(old.seatsTaken, 0);
   assert.equal((await getBooking(h.db, first.bookingId)).status, "expired");
   assert.equal((await scheduledRdvs(h)).length, 1);
+});
+
+dbTest("E4 plans in the committed time zone: a zone change between its plan and its batch is stale and writes nothing", async (h) => {
+  const s = await rdvSetup(h, { rdvFree: true });
+  const customerId = await makeCustomer(h.db, h.pro);
+  const res = await bookRdv(h.db, rdv(h, s.typeId, s.at(600), customerId, "free"), new Date(), {
+    afterPlan: async () => {
+      await h.db.update(professional).set({ timezone: "America/New_York" }).where(eq(professional.id, h.pro.proId));
+    },
+  });
+  assert.deepEqual(res, { ok: false, code: "stale" });
+  const occurrences = await h.db.select({ id: occurrence.id }).from(occurrence).where(eq(occurrence.professionalId, h.pro.proId));
+  assert.equal(occurrences.length, 0, "no occurrence row");
+  const bookings = await h.db.select({ id: booking.id }).from(booking).where(eq(booking.professionalId, h.pro.proId));
+  assert.equal(bookings.length, 0, "no booking row");
+
+  // a retry plans in the new zone: 10:00 in Paris is 04:00 or 05:00 in New York, outside the 08:00 to 20:00 hours
+  assert.equal(codeOf(await bookRdv(h.db, rdv(h, s.typeId, s.at(600), customerId, "free"))), "unavailable");
 });

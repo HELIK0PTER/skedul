@@ -58,9 +58,7 @@ export async function updateProfileCore(db: Db, ctx: ProCtx, input: ProfileInput
     G(db, sql`exists (select 1 from professional where id = ${pid})`, "not_found"),
     G(
       db,
-      sql`(select timezone from professional where id = ${pid}) = ${p.timezone}
-        or (not exists (select 1 from event where professional_id = ${pid} and archived_at is null)
-          and not exists (select 1 from occurrence where professional_id = ${pid} and status = 'scheduled' and starts_at > ${ts(now)}))`,
+      sql`(select timezone from professional where id = ${pid}) = ${p.timezone} or not ${timezoneLockedSql(pid, now)}`,
       "timezone_locked",
     ),
     db
