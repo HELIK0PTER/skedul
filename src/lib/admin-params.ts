@@ -5,7 +5,7 @@ import {
   PURCHASE_STATUSES,
   type BookingStatus,
   type PurchaseStatus,
-} from "@/lib/tickets";
+} from "@/lib/tickets-vocab";
 
 export type UserRole = (typeof userRole.enumValues)[number];
 export type { BookingStatus, PurchaseStatus };
@@ -34,8 +34,8 @@ export const ROLE_LABELS: Record<UserRole, string> = {
 export const ACTIVITY_TABS = ["bookings", "purchases"] as const;
 export type ActivityTab = (typeof ACTIVITY_TABS)[number];
 
-// The tickets vocabulary (src/lib/tickets.ts) is the single source of these labels.
-export { BOOKING_STATUS_LABELS, COVERAGE_LABELS, PURCHASE_STATUS_LABELS } from "@/lib/tickets";
+// The tickets vocabulary (src/lib/tickets-vocab.ts) is the single source of these labels.
+export { BOOKING_STATUS_LABELS, COVERAGE_LABELS, PURCHASE_STATUS_LABELS } from "@/lib/tickets-vocab";
 
 /* ── Traffic ── */
 

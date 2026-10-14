@@ -53,6 +53,8 @@ import {
   validityLabel,
   type RecurrenceRuleInput,
 } from "./tickets";
+import * as tickets from "./tickets";
+import * as vocab from "./tickets-vocab";
 
 test("enum values are exactly the ones of spec § 6.2", () => {
   assert.deepEqual([...BOOKING_MODES], ["tickets", "free", "none"]);
@@ -115,9 +117,26 @@ test("horizon and hold constants keep their margins", () => {
   assert.deepEqual(Object.keys(THROTTLE_LIMITS).sort(), [...THROTTLE_ACTIONS].sort());
 });
 
-test("the source contains no em dash", () => {
-  const source = readFileSync(join(__dirname, "tickets.ts"), "utf8");
-  assert.equal(source.includes("\u2014"), false);
+test("the vocabulary and the schemas contain no em or en dash", () => {
+  for (const file of ["tickets.ts", "tickets-vocab.ts"]) {
+    const source = readFileSync(join(__dirname, file), "utf8");
+    assert.equal(source.includes("\u2014"), false, `${file} contains U+2014`);
+    assert.equal(source.includes("\u2013"), false, `${file} contains U+2013`);
+  }
+});
+
+test("tickets-vocab.ts imports nothing, so client components can load it alone", () => {
+  const source = readFileSync(join(__dirname, "tickets-vocab.ts"), "utf8");
+  assert.equal(/^\s*import\b/m.test(source), false);
+  assert.equal(source.includes("require("), false);
+});
+
+test("tickets.ts re-exports every vocabulary value unchanged", () => {
+  const exported = tickets as Record<string, unknown>;
+  for (const [name, value] of Object.entries(vocab)) {
+    assert.equal(exported[name], value, name);
+  }
+  assert.equal(Object.keys(vocab).length > 40, true);
 });
 
 test("isEngineErrorCode accepts only engine codes", () => {
