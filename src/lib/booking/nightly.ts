@@ -63,8 +63,16 @@ export async function ensureAllHorizons(db: Db, now: Date = new Date()): Promise
  * Step 5: non-archived events in until/count mode (once included) whose last
  * rule date is before local today and with no future scheduled séance →
  * archived_at = now. `never` events are archived only by « supprimer ».
+ * Each event is archived only at the version read with it: the UPDATE's WHERE
+ * is re-evaluated on the locked row, so an edit that extended the event while
+ * the UPDATE waited (version + 1, future séances its snapshot cannot see)
+ * keeps it live. `opts.afterPlan` is test-only: it runs between the read and the UPDATE.
  */
-export async function archiveFinishedEvents(db: Db, now: Date = new Date()): Promise<{ archived: number }> {
+export async function archiveFinishedEvents(
+  db: Db,
+  now: Date = new Date(),
+  opts: { afterPlan?: () => Promise<void> } = {},
+): Promise<{ archived: number }> {
   const candidates = await db
     .select({ ev: event, tz: professional.timezone })
     .from(event)
@@ -75,12 +83,14 @@ export async function archiveFinishedEvents(db: Db, now: Date = new Date()): Pro
       const last = lastSeriesDate(ruleOf(ev));
       return last !== null && last < todayKey(now, tz);
     })
-    .map(({ ev }) => ev.id);
+    .map(({ ev }) => ev);
   if (finished.length === 0) return { archived: 0 };
+  if (opts.afterPlan) await opts.afterPlan();
   const res = await db.execute(sql`
-    update event set archived_at = ${ts(now)}, updated_at = ${ts(now)}
-    where id = any(${textArray(finished)}) and archived_at is null
-      and not exists (select 1 from occurrence o where o.event_id = event.id and o.status = 'scheduled' and o.starts_at > ${ts(now)})`);
+    update event e set archived_at = ${ts(now)}, updated_at = ${ts(now)}
+    from unnest(${textArray(finished.map((ev) => ev.id))}, ${sql.param(finished.map((ev) => ev.version))}::int[]) as v(id, version)
+    where e.id = v.id and e.version = v.version and e.archived_at is null
+      and not exists (select 1 from occurrence o where o.event_id = e.id and o.status = 'scheduled' and o.starts_at > ${ts(now)})`);
   return { archived: res.rowCount ?? 0 };
 }
 

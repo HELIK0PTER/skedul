@@ -1185,7 +1185,9 @@ place.
      ticket_movement (expire) SELECT … FROM u` ;
   4. `ensureHorizon` pour chaque pro ;
   5. archivage des événements terminés (`until_date` passé, ou `count` épuisé) sans séance future
-     `scheduled` ;
+     `scheduled`, chacun à la `version` lue avec lui (`UPDATE … FROM unnest(ids, versions) WHERE
+     version = v`, réévalué sur la ligne verrouillée) : un événement prolongé entre-temps reste
+     actif ;
   6. purge des lignes `throttle` de plus de 2 jours ;
   7. `checkInvariants()`, avec le nombre de violations stocké pour la carte santé de l'admin.
 

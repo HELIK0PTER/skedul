@@ -69,6 +69,35 @@ dbTest("E12 archiveFinishedEvents: finished once/until series are archived; neve
   assert.equal(await archivedAt(upcoming), null);
 });
 
+dbTest("E12 archiveFinishedEvents: an event extended between the read and the UPDATE (version + 1) is not archived", async ({ db, pro }) => {
+  const now = new Date();
+  const past = addDaysMs(now, -20);
+  const typeA = await makeType(db, pro);
+  const finished = () =>
+    makeEvent(
+      db,
+      pro,
+      { ticketTypeIds: [typeA], rule: weekly(dayIn(pro, -18, now), { endMode: "until", untilDate: dayIn(pro, -5, now) }) },
+      past,
+    );
+  const { eventId: extended } = await finished();
+  const { eventId: untouched } = await finished();
+
+  // Between the candidates read and the UPDATE, an edit commits on `extended`: version + 1 and a rule that
+  // no longer ends. Its new séances would be invisible to the UPDATE's snapshot (it waited on the row
+  // lock), which is why none is inserted here: only the version can tell.
+  const res = await archiveFinishedEvents(db, now, {
+    afterPlan: async () => {
+      await db.execute(sql`update event set version = version + 1, end_mode = 'never', until_date = null,
+        occurrence_count = null, updated_at = ${ts(now)} where id = ${extended}`);
+    },
+  });
+  assert.ok(res.archived >= 1);
+  const archivedAt = async (id: string) => (await db.select().from(event).where(eq(event.id, id)))[0]?.archivedAt?.getTime() ?? null;
+  assert.equal(await archivedAt(extended), null, "the extended event stays live");
+  assert.equal(await archivedAt(untouched), now.getTime());
+});
+
 dbTest("E12 ensureAllHorizons: a series created 10 days ago is brought to today + 400", async ({ db, pro }) => {
   const now = new Date();
   const typeA = await makeType(db, pro);
