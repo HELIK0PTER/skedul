@@ -9,13 +9,16 @@ import { SignOutButton } from "@/components/sign-out-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { env } from "@/lib/env";
 import { getCurrentProfessional } from "@/lib/session";
-import { getGoogleConnection } from "@/server/queries";
+import { getGoogleConnection, getSettingsExtras } from "@/server/queries";
 
 export const metadata: Metadata = { title: "Réglages" };
 
 export default async function SettingsPage() {
   const pro = (await getCurrentProfessional())!;
-  const google = await getGoogleConnection({ id: pro.id, userId: pro.userId });
+  const [google, extras] = await Promise.all([
+    getGoogleConnection({ id: pro.id, userId: pro.userId }),
+    getSettingsExtras(pro.id),
+  ]);
 
   return (
     <>
@@ -37,6 +40,7 @@ export default async function SettingsPage() {
               bio: pro.bio,
               timezone: pro.timezone,
             }}
+            timezoneLocked={extras.timezoneLocked}
           />
         </CardContent>
       </Card>

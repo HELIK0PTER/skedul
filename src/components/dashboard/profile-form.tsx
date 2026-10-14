@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Loader2 } from "lucide-react";
 
@@ -10,15 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-
-const TIMEZONES = [
-  "Europe/Paris",
-  "Europe/Brussels",
-  "Europe/Geneva",
-  "Europe/London",
-  "America/Montreal",
-  "America/New_York",
-];
+import { PRO_TIMEZONES, timeZoneLabel } from "@/lib/timezones";
 
 export interface ProfileValues {
   businessName: string;
@@ -27,23 +18,33 @@ export interface ProfileValues {
   timezone: string;
 }
 
-export function ProfileForm({ values }: { values: ProfileValues }) {
-  const router = useRouter();
+const LOCKED_HELP = "Fuseau verrouillé : vous avez des séances planifiées.";
+
+export function ProfileForm({ values, timezoneLocked }: { values: ProfileValues; timezoneLocked: boolean }) {
   const [pending, startTransition] = useTransition();
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // a zone the pro already has but the list does not offer stays selectable
+  const zones = PRO_TIMEZONES.some((zone) => zone.id === values.timezone)
+    ? PRO_TIMEZONES
+    : [...PRO_TIMEZONES, { id: values.timezone, label: timeZoneLabel(values.timezone) }];
 
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
+    setSaved(false);
+    setError(null);
     startTransition(async () => {
-      await updateProfile({
-        businessName: String(f.get("businessName")),
+      const res = await updateProfile({
+        businessName: String(f.get("businessName") ?? ""),
         headline: String(f.get("headline") ?? ""),
         bio: String(f.get("bio") ?? ""),
-        timezone: String(f.get("timezone")),
+        // a disabled select is not part of the form data: keep the current zone
+        timezone: String(f.get("timezone") ?? values.timezone),
       });
-      setSaved(true);
-      router.refresh();
+      if (res.ok) setSaved(true);
+      else setError(res.error);
     });
   }
 
@@ -51,20 +52,11 @@ export function ProfileForm({ values }: { values: ProfileValues }) {
     <form onSubmit={onSubmit} className="space-y-4">
       <div className="space-y-1.5">
         <Label htmlFor="businessName">Nom de l&apos;activité</Label>
-        <Input
-          id="businessName"
-          name="businessName"
-          defaultValue={values.businessName}
-          required
-        />
+        <Input id="businessName" name="businessName" defaultValue={values.businessName} required />
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="headline">Accroche</Label>
-        <Input
-          id="headline"
-          name="headline"
-          defaultValue={values.headline ?? ""}
-        />
+        <Input id="headline" name="headline" defaultValue={values.headline ?? ""} />
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="bio">Présentation</Label>
@@ -72,21 +64,42 @@ export function ProfileForm({ values }: { values: ProfileValues }) {
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="timezone">Fuseau horaire</Label>
-        <Select id="timezone" name="timezone" defaultValue={values.timezone}>
-          {TIMEZONES.map((tz) => (
-            <option key={tz} value={tz}>
-              {tz}
+        <Select
+          id="timezone"
+          name="timezone"
+          defaultValue={values.timezone}
+          disabled={timezoneLocked}
+          aria-describedby={timezoneLocked ? "timezone-help" : undefined}
+        >
+          {zones.map((zone) => (
+            <option key={zone.id} value={zone.id}>
+              {zone.label}
             </option>
           ))}
         </Select>
+        {timezoneLocked && (
+          <p id="timezone-help" className="text-xs text-muted-foreground">
+            {LOCKED_HELP}
+          </p>
+        )}
       </div>
+
+      {error && (
+        <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </p>
+      )}
 
       <div className="flex items-center gap-3 pt-2">
         <Button type="submit" disabled={pending}>
           {pending && <Loader2 className="size-4 animate-spin" />}
           Enregistrer
         </Button>
-        {saved && <span className="text-sm text-success">Enregistré ✓</span>}
+        {saved && (
+          <span role="status" className="text-sm text-success">
+            Enregistré
+          </span>
+        )}
       </div>
     </form>
   );

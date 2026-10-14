@@ -4,6 +4,7 @@ import { and, asc, eq, gte, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { account, availabilityRule, professional, timeOff, user } from "@/lib/db/schema";
 import { env } from "@/lib/env";
+import { isTimezoneLocked } from "@/lib/back-office/settings-actions";
 import { userNotSuspended } from "@/lib/suspension";
 
 /*
@@ -38,6 +39,11 @@ export function getProTimeOff(proId: string) {
     .from(timeOff)
     .where(and(eq(timeOff.professionalId, proId), gte(timeOff.endAt, new Date())))
     .orderBy(asc(timeOff.startAt));
+}
+
+/** What the settings page needs beyond the professional row (Task 29 adds the booking settings). */
+export async function getSettingsExtras(professionalId: string): Promise<{ timezoneLocked: boolean }> {
+  return { timezoneLocked: await isTimezoneLocked(db, professionalId, new Date()) };
 }
 
 /**

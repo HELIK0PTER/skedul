@@ -9,15 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-
-const TIMEZONES = [
-  "Europe/Paris",
-  "Europe/Brussels",
-  "Europe/Geneva",
-  "Europe/London",
-  "America/Montreal",
-  "America/New_York",
-];
+import { PRO_TIMEZONES } from "@/lib/timezones";
 
 export function OnboardingForm() {
   const [pending, startTransition] = useTransition();
@@ -80,9 +72,9 @@ export function OnboardingForm() {
       <div className="space-y-1.5">
         <Label htmlFor="timezone">Fuseau horaire</Label>
         <Select id="timezone" name="timezone" defaultValue="Europe/Paris">
-          {TIMEZONES.map((tz) => (
-            <option key={tz} value={tz}>
-              {tz}
+          {PRO_TIMEZONES.map((zone) => (
+            <option key={zone.id} value={zone.id}>
+              {zone.label}
             </option>
           ))}
         </Select>

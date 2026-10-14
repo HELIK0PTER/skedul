@@ -126,12 +126,18 @@ export function insertOccurrences(
  * Creates an event (first segment: series_root_id = id, version 1), its
  * links (only this pro's types, else `invalid`), its questions and its
  * occurrences, in ONE batch. Effects: none (empty séances are not synced).
- * Errors: invalid, not_found (unknown pro).
+ * The batch starts with the professional's row lock (rank 1 of the lock order)
+ * and a guard that the time zone read at plan time is still the committed one
+ * (`stale`): the séances are built in that zone and updateProfile locks the
+ * same row, so a zone change and an event creation cannot interleave.
+ * Errors: invalid, not_found (unknown pro), stale.
+ * `opts.afterPlan` is test-only: it runs between the plan and its batch.
  */
 export async function createEvent(
   db: Db,
   input: { professionalId: string; event: EventInput },
   now: Date = new Date(),
+  opts: { afterPlan?: () => Promise<void> } = {},
 ): Promise<EngineResult<{ eventId: string; occurrenceCount: number }>> {
   const parsed = eventInputSchema.safeParse(input.event);
   if (!parsed.success) return fail("invalid", parsed.error.issues[0]?.message);
@@ -157,6 +163,8 @@ export async function createEvent(
     return (aid) => {
       const c: BatchCtx = { db, aid, now };
       const qs: Query[] = [
+        lockRows(db, "professional", [professionalId]),
+        G(db, sql`(select timezone from professional where id = ${professionalId}) = ${pro.tz}`, "stale"),
         db.insert(event).values({
           id: eventId,
           professionalId,
@@ -225,7 +233,7 @@ export async function createEvent(
       }
       return qs;
     };
-  });
+  }, { afterPlan: opts.afterPlan });
   if (!res.ok) return failOf(res);
   return { ok: true, effects: [], eventId, occurrenceCount };
 }

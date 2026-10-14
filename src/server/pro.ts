@@ -19,6 +19,10 @@ import { env } from "@/lib/env";
 import { createSkedulCalendar } from "@/lib/google-calendar";
 import { getCurrentProfessional, getCurrentUser } from "@/lib/session";
 import { isHexColor, presetColor } from "@/lib/color";
+import type { ActionResult } from "@/lib/back-office/result";
+import { updateProfileCore, type ProfileInput } from "@/lib/back-office/settings-actions";
+import { isValidTimeZone } from "@/lib/timezones";
+import { runProAction } from "@/server/pro-context";
 import { availabilityRuleInputSchema } from "@/lib/tickets";
 import { buildTimeOffInterval } from "@/lib/timeoff";
 import { checkSlug } from "@/lib/slug";
@@ -81,7 +85,7 @@ export async function createProfessionalProfile(input: {
       businessName: input.businessName,
       headline: input.headline || null,
       bio: input.bio || null,
-      timezone: input.timezone || "Europe/Paris",
+      timezone: input.timezone && isValidTimeZone(input.timezone) ? input.timezone : "Europe/Paris",
     })
     .returning({ id: professional.id });
 
@@ -104,26 +108,8 @@ export async function createProfessionalProfile(input: {
   redirect("/dashboard");
 }
 
-export async function updateProfile(input: {
-  businessName: string;
-  headline?: string;
-  bio?: string;
-  brandColor?: string;
-  timezone?: string;
-}) {
-  const pro = await requirePro();
-  await db
-    .update(professional)
-    .set({
-      businessName: input.businessName,
-      headline: input.headline || null,
-      bio: input.bio || null,
-      brandColor: input.brandColor || pro.brandColor,
-      timezone: input.timezone || pro.timezone,
-    })
-    .where(eq(professional.id, pro.id));
-  revalidatePath("/dashboard/settings");
-  revalidatePath(`/${pro.slug}`);
+export async function updateProfile(input: ProfileInput): Promise<ActionResult> {
+  return runProAction("updateProfile", (ctx, now) => updateProfileCore(db, ctx, input, now), { publicPage: true });
 }
 
 const SLUG_TAKEN = "Cette adresse est déjà prise.";

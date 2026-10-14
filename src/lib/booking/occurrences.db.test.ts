@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { and, asc, eq, gt, sql } from "drizzle-orm";
 
 import { addDays, todayKey } from "@/lib/civil-date";
-import { event, eventTicketType, occurrence, question } from "@/lib/db/schema";
+import { event, eventTicketType, occurrence, professional, question } from "@/lib/db/schema";
 import { expand, expandDates, type RecurrenceRule } from "@/lib/recurrence";
 import type { RecurrenceRuleInput } from "@/lib/tickets";
 
@@ -286,4 +286,23 @@ dbTest("archived events are skipped by ensureHorizon and minGeneratedUntil", asy
     .from(occurrence)
     .where(and(eq(occurrence.eventId, created.eventId), gt(occurrence.seriesDate, horizonEnd(past, pro.tz))));
   assert.equal(late.length, 0);
+});
+
+dbTest("createEvent plans in the committed time zone: a zone change between its plan and its batch is stale and writes nothing", async ({ db, pro }) => {
+  const now = new Date();
+  const res = await createEvent(
+    db,
+    { professionalId: pro.proId, event: { title: "Changement de fuseau", rule: ONCE(addDays(todayKey(now, pro.tz), 3), 600) } },
+    now,
+    {
+      afterPlan: async () => {
+        await db.update(professional).set({ timezone: "America/New_York" }).where(eq(professional.id, pro.proId));
+      },
+    },
+  );
+  assert.deepEqual(res, { ok: false, code: "stale" });
+  const events = await db.select({ id: event.id }).from(event).where(eq(event.professionalId, pro.proId));
+  assert.equal(events.length, 0, "no event row");
+  const occurrences = await db.select({ id: occurrence.id }).from(occurrence).where(eq(occurrence.professionalId, pro.proId));
+  assert.equal(occurrences.length, 0, "no occurrence row");
 });
