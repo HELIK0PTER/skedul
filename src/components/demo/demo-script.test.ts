@@ -5,8 +5,10 @@ import { DEMO_CLIENT } from "./demo-data";
 import {
   DEMO_STEPS,
   INITIAL_STATE,
+  demoHref,
   stateAfter,
   stateEntering,
+  stepIndex,
 } from "./demo-script";
 
 test("12 étapes, la dernière est l'outro", () => {
@@ -42,6 +44,16 @@ test("côté pro : chaque étape démarre sur le bon écran", () => {
   assert.equal(stateAfter(9).saturdayEnabled, true);
   assert.equal(stateAfter(10).brandColor, "#0d9488");
   assert.equal(stateAfter(10).headerLayout, "vitrine");
+});
+
+test("lien profond : ?step= ouvre la bonne étape, sinon la première", () => {
+  assert.equal(demoHref(), "/demo");
+  assert.equal(demoHref("packs"), "/demo?step=packs");
+  assert.equal(stepIndex("planning"), 6);
+  assert.equal(stepIndex("buy-pack"), 4);
+  assert.equal(stepIndex(undefined), 0);
+  assert.equal(stepIndex("inconnue"), 0);
+  assert.equal(stepIndex(["packs", "planning"]), 0);
 });
 
 test("`paying` n'est jamais vrai à l'entrée d'une étape", () => {

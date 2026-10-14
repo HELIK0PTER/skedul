@@ -11,6 +11,7 @@ const SECTIONS = [
   { href: "/#features", label: "Fonctionnalités" },
   { href: "/#packs", label: "Packs prépayés" },
   { href: "/#how", label: "Comment ça marche" },
+  { href: "/demo", label: "Démo" },
 ];
 
 /**
@@ -43,7 +44,7 @@ export async function SiteHeader() {
           </span>
         </Link>
 
-        <nav aria-label="Sections de la page" className="hidden lg:block">
+        <nav aria-label="Navigation principale" className="hidden lg:block">
           <ul className="flex items-center">
             {SECTIONS.map((section) => (
               <li key={section.href}>

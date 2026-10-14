@@ -66,7 +66,9 @@ export function DashboardSidebar({
               key={item.href}
               href={item.href}
               className={cn(
-                "flex items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2 text-sm font-medium transition-colors",
+                // relative: keeps the badge's sr-only text (position: absolute)
+                // inside the scrolling mobile nav instead of widening the page
+                "relative flex items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2 text-sm font-medium transition-colors",
                 active
                   ? "bg-accent text-accent-foreground"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground",

@@ -38,7 +38,9 @@ export default async function DashboardLayout({
           isAdmin={session.user.role === "admin"}
           supportUnread={supportUnread}
         />
-        <main className="flex-1 overflow-y-auto bg-background">
+        {/* The window scrolls, not <main>: overflow-x-clip (unlike auto) keeps
+            sticky children (settings preview) working. */}
+        <main className="min-w-0 flex-1 overflow-x-clip bg-background">
           <div className="mx-auto max-w-5xl px-5 py-8">{children}</div>
         </main>
       </div>
