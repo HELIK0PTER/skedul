@@ -390,6 +390,44 @@ test("sign-in code requests keep their own counter; reset by code is never maile
   assert.equal(other.queries.length, 0);
 });
 
+test("a code request the route will reject is not counted", async () => {
+  const { db, queries } = stubDb([{ hits: 99 }]);
+  const { options } = build(db);
+  for (const body of [
+    { email: "lea@example.com", type: "change-email" },
+    { email: "lea@example.com", type: "bogus" },
+    { email: "lea@example.com" },
+    { email: " lea@example.com", type: "sign-in" },
+    { email: "Lea@Example.com ", type: "email-verification" },
+    { email: "not-an-address", type: "sign-in" },
+    { email: 42, type: "sign-in" },
+    { type: "sign-in" },
+  ]) {
+    assert.equal(await runBefore(options, ctxOf(OTP_SEND_PATH, body)), undefined, JSON.stringify(body));
+  }
+  assert.equal(queries.length, 0);
+});
+
+test("a confirmation code request counts only for an address that has an account", async () => {
+  const known = stubDb([{ found: true, hits: 6 }]);
+  assert.deepEqual(
+    await runBefore(build(known.db).options, ctxOf(OTP_SEND_PATH, { email: "Lea@Example.com", type: "email-verification" })),
+    { success: true },
+  );
+  assert.equal(known.queries.length, 2);
+  assert.match(known.queries[0].sql, /from "user" where email = \$1/);
+  assert.deepEqual(known.queries[0].params, ["lea@example.com"]);
+  assert.ok(known.queries[1].params.includes(otpThrottleKey("lea@example.com")));
+
+  // No account: the route answers 200 and mails nothing, so nothing is counted.
+  const unknown = stubDb([{ found: false, hits: 6 }]);
+  assert.equal(
+    await runBefore(build(unknown.db).options, ctxOf(OTP_SEND_PATH, { email: "lea@example.com", type: "email-verification" })),
+    undefined,
+  );
+  assert.equal(unknown.queries.length, 1);
+});
+
 test("only sign-in and email-verification codes are mailed, with their own template", async () => {
   const sent: AuthMail[] = [];
   const mailer = buildOtpMailer(async (mail) => {

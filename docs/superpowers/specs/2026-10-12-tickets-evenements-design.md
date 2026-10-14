@@ -1209,7 +1209,12 @@ appelle `stripe.checkout.sessions.expire` pour chacun (au mieux). Ensuite seulem
 - Un renvoi dans les 5 minutes renvoie **le même** code, sans rotation.
 - **Limite par email** : 5 envois par heure, appliquée dans un `hooks.before` sur
   `/email-otp/send-verification-otp`. Au-delà, le hook répond `{ success: true }` **avant** que
-  Better Auth génère un code : le code déjà envoyé reste valide.
+  Better Auth génère un code : le code déjà envoyé reste valide. Ce hook s'exécute avant la
+  validation : il ne compte que les demandes que la route enverra, soit le type `sign-in` ou
+  `email-verification` avec un email que la route accepte (une chaîne sans espace autour, valide
+  pour `z.email()` une fois en minuscules), et pour `email-verification` seulement si l'adresse a un
+  compte (sinon la route répond 200 sans rien envoyer). Toute autre demande passe sans compter :
+  la route répond elle-même (400, ou 200 sans mail), et la victime garde son plafond.
 - **Demandes de réinitialisation** : même plafond (5 par heure et par adresse), avec **son propre
   compteur** (`t:reset:e:…`, distinct de `t:otp:e:…`) : un spam de réinitialisation ne doit pas
   bloquer les codes de connexion de l'adresse. Le plafond compte les mails de réinitialisation

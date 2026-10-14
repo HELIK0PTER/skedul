@@ -8,6 +8,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { createAuthMiddleware } from "better-auth/api";
 import { emailOTP } from "better-auth/plugins";
 import { and, eq, isNull, sql } from "drizzle-orm";
+import { z } from "zod";
 
 import { ADMIN_HTTP_ENDPOINTS, adminPlugin } from "@/lib/auth-admin";
 import type { Db } from "@/lib/db/atomic";
@@ -110,6 +111,23 @@ export function buildOtpMailer(sendEmail: AuthDeps["sendEmail"]) {
     const mail = type === "sign-in" ? loginCodeEmail({ code: otp }) : verifyEmailCodeEmail({ code: otp });
     await sendEmail({ to: email, ...mail });
   };
+}
+
+/**
+ * The address a code request counts against, lower-cased, or null when the
+ * route will reject the request: a type other than sign-in / email-verification
+ * (change-email, forget-password, anything else), or an e-mail that is not a
+ * string, has surrounding whitespace, or fails z.email() once lower-cased (the
+ * route lower-cases without trimming, then checks z.email()). hooks.before runs
+ * before that validation, and a rejected request mails nothing: it must not use
+ * up the victim's cap (spec § 12).
+ */
+export function otpCapEmail(body: { email?: unknown; type?: unknown } | undefined): string | null {
+  if (body?.type !== "sign-in" && body?.type !== "email-verification") return null;
+  const raw = body.email;
+  if (typeof raw !== "string" || raw !== raw.trim()) return null;
+  const email = raw.toLowerCase();
+  return z.email().safeParse(email).success ? email : null;
 }
 
 /**
@@ -262,14 +280,21 @@ export function buildAuthOptions(deps: AuthDeps) {
       // Per-address cap on sign-in / confirmation codes (5 an hour). Past it,
       // answer like a send BEFORE the endpoint runs: no new code is generated,
       // the live one stays valid. (The reset-mail cap is in sendResetPassword.)
+      // Only a request the route will mail counts: one it rejects (otpCapEmail)
+      // or a confirmation code for an address without an account (the route
+      // answers 200 and mails nothing) would silently lock the address out.
       before: createAuthMiddleware(async (ctx) => {
         if (ctx.path !== OTP_SEND_PATH) return;
         const body = ctx.body as { email?: unknown; type?: unknown } | undefined;
         // Reset by code is closed (OTP_DISABLED_PATHS): never mail a forget-password code.
         if (body?.type === "forget-password") return ctx.json({ success: true });
-        const raw = body?.email;
-        if (typeof raw !== "string") return;
-        const allowed = await consumeThrottle(db, otpThrottleKey(raw), OTP_EMAIL_LIMIT, now());
+        const email = otpCapEmail(body);
+        if (email === null) return;
+        if (body?.type === "email-verification") {
+          const found = await db.execute<{ found: boolean }>(sql`select exists (select 1 from "user" where email = ${email}) as found`);
+          if (found.rows[0]?.found !== true) return;
+        }
+        const allowed = await consumeThrottle(db, otpThrottleKey(email), OTP_EMAIL_LIMIT, now());
         if (!allowed) return ctx.json({ success: true });
       }),
     },

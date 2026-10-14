@@ -693,6 +693,41 @@ test("a failing reset counter sends no mail, and the request still gets the usua
   }
 });
 
+test("IDE2 code requests the route rejects, or that mail nothing, never count against the address's cap", OPTS, async (ctx) => {
+  const db = await getTestDb();
+  const t = makeTestAuth(db);
+  const logs = captureLogs(ctx);
+  const email = testEmail("ide2");
+  try {
+    // One browser = one IP: 5 requests fit Better Auth's per-IP rule. Each one used to add a hit to the
+    // victim's counter, so the victim's next request answered 200 and mailed nothing for the hour.
+    const attacker = browser(t);
+    const rejected = [
+      { email, type: "change-email" },
+      { email, type: "bogus" },
+      { email: ` ${email}`, type: "sign-in" },
+      { email: `${email.toUpperCase()} `, type: "email-verification" },
+    ];
+    for (const body of rejected) {
+      assert.equal((await attacker("/email-otp/send-verification-otp", body)).status, 400, JSON.stringify(body));
+    }
+    // A confirmation code for an address without an account: the route answers 200 and mails nothing.
+    const silent = await attacker("/email-otp/send-verification-otp", { email, type: "email-verification" });
+    assert.equal(silent.status, 200);
+    assert.equal(t.mails.length, 0);
+    assert.equal(await throttleHits(db, otpThrottleKey(email)), null, "the address's counter is untouched");
+
+    const victim = browser(t);
+    assert.equal((await victim("/email-otp/send-verification-otp", { email, type: "sign-in" })).status, 200);
+    assert.equal(t.mails.filter((m) => m.to === email).length, 1, "the victim gets a code");
+    assert.ok(t.lastCode(email));
+    assert.equal(await throttleHits(db, otpThrottleKey(email)), 1);
+    assert.ok(!logs.some((l) => l.includes(email)), "no address in the logs");
+  } finally {
+    await deleteUsersByEmail(db, [email]);
+  }
+});
+
 test("a failing sign-in code counter answers 500 and neither mails nor stores a code", OPTS, async (ctx) => {
   const db = await getTestDb();
   const email = testEmail("otpfail");
