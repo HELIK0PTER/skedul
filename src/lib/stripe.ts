@@ -2,6 +2,7 @@ import "server-only";
 import Stripe from "stripe";
 
 import { env } from "@/lib/env";
+import { logSafeMessage } from "@/lib/notify-core";
 
 /**
  * Stripe client. `null` when no real key is configured — the app then runs in
@@ -67,4 +68,27 @@ export async function createCheckoutUrl(params: CheckoutParams): Promise<string>
 
   const checkout = await stripe.checkout.sessions.create(sessionParams);
   return checkout.url!;
+}
+
+/**
+ * Best effort: closes a still-open Checkout session whose seat ended (the
+ * pending purchase of a cancelled or released booking), so the client cannot
+ * pay for a seat that no longer exists. "mock" when Stripe is off; "not_open"
+ * when the session is already complete or expired (retrieved first, so Stripe
+ * is never asked to expire what is not open); "expired" after sessions.expire;
+ * "failed" on any error. Never throws.
+ */
+export async function expireCheckoutSession(
+  checkoutSessionId: string,
+): Promise<"expired" | "not_open" | "mock" | "failed"> {
+  if (!stripe) return "mock";
+  try {
+    const session = await stripe.checkout.sessions.retrieve(checkoutSessionId);
+    if (session.status !== "open") return "not_open";
+    await stripe.checkout.sessions.expire(checkoutSessionId);
+    return "expired";
+  } catch (err) {
+    console.error(`[stripe] expire failed: ${logSafeMessage(err)}`);
+    return "failed";
+  }
 }

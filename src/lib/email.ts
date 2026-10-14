@@ -2,6 +2,7 @@ import "server-only";
 import { Resend } from "resend";
 
 import { env } from "@/lib/env";
+import { mockLinks } from "@/lib/emails/mock-links";
 import { redactSubject } from "@/lib/emails/redact-subject";
 
 const resend = env.RESEND_ENABLED ? new Resend(env.RESEND_API_KEY!) : null;
@@ -25,7 +26,12 @@ type SendResult =
  */
 export async function sendEmail({ to, subject, html }: SendArgs): Promise<SendResult> {
   if (!resend) {
-    console.info(`\n📧 [email:mock] → ${to}\n   subject: ${subject}\n`);
+    // Development aid: the links of the mail (personal link, calendar file), so the
+    // flow can be followed without a mailbox. Never logged in production.
+    const links = process.env.NODE_ENV === "production" ? [] : mockLinks(html);
+    console.info(
+      `\n📧 [email:mock] → ${to}\n   subject: ${subject}\n${links.map((link) => `   link: ${link}\n`).join("")}`,
+    );
     return { id: "mock", mocked: true };
   }
   try {
