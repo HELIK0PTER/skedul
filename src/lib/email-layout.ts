@@ -11,7 +11,7 @@ export function layout(title: string, body: string) {
       <h1 style="font-size:18px;margin:0 0 12px">${title}</h1>
       ${body}
     </div>
-    <p style="color:#a1a1aa;font-size:12px;text-align:center;margin-top:20px">Envoyé par Skedul · Réservations & packs prépayés</p>
+    <p style="color:#a1a1aa;font-size:12px;text-align:center;margin-top:20px">Envoyé par Skedul · Réservations et tickets</p>
   </div></body></html>`;
 }
 
