@@ -7,6 +7,7 @@ import { headers } from "next/headers";
 
 import { isReservedSegment } from "@/lib/analytics";
 import { auth } from "@/lib/auth";
+import { clearGoogleLink } from "@/lib/calendar-sync-load";
 import { db } from "@/lib/db";
 import {
   availabilityRule,
@@ -379,7 +380,11 @@ export async function finalizeGoogleConnection(): Promise<{
   }
 }
 
-/** Unlink Google and stop syncing (the Skedul calendar is left in place). */
+/**
+ * Unlink Google and stop syncing (the Skedul calendar is left in place). One
+ * batch clears the calendar id and every occurrence's Google marker (Q33), so a
+ * later reconnect never patches events that belong to the old link.
+ */
 export async function disconnectGoogleCalendar(): Promise<{ ok: boolean }> {
   const pro = await getCurrentProfessional();
   if (!pro) return { ok: false };
@@ -391,9 +396,6 @@ export async function disconnectGoogleCalendar(): Promise<{ ok: boolean }> {
   } catch (err) {
     console.error("[google] unlink failed:", err);
   }
-  await db
-    .update(professional)
-    .set({ googleCalendarId: null })
-    .where(eq(professional.id, pro.id));
+  await clearGoogleLink(db, pro.id);
   return { ok: true };
 }

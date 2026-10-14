@@ -60,3 +60,32 @@ test("buildIcs → escapes commas, semicolons and newlines in text", () => {
   assert.ok(ics.includes("SUMMARY:Yoga\\; doux\\, matin"));
   assert.ok(ics.includes("DESCRIPTION:Ligne 1\\nLigne 2"));
 });
+
+test("no location → no location parameter and no LOCATION line", () => {
+  assert.equal(new URL(googleCalendarUrl(base)).searchParams.get("location"), null);
+  assert.equal(new URL(outlookCalendarUrl(base)).searchParams.get("location"), null);
+  assert.equal(new URL(googleCalendarUrl({ ...base, location: null })).searchParams.get("location"), null);
+  assert.equal(new URL(outlookCalendarUrl({ ...base, location: "" })).searchParams.get("location"), null);
+  const ics = buildIcs({ ...base, uid: "bk_1@skedul.app", location: null });
+  assert.ok(!ics.includes("LOCATION"));
+  assert.equal(ics, buildIcs({ ...base, uid: "bk_1@skedul.app" }));
+});
+
+test("location → Google and Outlook parameter", () => {
+  const where = "Parc de la Villette, Paris";
+  assert.equal(new URL(googleCalendarUrl({ ...base, location: where })).searchParams.get("location"), where);
+  assert.equal(new URL(outlookCalendarUrl({ ...base, location: where })).searchParams.get("location"), where);
+  // The other parameters are unchanged.
+  const url = new URL(googleCalendarUrl({ ...base, location: where }));
+  assert.equal(url.searchParams.get("dates"), "20260703T120000Z/20260703T130000Z");
+  assert.equal(url.searchParams.get("text"), "Coaching 1h");
+});
+
+test("location → ICS LOCATION line right after DESCRIPTION, escaped like other text", () => {
+  const ics = buildIcs({ ...base, uid: "bk_2@skedul.app", location: "Gymnase Japy, salle 2; entrée B\nPorte 3" });
+  const lines = ics.split("\r\n");
+  const description = lines.findIndex((line) => line.startsWith("DESCRIPTION:"));
+  assert.equal(lines[description + 1], "LOCATION:Gymnase Japy\\, salle 2\\; entrée B\\nPorte 3");
+  assert.equal(lines[description + 2], "END:VEVENT");
+  assert.ok(ics.endsWith("END:VCALENDAR\r\n"));
+});

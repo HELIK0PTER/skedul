@@ -40,33 +40,37 @@ export async function createSkedulCalendar(
   return json.id;
 }
 
+/** POST the body (with its id); 409 (id already known, even a cancelled event) → "exists". */
 export async function insertEvent(
   accessToken: string,
   calendarId: string,
   body: GoogleEventBody,
-): Promise<string> {
+): Promise<"created" | "exists"> {
   const res = await call(
     accessToken,
     `/calendars/${encodeURIComponent(calendarId)}/events`,
     { method: "POST", body },
   );
+  if (res.status === 409) return "exists";
   await ensureOk(res, "insert event");
-  const json = (await res.json()) as { id: string };
-  return json.id;
+  return "created";
 }
 
+/** PATCH the full body; 404 / 410 → "missing". */
 export async function patchEvent(
   accessToken: string,
   calendarId: string,
   eventId: string,
   body: GoogleEventBody,
-): Promise<void> {
+): Promise<"patched" | "missing"> {
   const res = await call(
     accessToken,
     `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
     { method: "PATCH", body },
   );
+  if (res.status === 404 || res.status === 410) return "missing";
   await ensureOk(res, "patch event");
+  return "patched";
 }
 
 export async function deleteEvent(

@@ -3,6 +3,8 @@ export interface CalendarLinkInput {
   description: string;
   startAt: Date;
   endAt: Date;
+  /** Where the séance takes place; the link or file carries it only when set. */
+  location?: string | null;
 }
 
 /** 2026-07-03T12:00:00.000Z → 20260703T120000Z (RFC 5545 UTC form). */
@@ -18,6 +20,7 @@ export function googleCalendarUrl(input: CalendarLinkInput): string {
     details: input.description,
     dates: `${compactUtc(input.startAt)}/${compactUtc(input.endAt)}`,
   });
+  if (input.location) params.set("location", input.location);
   return `https://calendar.google.com/calendar/render?${params}`;
 }
 
@@ -30,6 +33,7 @@ export function outlookCalendarUrl(input: CalendarLinkInput): string {
     startdt: input.startAt.toISOString(),
     enddt: input.endAt.toISOString(),
   });
+  if (input.location) params.set("location", input.location);
   return `https://outlook.live.com/calendar/0/deeplink/compose?${params}`;
 }
 
@@ -54,6 +58,7 @@ export function buildIcs(input: CalendarLinkInput & { uid: string }): string {
     `DTEND:${compactUtc(input.endAt)}`,
     `SUMMARY:${escapeIcsText(input.title)}`,
     `DESCRIPTION:${escapeIcsText(input.description)}`,
+    ...(input.location ? [`LOCATION:${escapeIcsText(input.location)}`] : []),
     "END:VEVENT",
     "END:VCALENDAR",
   ];

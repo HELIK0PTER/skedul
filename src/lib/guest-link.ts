@@ -42,3 +42,9 @@ export function verifyGuestLink(token: string, key: Buffer): GuestLink | null {
   if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null;
   return link;
 }
+
+/** `${appUrl}/api/c/${signGuestLink({ customerId: customer.id, linkVersion: customer.linkVersion }, key)}` (appUrl without trailing slash; the version comes from the row at send time). */
+export function personalLinkUrl(appUrl: string, customer: { id: string; linkVersion: number }, key: Buffer): string {
+  const token = signGuestLink({ customerId: customer.id, linkVersion: customer.linkVersion }, key);
+  return `${appUrl.replace(/\/+$/, "")}/api/c/${token}`;
+}

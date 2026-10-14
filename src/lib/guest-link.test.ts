@@ -1,7 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { GUEST_COOKIE, GUEST_COOKIE_MAX_AGE, guestLinkKey, signGuestLink, verifyGuestLink } from "./guest-link";
+import {
+  GUEST_COOKIE,
+  GUEST_COOKIE_MAX_AGE,
+  guestLinkKey,
+  personalLinkUrl,
+  signGuestLink,
+  verifyGuestLink,
+} from "./guest-link";
 
 const KEY = guestLinkKey("test-secret-0123456789abcdefghijklmnop");
 const LINK = { customerId: "V1StGXR8_Z5jdHi6B-myT", linkVersion: 3 };
@@ -60,4 +67,27 @@ test("malformed tokens are refused", () => {
   ]) {
     assert.equal(verifyGuestLink(bad, KEY), null, bad);
   }
+});
+
+test("personalLinkUrl points at /api/c/<token> and the token verifies back", () => {
+  const url = personalLinkUrl("https://myskedul.com", { id: LINK.customerId, linkVersion: LINK.linkVersion }, KEY);
+  assert.ok(url.startsWith("https://myskedul.com/api/c/"));
+  assert.equal(url, `https://myskedul.com/api/c/${signGuestLink(LINK, KEY)}`);
+  const token = url.slice("https://myskedul.com/api/c/".length);
+  assert.deepEqual(verifyGuestLink(token, KEY), LINK);
+});
+
+test("personalLinkUrl ignores trailing slashes of the app URL", () => {
+  const customer = { id: LINK.customerId, linkVersion: LINK.linkVersion };
+  const plain = personalLinkUrl("https://myskedul.com", customer, KEY);
+  assert.equal(personalLinkUrl("https://myskedul.com/", customer, KEY), plain);
+  assert.equal(personalLinkUrl("https://myskedul.com///", customer, KEY), plain);
+  assert.equal(personalLinkUrl("http://localhost:3102/", customer, KEY).startsWith("http://localhost:3102/api/c/"), true);
+});
+
+test("personalLinkUrl signs the link version of the row", () => {
+  const v3 = personalLinkUrl("https://myskedul.com", { id: LINK.customerId, linkVersion: 3 }, KEY);
+  const v4 = personalLinkUrl("https://myskedul.com", { id: LINK.customerId, linkVersion: 4 }, KEY);
+  assert.notEqual(v3, v4);
+  assert.deepEqual(verifyGuestLink(v4.split("/api/c/")[1], KEY), { customerId: LINK.customerId, linkVersion: 4 });
 });
