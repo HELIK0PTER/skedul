@@ -1074,7 +1074,13 @@ Un `stale` refait le choix et relance une fois. Les boutons sont désactivés pe
 - `UPDATE booking SET occurrence_id = $vers, moved_at = $now WHERE id AND occurrence_id = $depuis
   AND status = 'confirmed'`, puis `G` ;
 - `G(cible scheduled ∧ séance d'événement ∧ (couverture ≠ ticket ∨ type du ticket accepté par la
-  cible), 'not_eligible')`. Un type non accepté propose « Convertir » d'abord ;
+  cible), 'not_eligible')`. Un type non accepté propose « Convertir » d'abord, **dans la même
+  action** : avec `convertToTicketTypeId` (type actif du pro, autre que celui du ticket), le ticket
+  réservé lui-même est converti dans le même lot, après le déplacement de l'inscription et avant ce
+  `G` : transition `type A → B` sur ce ticket `booked`, qui reste `booked` (`purchase_id` et
+  expiration gardés), un mouvement `convert` `booked → booked` avec `from_ticket_type_id` ;
+  `G(B actif, 'stale')` et `G(un seul mouvement pour l'action, 'stale')`. L'inscription garde son
+  `moved_at` ; « Convertir » seul ne touche que des tickets `available` ;
 - si le ticket expire avant la cible, la fenêtre demande « Ticket expiré à la date de cette
   séance — déplacer quand même ? ». Le pro peut forcer ;
 - `booking_active_uq` couvre le cas d'un client déjà inscrit sur la cible ;

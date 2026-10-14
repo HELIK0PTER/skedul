@@ -513,6 +513,9 @@ export async function unpointTickets(
   });
 }
 
+/** The booked ticket a « Déplacer » converted (« Convertir d'abord », spec § 11 E8). */
+export type MoveConversion = { ticketId: string; fromTicketTypeId: string; toTicketTypeId: string };
+
 /**
  * Déplacer un inscrit (confirmed booking) to another EVENT séance: lock both
  * occurrences (id asc); R both; SEAT(src, −1), SEAT(tgt, +1); move with
@@ -521,14 +524,32 @@ export async function unpointTickets(
  * without force, G(ticket valid at the target start, 'ticket_expires_before').
  * assertNotBooked(target) sits between R(target) and SEAT(target, +1): a client
  * already on a full target is « already_booked », not « full » (ledger ruling Task 20).
+ *
+ * `convertToTicketTypeId` (ticket coverage only; ignored otherwise): the booked
+ * ticket is first converted to that active type of the pro, in the same batch
+ * after the booking moved and before the eligibility guard: booked → booked
+ * `convert` movement with from_ticket_type_id, purchase_id and expires_at kept;
+ * G(type still active, 'stale'), G(one movement for this action, 'stale').
+ * Plan errors: not_found (unknown or archived type), invalid (its current type).
+ * `opts.afterPlan` is test-only: it runs between the plan and its batch.
  */
 export async function moveAttendee(
   db: Db,
-  input: { professionalId: string; actorUserId: string; bookingId: string; targetOccurrenceId: string; force: boolean },
+  input: {
+    professionalId: string;
+    actorUserId: string;
+    bookingId: string;
+    targetOccurrenceId: string;
+    force: boolean;
+    convertToTicketTypeId?: string;
+  },
   now: Date = new Date(),
-): Promise<EngineResult<{ fromOccurrenceId: string }>> {
+  opts: { afterPlan?: () => Promise<void> } = {},
+): Promise<EngineResult<{ fromOccurrenceId: string; conversion: MoveConversion | null }>> {
   const from = { id: "" };
+  const converted: { value: MoveConversion | null } = { value: null };
   const res = await tryAtomic(db, async () => {
+    converted.value = null;
     const [b] = await db
       .select({
         id: booking.id,
@@ -554,20 +575,31 @@ export async function moveAttendee(
     if (tgt.eventId === null || tgt.status !== "scheduled") throw new PlanError("not_eligible");
     if (b.coverage === "ticket") {
       const [t] = await db
-        .select({ ticketTypeId: ticket.ticketTypeId, expiresAt: ticket.expiresAt })
+        .select({ id: ticket.id, ticketTypeId: ticket.ticketTypeId, expiresAt: ticket.expiresAt })
         .from(ticket)
-        .where(eq(ticket.bookingId, b.id));
+        .where(and(eq(ticket.bookingId, b.id), eq(ticket.professionalId, input.professionalId), eq(ticket.status, "booked")));
       if (!t) throw new PlanError("stale");
+      const to = input.convertToTicketTypeId;
+      if (to !== undefined) {
+        if (to === t.ticketTypeId) throw new PlanError("invalid", "Choisissez un autre type de ticket.");
+        const [active] = await db
+          .select({ id: ticketType.id })
+          .from(ticketType)
+          .where(and(eq(ticketType.id, to), eq(ticketType.professionalId, input.professionalId), isNull(ticketType.archivedAt)));
+        if (!active) throw new PlanError("not_found");
+        converted.value = { ticketId: t.id, fromTicketTypeId: t.ticketTypeId, toTicketTypeId: to };
+      }
       const [link] = await db
         .select({ eventId: eventTicketType.eventId })
         .from(eventTicketType)
-        .where(and(eq(eventTicketType.eventId, tgt.eventId), eq(eventTicketType.ticketTypeId, t.ticketTypeId)));
+        .where(and(eq(eventTicketType.eventId, tgt.eventId), eq(eventTicketType.ticketTypeId, to ?? t.ticketTypeId)));
       if (!link || tgt.bookingMode !== "tickets") throw new PlanError("not_eligible");
       if (!input.force && t.expiresAt !== null && t.expiresAt.getTime() <= tgt.startsAt.getTime()) {
         throw new PlanError("ticket_expires_before");
       }
     }
     from.id = b.occurrenceId;
+    const conversion = converted.value;
     return (aid) => {
       const c: BatchCtx = { db, aid, now };
       const queries: Query[] = [
@@ -582,6 +614,33 @@ export async function moveAttendee(
           where id = ${b.id} and occurrence_id = ${b.occurrenceId} and professional_id = ${input.professionalId}
             and status = 'confirmed'`),
         G(db, sql`(select occurrence_id from booking where id = ${b.id} and status = 'confirmed') = ${tgt.id}`, "stale"),
+      ];
+      if (conversion) {
+        // « Convertir d'abord »: the booked ticket (ticket = last in the lock order, after the booking).
+        queries.push(
+          G(
+            db,
+            sql`exists (select 1 from ticket_type where id = ${conversion.toTicketTypeId}
+              and professional_id = ${input.professionalId} and archived_at is null)`,
+            "stale",
+          ),
+          db.execute(sql`
+            with u as (
+              update ticket set ticket_type_id = ${conversion.toTicketTypeId}, updated_at = ${ts(now)}
+              where id = ${conversion.ticketId} and booking_id = ${b.id} and professional_id = ${input.professionalId}
+                and status = 'booked' and ticket_type_id = ${conversion.fromTicketTypeId}
+              returning id, professional_id, customer_id, purchase_id, booking_id
+            )
+            insert into ticket_movement (professional_id, customer_id, ticket_id, action_id, kind, from_status, to_status,
+              ticket_type_id, from_ticket_type_id, booking_id, purchase_id, actor, actor_user_id, created_at)
+            select professional_id, customer_id, id, ${aid}, 'convert'::movement_kind, 'booked'::ticket_status,
+              'booked'::ticket_status, ${conversion.toTicketTypeId}, ${conversion.fromTicketTypeId}, booking_id, purchase_id,
+              'pro'::actor, ${input.actorUserId}, ${ts(now)}
+            from u`),
+          G(db, sql`(select count(*)::int from ticket_movement where action_id = ${aid}) = 1`, "stale"),
+        );
+      }
+      queries.push(
         G(
           db,
           sql`exists (
@@ -595,7 +654,7 @@ export async function moveAttendee(
                 where t.booking_id = bk.id))))`,
           "not_eligible",
         ),
-      ];
+      );
       if (!input.force) {
         queries.push(
           G(
@@ -608,7 +667,7 @@ export async function moveAttendee(
       }
       return queries;
     };
-  });
+  }, { afterPlan: opts.afterPlan });
   if (!res.ok) return failOf(res);
   return {
     ok: true,
@@ -617,6 +676,7 @@ export async function moveAttendee(
       ...syncEffects([from.id, input.targetOccurrenceId]),
     ],
     fromOccurrenceId: from.id,
+    conversion: converted.value,
   };
 }
 

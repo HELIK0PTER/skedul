@@ -362,6 +362,108 @@ dbTest("Déplacer un inscrit: a full target the client already holds is `already
   assert.equal((await getOccurrence(db, full.id)).seatsTaken, 1);
 });
 
+dbTest("Déplacer + convertir (SPE1): the booked ticket takes a type the target accepts, in the same action", async ({ db, pro }) => {
+  const typeA = await makeType(db, pro);
+  const typeB = await makeType(db, pro);
+  const archived = await makeType(db, pro);
+  must(await setTicketTypeArchived(db, { professionalId: pro.proId, ticketTypeId: archived, archived: true }), "archive");
+  const {
+    occurrences: [src],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeA], rule: { startDate: dayIn(pro, 3) } });
+  const {
+    occurrences: [tgt],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeB], rule: { startDate: dayIn(pro, 5) } });
+  const customerId = await makeCustomer(db, pro);
+  const [bookedTicket] = await giveTickets(db, pro, customerId, typeA, 1);
+  const b = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: src.id, customerId, seenStartsAt: src.startsAt, actorUserId: null });
+  must(b, "book");
+  const [spare] = await giveTickets(db, pro, customerId, typeA, 1);
+  const now = new Date();
+  const move = (convertToTicketTypeId?: string) =>
+    moveAttendee(
+      db,
+      { professionalId: pro.proId, actorUserId: pro.userId, bookingId: b.bookingId, targetOccurrenceId: tgt.id, force: false, convertToTicketTypeId },
+      now,
+    );
+
+  // Without the option the target still refuses the type; an archived or the same type is refused before any write.
+  assert.equal(((r) => (r.ok ? "ok" : r.code))(await move()), "not_eligible");
+  assert.equal(((r) => (r.ok ? "ok" : r.code))(await move(archived)), "not_found");
+  assert.equal(((r) => (r.ok ? "ok" : r.code))(await move(typeA)), "invalid");
+  assert.equal((await getBooking(db, b.bookingId)).occurrenceId, src.id);
+
+  const res = await move(typeB);
+  must(res, "move + convert");
+  assert.deepEqual(res.conversion, { ticketId: bookedTicket, fromTicketTypeId: typeA, toTicketTypeId: typeB });
+  const moved = await getBooking(db, b.bookingId);
+  assert.equal(moved.occurrenceId, tgt.id);
+  assert.equal(moved.movedAt?.getTime(), now.getTime());
+  assert.equal((await getOccurrence(db, src.id)).seatsTaken, 0);
+  assert.equal((await getOccurrence(db, tgt.id)).seatsTaken, 1);
+
+  const tickets = new Map((await ticketsOf(db, customerId)).map((t) => [t.id, t]));
+  assert.deepEqual(
+    [tickets.get(bookedTicket)?.status, tickets.get(bookedTicket)?.ticketTypeId, tickets.get(bookedTicket)?.bookingId],
+    ["booked", typeB, b.bookingId],
+  );
+  assert.deepEqual([tickets.get(spare)?.status, tickets.get(spare)?.ticketTypeId], ["available", typeA], "the spare ticket is untouched");
+  const converts = await db.execute<{
+    from_status: string;
+    to_status: string;
+    ticket_type_id: string;
+    from_ticket_type_id: string;
+    booking_id: string | null;
+    purchase_id: string | null;
+    actor: string;
+    actor_user_id: string | null;
+  }>(sql`select from_status, to_status, ticket_type_id, from_ticket_type_id, booking_id, purchase_id, actor, actor_user_id
+    from ticket_movement where ticket_id = ${bookedTicket} and kind = 'convert'`);
+  assert.deepEqual(converts.rows, [
+    {
+      from_status: "booked",
+      to_status: "booked",
+      ticket_type_id: typeB,
+      from_ticket_type_id: typeA,
+      booking_id: b.bookingId,
+      purchase_id: null,
+      actor: "pro",
+      actor_user_id: pro.userId,
+    },
+  ]);
+  assert.equal((await movementsOf(db, spare)).length, 1, "only the spare's offer movement");
+});
+
+dbTest("Déplacer + convertir (SPE1): a target type archived between the plan and the batch is stale, nothing moves", async ({ db, pro }) => {
+  const typeA = await makeType(db, pro);
+  const typeB = await makeType(db, pro);
+  const {
+    occurrences: [src],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeA], rule: { startDate: dayIn(pro, 3) } });
+  const {
+    occurrences: [tgt],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeB], rule: { startDate: dayIn(pro, 5) } });
+  const customerId = await makeCustomer(db, pro);
+  const [bookedTicket] = await giveTickets(db, pro, customerId, typeA, 1);
+  const b = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: src.id, customerId, seenStartsAt: src.startsAt, actorUserId: null });
+  must(b, "book");
+
+  const res = await moveAttendee(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, bookingId: b.bookingId, targetOccurrenceId: tgt.id, force: false, convertToTicketTypeId: typeB },
+    new Date(),
+    {
+      afterPlan: async () => {
+        must(await setTicketTypeArchived(db, { professionalId: pro.proId, ticketTypeId: typeB, archived: true }), "archive inside afterPlan");
+      },
+    },
+  );
+  assert.equal(res.ok ? "ok" : res.code, "stale");
+  assert.equal((await getBooking(db, b.bookingId)).occurrenceId, src.id);
+  const [t] = await ticketsOf(db, customerId);
+  assert.deepEqual([t.id, t.status, t.ticketTypeId], [bookedTicket, "booked", typeA]);
+  assert.equal((await getOccurrence(db, tgt.id)).seatsTaken, 0);
+});
+
 dbTest("loadTypeFacts: archived, RDV, linked to an upcoming séance, orphan", async ({ db, pro }) => {
   const linked = await makeType(db, pro);
   const rdv = await makeType(db, pro, { rdvEnabled: true, rdvDurationMin: 60 });
