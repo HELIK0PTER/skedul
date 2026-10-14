@@ -109,16 +109,25 @@ test("Google is configured only when credentials are given", () => {
 
 const SECRET = "test-secret-0123456789abcdefghijklmnop";
 
-/** `execute` answers `rows`, or throws when given an Error; every query is recorded as rendered SQL + params. */
+/**
+ * Every statement answers `rows`, or throws when given an Error; every query is recorded as rendered SQL +
+ * params. Like drizzle, `execute` is lazy: awaited alone it runs, inside `batch` it runs with the others
+ * (one array of results; the first failure rejects the whole batch).
+ */
 function stubDb(answer: Array<Record<string, unknown>> | Error) {
   const queries: { sql: string; params: unknown[] }[] = [];
   const dialect = new PgDialect();
+  const run = (query: SQL) => {
+    queries.push(dialect.sqlToQuery(query));
+    if (answer instanceof Error) throw answer;
+    return { rows: answer };
+  };
   const db = {
-    execute: async (query: SQL) => {
-      queries.push(dialect.sqlToQuery(query));
-      if (answer instanceof Error) throw answer;
-      return { rows: answer };
-    },
+    execute: (query: SQL) => ({
+      query,
+      then: (ok: (v: unknown) => unknown, ko: (e: unknown) => unknown) => Promise.resolve().then(() => run(query)).then(ok, ko),
+    }),
+    batch: async (items: { query: SQL }[]) => items.map((item) => run(item.query)),
   } as unknown as Db;
   return { db, queries };
 }
@@ -192,15 +201,18 @@ test("an expired-ban update during a code sign-in touches neither the database n
   assert.equal(sent.length, 0);
 });
 
-test("the OTP verification purges the password and every session in one statement, then mails", async () => {
+test("the OTP verification locks the user row, purges the password and every session in one statement, then mails", async () => {
   const { db, queries } = stubDb([{ purged: 1 }]);
   const { options, sent } = build(db);
   await options.databaseHooks.user.update.before(
     { emailVerified: true },
     { path: OTP_SIGN_IN_PATH, body: { email: "Lea@Example.com", otp: "123456" } } as never,
   );
-  assert.equal(queries.length, 1);
-  const [query] = queries;
+  assert.equal(queries.length, 2);
+  const [lock, query] = queries;
+  // First the user row (FOR NO KEY UPDATE), so a password sign-in's check waits for the purge to commit.
+  assert.match(lock.sql, /^select id from "user" where email = \$1 for no key update$/);
+  assert.deepEqual(lock.params, ["lea@example.com"]);
   assert.deepEqual(query.params, ["lea@example.com"]);
   // One statement: the credential account and the sessions go together, or not at all.
   assert.match(query.sql, /delete from account/);
@@ -219,8 +231,37 @@ test("no password account to purge: no mail", async () => {
     { emailVerified: true },
     { path: OTP_SIGN_IN_PATH, body: { email: "a@b.com" } } as never,
   );
-  assert.equal(queries.length, 1);
+  assert.equal(queries.length, 2);
   assert.equal(sent.length, 0);
+});
+
+test("a password sign-in whose password account is gone is refused; other sessions are not checked", async () => {
+  const after = (db: Db) => build(db).options.databaseHooks.session.create.after;
+  const session = { id: "s1", userId: "u1", token: "t", expiresAt: new Date(), createdAt: new Date(), updatedAt: new Date() };
+
+  // The check deleted this session (no password account left): fail closed, without the address.
+  const gone = stubDb([{ id: "s1" }]);
+  await assert.rejects(after(gone.db)(session as never, { path: "/sign-in/email" } as never), (err: Error) => {
+    assert.match(err.message, /password sign-in refused/);
+    return true;
+  });
+  assert.equal(gone.queries.length, 2);
+  assert.match(gone.queries[0].sql, /^select id from "user" where id = \$1 for share$/);
+  assert.deepEqual(gone.queries[0].params, ["u1"]);
+  assert.match(gone.queries[1].sql, /delete from session where id = \$1/);
+  assert.match(gone.queries[1].sql, /provider_id = 'credential'/);
+
+  // Still there: the sign-in goes on (the best-effort steps then fail on this stub and are only logged).
+  const kept = stubDb([]);
+  await captureConsole(() => after(kept.db)(session as never, { path: "/sign-in/email" } as never));
+  assert.match(kept.queries[1]?.sql ?? "", /delete from session/);
+
+  // A code sign-in or an impersonation never runs the check.
+  for (const path of [OTP_SIGN_IN_PATH, "/admin/impersonate-user"]) {
+    const other = stubDb([{ id: "s1" }]);
+    await captureConsole(() => after(other.db)(session as never, { path } as never));
+    assert.ok(!other.queries.some((q) => /delete from session/.test(q.sql)), path);
+  }
 });
 
 test("a purge failure aborts the verification and mails nothing; a mail failure does not", async () => {

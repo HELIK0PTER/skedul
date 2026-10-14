@@ -7,7 +7,6 @@
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { and, eq, sql, type Query } from "drizzle-orm";
-import { PgDialect } from "drizzle-orm/pg-core";
 import { nanoid } from "nanoid";
 
 import { browser, deleteUsersByEmail, makeTestAuth, TEST_BASE_URL, type BrowserCall, type TestAuth } from "../test/auth";
@@ -101,22 +100,33 @@ function captureLogs(ctx: TestContext): string[] {
 }
 
 /**
- * The same db, except that the first `execute` whose statement satisfies `matches` rejects with
- * "simulated failure: <what>". `assertFired()` fails with a message naming the statement when it never
- * matched, so a renamed CTE or a changed key reads as that, not as an unrelated assertion.
+ * The same db, except that the first `execute`, or the first `batch` holding a statement, that satisfies
+ * `matches` rejects with "simulated failure: <what>" (a batch fails as a whole, like a rolled-back
+ * transaction). `assertFired()` fails with a message naming the statement when it never matched, so a
+ * renamed CTE or a changed key reads as that, not as an unrelated assertion.
  */
 function failingDb(db: Db, what: string, matches: (statement: Query) => boolean) {
-  const dialect = new PgDialect();
   let fired = false;
+  const fire = () => {
+    fired = true;
+    return Promise.reject(new Error(`simulated failure: ${what}`));
+  };
+  const hits = (q: unknown) => !fired && matches((q as { getQuery(): Query }).getQuery());
   const proxy = new Proxy(db, {
     get(target, prop, receiver) {
+      if (prop === "batch") {
+        return (queries: Parameters<Db["batch"]>[0]) => (queries.some(hits) ? fire() : target.batch(queries));
+      }
       if (prop !== "execute") return Reflect.get(target, prop, receiver);
       return (query: Parameters<Db["execute"]>[0]) => {
-        if (!fired && typeof query !== "string" && matches(dialect.sqlToQuery(query.getSQL()))) {
-          fired = true;
-          return Promise.reject(new Error(`simulated failure: ${what}`));
+        const raw = target.execute(query);
+        // Awaited alone, a raw query runs its own `execute`; inside a batch it never does.
+        if (hits(raw)) {
+          const own = raw as unknown as { execute: () => Promise<unknown> };
+          const run = own.execute;
+          own.execute = () => (fired ? run() : fire());
         }
-        return target.execute(query);
+        return raw;
       };
     },
   });
@@ -423,6 +433,157 @@ test("a purge that fails aborts the sign-in, leaves everything in place, and the
     assert.ok(!before.includes(now[0]));
     assert.equal(t.mails.filter((m) => m.subject === PASSWORD_DISABLED).length, 1);
   } finally {
+    await deleteUsersByEmail(db, [email]);
+  }
+});
+
+test("IDE1 a password sign-in paused past its password check while a code sign-in purges the password gets no session", OPTS, async (ctx) => {
+  const db = await getTestDb();
+  let armed = false;
+  let reached!: () => void;
+  const atGate = new Promise<void>((resolve) => (reached = resolve));
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  // Pauses the attacker's /sign-in/email after it read the password account and checked the password,
+  // before it inserts its session (the scrypt + ban-lookup window of the real route).
+  const t = makeTestAuth(db, {
+    async beforeSessionInsert(hookCtx) {
+      if (!armed || hookCtx?.path !== "/sign-in/email") return;
+      armed = false;
+      reached();
+      await gate;
+    },
+  });
+  const logs = captureLogs(ctx);
+  const email = testEmail("ide1");
+  try {
+    await signUp(t, email);
+    const attacker = browser(t);
+    armed = true;
+    const pending = attacker("/sign-in/email", { email, password: PASSWORD }).then(
+      (res) => res,
+      (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
+    );
+    await atGate;
+
+    const victim = browser(t);
+    assert.equal((await codeSignIn(t, victim, email)).status, 200);
+    const user = await userByEmail(db, email);
+    assert.equal(user.emailVerified, true);
+    assert.equal(await credentialCount(db, user.id), 0, "the purge ran");
+    const victimSessions = await sessionIds(db, user.id);
+    assert.equal(victimSessions.length, 1);
+
+    release();
+    const outcome = await pending;
+    assert.ok(outcome instanceof Error || outcome.status !== 200, `the paused password sign-in must fail: ${JSON.stringify(outcome)}`);
+    if (outcome instanceof Error) assert.ok(!outcome.message.includes(email), "no address in the error");
+    assert.equal((await attacker("/get-session?disableCookieCache=true")).json, null, "the attacker holds no live session");
+    assert.deepEqual(await sessionIds(db, user.id), victimSessions, "only the victim's session is left");
+    assert.equal(sessionEmail((await victim("/get-session?disableCookieCache=true")).json), email);
+    assert.ok(!logs.some((l) => l.includes(email)), "no address in the logs");
+  } finally {
+    release();
+    await deleteUsersByEmail(db, [email]);
+  }
+});
+
+/** pids of the other backends running a statement that contains `fragment` (only those waiting on a lock if asked). */
+async function backends(db: Db, fragment: string, waitingOnLock = false): Promise<number[]> {
+  const res = await db.execute<{ pid: number }>(sql`
+    select pid from pg_stat_activity
+    where pid <> pg_backend_pid() and state = 'active' and position(${fragment} in query) > 0
+      ${waitingOnLock ? sql`and wait_event_type = 'Lock'` : sql``}`);
+  return res.rows.map((r) => Number(r.pid));
+}
+
+/** Probes until it answers (bounded: a missed state fails the test instead of hanging). */
+async function waitFor<T>(what: string, probe: () => Promise<T | undefined>): Promise<T> {
+  for (let i = 0; i < 150; i++) {
+    const value = await probe();
+    if (value !== undefined) return value;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.fail(`timed out waiting for ${what}`);
+}
+
+test("IDE1 a password session inserted while the purge statement runs is caught by the user-row lock pair", { ...OPTS, timeout: 280_000 }, async (ctx) => {
+  const db = await getTestDb();
+  let armed = false;
+  let reached!: () => void;
+  const atGate = new Promise<void>((resolve) => (reached = resolve));
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const t = makeTestAuth(db, {
+    async beforeSessionInsert(hookCtx) {
+      if (!armed || hookCtx?.path !== "/sign-in/email") return;
+      armed = false;
+      reached();
+      await gate;
+    },
+  });
+  const logs = captureLogs(ctx);
+  const email = testEmail("ide1lock");
+  const tag = `ide1-blocker-${nanoid(10).replace(/[^A-Za-z0-9]/g, "x")}`;
+  let blockerPid: number | undefined;
+  try {
+    await signUp(t, email);
+    const user = await userByEmail(db, email);
+    const victim = browser(t);
+    assert.equal((await victim("/email-otp/send-verification-otp", { email, type: "sign-in" })).status, 200);
+    const otp = t.lastCode(email);
+    assert.ok(otp, "no sign-in code captured");
+
+    // 1. The attacker's password sign-in is past its password check, before its session insert.
+    const attacker = browser(t);
+    armed = true;
+    let attackerDone = false;
+    const pending = attacker("/sign-in/email", { email, password: PASSWORD })
+      .then(
+        (res) => res,
+        (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
+      )
+      .finally(() => (attackerDone = true));
+    await atGate;
+
+    // 2. A blocker holds the password account row, so the purge statement will wait inside its transaction.
+    const blocker = db
+      .batch([
+        db.execute(sql`select id from account where user_id = ${user.id} and provider_id = 'credential' for update`),
+        db.execute(sql.raw(`select pg_sleep(60) /* ${tag} */`)),
+      ])
+      .catch(() => undefined);
+    blockerPid = await waitFor("the blocker to hold the account row", async () => (await backends(db, tag))[0]);
+
+    // 3. The victim's code sign-in: the purge has taken its snapshot and waits on the account row.
+    const signedIn = victim("/sign-in/email-otp", { email, otp });
+    await waitFor("the purge to wait on the account row", async () =>
+      (await backends(db, "with gone as", true)).length > 0 ? true : undefined,
+    );
+
+    // 4. The attacker inserts its session now, after the purge's snapshot, while the purge is uncommitted. Its
+    //    check either waits behind the purge's user-row lock, or (without that lock) is already done.
+    release();
+    await waitFor("the attacker's check to wait behind the purge, or the attacker to finish", async () =>
+      attackerDone || (await backends(db, `from "user" where id = $1 for share`, true)).length > 0 ? true : undefined,
+    );
+
+    // 5. The purge commits.
+    await db.execute(sql`select pg_cancel_backend(${blockerPid}::int)`);
+    blockerPid = undefined;
+    await blocker;
+    assert.equal((await signedIn).status, 200);
+    assert.equal(await credentialCount(db, user.id), 0, "the purge ran");
+    const outcome = await pending;
+    assert.ok(outcome instanceof Error || outcome.status !== 200, `the password sign-in must fail: ${JSON.stringify(outcome)}`);
+    assert.equal((await attacker("/get-session?disableCookieCache=true")).json, null, "the attacker holds no live session");
+    const left = await sessionIds(db, user.id);
+    assert.equal(left.length, 1, "only the victim's session is left");
+    assert.equal(sessionEmail((await victim("/get-session?disableCookieCache=true")).json), email);
+    assert.ok(!logs.some((l) => l.includes(email)), "no address in the logs");
+  } finally {
+    release();
+    if (blockerPid !== undefined) await db.execute(sql`select pg_cancel_backend(${blockerPid}::int)`);
     await deleteUsersByEmail(db, [email]);
   }
 });

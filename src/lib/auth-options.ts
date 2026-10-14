@@ -38,6 +38,7 @@ export const OTP_SEND_PATH = "/email-otp/send-verification-otp";
 export const OTP_SIGN_IN_PATH = "/sign-in/email-otp";
 export const OTP_VERIFY_EMAIL_PATH = "/email-otp/verify-email";
 export const SIGN_UP_PATH = "/sign-up/email";
+export const PASSWORD_SIGN_IN_PATH = "/sign-in/email";
 export const RESET_REQUEST_PATH = "/request-password-reset";
 /** The only emailOTP endpoints served over HTTP. */
 export const OTP_HTTP_PATHS = [OTP_SEND_PATH, OTP_SIGN_IN_PATH, OTP_VERIFY_EMAIL_PATH] as const;
@@ -133,19 +134,46 @@ export function isOtpVerificationTransition(
  * session of that user, in ONE statement: both go or neither does. Returns how
  * many password accounts were deleted. `email_verified = false` is a second
  * guard against purging an address that is already confirmed.
+ *
+ * One batch (one transaction) that first locks the user row FOR NO KEY UPDATE:
+ * the purge statement then reads a snapshot taken after that lock, and a
+ * password sign-in's check (dropSessionWithoutPassword, FOR SHARE on the same
+ * row) waits until the purge commits, so it sees the password account gone.
  */
 async function purgeUnverifiedPassword(db: Db, email: string): Promise<number> {
-  const result = await db.execute<{ purged: number }>(sql`
-    with gone as (
-      delete from account
-      where provider_id = 'credential'
-        and user_id in (select id from "user" where email = ${email} and email_verified = false)
-      returning user_id
-    ), ended as (
-      delete from session where user_id in (select user_id from gone) returning id
-    )
-    select count(*)::int as purged from gone`);
+  const [, result] = await db.batch([
+    db.execute(sql`select id from "user" where email = ${email} for no key update`),
+    db.execute<{ purged: number }>(sql`
+      with gone as (
+        delete from account
+        where provider_id = 'credential'
+          and user_id in (select id from "user" where email = ${email} and email_verified = false)
+        returning user_id
+      ), ended as (
+        delete from session where user_id in (select user_id from gone) returning id
+      )
+      select count(*)::int as purged from gone`),
+  ]);
   return Number(result.rows[0]?.purged ?? 0);
+}
+
+/**
+ * The other half of the takeover fix (spec § 12): a password sign-in reads the
+ * password account, checks the password (scrypt), then inserts its session. If
+ * a code sign-in purged that account in between, the purge could not see the
+ * session, which would survive on the now-verified user. Run after the insert:
+ * locks the user row FOR SHARE (waits for a purge in progress), then deletes
+ * this session when the user has no password account any more. True = deleted.
+ */
+async function dropSessionWithoutPassword(db: Db, session: { id: string; userId: string }): Promise<boolean> {
+  const [, gone] = await db.batch([
+    db.execute(sql`select id from "user" where id = ${session.userId} for share`),
+    db.execute<{ id: string }>(sql`
+      delete from session where id = ${session.id}
+        and not exists (select 1 from account where user_id = ${session.userId} and provider_id = 'credential')
+      returning id`),
+  ]);
+  return gone.rows.length > 0;
 }
 
 export function buildAuthOptions(deps: AuthDeps) {
@@ -248,10 +276,17 @@ export function buildAuthOptions(deps: AuthDeps) {
     databaseHooks: {
       session: {
         create: {
-          // "Dernière connexion" (real sign-ins only, not impersonation), then
-          // best-effort link of this verified address's customer rows, all pros.
-          // Two separate best-effort steps: a failed stamp must not skip the link.
-          after: async (session) => {
+          // A password sign-in first checks that its password account still
+          // exists (dropSessionWithoutPassword): if a code sign-in purged it
+          // meanwhile, the session is deleted and the sign-in fails (closed; a
+          // failing check fails it too). Then "Dernière connexion" (real
+          // sign-ins only, not impersonation), then best-effort link of this
+          // verified address's customer rows, all pros. Two separate best-effort
+          // steps: a failed stamp must not skip the link.
+          after: async (session, ctx) => {
+            if (ctx?.path === PASSWORD_SIGN_IN_PATH && (await dropSessionWithoutPassword(db, session))) {
+              throw new Error("[auth] password sign-in refused: the password account was removed meanwhile");
+            }
             if (session.impersonatedBy) return;
             try {
               await db.update(schema.user).set({ lastLoginAt: new Date() }).where(eq(schema.user.id, session.userId));

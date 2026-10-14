@@ -1274,6 +1274,13 @@ charge), passent par la même table `throttle` : les codes de connexion et de co
 - **Échec fermé** : si la suppression lève une erreur, la mise à jour est abandonnée. L'utilisateur
   reste non vérifié, la connexion échoue, et le code suivant relance la purge. Il en va de même si
   la requête ne porte pas d'email : le hook lève au lieu de sauter la purge.
+- **Connexion par mot de passe en cours** : `/sign-in/email` lit le compte `credential`, vérifie le
+  mot de passe (scrypt), puis crée sa session ; une session créée après la purge lui échappe. Deux
+  verrous sur la ligne `user` ferment cette course. La purge est un lot (une transaction) qui
+  verrouille d'abord cette ligne (`FOR NO KEY UPDATE`), puis supprime. Un hook `session.create.after`
+  sur `/sign-in/email` la verrouille `FOR SHARE` (il attend donc qu'une purge en cours soit validée),
+  puis supprime la session qu'il vient de créer si l'utilisateur n'a plus de compte `credential`, et
+  lève : échec fermé, la connexion échoue (un aller-retour de plus par connexion par mot de passe).
 - **Pourquoi `before` et pas `after`** : une autre mise à jour de l'utilisateur a lieu dans la même
   requête, pour un utilisateur déjà vérifié. À la création de la session, le plugin admin écrit
   `{ banned: false, … }` quand un bannissement à durée (`banExpiresIn`) a expiré. Un hook `after`

@@ -21,15 +21,37 @@ export const TEST_BASE_URL = "http://localhost:3000";
 /** Codes lead the subject (src/lib/emails/login-code.ts, verify-email-code.ts). */
 const CODE_RE = /^(\d{6})\b/;
 
-function buildInstance(db: Db, sendEmail: AuthDeps["sendEmail"]) {
-  return betterAuth(
-    buildAuthOptions({
-      db,
-      baseURL: TEST_BASE_URL,
-      secret: process.env.BETTER_AUTH_SECRET ?? "test-secret-0123456789abcdefghijklmnop",
-      sendEmail,
-    }),
-  );
+/** Test-only seams of the instance (none by default). */
+export type TestAuthHooks = {
+  /**
+   * Awaited in `session.create.before`, i.e. inside a sign-in route after it
+   * read the user and its accounts and before it inserts the session: a gate
+   * here pauses `/sign-in/email` past its password check (race tests).
+   */
+  beforeSessionInsert?: (ctx: { path?: string } | null) => Promise<void>;
+};
+
+function buildInstance(db: Db, sendEmail: AuthDeps["sendEmail"], hooks: TestAuthHooks = {}) {
+  const options = buildAuthOptions({
+    db,
+    baseURL: TEST_BASE_URL,
+    secret: process.env.BETTER_AUTH_SECRET ?? "test-secret-0123456789abcdefghijklmnop",
+    sendEmail,
+  });
+  return betterAuth({
+    ...options,
+    databaseHooks: {
+      ...options.databaseHooks,
+      session: {
+        create: {
+          ...options.databaseHooks.session.create,
+          before: async (_session, ctx) => {
+            await hooks.beforeSessionInsert?.(ctx ?? null);
+          },
+        },
+      },
+    },
+  });
 }
 
 /** The instance type with its plugins (a bare ReturnType<typeof betterAuth> rejects it). */
@@ -43,11 +65,15 @@ export type TestAuth = {
   lastCode(email: string): string | undefined;
 };
 
-export function makeTestAuth(db: Db): TestAuth {
+export function makeTestAuth(db: Db, hooks: TestAuthHooks = {}): TestAuth {
   const mails: AuthMail[] = [];
-  const auth = buildInstance(db, async (mail) => {
-    mails.push(mail);
-  });
+  const auth = buildInstance(
+    db,
+    async (mail) => {
+      mails.push(mail);
+    },
+    hooks,
+  );
   return {
     auth,
     mails,
