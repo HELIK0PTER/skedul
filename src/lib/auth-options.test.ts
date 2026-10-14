@@ -235,21 +235,23 @@ test("no password account to purge: no mail", async () => {
   assert.equal(sent.length, 0);
 });
 
-test("a password sign-in whose password account is gone is refused; other sessions are not checked", async () => {
+test("a password sign-in or password change whose password account is gone is refused; other sessions are not checked", async () => {
   const after = (db: Db) => build(db).options.databaseHooks.session.create.after;
   const session = { id: "s1", userId: "u1", token: "t", expiresAt: new Date(), createdAt: new Date(), updatedAt: new Date() };
 
   // The check deleted this session (no password account left): fail closed, without the address.
-  const gone = stubDb([{ id: "s1" }]);
-  await assert.rejects(after(gone.db)(session as never, { path: "/sign-in/email" } as never), (err: Error) => {
-    assert.match(err.message, /password sign-in refused/);
-    return true;
-  });
-  assert.equal(gone.queries.length, 2);
-  assert.match(gone.queries[0].sql, /^select id from "user" where id = \$1 for share$/);
-  assert.deepEqual(gone.queries[0].params, ["u1"]);
-  assert.match(gone.queries[1].sql, /delete from session where id = \$1/);
-  assert.match(gone.queries[1].sql, /provider_id = 'credential'/);
+  for (const path of ["/sign-in/email", "/change-password"]) {
+    const gone = stubDb([{ id: "s1" }]);
+    await assert.rejects(after(gone.db)(session as never, { path } as never), (err: Error) => {
+      assert.match(err.message, /password session refused/);
+      return true;
+    });
+    assert.equal(gone.queries.length, 2, path);
+    assert.match(gone.queries[0].sql, /^select id from "user" where id = \$1 for share$/);
+    assert.deepEqual(gone.queries[0].params, ["u1"]);
+    assert.match(gone.queries[1].sql, /delete from session where id = \$1/);
+    assert.match(gone.queries[1].sql, /provider_id = 'credential'/);
+  }
 
   // Still there: the sign-in goes on (the best-effort steps then fail on this stub and are only logged).
   const kept = stubDb([]);

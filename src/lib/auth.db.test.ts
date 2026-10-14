@@ -488,6 +488,60 @@ test("IDE1 a password sign-in paused past its password check while a code sign-i
   }
 });
 
+test("IDE1 a password change paused before its new session while a code sign-in purges the password gets no session", OPTS, async (ctx) => {
+  const db = await getTestDb();
+  let armed = false;
+  let reached!: () => void;
+  const atGate = new Promise<void>((resolve) => (reached = resolve));
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  // Pauses the attacker's /change-password (revokeOtherSessions) after it read the password account,
+  // checked it and deleted the user's sessions, before it inserts its new session.
+  const t = makeTestAuth(db, {
+    async beforeSessionInsert(hookCtx) {
+      if (!armed || hookCtx?.path !== "/change-password") return;
+      armed = false;
+      reached();
+      await gate;
+    },
+  });
+  const logs = captureLogs(ctx);
+  const email = testEmail("ide1cp");
+  try {
+    const attacker = await signUp(t, email);
+    armed = true;
+    const pending = attacker("/change-password", {
+      currentPassword: PASSWORD,
+      newPassword: "password456",
+      revokeOtherSessions: true,
+    }).then(
+      (res) => res,
+      (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
+    );
+    await atGate;
+
+    const victim = browser(t);
+    assert.equal((await codeSignIn(t, victim, email)).status, 200);
+    const user = await userByEmail(db, email);
+    assert.equal(user.emailVerified, true);
+    assert.equal(await credentialCount(db, user.id), 0, "the purge ran");
+    const victimSessions = await sessionIds(db, user.id);
+    assert.equal(victimSessions.length, 1);
+
+    release();
+    const outcome = await pending;
+    assert.ok(outcome instanceof Error || outcome.status !== 200, `the paused password change must fail: ${JSON.stringify(outcome)}`);
+    if (outcome instanceof Error) assert.ok(!outcome.message.includes(email), "no address in the error");
+    assert.equal((await attacker("/get-session?disableCookieCache=true")).json, null, "the attacker holds no live session");
+    assert.deepEqual(await sessionIds(db, user.id), victimSessions, "only the victim's session is left");
+    assert.equal(await credentialCount(db, user.id), 0, "no password came back");
+    assert.ok(!logs.some((l) => l.includes(email)), "no address in the logs");
+  } finally {
+    release();
+    await deleteUsersByEmail(db, [email]);
+  }
+});
+
 /** pids of the other backends running a statement that contains `fragment` (only those waiting on a lock if asked). */
 async function backends(db: Db, fragment: string, waitingOnLock = false): Promise<number[]> {
   const res = await db.execute<{ pid: number }>(sql`

@@ -40,6 +40,9 @@ export const OTP_SIGN_IN_PATH = "/sign-in/email-otp";
 export const OTP_VERIFY_EMAIL_PATH = "/email-otp/verify-email";
 export const SIGN_UP_PATH = "/sign-up/email";
 export const PASSWORD_SIGN_IN_PATH = "/sign-in/email";
+export const CHANGE_PASSWORD_PATH = "/change-password";
+/** Routes that read the password account, then insert a session (dropSessionWithoutPassword). */
+export const PASSWORD_SESSION_PATHS: readonly string[] = [PASSWORD_SIGN_IN_PATH, CHANGE_PASSWORD_PATH];
 export const RESET_REQUEST_PATH = "/request-password-reset";
 /** The only emailOTP endpoints served over HTTP. */
 export const OTP_HTTP_PATHS = [OTP_SEND_PATH, OTP_SIGN_IN_PATH, OTP_VERIFY_EMAIL_PATH] as const;
@@ -176,8 +179,9 @@ async function purgeUnverifiedPassword(db: Db, email: string): Promise<number> {
 }
 
 /**
- * The other half of the takeover fix (spec § 12): a password sign-in reads the
- * password account, checks the password (scrypt), then inserts its session. If
+ * The other half of the takeover fix (spec § 12): a password sign-in (or a
+ * password change that revokes the other sessions) reads the password account,
+ * checks the password (scrypt), then inserts its session. If
  * a code sign-in purged that account in between, the purge could not see the
  * session, which would survive on the now-verified user. Run after the insert:
  * locks the user row FOR SHARE (waits for a purge in progress), then deletes
@@ -301,16 +305,21 @@ export function buildAuthOptions(deps: AuthDeps) {
     databaseHooks: {
       session: {
         create: {
-          // A password sign-in first checks that its password account still
-          // exists (dropSessionWithoutPassword): if a code sign-in purged it
-          // meanwhile, the session is deleted and the sign-in fails (closed; a
-          // failing check fails it too). Then "Dernière connexion" (real
+          // A password sign-in, or a password change that revokes the other
+          // sessions, first checks that its password account still exists
+          // (dropSessionWithoutPassword): if a code sign-in purged it meanwhile,
+          // the session is deleted and the request fails (closed; a failing
+          // check fails it too). Then "Dernière connexion" (real
           // sign-ins only, not impersonation), then best-effort link of this
           // verified address's customer rows, all pros. Two separate best-effort
           // steps: a failed stamp must not skip the link.
           after: async (session, ctx) => {
-            if (ctx?.path === PASSWORD_SIGN_IN_PATH && (await dropSessionWithoutPassword(db, session))) {
-              throw new Error("[auth] password sign-in refused: the password account was removed meanwhile");
+            if (
+              ctx?.path !== undefined &&
+              PASSWORD_SESSION_PATHS.includes(ctx.path) &&
+              (await dropSessionWithoutPassword(db, session))
+            ) {
+              throw new Error("[auth] password session refused: the password account was removed meanwhile");
             }
             if (session.impersonatedBy) return;
             try {

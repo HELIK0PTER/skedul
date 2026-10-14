@@ -573,8 +573,8 @@ séances » et préremplit « après K séances ».
 | `spend` | `available` → `booked` | client ou pro | renseigne `booking_id` |
 | `return` | `booked` → `available`, ou `expired` si périmé | client, pro ou système | vide `booking_id` |
 | `pointage` / `unpoint` | `available` ↔ `used` | pro | la note va dans `reason`, la date est celle du mouvement |
-| `convert` | `available` → `available`, type A → B | pro | garde `purchase_id` et `expires_at` |
-| `close` | `available` → `closed` | pro | motif obligatoire ; `retire` seulement si offert (CHECK) |
+| `convert` | `available` → `available`, type A → B ; ou `booked` → `booked` quand « Déplacer » convertit le ticket de l'inscription (E8) | pro | garde `purchase_id` et `expires_at` ; en `booked`, garde aussi `booking_id` |
+| `close` | `available` → `closed` | pro | motif obligatoire ; `retire` seulement si offert (CHECK) ; `rembourse` et `compense` seulement si payé |
 | `expire` | `available` → `expired` | système (tâche de nuit) | trace seulement : l'utilisabilité n'attend jamais la tâche |
 
 **Payé ou offert.**
@@ -1004,6 +1004,12 @@ porte la prochaine séance.
 Lecture préalable : l'événement (`version`) et les séances `series_date ≥ d`, avec
 `time_detached`, le nombre d'inscrits actifs et `has_history = EXISTS(booking sur cette séance)`.
 
+Segments suivants : si la série a déjà un segment plus tardif, non archivé (même racine), et que la
+nouvelle règle atteint sa date de début (« Jamais », une fin ou un nombre de séances qui y arrive),
+la modification est refusée (`invalid`, « La série change déjà à partir du JJ/MM/AAAA… ») : sinon
+deux segments produiraient chacun une séance aux mêmes dates. L'aperçu refuse de même, et le lot
+le revérifie (une garde, puis un nouveau plan).
+
 Planificateur pur `planSeriesEdit(ancien, lignes, nouvelleRègle)` (`src/lib/series-plan.ts`). Il
 renvoie :
 - `retime` : lignes non `time_detached` dont la date existe encore ;
@@ -1298,6 +1304,8 @@ charge), passent par la même table `throttle` : les codes de connexion et de co
   sur `/sign-in/email` la verrouille `FOR SHARE` (il attend donc qu'une purge en cours soit validée),
   puis supprime la session qu'il vient de créer si l'utilisateur n'a plus de compte `credential`, et
   lève : échec fermé, la connexion échoue (un aller-retour de plus par connexion par mot de passe).
+  Le même contrôle couvre `/change-password` avec `revokeOtherSessions`, qui lit aussi le compte
+  `credential` avant de créer une nouvelle session.
 - **Pourquoi `before` et pas `after`** : une autre mise à jour de l'utilisateur a lieu dans la même
   requête, pour un utilisateur déjà vérifié. À la création de la session, le plugin admin écrit
   `{ banned: false, … }` quand un bannissement à durée (`banExpiresIn`) a expiré. Un hook `after`
