@@ -522,7 +522,7 @@ export function BrandingForm({
                   className="h-10 w-16 cursor-pointer rounded-xl border border-input bg-card p-1"
                 />
                 <span className="text-xs text-muted-foreground">
-                  Votre preset personnalisé — modifiable à volonté.
+                  Votre preset personnalisé : modifiable à volonté.
                 </span>
               </div>
             )}

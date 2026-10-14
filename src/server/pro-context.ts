@@ -1,0 +1,83 @@
+import "server-only";
+
+import { revalidatePath } from "next/cache";
+import { redirect, unstable_rethrow } from "next/navigation";
+import { after } from "next/server";
+
+import {
+  UNEXPECTED_ERROR,
+  actionFail,
+  revalidationTargets,
+  withoutEffects,
+  type ActionResult,
+  type CoreResult,
+  type ProCtx,
+} from "@/lib/back-office/result";
+import { logSafeMessage } from "@/lib/log-safe";
+import { getCurrentProfessional, getSession } from "@/lib/session";
+import { runEffects } from "@/server/notify";
+
+/**
+ * The acting pro, from the session only (never from input). No session sends
+ * to /sign-in, no professional profile to /onboarding. While an admin
+ * impersonates, the session is the pro's own: actions stay allowed and
+ * `actorUserId` is the impersonated user (decision 10).
+ */
+export async function requireProContext(): Promise<ProCtx> {
+  const session = await getSession();
+  if (!session) redirect("/sign-in");
+  const pro = await getCurrentProfessional();
+  if (!pro) redirect("/onboarding");
+  return {
+    professionalId: pro.id,
+    actorUserId: session.user.id,
+    timezone: pro.timezone,
+    currency: pro.currency,
+    slug: pro.slug,
+  };
+}
+
+/**
+ * The wrapper of every pro write. Builds the context, takes ONE `now`, runs the
+ * core. A thrown error that is not a Next.js control-flow error is logged
+ * (« [pro] <name> failed: <message> », without address or token) and answered
+ * with UNEXPECTED_ERROR. On success: the dashboard layout is revalidated (and
+ * every public page under /[slug] when `publicPage`), the effects run after the response
+ * (after()), and the browser receives the result without them. A failure is
+ * returned as it is: no revalidation, no effect.
+ */
+export async function runProAction<T extends object>(
+  name: string,
+  fn: (ctx: ProCtx, now: Date) => Promise<CoreResult<T>>,
+  opts: { publicPage?: boolean } = {},
+): Promise<ActionResult<T>> {
+  const ctx = await requireProContext();
+  let res: CoreResult<T>;
+  try {
+    res = await fn(ctx, new Date());
+  } catch (err) {
+    unstable_rethrow(err);
+    console.error(`[pro] ${name} failed: ${logSafeMessage(err)}`);
+    return actionFail(UNEXPECTED_ERROR);
+  }
+  if (!res.ok) return res;
+  for (const target of revalidationTargets(opts.publicPage === true)) revalidatePath(target.path, target.type);
+  const effects = res.effects;
+  if (effects.length > 0) after(() => runEffects(effects));
+  return withoutEffects(res);
+}
+
+/** The wrapper of read cores (search, previews): context and error handling like runProAction, no revalidation, no effect. */
+export async function runProQuery<T extends object>(
+  name: string,
+  fn: (ctx: ProCtx, now: Date) => Promise<ActionResult<T>>,
+): Promise<ActionResult<T>> {
+  const ctx = await requireProContext();
+  try {
+    return await fn(ctx, new Date());
+  } catch (err) {
+    unstable_rethrow(err);
+    console.error(`[pro] ${name} failed: ${logSafeMessage(err)}`);
+    return actionFail(UNEXPECTED_ERROR);
+  }
+}

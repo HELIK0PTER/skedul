@@ -90,7 +90,7 @@ export function PlanningCalendar(props: {
   const hours = Array.from({ length: endHour - startHour }, (_, i) => startHour + i);
   const colHeight = hours.length * HOUR_PX;
 
-  // Libellé de la semaine affichée, ex. « 22 – 28 juin 2026 ».
+  // Libellé de la semaine affichée, ex. « 22 au 28 juin 2026 ».
   const fmt = (opts: Intl.DateTimeFormatOptions) =>
     new Intl.DateTimeFormat("fr-FR", { ...opts, timeZone: tz });
   const first = days[0];
@@ -105,7 +105,7 @@ export function PlanningCalendar(props: {
     : sameYear
       ? fmt({ day: "numeric", month: "long" }).format(first)
       : fmt({ day: "numeric", month: "long", year: "numeric" }).format(first);
-  const weekLabel = `${startLabel} – ${fmt({ day: "numeric", month: "long", year: "numeric" }).format(last)}`;
+  const weekLabel = `${startLabel} au ${fmt({ day: "numeric", month: "long", year: "numeric" }).format(last)}`;
 
   // Wall-clock minutes, not time elapsed since midnight: on a DST Sunday a
   // 19:00 session must sit on the 19:00 line.

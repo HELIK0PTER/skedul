@@ -34,7 +34,7 @@ export default async function DashboardLayout({
         <DashboardSidebar
           businessName={pro.businessName}
           slug={pro.slug}
-          // UI hint only — /admin re-checks the role in the database.
+          // UI hint only: /admin re-checks the role in the database.
           isAdmin={session.user.role === "admin"}
           supportUnread={supportUnread}
         />

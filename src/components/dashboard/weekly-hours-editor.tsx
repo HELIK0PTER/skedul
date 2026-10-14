@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Copy, Plus, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -81,10 +81,13 @@ function CopyToDaysPopover({
 }) {
   const days = DAY_ORDER.filter((d) => d !== sourceDay);
   const [selected, setSelected] = useState<number[]>([]);
+  const [wasOpen, setWasOpen] = useState(open);
 
-  useEffect(() => {
+  // Each opening starts with no day selected (adjusted during render, not in an effect).
+  if (open !== wasOpen) {
+    setWasOpen(open);
     if (open) setSelected([]);
-  }, [open]);
+  }
 
   const allSelected = selected.length === days.length;
 
@@ -225,7 +228,7 @@ export function WeeklyHoursEditor({
                       }}
                       className="h-9 rounded-lg border border-input bg-card px-2 text-sm"
                     />
-                    <span className="text-muted-foreground">–</span>
+                    <span className="text-muted-foreground">à</span>
                     <input
                       type="time"
                       value={r.end}

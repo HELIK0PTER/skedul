@@ -35,7 +35,7 @@ export default async function UnavailabilityPage() {
       label = `${formatDateLong(r.startAt, tz)} · ${formatTime(
         r.startAt,
         tz,
-      )} – ${formatTime(r.endAt, tz)}`;
+      )} à ${formatTime(r.endAt, tz)}`;
     }
     return { id: r.id, label, allDay: r.allDay, reason: r.reason };
   });
