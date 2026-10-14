@@ -948,6 +948,10 @@ attente, suppression de l'événement Google.
 - `UPDATE occurrence SET status = 'scheduled', cancelled_at = NULL, changed_at = $now WHERE id =
   $o AND professional_id = $p AND status = 'cancelled' AND event_id IS NOT NULL AND starts_at >
   $now`, puis `G(status = 'scheduled', 'not_found')` ;
+- refusé (`invalid`, « Cette série est terminée : recréez la séance si besoin. ») sur un segment
+  terminé : événement archivé, ou `series_date > until_date` (« supprimer à partir du » garde
+  annulées les séances ≥ d qui ont un historique). La lecture le vérifie, et
+  `G(segment encore vivant, 'stale')` relance une fois si la série s'est terminée entre-temps ;
 - aucune inscription n'est restaurée, et rien ne part vers Google avant la première inscription.
 
 **(c) Indisponibilité.**

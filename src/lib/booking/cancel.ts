@@ -291,30 +291,57 @@ export async function cancelOccurrence(
 
 /* ───────────────────────── Rétablir ───────────────────────── */
 
+const ENDED_SERIES = "Cette série est terminée : recréez la séance si besoin.";
+
 /**
  * Future EVENT séance only (never an RDV): → scheduled, cancelled_at NULL,
  * changed_at = now. The roster stays empty; nothing goes to Google before the
- * first booking. Idempotent on a scheduled séance.
+ * first booking. Idempotent on a scheduled séance. Refused (invalid) on an
+ * ended segment: its event is archived, or the séance is past its until_date
+ * (« supprimer à partir du » keeps the cancelled séances with history ≥ d);
+ * the plan checks it, and G(segment still live) re-plans once when the series
+ * ended meanwhile. `opts.afterPlan` is test-only: it runs between the plan and its batch.
  */
 export async function restoreOccurrence(
   db: Db,
   input: { professionalId: string; occurrenceId: string },
   now: Date = new Date(),
+  opts: { afterPlan?: () => Promise<void> } = {},
 ): Promise<EngineResult> {
-  const res = await tryAtomic(db, async () => {
-    const [o] = await db
-      .select({ id: occurrence.id })
-      .from(occurrence)
-      .where(and(eq(occurrence.id, input.occurrenceId), eq(occurrence.professionalId, input.professionalId)));
-    if (!o) throw new PlanError("not_found");
-    return () => [
-      db.execute(sql`
-        update occurrence set status = 'scheduled', cancelled_at = null, changed_at = ${ts(now)}, updated_at = ${ts(now)}
-        where id = ${o.id} and professional_id = ${input.professionalId} and status = 'cancelled'
-          and event_id is not null and starts_at > ${ts(now)}`),
-      G(db, sql`(select status from occurrence where id = ${o.id}) = 'scheduled'`, "not_found"),
-    ];
-  });
+  const res = await tryAtomic(
+    db,
+    async () => {
+      const [o] = await db
+        .select({
+          id: occurrence.id,
+          eventId: occurrence.eventId,
+          seriesDate: occurrence.seriesDate,
+          archivedAt: event.archivedAt,
+          untilDate: event.untilDate,
+        })
+        .from(occurrence)
+        .leftJoin(event, eq(event.id, occurrence.eventId))
+        .where(and(eq(occurrence.id, input.occurrenceId), eq(occurrence.professionalId, input.professionalId)));
+      if (!o) throw new PlanError("not_found");
+      if (o.eventId !== null && (o.archivedAt !== null || (o.untilDate !== null && String(o.seriesDate) > o.untilDate))) {
+        throw new PlanError("invalid", ENDED_SERIES);
+      }
+      return () => [
+        db.execute(sql`
+          update occurrence set status = 'scheduled', cancelled_at = null, changed_at = ${ts(now)}, updated_at = ${ts(now)}
+          where id = ${o.id} and professional_id = ${input.professionalId} and status = 'cancelled'
+            and event_id is not null and starts_at > ${ts(now)}`),
+        G(db, sql`(select status from occurrence where id = ${o.id}) = 'scheduled'`, "not_found"),
+        G(
+          db,
+          sql`not exists (select 1 from occurrence o join event e on e.id = o.event_id
+            where o.id = ${o.id} and (e.archived_at is not null or (e.until_date is not null and o.series_date > e.until_date)))`,
+          "stale",
+        ),
+      ];
+    },
+    { replanOnStale: true, afterPlan: opts.afterPlan },
+  );
   if (!res.ok) return failOf(res);
   return { ok: true, effects: [] };
 }

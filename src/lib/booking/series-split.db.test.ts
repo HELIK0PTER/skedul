@@ -806,3 +806,67 @@ dbTest("TIM1: a later segment moved inside the new rule's dates between the plan
   const r = await getEvent(db, rId);
   assert.deepEqual([r.version, r.startMinute, r.untilDate], [2, 600, addDays(d1, -1)], "R unchanged");
 });
+
+/* ───────────── Rétablir on an ended segment (Task 28 ruling) ───────────── */
+
+const ENDED = "Cette série est terminée : recréez la séance si besoin.";
+
+dbTest("Rétablir: a séance cancelled by « supprimer à partir du » stays cancelled; one before d still comes back", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await makeType(db, pro);
+  const start = dayIn(pro, 2, now);
+  const { eventId, occurrences } = await makeEvent(db, pro, { ticketTypeIds: [typeId], rule: weekly(start, [1, 3, 5]) }, now);
+  const [early, , dRow, later] = occurrences;
+  const d = dRow.seriesDate ?? "";
+  const customerId = await makeCustomer(db, pro);
+  must(await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: later.id, customerId, asGuest: true }), "registerPro");
+  must(await cancelOccurrence(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: early.id }, now), "cancel a séance before d");
+  must(await deleteSeriesFrom(db, { professionalId: pro.proId, actorUserId: pro.userId, eventId, seenVersion: 1, fromDate: d }, now), "delete from d");
+  assert.equal((await getEvent(db, eventId)).untilDate, addDays(d, -1));
+  assert.equal((await getOccurrence(db, later.id)).status, "cancelled", "kept cancelled: it has history");
+
+  const res = await restoreOccurrence(db, { professionalId: pro.proId, occurrenceId: later.id }, now);
+  assert.deepEqual(res.ok ? "ok" : [res.code, res.message], ["invalid", ENDED]);
+  assert.equal((await getOccurrence(db, later.id)).status, "cancelled");
+
+  must(await restoreOccurrence(db, { professionalId: pro.proId, occurrenceId: early.id }, now), "restore a séance before d");
+  assert.equal((await getOccurrence(db, early.id)).status, "scheduled");
+});
+
+dbTest("Rétablir: a séance of an archived series stays cancelled", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await makeType(db, pro);
+  const start = dayIn(pro, 2, now);
+  const { eventId, occurrences } = await makeEvent(db, pro, { ticketTypeIds: [typeId], rule: weekly(start, [0, 3]) }, now);
+  const customerId = await makeCustomer(db, pro);
+  must(await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: occurrences[0].id, customerId, asGuest: true }), "registerPro");
+  must(await deleteSeriesFrom(db, { professionalId: pro.proId, actorUserId: pro.userId, eventId, seenVersion: 1, fromDate: start }, now), "delete from start");
+  assert.ok((await getEvent(db, eventId)).archivedAt, "archived");
+
+  const res = await restoreOccurrence(db, { professionalId: pro.proId, occurrenceId: occurrences[0].id }, now);
+  assert.deepEqual(res.ok ? "ok" : [res.code, res.message], ["invalid", ENDED]);
+  assert.equal((await getOccurrence(db, occurrences[0].id)).status, "cancelled");
+});
+
+dbTest("Rétablir: a series archived between the plan and the batch makes the restore refused", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await makeType(db, pro);
+  const start = dayIn(pro, 2, now);
+  const { eventId, occurrences } = await makeEvent(db, pro, { ticketTypeIds: [typeId], rule: weekly(start, [0, 3]) }, now);
+  const target = occurrences[0];
+  const customerId = await makeCustomer(db, pro);
+  must(await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: target.id, customerId, asGuest: true }), "registerPro");
+  must(await cancelOccurrence(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: target.id }, now), "cancel");
+
+  const res = await restoreOccurrence(db, { professionalId: pro.proId, occurrenceId: target.id }, now, {
+    afterPlan: async () => {
+      must(
+        await deleteSeriesFrom(db, { professionalId: pro.proId, actorUserId: pro.userId, eventId, seenVersion: 1, fromDate: start }, now),
+        "archive inside afterPlan",
+      );
+    },
+  });
+  assert.deepEqual(res.ok ? "ok" : [res.code, res.message], ["invalid", ENDED]);
+  assert.ok((await getEvent(db, eventId)).archivedAt, "archived");
+  assert.equal((await getOccurrence(db, target.id)).status, "cancelled");
+});
