@@ -47,7 +47,8 @@ export function wantsGoogleEvent(o: Pick<LoadedOccurrence, "status" | "attendees
  * success) then clear the marker. Wanted: PATCH when there is a marker (a 404
  * falls back to the insert); insert with the deterministic id, and when Google
  * answers « exists » (an event it keeps as cancelled) PATCH the full body, which
- * revives it; then store the marker.
+ * revives it (a PATCH that answers « missing » throws and stores nothing); then
+ * store the marker.
  */
 export async function syncOccurrenceWith(occurrenceId: string, deps: SyncDeps): Promise<SyncOutcome> {
   if (!deps.enabled) return "disabled";
@@ -82,7 +83,12 @@ export async function syncOccurrenceWith(occurrenceId: string, deps: SyncDeps): 
   }
 
   const inserted = await deps.insertEvent(token, calendarId, body);
-  if (inserted === "exists") await deps.patchEvent(token, calendarId, body.id, body);
+  if (inserted === "exists") {
+    const revived = await deps.patchEvent(token, calendarId, body.id, body);
+    // Fail closed: the id is taken but the event cannot be patched (purged), so
+    // saving the marker would hide a séance that never reaches the calendar.
+    if (revived === "missing") throw new Error("Google Calendar revive failed: the id exists but the event cannot be patched");
+  }
   await deps.saveEventId(o.occurrenceId, body.id);
   return "created";
 }

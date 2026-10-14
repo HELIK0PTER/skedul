@@ -20,6 +20,7 @@ export async function loadOccurrenceForSync(db: Db, occurrenceId: string): Promi
   const rows = await db
     .select({
       occurrenceId: occurrence.id,
+      professionalId: occurrence.professionalId,
       userId: professional.userId,
       googleCalendarId: professional.googleCalendarId,
       timezone: professional.timezone,
@@ -47,7 +48,13 @@ export async function loadOccurrenceForSync(db: Db, occurrenceId: string): Promi
     .select({ name: customer.name, email: customer.email })
     .from(booking)
     .innerJoin(customer, eq(customer.id, booking.customerId))
-    .where(and(eq(booking.occurrenceId, occurrenceId), eq(booking.status, "confirmed")))
+    .where(
+      and(
+        eq(booking.occurrenceId, occurrenceId),
+        eq(booking.professionalId, row.professionalId),
+        eq(booking.status, "confirmed"),
+      ),
+    )
     .orderBy(asc(booking.createdAt), asc(booking.id));
 
   const isRdv = row.eventId === null;

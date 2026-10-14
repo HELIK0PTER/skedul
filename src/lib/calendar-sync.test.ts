@@ -132,6 +132,25 @@ test("insert answers « exists »: the event is revived by a PATCH of the same b
   assert.deepEqual(saved, [EVENT_ID]);
 });
 
+test("insert answers « exists » but the revive PATCH answers « missing »: fail closed, the marker is not saved", async () => {
+  const { calls, saved, deps } = makeDeps(seance, (log) => ({
+    insertEvent: async () => {
+      log.calls.push("insert");
+      return "exists";
+    },
+    patchEvent: async (_token, _calendarId, eventId) => {
+      log.calls.push(`patch:${eventId}`);
+      return "missing";
+    },
+  }));
+  await assert.rejects(
+    () => syncOccurrenceWith("occ1", deps),
+    /Google Calendar revive failed: the id exists but the event cannot be patched/,
+  );
+  assert.deepEqual(calls, ["load", "token", "insert", `patch:${EVENT_ID}`]);
+  assert.deepEqual(saved, []);
+});
+
 test("wanted and a marker: patch only, no insert, no save", async () => {
   const { calls, saved, deps } = makeDeps({ ...seance, googleEventId: EVENT_ID });
   assert.equal(await syncOccurrenceWith("occ1", deps), "updated");

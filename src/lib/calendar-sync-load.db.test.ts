@@ -146,3 +146,22 @@ dbTest("clearGoogleLink clears the calendar id and every marker of that pro only
     await deleteTestUser(db, other.userId);
   }
 });
+
+dbTest("attendees are read for the occurrence's own pro only: a booking row of another pro is ignored", async ({ db, pro }) => {
+  const other = await createTestPro(db);
+  try {
+    const seance = await rowSeance(db, pro, await rowEvent(db, pro), { seatsTaken: 1 });
+    const alice = await rowCustomer(db, pro, { name: "Alice", email: "alice@example.com" });
+    const mallory = await rowCustomer(db, other, { name: "Mallory", email: "mallory@example.com" });
+    await rowBooking(db, pro, { occurrenceId: seance, customerId: alice });
+    // Built by hand on purpose: booking.professional_id has no composite FK to the occurrence's pro,
+    // so only the loader's own filter keeps a foreign row out of the Google event.
+    await rowBooking(db, other, { occurrenceId: seance, customerId: mallory });
+
+    const loaded = await loadOccurrenceForSync(db, seance);
+    assert.deepEqual(loaded?.attendees, [{ name: "Alice", email: "alice@example.com" }]);
+  } finally {
+    // Cascades the foreign booking away, so I1 (seats_taken = 1) holds when the harness checks.
+    await deleteTestUser(db, other.userId);
+  }
+});

@@ -81,6 +81,15 @@ test("location → Google and Outlook parameter", () => {
   assert.equal(url.searchParams.get("text"), "Coaching 1h");
 });
 
+test("a bare CR, a CRLF and a LF in a text all become the \\n escape, never a raw CR", () => {
+  const ics = buildIcs({ ...base, uid: "bk_3@skedul.app", description: "a\rb\r\nc\nd", location: "Salle 1\rPorte 2" });
+  const lines = ics.split("\r\n");
+  assert.ok(lines.includes("DESCRIPTION:a\\nb\\nc\\nd"));
+  assert.ok(lines.includes("LOCATION:Salle 1\\nPorte 2"));
+  // The only CRs of the file are the CRLF line terminators.
+  assert.equal(ics.split("\r").length, ics.split("\r\n").length);
+});
+
 test("location → ICS LOCATION line right after DESCRIPTION, escaped like other text", () => {
   const ics = buildIcs({ ...base, uid: "bk_2@skedul.app", location: "Gymnase Japy, salle 2; entrée B\nPorte 3" });
   const lines = ics.split("\r\n");
