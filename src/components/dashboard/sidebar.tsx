@@ -13,6 +13,7 @@ import {
   LifeBuoy,
   Settings,
   ShieldCheck,
+  Ticket,
   Users,
 } from "lucide-react";
 
@@ -23,9 +24,10 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { href: "/dashboard", label: "Vue d'ensemble", icon: LayoutDashboard, exact: true },
   { href: "/dashboard/planning", label: "Planning", icon: CalendarRange },
+  { href: "/dashboard/events", label: "Événements", icon: CalendarDays },
   { href: "/dashboard/clients", label: "Clients", icon: Users },
   { href: "/dashboard/payments", label: "Paiements", icon: Euro },
-  { href: "/dashboard/event-types", label: "Prestations", icon: CalendarDays },
+  { href: "/dashboard/tickets", label: "Tickets", icon: Ticket },
   { href: "/dashboard/availability", label: "Disponibilités", icon: Clock },
   { href: "/dashboard/unavailability", label: "Indisponibilités", icon: CalendarOff },
   { href: "/dashboard/settings", label: "Réglages", icon: Settings },
