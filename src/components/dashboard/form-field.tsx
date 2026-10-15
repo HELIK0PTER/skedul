@@ -56,7 +56,7 @@ export function FormField({
         </p>
       )}
       {error && (
-        <p id={`${htmlFor}-error`} role="alert" className="text-xs text-destructive">
+        <p id={`${htmlFor}-error`} role="alert" className="text-xs text-rose-700">
           {error}
         </p>
       )}
