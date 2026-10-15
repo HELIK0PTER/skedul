@@ -5,11 +5,13 @@ import { ArrowLeft } from "lucide-react";
 
 import { OfferList } from "@/components/dashboard/offer-list";
 import { PageHeader } from "@/components/dashboard/page-header";
-import { TicketTypeInfoForm } from "@/components/dashboard/ticket-type-editor";
+import { RdvSettingsForm, TicketTypeInfoForm, TypeQuestionsForm } from "@/components/dashboard/ticket-type-editor";
 import { TypeDangerZone } from "@/components/dashboard/type-danger-zone";
+import { TypeHoursEditor } from "@/components/dashboard/type-hours-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { canBecomeFree } from "@/lib/back-office/rdv-form";
 import { getCurrentProfessional } from "@/lib/session";
 import { getTicketTypePage } from "@/server/catalog-queries";
 
@@ -100,6 +102,39 @@ export default async function TicketTypePage({ params }: { params: Promise<{ id:
                   </li>
                 ))}
               </ul>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>RDV libre</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-8">
+            <RdvSettingsForm
+              ticketTypeId={type.id}
+              initial={{
+                rdvEnabled: type.rdvEnabled,
+                rdvFree: type.rdvFree,
+                rdvDurationMin: type.rdvDurationMin,
+                rdvBufferBeforeMin: type.rdvBufferBeforeMin,
+                rdvBufferAfterMin: type.rdvBufferAfterMin,
+                rdvOverrides: type.rdvOverrides,
+              }}
+              proWindow={type.proWindow}
+              canBecomeFree={canBecomeFree(type)}
+            />
+            {type.rdvEnabled && (
+              <>
+                <section className="space-y-4 border-t border-border pt-6">
+                  <h3 className="text-base font-semibold">Horaires</h3>
+                  <TypeHoursEditor ticketTypeId={type.id} ownHours={type.ownHours} globalHours={type.globalHours} />
+                </section>
+                <section className="space-y-4 border-t border-border pt-6">
+                  <h3 className="text-base font-semibold">Questions</h3>
+                  <TypeQuestionsForm ticketTypeId={type.id} questions={type.questions} />
+                </section>
+              </>
             )}
           </CardContent>
         </Card>
