@@ -1,0 +1,366 @@
+/**
+ * Catalog cores (spec § 9 and § 13.1): ticket types, offers, per-type RDV
+ * hours and questions. Each core takes (db, ctx, input, now), validates its
+ * input with parseFr BEFORE the engine (no English zod text reaches the UI),
+ * checks the P3 rules the engine does not know (rdv_free, effective booking
+ * window) and turns engine failures into French (context "catalog").
+ * professionalId always comes from ctx. No server-only and no next/*: the
+ * "use server" wrappers live in src/server/pro-catalog.ts.
+ */
+import { and, eq, isNull, sql } from "drizzle-orm";
+import { z } from "zod";
+
+import {
+  createOffer,
+  createTicketType,
+  deleteOffer,
+  deleteTicketType,
+  setAvailabilityRules,
+  setTicketTypeArchived,
+  setTypeQuestions,
+  updateOffer,
+  updateTicketType,
+} from "@/lib/booking/catalog";
+import { effectiveWindow } from "@/lib/booking-window";
+import { ts, type Db } from "@/lib/db/atomic";
+import { ticketOffer, ticketType } from "@/lib/db/schema";
+import {
+  availabilityRuleInputSchema,
+  BOUNDS,
+  idSchema,
+  offerInputSchema,
+  questionInputSchema,
+  ticketTypeInputSchema,
+  type AvailabilityRuleInput,
+  type OfferInput,
+  type QuestionInput,
+  type TicketTypeInput,
+} from "@/lib/tickets";
+import { parseFr } from "@/lib/zod-fr";
+
+import { readProWindow } from "./catalog-reads";
+import { NOTICE_TOO_LONG, noticeExceedsHorizon } from "./notice";
+import { actionFail, fromEngine, type ActionFail, type CoreResult, type ProCtx } from "./result";
+
+export type TicketTypePatch = Partial<TicketTypeInput>;
+
+export const RDV_FREE_NO_OFFER = "Un rendez-vous gratuit ne se vend pas : retirez l'option « Gratuit » pour créer une offre.";
+export const RDV_FREE_HAS_SALES = "Ce type a des offres en vente ou des tickets valides : il ne peut pas devenir gratuit.";
+
+/** Hours of one type: at most 24 ranges a day. */
+const MAX_HOURS_RULES = 7 * 24;
+
+const typeIdSchema = z.object({ ticketTypeId: idSchema });
+const archiveSchema = z.object({ ticketTypeId: idSchema, archived: z.boolean() });
+const updateTypeSchema = z.object({ ticketTypeId: idSchema, patch: z.record(z.string(), z.unknown()) });
+const offerIdSchema = z.object({ offerId: idSchema });
+const updateOfferSchema = z.object({ offerId: idSchema, offer: z.record(z.string(), z.unknown()) });
+const offerActiveSchema = z.object({ offerId: idSchema, isActive: z.boolean() });
+const hoursSchema = z.object({
+  ticketTypeId: idSchema,
+  rules: z.array(availabilityRuleInputSchema).max(MAX_HOURS_RULES),
+});
+const questionsSchema = z.object({
+  ticketTypeId: idSchema,
+  questions: z.array(questionInputSchema).max(BOUNDS.questions),
+});
+
+/** The fields a patch may carry (anything else is ignored). */
+const PATCH_KEYS = [
+  "name",
+  "description",
+  "color",
+  "rdvEnabled",
+  "rdvFree",
+  "rdvDurationMin",
+  "rdvBufferBeforeMin",
+  "rdvBufferAfterMin",
+  "rdvOverrides",
+] as const satisfies readonly (keyof TicketTypeInput)[];
+
+type ParsedType = z.output<typeof ticketTypeInputSchema>;
+
+const notFound = (): ActionFail => fromEngine({ ok: false, code: "not_found" }, "catalog");
+
+/** Row → TicketTypeInput (the base a patch is merged over). */
+function typeInputOf(row: typeof ticketType.$inferSelect): TicketTypeInput {
+  return {
+    name: row.name,
+    description: row.description,
+    color: row.color,
+    rdvEnabled: row.rdvEnabled,
+    rdvFree: row.rdvFree,
+    rdvDurationMin: row.rdvDurationMin,
+    rdvBufferBeforeMin: row.rdvBufferBeforeMin,
+    rdvBufferAfterMin: row.rdvBufferAfterMin,
+    rdvOverrides: {
+      bookingHorizonDays: row.rdvBookingHorizonDays,
+      minNoticeMinutes: row.rdvMinNoticeMinutes,
+      cancelDeadlineHours: row.rdvCancelDeadlineHours,
+    },
+  };
+}
+
+/** The type row of this pro (null for another pro's or an unknown id). */
+async function readType(db: Db, professionalId: string, ticketTypeId: string) {
+  const [row] = await db
+    .select()
+    .from(ticketType)
+    .where(and(eq(ticketType.id, ticketTypeId), eq(ticketType.professionalId, professionalId)));
+  return row ?? null;
+}
+
+/** The non-archived offer of this pro (null otherwise). */
+async function readOffer(db: Db, professionalId: string, offerId: string) {
+  const [row] = await db
+    .select()
+    .from(ticketOffer)
+    .where(and(eq(ticketOffer.id, offerId), eq(ticketOffer.professionalId, professionalId), isNull(ticketOffer.archivedAt)));
+  return row ?? null;
+}
+
+/** True while an offer is en vente or a ticket of the type is usable at `now`. */
+async function hasSalesOrTickets(db: Db, professionalId: string, ticketTypeId: string, now: Date): Promise<boolean> {
+  const res = await db.execute<{ blocked: boolean }>(sql`select (
+    exists (select 1 from ticket_offer where ticket_type_id = ${ticketTypeId} and professional_id = ${professionalId}
+      and is_active and archived_at is null)
+    or exists (select 1 from ticket where ticket_type_id = ${ticketTypeId} and professional_id = ${professionalId}
+      and status = 'available' and (expires_at is null or expires_at > ${ts(now)}))
+  ) as blocked`);
+  return res.rows[0]?.blocked === true;
+}
+
+/** NOTICE_TOO_LONG when an RDV type's effective notice is longer than its effective horizon. */
+async function noticeRefusal(db: Db, ctx: ProCtx, type: ParsedType): Promise<ActionFail | null> {
+  if (!type.rdvEnabled) return null;
+  const pro = await readProWindow(db, ctx.professionalId);
+  if (!pro) return notFound();
+  const effective = effectiveWindow(pro, type.rdvOverrides);
+  return noticeExceedsHorizon(effective.minNoticeMinutes, effective.bookingHorizonDays) ? actionFail(NOTICE_TOO_LONG) : null;
+}
+
+/**
+ * RDV_FREE_NO_OFFER when an offer would be (or stay) en vente on an rdv_free type: its tickets
+ * are usable nowhere. An offer left inactive by the switch to « Gratuit » can still be edited
+ * as long as it stays « Pas en vente » (isActive false).
+ */
+async function freeTypeRefusal(db: Db, professionalId: string, ticketTypeId: string, isActive: boolean): Promise<ActionFail | null> {
+  if (!isActive) return null;
+  const [t] = await db
+    .select({ rdvFree: ticketType.rdvFree })
+    .from(ticketType)
+    .where(and(eq(ticketType.id, ticketTypeId), eq(ticketType.professionalId, professionalId)));
+  return t?.rdvFree ? actionFail(RDV_FREE_NO_OFFER) : null;
+}
+
+/* ───────────────────────────── Ticket types ───────────────────────────── */
+
+/** parseFr(ticketTypeInputSchema), RDV window check, createTicketType. */
+export async function createTicketTypeCore(
+  db: Db,
+  ctx: ProCtx,
+  input: TicketTypeInput,
+  now: Date,
+): Promise<CoreResult<{ ticketTypeId: string }>> {
+  const parsed = parseFr(ticketTypeInputSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  const refusal = await noticeRefusal(db, ctx, parsed.data);
+  if (refusal) return refusal;
+  const res = await createTicketType(db, { professionalId: ctx.professionalId, type: parsed.data }, now);
+  return res.ok ? res : fromEngine(res, "catalog");
+}
+
+/**
+ * Reads the type (pro), merges the patch over its current values, parseFr the
+ * full type, refuses rdvFree false → true while an offer en vente or a usable
+ * ticket exists (RDV_FREE_HAS_SALES), refuses an effective notice longer than
+ * the horizon (NOTICE_TOO_LONG) when the patch carries rdvEnabled or rdvOverrides,
+ * then updateTicketType.
+ */
+export async function updateTicketTypeCore(
+  db: Db,
+  ctx: ProCtx,
+  input: { ticketTypeId: string; patch: TicketTypePatch },
+  now: Date,
+): Promise<CoreResult> {
+  const head = parseFr(updateTypeSchema, input);
+  if (!head.ok) return actionFail(head.error);
+  const row = await readType(db, ctx.professionalId, head.data.ticketTypeId);
+  if (!row) return notFound();
+
+  const merged: Record<string, unknown> = { ...typeInputOf(row) };
+  for (const key of PATCH_KEYS) {
+    const value = head.data.patch[key];
+    if (value !== undefined) merged[key] = value;
+  }
+  const parsed = parseFr(ticketTypeInputSchema, merged);
+  if (!parsed.ok) return actionFail(parsed.error);
+
+  if (parsed.data.rdvFree && !row.rdvFree && (await hasSalesOrTickets(db, ctx.professionalId, row.id, now))) {
+    return actionFail(RDV_FREE_HAS_SALES);
+  }
+  // The window is checked only when the patch touches it: a rename from the « Informations » card must not
+  // be refused for booking rules that card does not show (e.g. the pro lowered their horizon since).
+  const touchesWindow = head.data.patch.rdvEnabled !== undefined || head.data.patch.rdvOverrides !== undefined;
+  const refusal = touchesWindow ? await noticeRefusal(db, ctx, parsed.data) : null;
+  if (refusal) return refusal;
+
+  const res = await updateTicketType(db, { professionalId: ctx.professionalId, ticketTypeId: row.id, type: parsed.data }, now);
+  return res.ok ? res : fromEngine(res, "catalog");
+}
+
+export async function setTicketTypeArchivedCore(
+  db: Db,
+  ctx: ProCtx,
+  input: { ticketTypeId: string; archived: boolean },
+  now: Date,
+): Promise<CoreResult> {
+  const parsed = parseFr(archiveSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  const res = await setTicketTypeArchived(
+    db,
+    { professionalId: ctx.professionalId, ticketTypeId: parsed.data.ticketTypeId, archived: parsed.data.archived },
+    now,
+  );
+  return res.ok ? res : fromEngine(res, "catalog");
+}
+
+/** deleteTicketType: physical delete when unused, else archived (outcome). */
+export async function deleteTicketTypeCore(
+  db: Db,
+  ctx: ProCtx,
+  input: { ticketTypeId: string },
+  now: Date,
+): Promise<CoreResult<{ outcome: "deleted" | "archived" }>> {
+  const parsed = parseFr(typeIdSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  const res = await deleteTicketType(db, { professionalId: ctx.professionalId, ticketTypeId: parsed.data.ticketTypeId }, now);
+  return res.ok ? res : fromEngine(res, "catalog");
+}
+
+/* ───────────────────────────── Offers ───────────────────────────── */
+
+/** parseFr(offerInputSchema); the type must be the pro's, not archived, not rdv_free (RDV_FREE_NO_OFFER); createOffer. */
+export async function createOfferCore(
+  db: Db,
+  ctx: ProCtx,
+  input: OfferInput,
+  now: Date,
+): Promise<CoreResult<{ offerId: string }>> {
+  const parsed = parseFr(offerInputSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  const [type] = await db
+    .select({ rdvFree: ticketType.rdvFree })
+    .from(ticketType)
+    .where(
+      and(
+        eq(ticketType.id, parsed.data.ticketTypeId),
+        eq(ticketType.professionalId, ctx.professionalId),
+        isNull(ticketType.archivedAt),
+      ),
+    );
+  if (!type) return notFound();
+  if (type.rdvFree) return actionFail(RDV_FREE_NO_OFFER);
+  const res = await createOffer(db, { professionalId: ctx.professionalId, offer: parsed.data }, now);
+  return res.ok ? res : fromEngine(res, "catalog");
+}
+
+/** parseFr(offerInputSchema) with ticketTypeId forced to the offer's own type; no en vente offer on an rdv_free type (RDV_FREE_NO_OFFER); updateOffer. */
+export async function updateOfferCore(
+  db: Db,
+  ctx: ProCtx,
+  input: { offerId: string; offer: OfferInput },
+  now: Date,
+): Promise<CoreResult> {
+  const head = parseFr(updateOfferSchema, input);
+  if (!head.ok) return actionFail(head.error);
+  const row = await readOffer(db, ctx.professionalId, head.data.offerId);
+  if (!row) return notFound();
+  const parsed = parseFr(offerInputSchema, { ...head.data.offer, ticketTypeId: row.ticketTypeId });
+  if (!parsed.ok) return actionFail(parsed.error);
+  const refusal = await freeTypeRefusal(db, ctx.professionalId, row.ticketTypeId, parsed.data.isActive);
+  if (refusal) return refusal;
+  const res = await updateOffer(db, { professionalId: ctx.professionalId, offerId: row.id, offer: parsed.data }, now);
+  return res.ok ? res : fromEngine(res, "catalog");
+}
+
+/** « En vente » toggle: reads the offer (pro, not archived), refuses to put it en vente on an rdv_free type (RDV_FREE_NO_OFFER) and calls updateOffer with its fields and the new isActive. */
+export async function setOfferActiveCore(
+  db: Db,
+  ctx: ProCtx,
+  input: { offerId: string; isActive: boolean },
+  now: Date,
+): Promise<CoreResult> {
+  const parsed = parseFr(offerActiveSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  const row = await readOffer(db, ctx.professionalId, parsed.data.offerId);
+  if (!row) return notFound();
+  const refusal = await freeTypeRefusal(db, ctx.professionalId, row.ticketTypeId, parsed.data.isActive);
+  if (refusal) return refusal;
+  const res = await updateOffer(
+    db,
+    {
+      professionalId: ctx.professionalId,
+      offerId: row.id,
+      offer: {
+        ticketTypeId: row.ticketTypeId,
+        label: row.label,
+        quantity: row.quantity,
+        priceCents: row.priceCents,
+        validityCount: row.validityCount,
+        validityUnit: row.validityUnit,
+        isActive: parsed.data.isActive,
+      },
+    },
+    now,
+  );
+  return res.ok ? res : fromEngine(res, "catalog");
+}
+
+export async function deleteOfferCore(
+  db: Db,
+  ctx: ProCtx,
+  input: { offerId: string },
+  now: Date,
+): Promise<CoreResult<{ outcome: "deleted" | "archived" }>> {
+  const parsed = parseFr(offerIdSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  const res = await deleteOffer(db, { professionalId: ctx.professionalId, offerId: parsed.data.offerId }, now);
+  return res.ok ? res : fromEngine(res, "catalog");
+}
+
+/* ───────────────────────────── Hours and questions ───────────────────────────── */
+
+/** Per-type RDV hours (empty list = back to the global hours): parseFr(array of availabilityRuleInputSchema, max 168), setAvailabilityRules. */
+export async function setTypeHoursCore(
+  db: Db,
+  ctx: ProCtx,
+  input: { ticketTypeId: string; rules: AvailabilityRuleInput[] },
+  now: Date,
+): Promise<CoreResult> {
+  const parsed = parseFr(hoursSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  const res = await setAvailabilityRules(
+    db,
+    { professionalId: ctx.professionalId, ticketTypeId: parsed.data.ticketTypeId, rules: parsed.data.rules },
+    now,
+  );
+  return res.ok ? res : fromEngine(res, "catalog");
+}
+
+/** RDV questions: parseFr(array of questionInputSchema, max 20), setTypeQuestions. */
+export async function setTypeQuestionsCore(
+  db: Db,
+  ctx: ProCtx,
+  input: { ticketTypeId: string; questions: QuestionInput[] },
+  now: Date,
+): Promise<CoreResult> {
+  const parsed = parseFr(questionsSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  const res = await setTypeQuestions(
+    db,
+    { professionalId: ctx.professionalId, ticketTypeId: parsed.data.ticketTypeId, questions: parsed.data.questions },
+    now,
+  );
+  return res.ok ? res : fromEngine(res, "catalog");
+}
