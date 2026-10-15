@@ -695,13 +695,18 @@ export async function moveAttendee(
   };
 }
 
-/** One query per pro: the facts classifyTypes (src/lib/wallet-rules.ts) needs. */
+/**
+ * One query per pro: the facts classifyTypes (src/lib/wallet-rules.ts) needs.
+ * An rdv_free type uses no ticket: it is reported as not RDV-enabled, classified
+ * like a non-RDV type, so its unusable tickets raise the orange alert (Q16).
+ */
 export async function loadTypeFacts(db: Db, professionalId: string, now: Date = new Date()): Promise<TypeFacts[]> {
   const rows = await db
     .select({
       ticketTypeId: ticketType.id,
       archivedAt: ticketType.archivedAt,
       rdvEnabled: ticketType.rdvEnabled,
+      rdvFree: ticketType.rdvFree,
       // single-table select: an interpolated column renders unqualified, so the outer id is written out
       linked: sql<boolean>`exists (
         select 1 from event_ticket_type l
@@ -715,7 +720,7 @@ export async function loadTypeFacts(db: Db, professionalId: string, now: Date = 
   return rows.map((r) => ({
     ticketTypeId: r.ticketTypeId,
     archived: r.archivedAt !== null,
-    rdvEnabled: r.rdvEnabled,
+    rdvEnabled: r.rdvEnabled && !r.rdvFree,
     linkedToUpcomingEvent: r.linked === true,
   }));
 }

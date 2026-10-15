@@ -16,6 +16,7 @@ import {
 } from "../../test/fixtures";
 import { instantAt } from "../civil-date";
 import type { TicketCloseReason } from "../tickets";
+import { classifyTypes } from "../wallet-rules";
 import { cancelByClient } from "./cancel";
 import { setTicketTypeArchived } from "./catalog";
 import { bookWithHeldTicket } from "./claims";
@@ -513,6 +514,20 @@ dbTest("loadTypeFacts: archived, RDV, linked to an upcoming séance, orphan", as
   assert.deepEqual(facts.get(rdv), { ticketTypeId: rdv, archived: false, rdvEnabled: true, linkedToUpcomingEvent: false });
   assert.deepEqual(facts.get(orphan), { ticketTypeId: orphan, archived: false, rdvEnabled: false, linkedToUpcomingEvent: false });
   assert.equal(facts.get(archived)?.archived, true);
+});
+
+dbTest("loadTypeFacts: an rdv_free type counts as not RDV-enabled, so its tickets raise the orange alert (Q16)", async ({ db, pro }) => {
+  const paidRdv = await makeType(db, pro, { rdvEnabled: true, rdvDurationMin: 60 });
+  const freeRdv = await makeType(db, pro, { rdvEnabled: true, rdvFree: true, rdvDurationMin: 15 });
+
+  const facts = (await loadTypeFacts(db, pro.proId)).filter((f) => [paidRdv, freeRdv].includes(f.ticketTypeId));
+  const byId = new Map(facts.map((f) => [f.ticketTypeId, f]));
+  assert.deepEqual(byId.get(paidRdv), { ticketTypeId: paidRdv, archived: false, rdvEnabled: true, linkedToUpcomingEvent: false });
+  assert.deepEqual(byId.get(freeRdv), { ticketTypeId: freeRdv, archived: false, rdvEnabled: false, linkedToUpcomingEvent: false });
+
+  const classes = classifyTypes(facts);
+  assert.equal(classes.get(paidRdv), "ok");
+  assert.equal(classes.get(freeRdv), "orphan");
 });
 
 dbTest("E5 after « Déplacer »: a moved client may cancel until the start of the new séance", async ({ db, pro }) => {
