@@ -9,12 +9,13 @@ import type { TicketStatus } from "@/lib/tickets";
 export type TypeFacts = {
   ticketTypeId: string;
   archived: boolean;
+  /** RDV paid with tickets: false for an rdv_free type, which uses no ticket (loadTypeFacts reports rdv_enabled and not rdv_free) */
   rdvEnabled: boolean;
   /** linked to a non-archived tickets-mode event (private counts) with a future scheduled séance */
   linkedToUpcomingEvent: boolean;
 };
 
-/** ok, 🔴 archived, 🟠 orphan (active, not rdv_enabled, not linked). */
+/** ok, 🔴 archived, 🟠 orphan (active, not RDV paid with tickets, not linked to an upcoming tickets-mode event). */
 export type TypeClass = "ok" | "archived" | "orphan";
 
 export function classifyTypes(types: readonly TypeFacts[]): Map<string, TypeClass> {

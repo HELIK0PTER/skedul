@@ -4,7 +4,9 @@
  * libre details of one type. Pure functions of (db, professionalId, now): no
  * server-only and no next/*, so the DB tests call them directly;
  * src/server/catalog-queries.ts wraps them. Every statement filters
- * professional_id.
+ * professional_id, except loadQuestions (booking/answers.ts), which filters by
+ * ticket_type_id only: getTicketTypeDetail calls it after loadSummaries has
+ * found the type among this pro's own, so the id is already known to be theirs.
  */
 import { and, asc, eq, gt, isNotNull, isNull, or, sql } from "drizzle-orm";
 
@@ -49,7 +51,7 @@ export type TicketTypeSummary = {
   rdvDurationMin: number | null;
   /** non-archived offers (en vente or not), by position, createdAt, id */
   offers: OfferView[];
-  /** non-archived events linking the type, one per series root (its latest segment), by title */
+  /** non-archived tickets-mode events linking the type, one per series root (its latest segment), by title */
   acceptedBy: AcceptedBy[];
   /** available and valid at now, every customer */
   usableTickets: number;
@@ -132,20 +134,25 @@ async function readOffers(
 
 /**
  * The latest non-archived segment of each series (same series root), kept when
- * it links the type. An older segment of the same series that still links the
- * type is not listed: a series is one entry, addressed by its current segment.
+ * it is in tickets mode and links the type. Only a tickets-mode event accepts
+ * tickets (src/lib/booking/eligibility.ts, the `linked` fact of loadTypeFacts),
+ * so a free or no-booking event that still carries the link is not listed. The
+ * mode filter is on the OUTER query: a series whose latest segment left tickets
+ * mode does not fall back to an older segment, and an older segment of the same
+ * series that still links the type is not listed either: a series is one entry,
+ * addressed by its current segment.
  */
 async function readAcceptedBy(db: Db, professionalId: string, ticketTypeId?: string): Promise<Map<string, AcceptedBy[]>> {
   const res = await db.execute<{ ticket_type_id: string; event_id: string; title: string; is_private: boolean }>(sql`
     select l.ticket_type_id, e.id as event_id, e.title, e.is_private
     from (
-      select distinct on (coalesce(series_root_id, id)) id, title, is_private
+      select distinct on (coalesce(series_root_id, id)) id, title, is_private, booking_mode
       from event
       where professional_id = ${professionalId} and archived_at is null
       order by coalesce(series_root_id, id), start_date desc, created_at desc, id desc
     ) e
     join event_ticket_type l on l.event_id = e.id
-    where l.professional_id = ${professionalId}${ticketTypeId === undefined ? sql`` : sql` and l.ticket_type_id = ${ticketTypeId}`}`);
+    where l.professional_id = ${professionalId} and e.booking_mode = 'tickets'${ticketTypeId === undefined ? sql`` : sql` and l.ticket_type_id = ${ticketTypeId}`}`);
   const byType = new Map<string, AcceptedBy[]>();
   for (const r of res.rows) {
     pushTo(byType, r.ticket_type_id, { eventId: r.event_id, title: r.title, isPrivate: r.is_private });

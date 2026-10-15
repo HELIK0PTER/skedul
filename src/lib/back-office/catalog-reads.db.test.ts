@@ -3,9 +3,10 @@ import { sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
 import { deleteOffer, setAvailabilityRules, setTicketTypeArchived, setTypeQuestions } from "@/lib/booking/catalog";
+import { bookWithHeldTicket } from "@/lib/booking/claims";
 import { fulfillPurchase, startPurchase } from "@/lib/booking/fulfillment";
 import { editSeriesFrom } from "@/lib/booking/series";
-import { convertTickets } from "@/lib/booking/wallet";
+import { closeTickets, convertTickets, pointTickets } from "@/lib/booking/wallet";
 import type { Db } from "@/lib/db/atomic";
 import type { RecurrenceRuleInput } from "@/lib/tickets";
 import { addDaysMs, createTestPro, dbTest, deleteTestUser, type TestPro } from "@/test/db";
@@ -160,6 +161,52 @@ dbTest("catalog reads: acceptedBy lists one entry per series root (its latest se
   assert.deepEqual((await summaryOf(db, pro, otherType, now)).acceptedBy.map((e) => e.title), ["Roda libre"]);
 });
 
+dbTest("catalog reads: acceptedBy lists tickets-mode events only, like the orange alert does", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await makeType(db, pro, { name: "Cours collectif" });
+  const onlyFree = await makeType(db, pro, { name: "Lié à un événement libre" });
+  const cours = (await makeEvent(db, pro, { title: "Cours payant", ticketTypeIds: [typeId] })).eventId;
+  await makeEvent(db, pro, { title: "Roda libre", bookingMode: "free", ticketTypeIds: [typeId, onlyFree] });
+  await makeEvent(db, pro, { title: "Stage sans réservation", bookingMode: "none", ticketTypeIds: [typeId] });
+
+  // A series whose latest segment switched to « free »: the older tickets-mode segment does not come back.
+  const seriesStart = (
+    await makeEvent(db, pro, { title: "Altinha intermédiaires", ticketTypeIds: [typeId], rule: weekly(dayIn(pro, -14, now), [1, 3, 5]) }, addDaysMs(now, -14))
+  ).eventId;
+  const split = await editSeriesFrom(
+    db,
+    {
+      professionalId: pro.proId,
+      actorUserId: pro.userId,
+      eventId: seriesStart,
+      seenVersion: 1,
+      fromDate: dayIn(pro, 1, now),
+      rule: weekly(dayIn(pro, 1, now), [1, 3]),
+      durationMin: 60,
+      orphans: "keep",
+    },
+    now,
+  );
+  must(split, "split the series");
+  assert.notEqual(split.eventId, seriesStart, "a new segment was created");
+  assert.ok(
+    (await summaryOf(db, pro, typeId, now)).acceptedBy.some((e) => e.eventId === split.eventId),
+    "while the latest segment is in tickets mode, the series is listed",
+  );
+  await db.execute(sql`update event set booking_mode = 'free' where id = ${split.eventId}`);
+
+  const type = await summaryOf(db, pro, typeId, now);
+  assert.deepEqual(type.acceptedBy, [{ eventId: cours, title: "Cours payant", isPrivate: false }]);
+  assert.equal(type.orphan, false, "linked to a future tickets-mode event");
+
+  // Only linked to a free-mode event: nothing accepts it, and the card says so on both sides.
+  const freeOnly = await summaryOf(db, pro, onlyFree, now);
+  assert.deepEqual(freeOnly.acceptedBy, []);
+  assert.equal(freeOnly.orphan, true);
+  const detail = found(await getTicketTypeDetail(db, pro.proId, typeId, now), "detail");
+  assert.deepEqual(detail.acceptedBy, type.acceptedBy);
+});
+
 dbTest("catalog reads: usableTickets counts available, unexpired tickets of every customer", async ({ db, pro }) => {
   const now = new Date();
   const typeId = await makeType(db, pro);
@@ -171,6 +218,33 @@ dbTest("catalog reads: usableTickets counts available, unexpired tickets of ever
   assert.equal((await summaryOf(db, pro, typeId, now)).usableTickets, 3);
   assert.equal((await summaryOf(db, pro, typeId, addDaysMs(now, 20))).usableTickets, 2, "the expired ticket no longer counts");
   assert.equal((await summaryOf(db, pro, await makeType(db, pro), now)).usableTickets, 0);
+});
+
+dbTest("catalog reads: usableTickets ignores booked, used and closed tickets", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await makeType(db, pro);
+  const {
+    occurrences: [occ],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeId] });
+  const customerId = await makeCustomer(db, pro);
+  const [pointedId, closedId] = await giveTickets(db, pro, customerId, typeId, 4);
+  assert.equal((await summaryOf(db, pro, typeId, now)).usableTickets, 4);
+
+  must(
+    await pointTickets(db, { professionalId: pro.proId, actorUserId: pro.userId, customerId, selection: { ticketIds: [pointedId] } }),
+    "point",
+  );
+  must(
+    await closeTickets(db, { professionalId: pro.proId, actorUserId: pro.userId, customerId, selection: { ticketIds: [closedId] }, reason: "retire" }),
+    "close",
+  );
+  assert.equal((await summaryOf(db, pro, typeId, now)).usableTickets, 2, "used and closed tickets no longer count");
+
+  must(
+    await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: null }),
+    "book",
+  );
+  assert.equal((await summaryOf(db, pro, typeId, now)).usableTickets, 1, "a booked ticket no longer counts");
 });
 
 dbTest("catalog reads: orphan follows the wallet classes (linked event, private, rdv_free)", async ({ db, pro }) => {
