@@ -72,6 +72,15 @@ export function rdvErrorField(error: string): RdvField | null {
 }
 
 /**
+ * True for the server's refusal of « Gratuit » (RDV_FREE_HAS_SALES), recognised by its opening words: the failure
+ * carries no code, and a client file cannot import the constant from catalog-actions (server side). The unit test
+ * checks it against the real constant, so a rewording cannot slip by.
+ */
+export function isFreeSalesRefusal(error: string): boolean {
+  return error.startsWith("Ce type a des offres en vente");
+}
+
+/**
  * « Gratuit » can be switched on only with no offer en vente and no usable ticket. This is the form's hint: the
  * server stays the judge and also refuses for a checkout in progress or a booked ticket (RDV_FREE_HAS_SALES), which
  * the page does not carry; that refusal is shown in the form's error box.

@@ -11,7 +11,14 @@ import { WindowOverrideFields } from "@/components/dashboard/window-override-fie
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { rdvErrorField, rdvFormFromType, rdvPatchFromForm, type RdvField, type RdvFormValues } from "@/lib/back-office/rdv-form";
+import {
+  isFreeSalesRefusal,
+  rdvErrorField,
+  rdvFormFromType,
+  rdvPatchFromForm,
+  type RdvField,
+  type RdvFormValues,
+} from "@/lib/back-office/rdv-form";
 import type { QuestionRow } from "@/lib/booking/answers";
 import type { BookingWindow } from "@/lib/booking-window";
 import type { WindowOverrides } from "@/lib/tickets";
@@ -173,6 +180,8 @@ export function RdvSettingsForm({
       const res = await updateTicketTypeAction({ ticketTypeId, patch: built.patch });
       if (!res.ok) {
         setError({ field: rdvErrorField(res.error), message: res.error });
+        // The page could not see a checkout in progress or a booked ticket: the saved state is still « not free ».
+        if (isFreeSalesRefusal(res.error)) setValues((current) => ({ ...current, free: false }));
         return;
       }
       setSaved(true);

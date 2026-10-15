@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { canBecomeFree, rdvErrorField, rdvFormFromType, rdvPatchFromForm, type RdvFormValues } from "./rdv-form";
+import { RDV_FREE_HAS_SALES } from "./catalog-actions";
+import { NOTICE_TOO_LONG } from "./notice";
+import { canBecomeFree, isFreeSalesRefusal, rdvErrorField, rdvFormFromType, rdvPatchFromForm, type RdvFormValues } from "./rdv-form";
 
 const NO_OVERRIDES = { bookingHorizonDays: null, minNoticeMinutes: null, cancelDeadlineHours: null };
 
@@ -85,6 +87,13 @@ test("canBecomeFree: no offer en vente and no usable ticket", () => {
   assert.equal(canBecomeFree({ offers: [{ isActive: false }], usableTickets: 0 }), true, "an offer taken off sale");
   assert.equal(canBecomeFree({ offers: [{ isActive: false }, { isActive: true }], usableTickets: 0 }), false);
   assert.equal(canBecomeFree({ offers: [], usableTickets: 2 }), false);
+});
+
+test("isFreeSalesRefusal: recognises the server's refusal of « Gratuit » (its real text), and nothing else", () => {
+  assert.equal(isFreeSalesRefusal(RDV_FREE_HAS_SALES), true, "the wording moved: update isFreeSalesRefusal");
+  assert.equal(isFreeSalesRefusal(NOTICE_TOO_LONG), false);
+  assert.equal(isFreeSalesRefusal("Durée du rendez-vous : minimum 5."), false);
+  assert.equal(isFreeSalesRefusal("Un rendez-vous gratuit ne se vend pas : cette offre doit rester hors vente."), false);
 });
 
 test("rdv form copy carries no em dash or en dash", () => {

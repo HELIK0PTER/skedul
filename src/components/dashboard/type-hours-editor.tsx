@@ -105,13 +105,17 @@ export function TypeHoursEditor({
         </>
       ) : (
         <div className="space-y-3">
-          <p className="text-sm text-muted-foreground">Ce type suit vos disponibilités générales.</p>
+          <p className="text-sm text-muted-foreground">
+            {hadOwn
+              ? "Vos horaires propres restent actifs tant que vous ne revenez pas aux disponibilités générales."
+              : "Ce type suit vos disponibilités générales."}
+          </p>
           <div className="flex flex-wrap items-center gap-3">
             <Button asChild variant="secondary" size="sm">
               <Link href="/dashboard/availability">Voir mes disponibilités</Link>
             </Button>
             {hadOwn && (
-              <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => run("revert", [])}>
+              <Button type="button" variant="secondary" size="sm" disabled={pending} onClick={() => run("revert", [])}>
                 {pending && running === "revert" && <Loader2 className="animate-spin" />}
                 Revenir aux disponibilités générales
               </Button>
