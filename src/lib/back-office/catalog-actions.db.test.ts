@@ -3,10 +3,11 @@ import { sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
 import { setTicketTypeArchived } from "@/lib/booking/catalog";
+import { bookWithHeldTicket } from "@/lib/booking/claims";
 import { fulfillPurchase, startPurchase } from "@/lib/booking/fulfillment";
 import type { Db } from "@/lib/db/atomic";
 import { addDaysMs, createTestPro, dbTest, deleteTestUser, type TestPro } from "@/test/db";
-import { giveTickets, makeCustomer, makeOffer, makeType } from "@/test/fixtures";
+import { giveTickets, makeCustomer, makeEvent, makeOffer, makeType } from "@/test/fixtures";
 import { proCtx } from "@/test/pro-ctx";
 
 import {
@@ -16,6 +17,7 @@ import {
   deleteTicketTypeCore,
   RDV_FREE_HAS_SALES,
   RDV_FREE_NO_OFFER,
+  RDV_FREE_OFFER_STAYS_OFF,
   setOfferActiveCore,
   setTicketTypeArchivedCore,
   setTypeHoursCore,
@@ -156,10 +158,10 @@ dbTest("rdvFree cannot be switched on while an offer is en vente or a usable tic
   must(await makeFree(withOffer), "free once the offer is off");
   assert.equal((await detailOf(db, pro, withOffer, now)).rdvFree, true);
   // The leftover offer cannot go back en vente on a free type (its tickets would be usable nowhere)...
-  refused(await setOfferActiveCore(db, ctx, { offerId, isActive: true }, now), RDV_FREE_NO_OFFER, "a free type's offer cannot go back on sale");
+  refused(await setOfferActiveCore(db, ctx, { offerId, isActive: true }, now), RDV_FREE_OFFER_STAYS_OFF, "a free type's offer cannot go back on sale");
   refused(
     await updateOfferCore(db, ctx, { offerId, offer: { ticketTypeId: withOffer, quantity: 1, priceCents: 2500 } }, now),
-    RDV_FREE_NO_OFFER,
+    RDV_FREE_OFFER_STAYS_OFF,
     "an edit that puts a free type's offer en vente (isActive defaults to true)",
   );
   // ...but it can still be edited while it stays « Pas en vente ».
@@ -182,6 +184,33 @@ dbTest("rdvFree cannot be switched on while an offer is en vente or a usable tic
 
   const plain = await makeType(db, pro);
   refused(await makeFree(plain), "Le rendez-vous gratuit demande le RDV libre.", "rdv_free needs the RDV option");
+});
+
+dbTest("rdvFree also waits for a payment in progress and for a booked ticket", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const makeFree = (ticketTypeId: string) => updateTicketTypeCore(db, ctx, { ticketTypeId, patch: { rdvFree: true } }, now);
+
+  // A checkout started before the pro turned the offer off can still be paid: its tickets would land on a free type.
+  const withCheckout = await makeType(db, pro, { rdvEnabled: true, rdvDurationMin: 15 });
+  const offerId = await makeOffer(db, pro, withCheckout);
+  const started = await startPurchase(db, { professionalId: pro.proId, offerId, customerId: await makeCustomer(db, pro) });
+  if (!started.ok) assert.fail(`startPurchase: ${JSON.stringify(started)}`);
+  must(await setOfferActiveCore(db, ctx, { offerId, isActive: false }, now), "offer off");
+  refused(await makeFree(withCheckout), RDV_FREE_HAS_SALES, "a checkout in progress, offer already off");
+  assert.equal((await detailOf(db, pro, withCheckout, now)).rdvFree, false, "the refusal changed nothing");
+
+  // A booked ticket comes back available when its booking is cancelled.
+  const withBooked = await makeType(db, pro, { rdvEnabled: true, rdvDurationMin: 15 });
+  const {
+    occurrences: [occ],
+  } = await makeEvent(db, pro, { ticketTypeIds: [withBooked] });
+  const customerId = await makeCustomer(db, pro);
+  await giveTickets(db, pro, customerId, withBooked, 1);
+  const booked = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: null });
+  assert.ok(booked.ok, `bookWithHeldTicket: ${JSON.stringify(booked)}`);
+  refused(await makeFree(withBooked), RDV_FREE_HAS_SALES, "a booked ticket");
+  assert.equal((await detailOf(db, pro, withBooked, now)).rdvFree, false, "the refusal changed nothing");
 });
 
 dbTest("updateTicketTypeCore refuses a notice longer than the effective horizon", async ({ db, pro }) => {

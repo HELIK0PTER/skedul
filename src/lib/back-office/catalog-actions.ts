@@ -45,7 +45,10 @@ import { actionFail, fromEngine, type ActionFail, type CoreResult, type ProCtx }
 export type TicketTypePatch = Partial<TicketTypeInput>;
 
 export const RDV_FREE_NO_OFFER = "Un rendez-vous gratuit ne se vend pas : retirez l'option « Gratuit » pour créer une offre.";
-export const RDV_FREE_HAS_SALES = "Ce type a des offres en vente ou des tickets valides : il ne peut pas devenir gratuit.";
+/** Shown when an existing offer would be (or stay) en vente on a free type: it has to stay « Pas en vente ». */
+export const RDV_FREE_OFFER_STAYS_OFF = "Un rendez-vous gratuit ne se vend pas : cette offre doit rester hors vente.";
+export const RDV_FREE_HAS_SALES =
+  "Ce type a des offres en vente, un paiement en cours ou des tickets valides : il ne peut pas devenir gratuit.";
 
 /** Hours of one type: at most 24 ranges a day. */
 const MAX_HOURS_RULES = 7 * 24;
@@ -119,13 +122,19 @@ async function readOffer(db: Db, professionalId: string, offerId: string) {
   return row ?? null;
 }
 
-/** True while an offer is en vente or a ticket of the type is usable at `now`. */
+/**
+ * True while an offer is en vente, a checkout is in progress (it can still be paid after the offer
+ * went off: fulfilment does not re-check the offer), or a ticket of the type is usable at `now`
+ * (available and unexpired) or booked (it comes back available when its booking is cancelled).
+ */
 async function hasSalesOrTickets(db: Db, professionalId: string, ticketTypeId: string, now: Date): Promise<boolean> {
   const res = await db.execute<{ blocked: boolean }>(sql`select (
     exists (select 1 from ticket_offer where ticket_type_id = ${ticketTypeId} and professional_id = ${professionalId}
       and is_active and archived_at is null)
+    or exists (select 1 from ticket_purchase where ticket_type_id = ${ticketTypeId} and professional_id = ${professionalId}
+      and status = 'pending')
     or exists (select 1 from ticket where ticket_type_id = ${ticketTypeId} and professional_id = ${professionalId}
-      and status = 'available' and (expires_at is null or expires_at > ${ts(now)}))
+      and (status = 'booked' or (status = 'available' and (expires_at is null or expires_at > ${ts(now)}))))
   ) as blocked`);
   return res.rows[0]?.blocked === true;
 }
@@ -140,9 +149,9 @@ async function noticeRefusal(db: Db, ctx: ProCtx, type: ParsedType): Promise<Act
 }
 
 /**
- * RDV_FREE_NO_OFFER when an offer would be (or stay) en vente on an rdv_free type: its tickets
- * are usable nowhere. An offer left inactive by the switch to « Gratuit » can still be edited
- * as long as it stays « Pas en vente » (isActive false).
+ * RDV_FREE_OFFER_STAYS_OFF when an existing offer would be (or stay) en vente on an rdv_free type:
+ * its tickets are usable nowhere. An offer left inactive by the switch to « Gratuit » can still be
+ * edited as long as it stays « Pas en vente » (isActive false).
  */
 async function freeTypeRefusal(db: Db, professionalId: string, ticketTypeId: string, isActive: boolean): Promise<ActionFail | null> {
   if (!isActive) return null;
@@ -150,7 +159,7 @@ async function freeTypeRefusal(db: Db, professionalId: string, ticketTypeId: str
     .select({ rdvFree: ticketType.rdvFree })
     .from(ticketType)
     .where(and(eq(ticketType.id, ticketTypeId), eq(ticketType.professionalId, professionalId)));
-  return t?.rdvFree ? actionFail(RDV_FREE_NO_OFFER) : null;
+  return t?.rdvFree ? actionFail(RDV_FREE_OFFER_STAYS_OFF) : null;
 }
 
 /* ───────────────────────────── Ticket types ───────────────────────────── */
@@ -172,8 +181,8 @@ export async function createTicketTypeCore(
 
 /**
  * Reads the type (pro), merges the patch over its current values, parseFr the
- * full type, refuses rdvFree false → true while an offer en vente or a usable
- * ticket exists (RDV_FREE_HAS_SALES), refuses an effective notice longer than
+ * full type, refuses rdvFree false → true while an offer en vente, a checkout in
+ * progress, a usable ticket or a booked ticket exists (RDV_FREE_HAS_SALES), refuses an effective notice longer than
  * the horizon (NOTICE_TOO_LONG) when the patch carries rdvEnabled or rdvOverrides,
  * then updateTicketType.
  */
@@ -265,7 +274,7 @@ export async function createOfferCore(
   return res.ok ? res : fromEngine(res, "catalog");
 }
 
-/** parseFr(offerInputSchema) with ticketTypeId forced to the offer's own type; no en vente offer on an rdv_free type (RDV_FREE_NO_OFFER); updateOffer. */
+/** parseFr(offerInputSchema) with ticketTypeId forced to the offer's own type; no en vente offer on an rdv_free type (RDV_FREE_OFFER_STAYS_OFF); updateOffer. */
 export async function updateOfferCore(
   db: Db,
   ctx: ProCtx,
@@ -284,7 +293,7 @@ export async function updateOfferCore(
   return res.ok ? res : fromEngine(res, "catalog");
 }
 
-/** « En vente » toggle: reads the offer (pro, not archived), refuses to put it en vente on an rdv_free type (RDV_FREE_NO_OFFER) and calls updateOffer with its fields and the new isActive. */
+/** « En vente » toggle: reads the offer (pro, not archived), refuses to put it en vente on an rdv_free type (RDV_FREE_OFFER_STAYS_OFF) and calls updateOffer with its fields and the new isActive. */
 export async function setOfferActiveCore(
   db: Db,
   ctx: ProCtx,
