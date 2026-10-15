@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 
 const TONE_CLASS: Record<AlertTone, string> = {
   red: "bg-destructive",
-  orange: "bg-amber-500",
+  orange: "bg-amber-600",
 };
 
 /**

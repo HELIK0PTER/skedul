@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 
 export function Skeleton({ className }: { className?: string }) {
-  return <div className={cn("animate-pulse rounded-xl bg-muted", className)} />;
+  return <div className={cn("motion-safe:animate-pulse rounded-xl bg-muted", className)} />;
 }
 
 /** Loading state of a page: a title block and `blocks` cards. */

@@ -199,7 +199,7 @@ export function WeeklyHoursEditor({
                 <span
                   className={cn(
                     "flex h-5 w-9 items-center rounded-full p-0.5 transition-colors",
-                    enabled ? "bg-primary" : "bg-muted-foreground/50",
+                    enabled ? "bg-primary" : "bg-muted-foreground",
                   )}
                 >
                   <span

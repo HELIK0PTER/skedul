@@ -1,5 +1,6 @@
 "use client";
 
+import { useId } from "react";
 import { Loader2 } from "lucide-react";
 
 import { FormError } from "@/components/dashboard/form-error";
@@ -35,9 +36,19 @@ export function ConfirmDialog({
   onClose: () => void;
   children?: React.ReactNode;
 }) {
+  const titleId = useId();
+  const bodyId = useId();
   return (
-    <Dialog open={open} onClose={pending ? noop : onClose} title={copy.title}>
-      <p className="text-sm text-muted-foreground">{copy.body}</p>
+    <Dialog
+      open={open}
+      onClose={pending ? noop : onClose}
+      title={copy.title}
+      labelledBy={titleId}
+      describedBy={bodyId}
+    >
+      <p id={bodyId} className="text-sm text-muted-foreground">
+        {copy.body}
+      </p>
       {children && <div className="mt-4 space-y-3">{children}</div>}
       {error && (
         <div className="mt-4">
