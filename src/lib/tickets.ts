@@ -195,6 +195,24 @@ export const eventInputSchema = z.object({
 export type EventInput = z.input<typeof eventInputSchema>;
 export type EventInputParsed = z.infer<typeof eventInputSchema>;
 
+/**
+ * The « Informations » part of an event (everything but the schedule): one
+ * schema for the info form and for editEventInfoCore, so both refuse the same things.
+ */
+export const eventInfoSchema = eventInputSchema.pick({
+  title: true,
+  description: true,
+  location: true,
+  color: true,
+  bookingMode: true,
+  isPrivate: true,
+  capacity: true,
+  overrides: true,
+  ticketTypeIds: true,
+  questions: true,
+});
+export type EventInfoInput = z.input<typeof eventInfoSchema>;
+
 export const availabilityRuleInputSchema = z
   .object({
     dayOfWeek: intIn(0, 6),

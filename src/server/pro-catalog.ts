@@ -13,15 +13,36 @@ import {
   updateTicketTypeCore,
   type TicketTypePatch,
 } from "@/lib/back-office/catalog-actions";
+import {
+  applyScheduleCore,
+  createEventCore,
+  deleteEventFromCore,
+  deleteEventPreviewCore,
+  editEventInfoCore,
+  previewNewEventCore,
+  previewScheduleCore,
+  type SchedulePreview,
+} from "@/lib/back-office/event-actions";
+import type { DeletePreview } from "@/lib/back-office/event-reads";
 import type { ActionResult } from "@/lib/back-office/result";
+import type { DateKey } from "@/lib/civil-date";
 import { db } from "@/lib/db";
-import type { AvailabilityRuleInput, OfferInput, QuestionInput, TicketTypeInput } from "@/lib/tickets";
-import { runProAction } from "@/server/pro-context";
+import type {
+  AvailabilityRuleInput,
+  EventInfoInput,
+  EventInput,
+  OfferInput,
+  QuestionInput,
+  RecurrenceRuleInput,
+  TicketTypeInput,
+} from "@/lib/tickets";
+import { runProAction, runProQuery } from "@/server/pro-context";
 
 /*
  * Thin wrappers of src/lib/back-office/catalog-actions.ts: session context,
  * core, revalidation of /dashboard and of the public page, effects after commit
- * (runProAction). Task 16 adds the events wrappers to this file.
+ * (runProAction). The events wrappers (src/lib/back-office/event-actions.ts) follow
+ * the catalog ones; the previews use runProQuery (no revalidation, no effect).
  */
 
 export async function createTicketTypeAction(input: TicketTypeInput): Promise<ActionResult<{ ticketTypeId: string }>> {
@@ -62,4 +83,62 @@ export async function setTypeHoursAction(input: { ticketTypeId: string; rules: A
 
 export async function setTypeQuestionsAction(input: { ticketTypeId: string; questions: QuestionInput[] }): Promise<ActionResult> {
   return runProAction("setTypeQuestions", (ctx, now) => setTypeQuestionsCore(db, ctx, input, now), { publicPage: true });
+}
+
+/* Events: create, edit the information, cut the schedule, delete from a date. */
+
+export async function createEventAction(
+  input: EventInput,
+): Promise<ActionResult<{ eventId: string; occurrenceCount: number }>> {
+  return runProAction("createEvent", (ctx, now) => createEventCore(db, ctx, input, now), { publicPage: true });
+}
+
+export async function editEventInfoAction(input: {
+  eventId: string;
+  seenVersion: number;
+  info: EventInfoInput;
+}): Promise<ActionResult<{ version: number }>> {
+  return runProAction("editEventInfo", (ctx, now) => editEventInfoCore(db, ctx, input, now), { publicPage: true });
+}
+
+export async function previewScheduleAction(input: {
+  eventId: string;
+  fromDate: DateKey;
+  rule: RecurrenceRuleInput;
+  durationMin: number;
+}): Promise<ActionResult<{ preview: SchedulePreview }>> {
+  return runProQuery("previewSchedule", (ctx, now) => previewScheduleCore(db, ctx, input, now));
+}
+
+export async function applyScheduleAction(input: {
+  eventId: string;
+  seenVersion: number;
+  fromDate: DateKey;
+  rule: RecurrenceRuleInput;
+  durationMin: number;
+  orphans: "keep" | "cancel";
+}): Promise<ActionResult<{ eventId: string; summaryText: string }>> {
+  return runProAction("applySchedule", (ctx, now) => applyScheduleCore(db, ctx, input, now), { publicPage: true });
+}
+
+export async function deleteEventPreviewAction(input: {
+  eventId: string;
+  fromDate: DateKey;
+}): Promise<ActionResult<{ preview: DeletePreview }>> {
+  return runProQuery("deleteEventPreview", (ctx, now) => deleteEventPreviewCore(db, ctx, input, now));
+}
+
+export async function deleteEventFromAction(input: {
+  eventId: string;
+  seenVersion: number;
+  fromDate: DateKey;
+}): Promise<ActionResult<{ deletedEvent: boolean; cancelledOccurrences: number; deletedOccurrences: number }>> {
+  return runProAction("deleteEventFrom", (ctx, now) => deleteEventFromCore(db, ctx, input, now), { publicPage: true });
+}
+
+export async function previewNewEventAction(input: {
+  rule: RecurrenceRuleInput;
+  durationMin: number;
+}): Promise<ActionResult<{ rdvConflicts: number; occurrenceCount: number }>> {
+  return runProQuery("previewNewEvent", (ctx, now) => previewNewEventCore(db, ctx, input, now));
 }
