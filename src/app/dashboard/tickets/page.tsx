@@ -5,13 +5,13 @@ import { EmptyState } from "@/components/dashboard/empty-state";
 import { NewTicketTypeButton } from "@/components/dashboard/new-ticket-type-button";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { TicketTypeCard } from "@/components/dashboard/ticket-type-card";
-import { getCurrentProfessional } from "@/lib/session";
 import { getTicketTypesPage } from "@/server/catalog-queries";
+import { requireProfessional } from "@/server/pro-context";
 
 export const metadata: Metadata = { title: "Tickets" };
 
 export default async function TicketsPage() {
-  const pro = (await getCurrentProfessional())!;
+  const pro = await requireProfessional();
   const { active, archived } = await getTicketTypesPage(pro.id);
   const empty = active.length === 0 && archived.length === 0;
 

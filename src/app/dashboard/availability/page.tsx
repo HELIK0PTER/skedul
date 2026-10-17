@@ -2,13 +2,13 @@ import type { Metadata } from "next";
 
 import { PageHeader } from "@/components/dashboard/page-header";
 import { AvailabilityEditor } from "@/components/dashboard/availability-editor";
-import { getCurrentProfessional } from "@/lib/session";
+import { requireProfessional } from "@/server/pro-context";
 import { getProAvailability } from "@/server/queries";
 
 export const metadata: Metadata = { title: "Disponibilités" };
 
 export default async function AvailabilityPage() {
-  const pro = (await getCurrentProfessional())!;
+  const pro = await requireProfessional();
   const rules = await getProAvailability(pro.id);
 
   return (

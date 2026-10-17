@@ -7,10 +7,10 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { env } from "@/lib/env";
-import { getCurrentProfessional } from "@/lib/session";
+import { requireProfessional } from "@/server/pro-context";
 
 export default async function DashboardPage() {
-  const pro = (await getCurrentProfessional())!;
+  const pro = await requireProfessional();
   const publicUrl = `${env.APP_URL}/${pro.slug}`;
 
   return (

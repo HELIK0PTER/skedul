@@ -5,7 +5,7 @@ import {
   UnavailabilityManager,
   type TimeOffEntry,
 } from "@/components/dashboard/unavailability-manager";
-import { getCurrentProfessional } from "@/lib/session";
+import { requireProfessional } from "@/server/pro-context";
 import { getProTimeOff } from "@/server/queries";
 import { coveredDayKeys } from "@/lib/timeoff";
 import { dayKeyInTz, formatDateLong, formatTime } from "@/lib/datetime";
@@ -13,7 +13,7 @@ import { dayKeyInTz, formatDateLong, formatTime } from "@/lib/datetime";
 export const metadata: Metadata = { title: "Indisponibilités" };
 
 export default async function UnavailabilityPage() {
-  const pro = (await getCurrentProfessional())!;
+  const pro = await requireProfessional();
   const tz = pro.timezone;
   const rows = await getProTimeOff(pro.id);
 

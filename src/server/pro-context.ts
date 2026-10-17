@@ -18,6 +18,21 @@ import { getCurrentProfessional, getSession } from "@/lib/session";
 import { runEffects } from "@/server/notify";
 
 /**
+ * The professional row of the signed-in user, for the dashboard pages. A page
+ * cannot rely on the dashboard layout to guard it (layout and page render in
+ * parallel, and a layout does not render again on a client navigation), so
+ * each page checks itself: no session sends to /sign-in, no professional
+ * profile to /onboarding.
+ */
+export async function requireProfessional(): Promise<NonNullable<Awaited<ReturnType<typeof getCurrentProfessional>>>> {
+  const session = await getSession();
+  if (!session) redirect("/sign-in");
+  const pro = await getCurrentProfessional();
+  if (!pro) redirect("/onboarding");
+  return pro;
+}
+
+/**
  * The acting pro, from the session only (never from input). No session sends
  * to /sign-in, no professional profile to /onboarding. While an admin
  * impersonates, the session is the pro's own: actions stay allowed and

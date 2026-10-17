@@ -12,14 +12,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { canBecomeFree } from "@/lib/back-office/rdv-form";
-import { getCurrentProfessional } from "@/lib/session";
 import { getTicketTypePage } from "@/server/catalog-queries";
+import { requireProfessional } from "@/server/pro-context";
 
 export const metadata: Metadata = { title: "Type de ticket" };
 
 export default async function TicketTypePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const pro = (await getCurrentProfessional())!;
+  const pro = await requireProfessional();
   const type = await getTicketTypePage(pro.id, id);
   if (!type) notFound();
 

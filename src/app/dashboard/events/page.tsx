@@ -6,14 +6,13 @@ import { EmptyState } from "@/components/dashboard/empty-state";
 import { EventList } from "@/components/dashboard/event-list";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Button } from "@/components/ui/button";
-import { getCurrentProfessional } from "@/lib/session";
 import { getEventsPage } from "@/server/catalog-queries";
+import { requireProfessional } from "@/server/pro-context";
 
 export const metadata: Metadata = { title: "Événements" };
 
 export default async function EventsPage() {
-  // The dashboard layout guarantees a signed-in user with a professional profile.
-  const pro = (await getCurrentProfessional())!;
+  const pro = await requireProfessional();
   const { live, ended } = await getEventsPage(pro.id);
 
   // With no event at all, the empty state carries the button: one call to action per intent.

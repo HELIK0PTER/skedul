@@ -8,13 +8,13 @@ import { SlugEditor } from "@/components/dashboard/slug-editor";
 import { SignOutButton } from "@/components/sign-out-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { env } from "@/lib/env";
-import { getCurrentProfessional } from "@/lib/session";
+import { requireProfessional } from "@/server/pro-context";
 import { getGoogleConnection, getSettingsExtras } from "@/server/queries";
 
 export const metadata: Metadata = { title: "Réglages" };
 
 export default async function SettingsPage() {
-  const pro = (await getCurrentProfessional())!;
+  const pro = await requireProfessional();
   const [google, extras] = await Promise.all([
     getGoogleConnection({ id: pro.id, userId: pro.userId }),
     getSettingsExtras(pro.id),
