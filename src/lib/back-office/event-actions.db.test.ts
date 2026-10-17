@@ -16,9 +16,9 @@ import { proCtx } from "../../test/pro-ctx";
 import { rowBooking, rowCustomer, rowRdv, rowRdvType } from "../../test/rows";
 import { setTicketTypeArchived } from "../booking/catalog";
 import { registerPro } from "../booking/claims";
-import { addDays, formatDayMonthYear } from "../civil-date";
+import { addDays, dayOfWeek, formatDayMonthYear } from "../civil-date";
 import type { Db } from "../db/atomic";
-import { event, eventTicketType } from "../db/schema";
+import { event, eventTicketType, occurrence } from "../db/schema";
 import { expand } from "../recurrence";
 import type { EventInfoInput, EventInput, RecurrenceRuleInput } from "../tickets";
 import {
@@ -39,6 +39,12 @@ const DAY = 86_400_000;
 const STALE = "Les données ont changé entre-temps : rafraîchissez la page.";
 const NOT_FOUND = "Événement introuvable ou terminé.";
 const NO_OVERRIDES = { bookingHorizonDays: null, minNoticeMinutes: null, cancelDeadlineHours: null };
+/** The engine's own French texts for a delete from a date (src/lib/booking/series.ts). */
+const SEANCE_STARTED = "Une séance concernée a déjà commencé.";
+const LEFTOVER_BEFORE = "Une séance isolée avec inscrits reste avant cette date. Annulez-la d'abord.";
+/** A pinned clock, far from any midnight in Paris: 2026-10-14 12:00 and 15:00 local (UTC+2). */
+const MIDDAY_PARIS = new Date("2026-10-14T10:00:00.000Z");
+const AFTERNOON_PARIS = new Date("2026-10-14T13:00:00.000Z");
 
 function must<T extends { ok: boolean }>(res: T, what: string): asserts res is Extract<T, { ok: true }> {
   assert.ok(res.ok, `${what}: ${JSON.stringify(res)}`);
@@ -124,7 +130,7 @@ async function futureRows(db: Db, eventId: string, now: Date) {
 
 dbTest("createEventCore: the start date is between local today and today + 730", async ({ db, pro }) => {
   const ctx = proCtx(pro);
-  const now = new Date();
+  const now = MIDDAY_PARIS; // pinned: « today at 23:59 » must stay later today whenever the suite runs
   const past = await createEventCore(db, ctx, eventInput(pro, now, { rule: onceRule(dayIn(pro, -1, now)) }), now);
   assert.equal(outcome(past), EVENT_START_PAST);
   const far = await createEventCore(db, ctx, eventInput(pro, now, { rule: onceRule(dayIn(pro, 731, now)) }), now);
@@ -156,6 +162,33 @@ dbTest("createEventCore: today is the pro's local day (Paris midnight is still t
   } finally {
     await deleteTestUser(db, la.userId);
   }
+});
+
+dbTest("createEventCore: a first séance that has already started is refused, one later today is accepted", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = AFTERNOON_PARIS; // 15:00 in Paris
+  const today = dayIn(pro, 0, now);
+  assert.equal(today, "2026-10-14");
+
+  const earlier = await createEventCore(db, ctx, eventInput(pro, now, { rule: onceRule(today, 600) }), now);
+  assert.equal(outcome(earlier), EVENT_START_PAST, "10:00 is behind us");
+  const exactlyNow = await createEventCore(db, ctx, eventInput(pro, now, { rule: onceRule(today, 900) }), now);
+  assert.equal(outcome(exactlyNow), EVENT_START_PAST, "a séance starting right now has started");
+  const weeklyToday = await createEventCore(db, ctx, eventInput(pro, now, { rule: weekly(today, [dayOfWeek(today)]) }), now);
+  assert.equal(outcome(weeklyToday), EVENT_START_PAST, "the first séance of the series is today at 10:00");
+  assert.equal((await db.select().from(event).where(eq(event.professionalId, pro.proId))).length, 0, "the refusals wrote nothing");
+
+  const later = await createEventCore(db, ctx, eventInput(pro, now, { rule: onceRule(today, 1020) }), now);
+  must(later, "17:00 is still to come");
+  assert.equal(later.occurrenceCount, 1);
+  const nextWeekday = await createEventCore(
+    db,
+    ctx,
+    eventInput(pro, now, { rule: weekly(today, [(dayOfWeek(today) + 1) % 7], { endMode: "count", occurrenceCount: 2 }) }),
+    now,
+  );
+  must(nextWeekday, "the series starts today but its first séance is tomorrow, whatever the hour");
+  assert.equal(nextWeekday.occurrenceCount, 2);
 });
 
 dbTest("createEventCore: duplicate type ids link once; archived, rdv_free, foreign and unknown types are refused", async ({ db, pro }) => {
@@ -609,6 +642,79 @@ dbTest("deleteEventFromCore: a booked event is archived, its client told, and th
   assert.equal(outcome(again), NOT_FOUND, "an archived event is finished");
 });
 
+dbTest("deleteEventPreviewCore: a séance that has already started refuses like the delete does", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = AFTERNOON_PARIS; // 15:00 in Paris
+  const today = dayIn(pro, 0, now);
+  // the engine itself accepts a started séance: today at 10:00, five hours before `now`
+  const { eventId, occurrences } = await makeEvent(db, pro, { rule: { startDate: today, startMinute: 600 } }, now);
+  assert.equal(occurrences.length, 1);
+
+  const preview = await deleteEventPreviewCore(db, ctx, { eventId, fromDate: today }, now);
+  assert.equal(outcome(preview), SEANCE_STARTED);
+  const del = await deleteEventFromCore(db, ctx, { eventId, seenVersion: 1, fromDate: today }, now);
+  assert.equal(outcome(del), SEANCE_STARTED, "the preview and the delete say the same");
+  assert.ok(await getEvent(db, eventId), "nothing was deleted");
+
+  const tomorrow = await deleteEventPreviewCore(db, ctx, { eventId, fromDate: addDays(today, 1) }, now);
+  must(tomorrow, "from tomorrow no started séance is concerned");
+  assert.equal(tomorrow.preview.deletedSeances + tomorrow.preview.cancelledSeances, 0);
+});
+
+dbTest("deleteEventPreviewCore: like the engine, a cancelled séance that has started also refuses", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = AFTERNOON_PARIS;
+  const today = dayIn(pro, 0, now);
+  const { eventId, occurrences } = await makeEvent(
+    db,
+    pro,
+    { rule: { startDate: today, startMinute: 600, freq: "weekly", weekdays: [dayOfWeek(today)], endMode: "count", occurrenceCount: 2 } },
+    now,
+  );
+  assert.equal(occurrences.length, 2);
+  await db.update(occurrence).set({ status: "cancelled", cancelledAt: now }).where(eq(occurrence.id, occurrences[0].id));
+
+  const preview = await deleteEventPreviewCore(db, ctx, { eventId, fromDate: today }, now);
+  assert.equal(outcome(preview), SEANCE_STARTED, "series.ts does not filter on the status");
+  const del = await deleteEventFromCore(db, ctx, { eventId, seenVersion: 1, fromDate: today }, now);
+  assert.equal(outcome(del), SEANCE_STARTED);
+});
+
+dbTest("deleteEventPreviewCore: a booked séance left before the start refuses the archive like the delete does", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const d1 = dayIn(pro, 2, now);
+  const d2 = dayIn(pro, 4, now);
+  const typeId = await makeType(db, pro);
+  const { eventId, occurrences } = await makeEvent(db, pro, { ticketTypeIds: [typeId], rule: { startDate: d1 } }, now);
+  const customerId = await makeCustomer(db, pro);
+  must(
+    await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: occurrences[0].id, customerId, asGuest: true }),
+    "register",
+  );
+  // moving the series to d2 keeps the booked séance of d1 apart, before the new start
+  const moved = await applyScheduleCore(
+    db,
+    ctx,
+    { eventId, seenVersion: 1, fromDate: d1, rule: onceRule(d2), durationMin: 60, orphans: "keep" },
+    now,
+  );
+  must(moved, "move to d2, keeping the booked séance");
+  assert.equal(moved.eventId, eventId, "nothing precedes d1: the same event changes in place");
+  assert.equal((await getEvent(db, eventId)).startDate, d2);
+  assert.equal((await futureRows(db, eventId, now)).length, 2, "the kept séance of d1 and the new one of d2");
+
+  const preview = await deleteEventPreviewCore(db, ctx, { eventId, fromDate: d2 }, now);
+  assert.equal(outcome(preview), LEFTOVER_BEFORE);
+  const del = await deleteEventFromCore(db, ctx, { eventId, seenVersion: 2, fromDate: d2 }, now);
+  assert.equal(outcome(del), LEFTOVER_BEFORE, "the preview and the delete say the same");
+  assert.equal((await getEvent(db, eventId)).archivedAt, null, "nothing was archived");
+
+  const fromD1 = await deleteEventPreviewCore(db, ctx, { eventId, fromDate: d1 }, now);
+  must(fromD1, "from d1 nothing is left before the cut");
+  assert.deepEqual(fromD1.preview, { fromDate: d1, deleteWhole: false, deletedSeances: 1, cancelledSeances: 1, registrants: 1, ticketsReturned: 0 });
+});
+
 /* ───────────────────────────── previewNewEventCore ───────────────────────────── */
 
 dbTest("previewNewEventCore: the séances the rule would create and their RDV conflicts, nothing written", async ({ db, pro }) => {
@@ -641,4 +747,30 @@ dbTest("previewNewEventCore: the séances the rule would create and their RDV co
   );
   assert.equal(outcome(invalid), "La fin précède le début.");
   assert.equal((await db.select().from(event).where(eq(event.professionalId, pro.proId))).length, 0, "a preview creates nothing");
+});
+
+dbTest("previewNewEventCore: refuses the start dates createEventCore refuses, with the same texts", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = AFTERNOON_PARIS; // 15:00 in Paris
+  const today = dayIn(pro, 0, now);
+  const cases: [string, RecurrenceRuleInput, string][] = [
+    ["a past day", onceRule(addDays(today, -1)), EVENT_START_PAST],
+    ["today at 10:00, already started", onceRule(today, 600), EVENT_START_PAST],
+    ["a series whose first séance is today at 10:00", weekly(today, [dayOfWeek(today)]), EVENT_START_PAST],
+    ["today + 731", onceRule(addDays(today, 731)), EVENT_START_TOO_FAR],
+  ];
+  for (const [what, rule, message] of cases) {
+    const preview = await previewNewEventCore(db, ctx, { rule, durationMin: 60 }, now);
+    assert.equal(outcome(preview), message, `preview: ${what}`);
+    const created = await createEventCore(db, ctx, { title: "Cours", rule }, now);
+    assert.equal(outcome(created), message, `create: ${what}`);
+  }
+
+  const later = await previewNewEventCore(db, ctx, { rule: onceRule(today, 1020), durationMin: 60 }, now);
+  must(later, "today at 17:00 is still to come");
+  assert.equal(later.occurrenceCount, 1);
+  const limit = await previewNewEventCore(db, ctx, { rule: onceRule(addDays(today, 730)), durationMin: 60 }, now);
+  must(limit, "today + 730 is allowed");
+  assert.equal(limit.occurrenceCount, 0, "beyond the 400-day horizon nothing is materialised yet");
+  assert.equal((await db.select().from(event).where(eq(event.professionalId, pro.proId))).length, 0, "nothing was created");
 });

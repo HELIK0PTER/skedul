@@ -17,7 +17,7 @@ import { deleteSeriesFrom, editEventInPlace, editSeriesFrom, previewSeriesEdit }
 import { fail } from "@/lib/booking/types";
 import { effectiveWindow } from "@/lib/booking-window";
 import { addDays, maxKey, minKey, todayKey, type DateKey } from "@/lib/civil-date";
-import { textArray, type Db } from "@/lib/db/atomic";
+import { textArray, ts, type Db } from "@/lib/db/atomic";
 import { expand, lastSeriesDate, type RecurrenceRule } from "@/lib/recurrence";
 import { describeSeriesEdit, type SeriesEditSummary } from "@/lib/series-plan";
 import {
@@ -60,6 +60,9 @@ export const EVENT_TYPE_UNAVAILABLE = "Un type de ticket choisi est archivé ou 
 
 /** The engine's own text for a cut before local today (src/lib/booking/series.ts), so both layers say the same. */
 const PAST_FROM_DATE = "La modification doit partir d'aujourd'hui ou d'une date future.";
+/** The two refusals of deleteSeriesFrom that the delete preview must reproduce (src/lib/booking/series.ts). */
+const SEANCE_STARTED = "Une séance concernée a déjà commencé.";
+const LEFTOVER_BEFORE = "Une séance isolée avec inscrits reste avant cette date. Annulez-la d'abord.";
 /** A new event may start at most this many days after local today (OUT L114). */
 const START_MAX_DAYS = 730;
 
@@ -114,11 +117,61 @@ async function typesUsable(db: Db, professionalId: string, ids: readonly string[
   return Number(res.rows[0]?.n ?? 0) === ids.length;
 }
 
+/**
+ * The start window of a NEW event, shared by the create core and the create-form
+ * preview so both refuse the same things with the same text: the start date is in
+ * [local today, today + 730], and the first séance the rule produces has not
+ * started yet (one inserted at or before `now` could not be deleted from today
+ * afterwards: the engine refuses a delete that reaches a started séance). Dates
+ * are the pro's local days (`tz`), never the host's. Null when the start is fine.
+ */
+function startProblem(rule: RecurrenceRuleInput, durationMin: number, tz: string, now: Date): string | null {
+  const today = todayKey(now, tz);
+  if (rule.startDate < today) return EVENT_START_PAST;
+  if (rule.startDate > addDays(today, START_MAX_DAYS)) return EVENT_START_TOO_FAR;
+  // A first séance on a later local day starts after `now`: only a start date of today can already be behind us.
+  if (rule.startDate === today) {
+    const [first] = expand({ ...rule, durationMin }, tz, today, today);
+    if (first !== undefined && first.startsAt.getTime() <= now.getTime()) return EVENT_START_PAST;
+  }
+  return null;
+}
+
+/**
+ * The two refusals deleteSeriesFrom makes after its plan reads, which the delete
+ * preview does not reproduce on its own (same predicates as src/lib/booking/series.ts,
+ * checked in the same order, scoped to the pro): (a) any séance of the event, whatever
+ * its status, with a local date at or after `fromDate` and a start at or before `now`;
+ * (b) a cut that archives the segment (`fromDate` at or before its start date) while a
+ * scheduled séance to come is left before `fromDate`. Null when the delete would not
+ * refuse (an unknown or archived event is the caller's not_found).
+ */
+async function deleteRefusal(db: Db, professionalId: string, eventId: string, fromDate: DateKey, now: Date): Promise<string | null> {
+  const res = await db.execute<{ started: boolean; archive: boolean; live_before: boolean }>(sql`
+    select
+      exists (select 1 from occurrence o
+        where o.professional_id = e.professional_id and o.event_id = e.id
+          and o.series_date >= ${fromDate}::date and o.starts_at <= ${ts(now)}) as started,
+      (${fromDate}::date <= e.start_date) as archive,
+      exists (select 1 from occurrence o
+        where o.professional_id = e.professional_id and o.event_id = e.id
+          and o.series_date < ${fromDate}::date and o.status = 'scheduled' and o.starts_at > ${ts(now)}) as live_before
+    from event e
+    where e.id = ${eventId} and e.professional_id = ${professionalId} and e.archived_at is null`);
+  const flags = res.rows[0];
+  if (!flags) return null;
+  if (flags.started === true) return SEANCE_STARTED;
+  // A leftover can only precede fromDate when rows exist before it, so the engine's physical-delete
+  // branch (no row before, never booked) never meets this one: no need to know about deleteWhole here.
+  if (flags.archive === true && flags.live_before === true) return LEFTOVER_BEFORE;
+  return null;
+}
+
 /* ───────────────────────────── Create ───────────────────────────── */
 
 /**
- * parseFr(eventInputSchema); the start date in [local today, today + 730];
- * the types deduped, each an active non-rdv_free type of the pro; the notice
+ * parseFr(eventInputSchema); the start window (`startProblem`: the start date in
+ * [local today, today + 730] and a first séance that has not started); the types deduped, each an active non-rdv_free type of the pro; the notice
  * of the effective window within its horizon; createEvent. Context "event".
  */
 export async function createEventCore(
@@ -131,9 +184,8 @@ export async function createEventCore(
   if (!parsed.ok) return actionFail(parsed.error);
   const draft = parsed.data;
 
-  const today = todayKey(now, ctx.timezone);
-  if (draft.rule.startDate < today) return actionFail(EVENT_START_PAST);
-  if (draft.rule.startDate > addDays(today, START_MAX_DAYS)) return actionFail(EVENT_START_TOO_FAR);
+  const badStart = startProblem(draft.rule, draft.durationMin, ctx.timezone, now);
+  if (badStart !== null) return actionFail(badStart);
 
   const typeIds = [...new Set(draft.ticketTypeIds)];
   if (!(await typesUsable(db, ctx.professionalId, typeIds))) return actionFail(EVENT_TYPE_UNAVAILABLE);
@@ -267,7 +319,12 @@ export async function applyScheduleCore(
 
 /* ───────────────────────────── Supprimer à partir du ───────────────────────────── */
 
-/** deleteFromPreview behind validation (unknown, other pro's or finished event → « Événement introuvable ou terminé. »). */
+/**
+ * deleteFromPreview behind validation (unknown, other pro's or finished event → « Événement introuvable ou terminé. »).
+ * The preview computes consequences but not the engine's refusals, so the ones deleteEventFromCore would
+ * answer are answered here first, with the engine's own texts: the confirm dialog never lists
+ * consequences of a delete that is then refused.
+ */
 export async function deleteEventPreviewCore(
   db: Db,
   ctx: ProCtx,
@@ -278,6 +335,8 @@ export async function deleteEventPreviewCore(
   if (!parsed.ok) return actionFail(parsed.error);
   const { eventId, fromDate } = parsed.data;
   if (fromDate < todayKey(now, ctx.timezone)) return actionFail(PAST_FROM_DATE);
+  const refusal = await deleteRefusal(db, ctx.professionalId, eventId, fromDate, now);
+  if (refusal !== null) return actionFail(refusal);
 
   const preview = await deleteFromPreview(db, ctx.professionalId, eventId, fromDate, now);
   if (!preview) return fromEngine(fail("not_found"), "series");
@@ -315,7 +374,9 @@ export async function deleteEventFromCore(
 /**
  * The create form's preview: how many séances the rule would materialise (the
  * rows createEvent inserts: from the start date to the horizon, at most
- * MATERIALIZE_MAX_ROWS) and how many scheduled RDV overlap the ones still to come.
+ * MATERIALIZE_MAX_ROWS) and how many scheduled RDV overlap them. The start date
+ * is held to the same window as createEventCore (`startProblem`), so a start the
+ * create would refuse never gets a count.
  */
 export async function previewNewEventCore(
   db: Db,
@@ -326,16 +387,13 @@ export async function previewNewEventCore(
   const parsed = parseFr(newEventSchema, input);
   if (!parsed.ok) return actionFail(parsed.error);
   const { rule, durationMin } = parsed.data;
+  const badStart = startProblem(rule, durationMin, ctx.timezone, now);
+  if (badStart !== null) return actionFail(badStart);
 
   const full: RecurrenceRule = { ...rule, durationMin };
   const last = lastSeriesDate(full);
   const end = horizonEnd(now, ctx.timezone);
   const dates = expand(full, ctx.timezone, rule.startDate, last === null ? end : minKey(last, end)).slice(0, MATERIALIZE_MAX_ROWS);
-  const today = todayKey(now, ctx.timezone);
-  const rdvConflicts = await countRdvConflicts(
-    db,
-    ctx.professionalId,
-    dates.filter((d) => d.seriesDate >= today),
-  );
+  const rdvConflicts = await countRdvConflicts(db, ctx.professionalId, dates);
   return { ok: true, rdvConflicts, occurrenceCount: dates.length };
 }
