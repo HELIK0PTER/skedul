@@ -16,6 +16,7 @@ import {
   ruleFromForm,
   type RecurrenceFormValue,
 } from "@/lib/back-office/recurrence-form";
+import { isDayKey, submittableRule, upcomingOnly } from "@/lib/back-office/recurrence-submit";
 import { addMonthsClamped, dayOfWeek, type DateKey } from "@/lib/civil-date";
 import { BOUNDS, type RecurrenceEnd, type RecurrenceFreq } from "@/lib/tickets-vocab";
 import { cn } from "@/lib/utils";
@@ -23,7 +24,6 @@ import { cn } from "@/lib/utils";
 /** The pure gates live in a tested module; Tasks 19 and 20 import them from here with the editor. */
 export { startProblem, submittableRule } from "@/lib/back-office/recurrence-submit";
 
-const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 /** How many séances the preview expands to find the daylight-saving changes (a daily series materialises 400 days). */
 const DST_SCAN_LIMIT = 400;
 const UPCOMING_SHOWN = 5;
@@ -53,10 +53,6 @@ const NO_UPCOMING = "Aucune séance à venir.";
 
 /** AA on the page background and on the tinted preview panel (muted-foreground is only 4.6:1 on #fafafa). */
 const MUTED_TEXT = "text-zinc-600";
-
-function isDateKey(value: string): boolean {
-  return DATE_KEY_PATTERN.test(value);
-}
 
 function parseFreq(text: string): RecurrenceFreq | null {
   const found = FREQ_OPTIONS.find((option) => option.value === text);
@@ -143,7 +139,8 @@ export function RecurrenceEditor({
   fieldErrors?: Record<string, string>;
 }) {
   const freq = value.freq;
-  const startKnown = isDateKey(value.startDate);
+  /** A real day, not just a well-formed key: parseKey and the date arithmetic below throw on "2026-02-30". */
+  const startKnown = isDayKey(value.startDate);
   const choices = useMemo(
     () => (startKnown ? monthlyChoices(value.startDate) : []),
     [startKnown, value.startDate],
@@ -174,7 +171,7 @@ export function RecurrenceEditor({
 
   /** The weekday toggles and the monthly choice follow the start date while the user has not customised them. */
   function changeStartDate(next: string) {
-    if (!isDateKey(next)) {
+    if (!isDayKey(next)) {
       set({ startDate: next });
       return;
     }
@@ -207,7 +204,7 @@ export function RecurrenceEditor({
   }
 
   function changeEndMode(mode: RecurrenceEnd) {
-    const untilUsable = isDateKey(value.untilDate) && value.untilDate >= value.startDate;
+    const untilUsable = isDayKey(value.untilDate) && value.untilDate >= value.startDate;
     if (mode === "until" && !untilUsable) {
       set({ endMode: mode, untilDate: startKnown ? addMonthsClamped(value.startDate, 3) : "" });
       return;
@@ -323,6 +320,7 @@ export function RecurrenceEditor({
                   type="button"
                   aria-pressed={on}
                   aria-label={WEEKDAY_NAMES[day]}
+                  title={WEEKDAY_NAMES[day]}
                   onClick={() => toggleWeekday(day)}
                   className={cn(
                     "flex h-10 w-full cursor-pointer items-center justify-center rounded-xl border text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 sm:w-10",
@@ -372,7 +370,11 @@ export function RecurrenceEditor({
       )}
 
       {freq !== "once" && (
-        <fieldset disabled={disabled} className="min-w-0 space-y-1">
+        <fieldset
+          disabled={disabled}
+          className="min-w-0 space-y-1"
+          aria-describedby={endModeError ? `${endId}-error` : undefined}
+        >
           <legend className={LEGEND_CLASS}>Fin</legend>
           <div>
             <Radio
@@ -455,7 +457,8 @@ function buildPreview(value: RecurrenceFormValue, tz: string, now: Date): Previe
   const summary = recurrenceSummary(value);
   const built = ruleFromForm(value);
   if (!summary || !built) return null;
-  const dates = previewDates(built.rule, built.durationMin, tz, now, DST_SCAN_LIMIT);
+  // previewDates starts at local today: a séance of today that has already started is one the form could not create.
+  const dates = upcomingOnly(previewDates(built.rule, built.durationMin, tz, now, DST_SCAN_LIMIT), now);
   const notes = dstNoteTexts(
     built.rule,
     built.durationMin,
@@ -474,38 +477,9 @@ function buildPreview(value: RecurrenceFormValue, tz: string, now: Date): Previe
   };
 }
 
-export function RecurrencePreview({
-  value,
-  tz,
-  nowIso,
-  rdvConflicts,
-}: {
-  value: RecurrenceFormValue;
-  tz: string;
-  nowIso: string;
-  rdvConflicts: number | null;
-}) {
-  const now = useMemo(() => new Date(nowIso), [nowIso]);
-  const preview = useMemo(() => buildPreview(value, tz, now), [value, tz, now]);
-
-  if (!preview) {
-    return (
-      <p
-        aria-live="polite"
-        className={cn("rounded-xl border border-dashed border-border px-4 py-3 text-sm", MUTED_TEXT)}
-      >
-        {PREVIEW_INCOMPLETE}
-      </p>
-    );
-  }
-
-  const conflicts = rdvConflicts ?? 0;
-
+function PreviewBody({ preview, conflicts }: { preview: PreviewModel; conflicts: number }) {
   return (
-    <div
-      aria-live="polite"
-      className="space-y-3 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm"
-    >
+    <>
       <div className="space-y-1">
         <p className="font-semibold">{preview.label}</p>
         {preview.warning && (
@@ -555,6 +529,36 @@ export function RecurrencePreview({
           </span>
         </p>
       )}
+    </>
+  );
+}
+
+export function RecurrencePreview({
+  value,
+  tz,
+  nowIso,
+  rdvConflicts,
+}: {
+  value: RecurrenceFormValue;
+  tz: string;
+  nowIso: string;
+  rdvConflicts: number | null;
+}) {
+  const now = useMemo(() => new Date(nowIso), [nowIso]);
+  const preview = useMemo(() => buildPreview(value, tz, now), [value, tz, now]);
+  // A count fetched for a previous value must not sit beside a form that cannot be submitted.
+  const conflicts = submittableRule(value) ? (rdvConflicts ?? 0) : 0;
+
+  // One live region element in both states: swapping a <p> for a <div> would replace the region itself, and assistive technology can miss the announcement.
+  return (
+    <div
+      aria-live="polite"
+      className={cn(
+        "rounded-xl border px-4 py-3 text-sm",
+        preview ? "space-y-3 border-border bg-muted/40" : cn("border-dashed border-border", MUTED_TEXT),
+      )}
+    >
+      {preview ? <PreviewBody preview={preview} conflicts={conflicts} /> : PREVIEW_INCOMPLETE}
     </div>
   );
 }
