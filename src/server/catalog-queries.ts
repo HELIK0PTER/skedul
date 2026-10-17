@@ -8,12 +8,17 @@ import {
   type TicketTypeSummary,
   type TypeOption,
 } from "@/lib/back-office/catalog-reads";
+import {
+  getEventEditor,
+  listEvents,
+  type EventEditorLookup,
+  type EventListRow,
+} from "@/lib/back-office/event-reads";
 import { db } from "@/lib/db";
 
 /*
- * Thin server-only wrappers of src/lib/back-office/catalog-reads.ts: each is
- * the read with `db` and the current instant. Task 15 adds the events reads
- * (getEventsPage, getEventEditorPage) to this file.
+ * Thin server-only wrappers of src/lib/back-office/catalog-reads.ts and
+ * event-reads.ts: each is the read with `db` and the current instant.
  */
 
 /** /dashboard/tickets */
@@ -31,4 +36,16 @@ export async function getTicketTypePage(professionalId: string, ticketTypeId: st
 /** The non-archived types, for the event forms. */
 export async function getActiveTypeOptions(professionalId: string): Promise<TypeOption[]> {
   return listActiveTypeOptions(db, professionalId);
+}
+
+/** The events list: one row per series on its current segment, finished series apart. */
+export async function getEventsPage(
+  professionalId: string,
+): Promise<{ live: EventListRow[]; ended: EventListRow[] }> {
+  return listEvents(db, professionalId, new Date());
+}
+
+/** The editor data of an event page (another segment of the series redirects), null for an unknown event. */
+export async function getEventEditorPage(professionalId: string, eventId: string): Promise<EventEditorLookup> {
+  return getEventEditor(db, professionalId, eventId, new Date());
 }
