@@ -22,7 +22,7 @@ function EventTitle({ row }: { row: EventListRow }) {
       <div className="min-w-0">
         <Link
           href={`/dashboard/events/${row.eventId}`}
-          className="rounded-sm font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="rounded-sm font-medium break-words hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {row.title}
         </Link>
@@ -37,7 +37,11 @@ function EventTitle({ row }: { row: EventListRow }) {
   );
 }
 
-/** The accepted ticket types as chips, « Aucun », and the orange alert when none of them is active. */
+/**
+ * The accepted ticket types as chips, « Aucun », and the orange alert when none of them is active.
+ * Type names are typed by the pro: the caller sets `overflow-wrap` (inherited by the chips) so a long
+ * unbroken name wraps instead of being clipped.
+ */
 function AcceptedTypes({ row }: { row: EventListRow }) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
@@ -46,7 +50,8 @@ function AcceptedTypes({ row }: { row: EventListRow }) {
       ))}
       {row.noActiveType && (
         <span className="inline-flex items-center gap-2 text-sm text-warning">
-          <StatusMark tone="orange" label={NO_ACTIVE_TICKET} />
+          {/* The text beside the mark carries the meaning: the mark is decorative. */}
+          <StatusMark tone="orange" decorative />
           {NO_ACTIVE_TICKET}
         </span>
       )}
@@ -68,7 +73,8 @@ function NextOccurrence({ row, tz }: { row: EventListRow; tz: string }) {
 function EventRows({ rows, tz, label }: { rows: EventListRow[]; tz: string; label: string }) {
   return (
     <>
-      <Card className="hidden overflow-hidden sm:block">
+      {/* overflow-x-auto (not hidden): between 640 and ~800 px the table is wider than the card and scrolls inside it. */}
+      <Card className="hidden overflow-x-auto sm:block">
         <table className="w-full text-left text-sm">
           <caption className="sr-only">{label}</caption>
           <thead>
@@ -94,7 +100,7 @@ function EventRows({ rows, tz, label }: { rows: EventListRow[]; tz: string; labe
                   <EventTitle row={row} />
                 </td>
                 <td className="px-4 py-4 whitespace-nowrap">{MODE_SHORT_LABELS[row.bookingMode]}</td>
-                <td className="px-4 py-4">
+                <td className="px-4 py-4 break-words">
                   <AcceptedTypes row={row} />
                 </td>
                 <td className="px-5 py-4">
@@ -106,7 +112,8 @@ function EventRows({ rows, tz, label }: { rows: EventListRow[]; tz: string; labe
         </table>
       </Card>
 
-      <ul aria-label={label} className="grid gap-3 sm:hidden">
+      {/* grid-cols-1 is minmax(0, 1fr): a plain grid track grows to the longest word and the cards overflow. */}
+      <ul aria-label={label} className="grid grid-cols-1 gap-3 sm:hidden">
         {rows.map((row) => (
           <li key={row.eventId}>
             <Card className="p-4">
@@ -118,7 +125,8 @@ function EventRows({ rows, tz, label }: { rows: EventListRow[]; tz: string; labe
                 </div>
                 <div className="grid gap-1.5">
                   <dt className="text-muted-foreground">Tickets acceptés</dt>
-                  <dd>
+                  {/* anywhere (not break-word): the dd is a grid item, only this lets it shrink below a long word. */}
+                  <dd className="[overflow-wrap:anywhere]">
                     <AcceptedTypes row={row} />
                   </dd>
                 </div>
