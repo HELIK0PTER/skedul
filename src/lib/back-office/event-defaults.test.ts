@@ -43,6 +43,44 @@ test("a clicked past date gives the default start", () => {
   });
 });
 
+test("a clicked cell of today whose time has already passed gives the default start", () => {
+  const now = parisAt("10:20");
+  const next = { startDate: "2026-10-14", startMinute: 660 };
+  // 09:00 and 10:00 are behind the wall clock (10:20)
+  assert.deepEqual(defaultEventStart({ now, tz: PARIS, clicked: { date: "2026-10-14", minute: 540 } }), next);
+  assert.deepEqual(defaultEventStart({ now, tz: PARIS, clicked: { date: "2026-10-14", minute: 600 } }), next);
+  // 10:20 rounds down to 10:00, still behind
+  assert.deepEqual(defaultEventStart({ now, tz: PARIS, clicked: { date: "2026-10-14", minute: 620 } }), next);
+  // a clicked minute that rounds to a time already passed (00:00 click at 00:05)
+  assert.deepEqual(
+    defaultEventStart({ now: parisAt("00:05"), tz: PARIS, clicked: { date: "2026-10-14", minute: 10 } }),
+    { startDate: "2026-10-14", startMinute: 60 },
+  );
+  // late in the evening there is no full hour left: tomorrow 09:00
+  assert.deepEqual(
+    defaultEventStart({ now: parisAt("23:10"), tz: PARIS, clicked: { date: "2026-10-14", minute: 1320 } }),
+    { startDate: "2026-10-15", startMinute: 540 },
+  );
+});
+
+test("a clicked cell of today at the current minute is already past, one half hour later is kept", () => {
+  // 10:30 on the dot: the 10:30 cell starts now (the engine refuses a start at or before now)
+  const now = parisAt("10:30");
+  assert.deepEqual(defaultEventStart({ now, tz: PARIS, clicked: { date: "2026-10-14", minute: 630 } }), {
+    startDate: "2026-10-14",
+    startMinute: 660,
+  });
+  assert.deepEqual(defaultEventStart({ now, tz: PARIS, clicked: { date: "2026-10-14", minute: 660 } }), {
+    startDate: "2026-10-14",
+    startMinute: 660,
+  });
+  // 10:20: the 10:30 cell is still ahead
+  assert.deepEqual(
+    defaultEventStart({ now: parisAt("10:20"), tz: PARIS, clicked: { date: "2026-10-14", minute: 630 } }),
+    { startDate: "2026-10-14", startMinute: 630 },
+  );
+});
+
 test("no click: the next full hour today", () => {
   assert.deepEqual(defaultEventStart({ now: parisAt("22:10"), tz: PARIS }), { startDate: "2026-10-14", startMinute: 1380 });
   assert.deepEqual(defaultEventStart({ now: parisAt("09:00"), tz: PARIS, clicked: null }), {
@@ -62,10 +100,15 @@ test("the pro's zone decides, not the host's: a Los Angeles pro at Paris midnigh
   const now = new Date("2026-10-14T22:00:00.000Z");
   assert.deepEqual(defaultEventStart({ now, tz: LA }), { startDate: "2026-10-14", startMinute: 960 });
   assert.deepEqual(defaultEventStart({ now, tz: PARIS }), { startDate: "2026-10-15", startMinute: 60 });
-  // the click on 14 October is today for the Los Angeles pro, but already past for the Paris one
-  const clicked = { date: "2026-10-14", minute: 600 };
-  assert.deepEqual(defaultEventStart({ now, tz: LA, clicked }), { startDate: "2026-10-14", startMinute: 600 });
+  // the click on 14 October 17:00 is still ahead today for the Los Angeles pro (15:00), but a past day for the Paris one
+  const clicked = { date: "2026-10-14", minute: 1020 };
+  assert.deepEqual(defaultEventStart({ now, tz: LA, clicked }), { startDate: "2026-10-14", startMinute: 1020 });
   assert.deepEqual(defaultEventStart({ now, tz: PARIS, clicked }), { startDate: "2026-10-15", startMinute: 60 });
+  // 10:00 on 14 October is behind the Los Angeles wall clock (15:00): the next full hour instead
+  assert.deepEqual(defaultEventStart({ now, tz: LA, clicked: { date: "2026-10-14", minute: 600 } }), {
+    startDate: "2026-10-14",
+    startMinute: 960,
+  });
 });
 
 test("the proposed start follows the wall clock across the autumn change in Paris", () => {

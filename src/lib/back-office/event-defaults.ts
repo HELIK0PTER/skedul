@@ -21,9 +21,10 @@ const TOMORROW_MINUTE = 540;
 const LAST_PROPOSED_MINUTE = 1380;
 
 /**
- * Q10: the clicked planning cell when its date is today or later (minute
- * rounded down to 30), else the next full hour today when it is at most 23:00,
- * else tomorrow 09:00.
+ * Q10: the clicked planning cell when it is still ahead (a later date, or today
+ * with its start minute, rounded down to 30, after the current wall-clock
+ * minute: the engine refuses a start at or before now), else the next full hour
+ * today when it is at most 23:00, else tomorrow 09:00.
  */
 export function defaultEventStart(args: {
   now: Date;
@@ -31,11 +32,13 @@ export function defaultEventStart(args: {
   clicked?: { date: DateKey; minute: number } | null;
 }): { startDate: DateKey; startMinute: number } {
   const today = todayKey(args.now, args.tz);
+  const nowMinute = wallClockMinutes(args.now, args.tz);
   const { clicked } = args;
   if (clicked && clicked.date >= today) {
-    return { startDate: clicked.date, startMinute: Math.floor(clicked.minute / 30) * 30 };
+    const startMinute = Math.floor(clicked.minute / 30) * 30;
+    if (clicked.date > today || startMinute > nowMinute) return { startDate: clicked.date, startMinute };
   }
-  const nextHour = (Math.floor(wallClockMinutes(args.now, args.tz) / 60) + 1) * 60;
+  const nextHour = (Math.floor(nowMinute / 60) + 1) * 60;
   if (nextHour <= LAST_PROPOSED_MINUTE) return { startDate: today, startMinute: nextHour };
   return { startDate: addDays(today, 1), startMinute: TOMORROW_MINUTE };
 }
