@@ -2,13 +2,14 @@
 
 import { useEffect, useId, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { ArrowRightLeft, ArrowUpRight, Ban, CircleCheck, MapPin, Pencil, RotateCcw, UserMinus } from "lucide-react";
+import { ArrowRightLeft, ArrowUpRight, Ban, CircleCheck, MapPin, Pencil, RotateCcw, UserMinus, UserPlus } from "lucide-react";
 
 import { BookingStatusBadge } from "@/components/dashboard/booking-status-badge";
 import { ConfirmDialog } from "@/components/dashboard/confirm-dialog";
 import { CoverageBadge } from "@/components/dashboard/coverage-badge";
 import { MoveAttendeeDialog } from "@/components/dashboard/move-attendee-dialog";
 import { OccurrenceEditForm } from "@/components/dashboard/occurrence-edit-form";
+import { RegisterAttendeeDialog } from "@/components/dashboard/register-attendee-dialog";
 import { SessionCapacityControl } from "@/components/dashboard/session-capacity-control";
 import { TypeChip } from "@/components/dashboard/type-chip";
 import { Badge } from "@/components/ui/badge";
@@ -207,6 +208,7 @@ function OccurrenceDialogBody({
   // True while the edit form has a request in flight: the dialog cannot be left then.
   const [editBusy, setEditBusy] = useState(false);
   const [moving, setMoving] = useState<{ bookingId: string; customerName: string } | null>(null);
+  const [registering, setRegistering] = useState(false);
 
   // An action that answers after this séance was swapped for another one must not touch the page any more.
   const alive = useRef(true);
@@ -268,9 +270,9 @@ function OccurrenceDialogBody({
   }
 
   // `Dialog` calls its onClose with the click event (backdrop, close button): never pass `onClose` itself, it reads a notice.
-  // Escape and the backdrop close a sub-dialog (the confirmation, « Déplacer ») first, never both dialogs at once.
+  // Escape and the backdrop close a sub-dialog (the confirmation, « Déplacer », « Inscrire ») first, never both dialogs at once.
   function closeSelf() {
-    if (confirming || pending || moving !== null) return;
+    if (confirming || pending || moving !== null || registering) return;
     onLine(null);
     onClose();
   }
@@ -420,6 +422,32 @@ function OccurrenceDialogBody({
           </div>
         )}
 
+        {isSeance && (
+          <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!scheduled || pending}
+              onClick={() => {
+                setDone(null);
+                onLine(null);
+                setRegistering(true);
+              }}
+            >
+              <UserPlus />
+              Inscrire
+            </Button>
+            {cancelled && (
+              // A past séance cannot be restored (no « Rétablir » then): the line must not point to a button that is not there.
+              <p className="text-xs text-zinc-600">
+                {item.canRestore
+                  ? "Rétablissez la séance pour inscrire quelqu'un."
+                  : "Une séance annulée ne prend plus d'inscription."}
+              </p>
+            )}
+          </div>
+        )}
+
         {selected.length > 0 && (
           <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-muted/60 px-3 py-2">
             <span className="text-sm text-foreground">{plural(selected.length, "sélectionné", "sélectionnés")}</span>
@@ -544,6 +572,17 @@ function OccurrenceDialogBody({
           onClose={() => setMoving(null)}
           onDone={(text) => {
             setMoving(null);
+            announce(text);
+          }}
+        />
+      )}
+
+      {registering && (
+        <RegisterAttendeeDialog
+          item={item}
+          onClose={() => setRegistering(false)}
+          onDone={(text) => {
+            setRegistering(false);
             announce(text);
           }}
         />
