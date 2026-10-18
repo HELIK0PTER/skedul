@@ -41,6 +41,7 @@ import {
 } from "@/lib/back-office/recurrence-form";
 import type { BookingWindow } from "@/lib/booking-window";
 import type { DateKey } from "@/lib/civil-date";
+import { REQUEST_FAILED } from "@/lib/pro-messages";
 import {
   eventInfoSchema,
   eventInputSchema,
@@ -55,8 +56,6 @@ import { createEventAction, editEventInfoAction, previewNewEventAction } from "@
 const PREVIEW_DEBOUNCE_MS = 600;
 /** Dot colour of an archived type that is still linked (the page only knows its id and name). */
 const ARCHIVED_DOT_COLOR = "#a1a1aa";
-/** Shown when a Server Action call itself fails (network): the form stays filled. Shared by the event forms. */
-export const REQUEST_FAILED = "La demande n'a pas abouti. Vérifiez votre connexion et réessayez.";
 const LEGEND_CLASS = "mb-2 text-sm font-medium leading-none text-foreground";
 
 const NO_OVERRIDES: WindowOverrides = {

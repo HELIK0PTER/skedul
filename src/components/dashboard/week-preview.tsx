@@ -2,10 +2,10 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, CircleCheck } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { OccurrenceDialog } from "@/components/dashboard/occurrence-dialog";
-import { OFF_PATTERN, dayLongLabel, dayShortLabel, hhmm, tintOf } from "@/components/dashboard/planning-calendar";
+import { OFF_PATTERN, PlanningNotice, dayLongLabel, dayShortLabel, hhmm, tintOf } from "@/components/dashboard/planning-calendar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { previewTitle, type PlanningItemVM, type TimeOffSegmentVM } from "@/lib/back-office/planning-view";
@@ -171,15 +171,7 @@ export function WeekPreview({
         </div>
       </CardHeader>
       <CardContent>
-        {notice && (
-          <p
-            role="status"
-            className="mb-3 flex items-start gap-2 rounded-xl bg-success-muted px-3 py-2 text-sm text-foreground"
-          >
-            <CircleCheck className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
-            {notice}
-          </p>
-        )}
+        <PlanningNotice notice={notice} />
         {view === "day" && (
           <div className="mb-3 flex items-center justify-center gap-1">
             <Button

@@ -6,6 +6,7 @@ import {
   PRO_CONTEXT_MESSAGES,
   PRO_ERROR_MESSAGES,
   proErrorMessage,
+  REQUEST_FAILED,
   type ProErrorContext,
 } from "./pro-messages";
 
@@ -126,4 +127,9 @@ test("every code resolves to a message in every context", () => {
       assert.ok(proErrorMessage({ code }, context).trim().length > 0, `${context}.${code}`);
     }
   }
+});
+
+test("REQUEST_FAILED is the French transport failure text, without a dash", () => {
+  assert.equal(REQUEST_FAILED, "La demande n'a pas abouti. Vérifiez votre connexion et réessayez.");
+  assert.ok(!DASH.test(REQUEST_FAILED));
 });

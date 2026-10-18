@@ -1,6 +1,6 @@
 "use client";
 
-import { useId } from "react";
+import { useEffect, useId, useRef } from "react";
 import { Loader2 } from "lucide-react";
 
 import { FormError } from "@/components/dashboard/form-error";
@@ -16,6 +16,9 @@ const noop = () => {};
  * (a reason, a choice), the action error, « Retour » and the confirm button.
  * While the action runs, both buttons are disabled and the dialog cannot be
  * closed. « Retour » has the focus: a stray Enter never destroys anything.
+ * When the action fails, the focus moves to the error text: the confirm button
+ * was disabled while it ran, which dropped the focus onto the page, and the
+ * message must be read.
  */
 export function ConfirmDialog({
   open,
@@ -38,6 +41,10 @@ export function ConfirmDialog({
 }) {
   const titleId = useId();
   const bodyId = useId();
+  const errorBox = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (open && error && !pending) errorBox.current?.focus();
+  }, [open, error, pending]);
   return (
     <Dialog
       open={open}
@@ -52,7 +59,7 @@ export function ConfirmDialog({
       {children && <div className="mt-4 space-y-3">{children}</div>}
       {error && (
         <div className="mt-4">
-          <FormError message={error} />
+          <FormError message={error} ref={errorBox} tabIndex={-1} />
         </div>
       )}
       <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">

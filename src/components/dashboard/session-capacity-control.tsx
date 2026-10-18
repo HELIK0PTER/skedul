@@ -7,10 +7,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { plural } from "@/lib/back-office/format";
+import { REQUEST_FAILED } from "@/lib/pro-messages";
 import { BOUNDS } from "@/lib/tickets-vocab";
 import { updateCapacityAction } from "@/server/pro-planning";
 
-const REQUEST_FAILED = "La demande n'a pas abouti. Vérifiez votre connexion et réessayez.";
+type Scope = "occurrence" | "event";
+
+const SAVED_TEXT: Record<Scope, string> = {
+  occurrence: "Places enregistrées pour cette séance.",
+  event: "Places enregistrées pour les séances à venir de l'événement.",
+};
 
 /**
  * Number of seats of a séance. It cannot go under the people already
@@ -38,9 +44,10 @@ export function SessionCapacityControl({
   const inputId = useId();
   const [value, setValue] = useState(String(capacity));
   const [seenCapacity, setSeenCapacity] = useState(capacity);
-  const [scope, setScope] = useState<"occurrence" | "event">("occurrence");
+  const [scope, setScope] = useState<Scope>("occurrence");
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
+  // The scope of the last successful save, until the field or the scope changes.
+  const [saved, setSaved] = useState<Scope | null>(null);
   const [pending, startTransition] = useTransition();
 
   // The capacity changed under us (a refresh after a save): the field follows it.
@@ -57,18 +64,30 @@ export function SessionCapacityControl({
   const tooHigh = isInteger && next > max;
   const valid = isInteger && !tooLow && !tooHigh;
   const choosesScope = recurring && seenVersion !== null;
-  const unchanged = scope === "occurrence" && next === capacity;
+  const effectiveScope: Scope = choosesScope ? scope : "occurrence";
+  const unchanged = effectiveScope === "occurrence" && next === capacity;
+
+  // An empty field, a decimal or a text the browser empties: said out loud rather than a silently disabled button.
+  const fieldError = !isInteger
+    ? "Indiquez un nombre entier de places."
+    : tooLow
+      ? seatsTaken === 0
+        ? "Minimum 1 place."
+        : `Minimum ${seatsTaken} : ${plural(seatsTaken, "personne est déjà inscrite", "personnes sont déjà inscrites")}.`
+      : tooHigh
+        ? `Maximum ${max}.`
+        : null;
 
   function save() {
     if (!valid || unchanged || pending) return;
     setError(null);
-    setSaved(false);
+    setSaved(null);
     startTransition(async () => {
       try {
         const res = await updateCapacityAction({
           occurrenceId,
           seenStartsAt,
-          scope: choosesScope ? scope : "occurrence",
+          scope: effectiveScope,
           capacity: next,
           seenVersion,
         });
@@ -76,7 +95,7 @@ export function SessionCapacityControl({
           setError(res.error);
           return;
         }
-        setSaved(true);
+        setSaved(effectiveScope);
       } catch {
         setError(REQUEST_FAILED);
       }
@@ -104,10 +123,11 @@ export function SessionCapacityControl({
             value={value}
             onChange={(e) => {
               setValue(e.target.value);
-              setSaved(false);
+              setSaved(null);
+              setError(null);
             }}
-            aria-invalid={tooLow || tooHigh || undefined}
-            aria-describedby={tooLow || tooHigh ? helpId : undefined}
+            aria-invalid={fieldError !== null || undefined}
+            aria-describedby={fieldError !== null ? helpId : undefined}
             className="h-9 w-24"
             readOnly={pending}
           />
@@ -115,16 +135,9 @@ export function SessionCapacityControl({
             {pending ? "Enregistrement…" : "Enregistrer"}
           </Button>
         </div>
-        {tooLow && (
+        {fieldError !== null && (
           <p id={helpId} className="text-xs text-rose-700">
-            {seatsTaken === 0
-              ? "Minimum 1 place."
-              : `Minimum ${seatsTaken} : ${plural(seatsTaken, "personne est déjà inscrite", "personnes sont déjà inscrites")}.`}
-          </p>
-        )}
-        {tooHigh && (
-          <p id={helpId} className="text-xs text-rose-700">
-            {`Maximum ${max}.`}
+            {fieldError}
           </p>
         )}
       </div>
@@ -140,7 +153,8 @@ export function SessionCapacityControl({
               checked={scope === "occurrence"}
               onChange={() => {
                 setScope("occurrence");
-                setSaved(false);
+                setSaved(null);
+                setError(null);
               }}
             />
             Cette séance
@@ -153,7 +167,8 @@ export function SessionCapacityControl({
               checked={scope === "event"}
               onChange={() => {
                 setScope("event");
-                setSaved(false);
+                setSaved(null);
+                setError(null);
               }}
             />
             Toutes les séances à venir
@@ -164,9 +179,9 @@ export function SessionCapacityControl({
         </fieldset>
       )}
 
-      {saved && (
+      {saved !== null && (
         <p role="status" className="text-xs text-foreground">
-          Places enregistrées.
+          {SAVED_TEXT[saved]}
         </p>
       )}
       <FormError message={error} />

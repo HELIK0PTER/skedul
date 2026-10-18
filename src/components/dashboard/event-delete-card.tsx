@@ -5,7 +5,6 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { Loader2, Trash2 } from "lucide-react";
 
 import { ConfirmDialog } from "@/components/dashboard/confirm-dialog";
-import { REQUEST_FAILED } from "@/components/dashboard/event-editor";
 import { FormError } from "@/components/dashboard/form-error";
 import { FormField } from "@/components/dashboard/form-field";
 import { Button } from "@/components/ui/button";
@@ -13,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { deleteEventCopy, type ConfirmCopy } from "@/lib/back-office/confirm-copy";
 import type { DeletePreview } from "@/lib/back-office/event-reads";
 import { formatDayMonth, formatDayMonthYear, maxKey, type DateKey } from "@/lib/civil-date";
+import { REQUEST_FAILED } from "@/lib/pro-messages";
 import { deleteEventFromAction, deleteEventPreviewAction } from "@/server/pro-catalog";
 
 const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;

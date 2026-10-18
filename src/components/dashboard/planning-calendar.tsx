@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { CalendarDays, ChevronLeft, ChevronRight, CircleCheck, Plus, UserRound } from "lucide-react";
@@ -35,6 +35,37 @@ export { dayLongLabel, dayShortLabel, hhmm, tintOf };
 
 const seatsText = (item: PlanningItemVM): string =>
   `${plural(item.seatsTaken, "inscrit", "inscrits")} sur ${item.capacity}`;
+
+/**
+ * The status line the occurrence dialog hands over when its séance leaves the page data (an ended RDV, a séance
+ * hidden by a time off). The live region is always on the page and only its text changes, so assistive technology
+ * announces it; a new line also takes the focus, because the dialog and the block that opened it are gone.
+ * Shared with the week preview.
+ */
+export function PlanningNotice({ notice }: { notice: string | null }) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (notice) box.current?.focus();
+  }, [notice]);
+  return (
+    <div
+      ref={box}
+      role="status"
+      tabIndex={-1}
+      className={cn(
+        notice &&
+          "mb-3 flex items-start gap-2 rounded-xl bg-success-muted px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+      )}
+    >
+      {notice && (
+        <>
+          <CircleCheck className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
+          {notice}
+        </>
+      )}
+    </div>
+  );
+}
 
 function ItemBlock({
   item,
@@ -315,15 +346,7 @@ export function PlanningCalendar({
         </Button>
       </div>
 
-      {notice && (
-        <p
-          role="status"
-          className="mb-3 flex items-start gap-2 rounded-xl bg-success-muted px-3 py-2 text-sm text-foreground"
-        >
-          <CircleCheck className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
-          {notice}
-        </p>
-      )}
+      <PlanningNotice notice={notice} />
 
       {empty && <p className="mb-3 text-sm text-muted-foreground">Aucune séance cette semaine.</p>}
 

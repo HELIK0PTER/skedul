@@ -18,12 +18,11 @@ import { cancelOccurrenceCopy, restoreOccurrenceCopy, unenrollCopy } from "@/lib
 import { formatWhen, plural } from "@/lib/back-office/format";
 import { MODE_SHORT_LABELS } from "@/lib/back-office/labels";
 import { unenrolledMessage, type PlanningAttendeeVM, type PlanningItemVM } from "@/lib/back-office/planning-view";
+import { REQUEST_FAILED } from "@/lib/pro-messages";
 import { BOUNDS } from "@/lib/tickets-vocab";
 import { cancelOccurrenceAction, restoreOccurrenceAction, unenrollAction } from "@/server/pro-planning";
 
 type Confirm = { kind: "cancel" } | { kind: "restore" } | { kind: "unenroll"; ids: string[] };
-
-const REQUEST_FAILED = "La demande n'a pas abouti. Vérifiez votre connexion et réessayez.";
 
 function AttendeeRow({
   attendee,
@@ -109,6 +108,13 @@ function AttendeeRow({
   );
 }
 
+type DialogProps = {
+  item: PlanningItemVM;
+  tz: string;
+  nowIso: string;
+  onClose: (notice?: string) => void;
+};
+
 /**
  * A séance or an RDV of the planning. The caller keeps the occurrence's id and
  * passes the item freshly read from the page data, so seats and attendees are
@@ -122,17 +128,47 @@ function AttendeeRow({
  * and not read any more, and an emptied or restored séance under a time off is
  * hidden. The first case calls `onClose(line)` at once; the second is caught
  * when the page unmounts the dialog while a success line was not yet closed.
+ *
+ * The state of the dialog (success line, confirmation, selection, reason) belongs
+ * to one séance: it is keyed by the occurrence id, so a deep link or a Back/Forward
+ * that swaps the séance starts again from nothing. The key sits here, not at the
+ * call sites: a dialog that the page unmounts hands its unclosed line to the page,
+ * and when another séance replaces it there is nothing to hand over (a key at the
+ * call site would close the new séance with the old line).
  */
-export function OccurrenceDialog({
-  item,
-  tz,
-  onClose,
-}: {
-  item: PlanningItemVM;
-  tz: string;
-  nowIso: string;
-  onClose: (notice?: string) => void;
-}) {
+export function OccurrenceDialog(props: DialogProps) {
+  const { item, onClose } = props;
+  // The success line the pro has not closed the dialog on yet, and the latest `onClose` for the unmount below.
+  const unclosedLine = useRef<string | null>(null);
+  const latestOnClose = useRef(onClose);
+  useEffect(() => {
+    latestOnClose.current = onClose;
+  });
+  // Declared first: on unmount it runs before the reset below. A replacement by another séance only runs the reset.
+  useEffect(
+    () => () => {
+      if (unclosedLine.current !== null) latestOnClose.current(unclosedLine.current);
+    },
+    [],
+  );
+  useEffect(
+    () => () => {
+      unclosedLine.current = null;
+    },
+    [item.id],
+  );
+  return (
+    <OccurrenceDialogBody
+      key={item.id}
+      {...props}
+      onLine={(line) => {
+        unclosedLine.current = line;
+      }}
+    />
+  );
+}
+
+function OccurrenceDialogBody({ item, tz, onClose, onLine }: DialogProps & { onLine: (line: string | null) => void }) {
   const summaryId = useId();
   const reasonId = useId();
   const statusRef = useRef<HTMLParagraphElement>(null);
@@ -143,18 +179,14 @@ export function OccurrenceDialog({
   const [picked, setPicked] = useState<string[]>([]);
   const [pending, startTransition] = useTransition();
 
-  // The success line the pro has not closed this dialog on yet, and the latest `onClose` for the unmount below.
-  const unclosedLine = useRef<string | null>(null);
-  const latestOnClose = useRef(onClose);
+  // An action that answers after this séance was swapped for another one must not touch the page any more.
+  const alive = useRef(true);
   useEffect(() => {
-    latestOnClose.current = onClose;
-  });
-  useEffect(
-    () => () => {
-      if (unclosedLine.current !== null) latestOnClose.current(unclosedLine.current);
-    },
-    [],
-  );
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
   // A new success line takes the focus: the button that opened the confirmation has left the page by then.
   useEffect(() => {
@@ -172,10 +204,12 @@ export function OccurrenceDialog({
   const selected = item.attendees.filter((a) => picked.includes(a.bookingId));
 
   const peopleOf = (ids: string[]) => item.attendees.filter((a) => ids.includes(a.bookingId));
+  // A lapsed hold is a seat already freed and a payment already dead: the texts count the live bookings only.
   const copy = (() => {
     if (!confirm) return null;
     if (confirm.kind === "cancel") {
-      return cancelOccurrenceCopy({ kind: item.kind, registrants: item.attendees.length, past: item.past });
+      const registrants = item.attendees.filter((a) => !a.holdLapsed).length;
+      return cancelOccurrenceCopy({ kind: item.kind, registrants, past: item.past });
     }
     if (confirm.kind === "restore") return restoreOccurrenceCopy();
     const people = peopleOf(confirm.ids);
@@ -184,7 +218,7 @@ export function OccurrenceDialog({
     return unenrollCopy({
       names: people.map((p) => p.name),
       ticketCount: people.filter((p) => p.coverage === "ticket" && p.status === "confirmed").length,
-      pendingCount: people.filter((p) => p.status === "pending").length,
+      pendingCount: people.filter((p) => p.status === "pending" && !p.holdLapsed).length,
     });
   })();
   const confirming = confirm !== null && copy !== null;
@@ -200,7 +234,7 @@ export function OccurrenceDialog({
   // Escape and the backdrop close the confirmation first, never both dialogs at once.
   function closeSelf() {
     if (confirming || pending) return;
-    unclosedLine.current = null;
+    onLine(null);
     onClose();
   }
 
@@ -249,13 +283,14 @@ export function OccurrenceDialog({
           setPicked([]);
           setReason("");
         }
+        if (!alive.current) return;
         if (item.kind === "rdv") {
           // The RDV is ended and leaves the page data: the calendar shows the line, this dialog goes away.
-          unclosedLine.current = null;
+          onLine(null);
           onClose(text);
           return;
         }
-        unclosedLine.current = text;
+        onLine(text);
         setDone({ text });
         setConfirm(null);
       } catch {

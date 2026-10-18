@@ -89,13 +89,13 @@ export async function createProfessionalProfile(input: {
     })
     .returning({ id: professional.id });
 
-  // Promote plain clients to "pro" — never demote an admin.
+  // Promote plain clients to "pro", never demote an admin.
   await db
     .update(userTable)
     .set({ role: "pro" })
     .where(and(eq(userTable.id, user.id), eq(userTable.role, "client")));
 
-  // sensible default availability: Mon–Fri 9:00–17:00 (global rules)
+  // sensible default availability: Monday to Friday, 9:00 to 17:00 (global rules)
   await db.insert(availabilityRule).values(
     [1, 2, 3, 4, 5].map((dayOfWeek) => ({
       professionalId: created.id,
@@ -277,7 +277,7 @@ export async function deleteTimeOff(id: string) {
   revalidatePath(`/${pro.slug}`);
 }
 
-/* ──────────── Séances et planning (rebuilt in P3, same signatures) ──────────── */
+/* ──────────── Séances et planning (the P3 actions live in pro-planning.ts; only this stub is left, until Task 37) ──────────── */
 
 export async function cancelBooking(bookingId: string): Promise<Res> {
   await requirePro();

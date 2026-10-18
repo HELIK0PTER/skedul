@@ -116,3 +116,9 @@ export function proErrorMessage(fail: { code: EngineErrorCode; message?: string 
   if (fail.message) return fail.message;
   return PRO_CONTEXT_MESSAGES[context]?.[fail.code] ?? PRO_ERROR_MESSAGES[fail.code];
 }
+
+/**
+ * Shown when a Server Action call itself fails (network, no answer): the form or
+ * the confirmation stays as it was. One text for every back-office form and dialog.
+ */
+export const REQUEST_FAILED = "La demande n'a pas abouti. Vérifiez votre connexion et réessayez.";
