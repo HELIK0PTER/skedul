@@ -6,9 +6,10 @@ import { expiryLabel, formatWhenShort } from "@/lib/back-office/format";
 import type { ProCtx } from "@/lib/back-office/result";
 import { registerPro } from "@/lib/booking/claims";
 import { checkInvariants } from "@/lib/booking/invariants";
+import { createEvent } from "@/lib/booking/occurrences";
 import { dayOfWeek, instantAt } from "@/lib/civil-date";
 import type { Db } from "@/lib/db/atomic";
-import { customer, event, ticketMovement, ticketType } from "@/lib/db/schema";
+import { bookingAnswer, customer, event, question, ticketMovement, ticketType } from "@/lib/db/schema";
 import type { RecurrenceRule } from "@/lib/recurrence";
 import { addMinutes, createTestPro, dbTest, deleteTestUser, type TestPro } from "@/test/db";
 import {
@@ -20,6 +21,7 @@ import {
   makeEvent,
   makeType,
   movementsOf,
+  occurrencesOf,
   ticketsOf,
 } from "@/test/fixtures";
 import { proCtx } from "@/test/pro-ctx";
@@ -40,6 +42,7 @@ import {
   updateOccurrenceCore,
   CONVERSION_TYPE_UNAVAILABLE,
   MOVE_NOT_MOVABLE,
+  MOVE_TARGET_UNAVAILABLE,
   REGISTER_NONE_GUEST,
   REGISTER_NO_TICKET_MODE,
   REGISTER_RDV,
@@ -1062,6 +1065,152 @@ dbTest("every attendee core refuses a malformed input in French, before any read
     assert.ok(!res.ok, JSON.stringify(res));
     assert.ok(res.error.length > 0 && !english.test(res.error), res.error);
   }
+});
+
+dbTest("moveAttendeeCore: a booking without a ticket moved onto a target cancelled meanwhile reads « plus disponible »", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const typeX = await makeType(db, pro, { name: "Cours collectif" });
+  const [from] = (await makeEvent(db, pro, { title: "Source", ticketTypeIds: [typeX] })).occurrences;
+  const [fromFree] = (await makeEvent(db, pro, { title: "Source libre", bookingMode: "free" })).occurrences;
+  const [to] = (await makeEvent(db, pro, { title: "Cible", ticketTypeIds: [typeX], rule: { startDate: dayIn(pro, 4) } })).occurrences;
+  const [toFree] = (
+    await makeEvent(db, pro, { title: "Cible libre", bookingMode: "free", rule: { startDate: dayIn(pro, 4) } })
+  ).occurrences;
+  const guestBooking = await register(db, pro, from.id, await makeCustomer(db, pro));
+  const freeBooking = await register(db, pro, fromFree.id, await makeCustomer(db, pro), { asGuest: false });
+  const holder = await makeCustomer(db, pro);
+  await giveTickets(db, pro, holder, typeX, 1);
+  const ticketBooking = await register(db, pro, from.id, holder, { asGuest: false });
+  assert.equal((await getBooking(db, freeBooking)).coverage, "free");
+
+  for (const target of [to, toFree]) {
+    const cancelled = await cancelOccurrenceCore(db, ctx, { occurrenceId: target.id }, now);
+    assert.ok(cancelled.ok, JSON.stringify(cancelled));
+  }
+
+  const guest = await moveAttendeeCore(db, ctx, move(guestBooking, to.id), now);
+  check("guest, cancelled target", guest, "La séance choisie n'est plus disponible.");
+  assert.equal(codeOf(guest), "not_eligible");
+  check("free, cancelled target", await moveAttendeeCore(db, ctx, move(freeBooking, toFree.id), now), "La séance choisie n'est plus disponible.");
+  assert.equal(MOVE_TARGET_UNAVAILABLE, "La séance choisie n'est plus disponible.");
+
+  // A booking that holds a ticket keeps the engine's conversion wording (the wording of a cancelled target is not part of this fix).
+  const withTicket = await moveAttendeeCore(db, ctx, move(ticketBooking, to.id), now);
+  check(
+    "ticket, cancelled target",
+    withTicket,
+    "Cette séance n'accepte pas le ticket de ce client : choisissez un type vers lequel le convertir.",
+  );
+  assert.equal(codeOf(withTicket), "not_eligible");
+
+  assert.deepEqual(
+    (await Promise.all([guestBooking, freeBooking, ticketBooking].map((id) => getBooking(db, id)))).map((b) => [b.occurrenceId, b.movedAt]),
+    [
+      [from.id, null],
+      [fromFree.id, null],
+      [from.id, null],
+    ],
+    "nothing moved",
+  );
+});
+
+dbTest("registerAttendeeCore: answers are checked by the engine, stored on the booking, and a required question is not demanded of the pro", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const created = await createEvent(
+    db,
+    {
+      professionalId: pro.proId,
+      event: {
+        title: "Atelier",
+        bookingMode: "free",
+        capacity: 12,
+        durationMin: 60,
+        isPrivate: false,
+        ticketTypeIds: [],
+        questions: [
+          { label: "Votre objectif ?", type: "text", options: [], required: true },
+          { label: "Niveau ?", type: "choice", options: ["Débutant", "Confirmé"], required: false },
+        ],
+        rule: {
+          startDate: dayIn(pro, 3),
+          startMinute: 600,
+          freq: "once",
+          interval: 1,
+          weekdays: null,
+          monthlyBy: null,
+          monthWeek: null,
+          endMode: "count",
+          untilDate: null,
+          occurrenceCount: 1,
+        },
+      },
+    },
+    now,
+  );
+  assert.ok(created.ok, JSON.stringify(created));
+  const [occ] = await occurrencesOf(db, created.eventId);
+  const questions = await db.select().from(question).where(eq(question.eventId, created.eventId));
+  const goal = questions.find((q) => q.label === "Votre objectif ?");
+  const level = questions.find((q) => q.label === "Niveau ?");
+  assert.ok(goal && level);
+  const answersOf = async (bookingId: string) =>
+    (await db.select().from(bookingAnswer).where(eq(bookingAnswer.bookingId, bookingId))).map((a) => [a.questionId, a.questionLabel, a.value]);
+
+  // An answer to a question that is not the event's: refused with the engine's French text, nothing is booked.
+  const stranger = await makeCustomer(db, pro);
+  const unknown = await registerAttendeeCore(db, ctx, reg(occ.id, stranger, { answers: [{ questionId: "inconnue", value: "x" }] }), now);
+  check("unknown question", unknown, "Données invalides.");
+  assert.equal(codeOf(unknown), "invalid");
+  const notAnOption = await registerAttendeeCore(db, ctx, reg(occ.id, stranger, { answers: [{ questionId: level.id, value: "Expert" }] }), now);
+  check("choice outside the options", notAnOption, "Réponse invalide pour : Niveau ?");
+  assert.equal((await getOccurrence(db, occ.id)).seatsTaken, 0, "the refusals booked nothing");
+
+  // A valid answer is stored on the booking (trimmed), with the question's label.
+  const answered = await makeCustomer(db, pro);
+  const withAnswer = await registerAttendeeCore(db, ctx, reg(occ.id, answered, { answers: [{ questionId: level.id, value: " Confirmé " }] }), now);
+  assert.ok(withAnswer.ok, JSON.stringify(withAnswer));
+  assert.deepEqual(await answersOf(withAnswer.bookingId), [[level.id, "Niveau ?", "Confirmé"]]);
+
+  // The required question stays unanswered: the pro is not forced to ask it (only a client is).
+  const silent = await makeCustomer(db, pro);
+  const without = await registerAttendeeCore(db, ctx, reg(occ.id, silent, { answers: [] }), now);
+  assert.ok(without.ok, JSON.stringify(without));
+  assert.deepEqual(await answersOf(without.bookingId), []);
+  assert.equal(goal.required, true);
+  assert.equal((await getOccurrence(db, occ.id)).seatsTaken, 2);
+});
+
+dbTest("moveAttendeeCore: a conversion type of the pro, active and not rdv_free, but not linked to the target event is refused", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const typeX = await makeType(db, pro, { name: "Cours collectif" });
+  const typeY = await makeType(db, pro, { name: "Cours d'essai" });
+  const typeZ = await makeType(db, pro, { name: "Stage" });
+  const [from] = (await makeEvent(db, pro, { title: "Source", ticketTypeIds: [typeX] })).occurrences;
+  const [to] = (await makeEvent(db, pro, { title: "Cible Y", ticketTypeIds: [typeY], rule: { startDate: dayIn(pro, 4) } })).occurrences;
+  // typeZ is linked to another event only: it is usable in general, not on this target.
+  await makeEvent(db, pro, { title: "Autre", ticketTypeIds: [typeZ], rule: { startDate: dayIn(pro, 5) } });
+  const customerId = await makeCustomer(db, pro);
+  const [ticketId] = await giveTickets(db, pro, customerId, typeX, 1);
+  const bookingId = await register(db, pro, from.id, customerId, { asGuest: false });
+
+  const res = await moveAttendeeCore(db, ctx, move(bookingId, to.id, { convertToTicketTypeId: typeZ }), now);
+  check(
+    "conversion type not linked to the target",
+    res,
+    "Cette séance n'accepte pas le ticket de ce client : choisissez un type vers lequel le convertir.",
+  );
+  assert.equal(codeOf(res), "not_eligible");
+
+  const booking = await getBooking(db, bookingId);
+  assert.deepEqual([booking.occurrenceId, booking.movedAt], [from.id, null]);
+  assert.deepEqual([(await getOccurrence(db, from.id)).seatsTaken, (await getOccurrence(db, to.id)).seatsTaken], [1, 0]);
+  const [held] = await ticketsOf(db, customerId);
+  assert.deepEqual([held.id, held.ticketTypeId, held.status, held.bookingId], [ticketId, typeX, "booked", bookingId]);
+  const kinds = (await movementsOf(db, ticketId)).map((m) => m.kind);
+  assert.equal(kinds[kinds.length - 1], "spend", "no convert movement was written");
 });
 
 test("followingRuleOf: the rule that starts at the séance, with the remaining count in count mode", () => {

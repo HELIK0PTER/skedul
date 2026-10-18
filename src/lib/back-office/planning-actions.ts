@@ -30,7 +30,7 @@ import { createCustomer, moveAttendee } from "@/lib/booking/wallet";
 import { instantAt, type DateKey } from "@/lib/civil-date";
 import { dayKeyInTz } from "@/lib/datetime";
 import type { Db } from "@/lib/db/atomic";
-import { event, occurrence, ticketType } from "@/lib/db/schema";
+import { booking, event, occurrence, ticketType } from "@/lib/db/schema";
 import type { ProErrorContext } from "@/lib/pro-messages";
 import { expandDates, remainingCount, type RecurrenceRule } from "@/lib/recurrence";
 import { describeSeriesEdit } from "@/lib/series-plan";
@@ -466,6 +466,7 @@ export const REGISTER_NONE_GUEST = "Séance sans réservation en ligne : inscriv
 export const REGISTER_NO_TICKET_MODE = "Cette séance n'accepte pas de ticket : choisissez « Invité ».";
 export const CONVERSION_TYPE_UNAVAILABLE = "Ce type ne peut pas recevoir de tickets.";
 export const MOVE_NOT_MOVABLE = "Cette inscription ne peut pas être déplacée.";
+export const MOVE_TARGET_UNAVAILABLE = "La séance choisie n'est plus disponible.";
 
 export const registerInputSchema = z.object({
   occurrenceId: idSchema,
@@ -615,8 +616,25 @@ export async function moveAttendeeCore(
     },
     now,
   );
-  if (!res.ok) return fromEngine(res, "move");
+  if (!res.ok) {
+    // moveAttendee answers not_eligible for a target that is no longer scheduled, an RDV, or a type it does not
+    // accept. The « choisissez un type vers lequel le convertir » wording only makes sense for a booking that holds
+    // a ticket; a guest or free booking has nothing to convert, so the target itself is the problem.
+    if (res.code === "not_eligible" && (await holdsNoTicket(db, ctx.professionalId, p.bookingId))) {
+      return actionFail(MOVE_TARGET_UNAVAILABLE, res.code);
+    }
+    return fromEngine(res, "move");
+  }
   return { ok: true, effects: res.effects, converted: res.conversion !== null };
+}
+
+/** True when the pro's booking exists and is not covered by a ticket (guest or free). */
+async function holdsNoTicket(db: Db, professionalId: string, bookingId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ coverage: booking.coverage })
+    .from(booking)
+    .where(and(eq(booking.id, bookingId), eq(booking.professionalId, professionalId)));
+  return row !== undefined && row.coverage !== "ticket";
 }
 
 const searchSchema = z.object({ q: z.string().max(254) });
