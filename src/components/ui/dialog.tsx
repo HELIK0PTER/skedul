@@ -1,7 +1,18 @@
 "use client";
 
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { X } from "lucide-react";
+
+/**
+ * The element that holds the focus right now, when it is worth coming back to:
+ * not `document.body`, which is where the focus rests when nothing has it. Null
+ * on the server.
+ */
+function focusedElement(): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+  const el = document.activeElement;
+  return el instanceof HTMLElement && el !== document.body ? el : null;
+}
 
 /**
  * A modal dialog. The title heading names it (`aria-labelledby`): its id is
@@ -11,6 +22,14 @@ import { X } from "lucide-react";
  * control inside holds the focus (an `autoFocus` control that is disabled at
  * mount does not), the panel itself takes it, so assistive technology is taken
  * into the dialog.
+ *
+ * When it closes (`open` turns false, or the component unmounts while open) the
+ * focus goes back to the element that held it when the dialog opened, as long
+ * as that element is still on the page (WCAG 2.4.3). That element is read while
+ * rendering, at the moment `open` turns true: an `autoFocus` control inside the
+ * dialog takes the focus during the commit, before any effect runs, so an
+ * effect would only ever see the dialog's own control. A dialog opened from a
+ * dialog hands the focus back to its opener inside the outer one.
  */
 export function Dialog({
   open,
@@ -31,11 +50,29 @@ export function Dialog({
   const titleId = labelledBy ?? generatedTitleId;
   const panel = useRef<HTMLDivElement>(null);
 
+  // « Adjust state when a prop changes »: the opener is stored in the render where `open` turns true.
+  const [wasOpen, setWasOpen] = useState(false);
+  const [opener, setOpener] = useState<HTMLElement | null>(null);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setOpener(focusedElement());
+  }
+
   useEffect(() => {
     if (!open) return;
     const el = panel.current;
     if (el && !el.contains(document.activeElement)) el.focus();
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const el = panel.current;
+    return () => {
+      // Strict Mode runs this cleanup once while the dialog is still on screen: nothing has closed then.
+      if (el?.isConnected) return;
+      if (opener && opener.isConnected) opener.focus();
+    };
+  }, [open, opener]);
 
   useEffect(() => {
     if (!open) return;
