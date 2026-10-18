@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { PageHeader } from "@/components/dashboard/page-header";
 import { ProfileForm } from "@/components/dashboard/profile-form";
+import { BookingSettingsForm } from "@/components/dashboard/booking-settings-form";
 import { BrandingForm } from "@/components/dashboard/branding-form";
 import { GoogleCalendarCard } from "@/components/dashboard/google-calendar-card";
 import { SlugEditor } from "@/components/dashboard/slug-editor";
@@ -42,6 +43,18 @@ export default async function SettingsPage() {
             }}
             timezoneLocked={extras.timezoneLocked}
           />
+        </CardContent>
+      </Card>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>Réservations</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Quand vos clients peuvent réserver et annuler.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <BookingSettingsForm initial={extras.bookingSettings} />
         </CardContent>
       </Card>
 

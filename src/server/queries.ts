@@ -6,6 +6,7 @@ import { account, availabilityRule, professional, timeOff, user } from "@/lib/db
 import { env } from "@/lib/env";
 import { isTimezoneLocked } from "@/lib/back-office/settings-actions";
 import { userNotSuspended } from "@/lib/suspension";
+import type { BookingSettings } from "@/lib/tickets";
 
 /*
  * Tickets & événements, P2: the readers of the dropped booking tables
@@ -41,9 +42,22 @@ export function getProTimeOff(proId: string) {
     .orderBy(asc(timeOff.startAt));
 }
 
-/** What the settings page needs beyond the professional row (Task 29 adds the booking settings). */
-export async function getSettingsExtras(professionalId: string): Promise<{ timezoneLocked: boolean }> {
-  return { timezoneLocked: await isTimezoneLocked(db, professionalId, new Date()) };
+/** What the settings page needs beyond the professional row: the time-zone lock and the booking settings. */
+export async function getSettingsExtras(
+  professionalId: string,
+): Promise<{ timezoneLocked: boolean; bookingSettings: BookingSettings }> {
+  const [timezoneLocked, [row]] = await Promise.all([
+    isTimezoneLocked(db, professionalId, new Date()),
+    db
+      .select({
+        bookingHorizonDays: professional.bookingHorizonDays,
+        minNoticeMinutes: professional.minNoticeMinutes,
+        cancelDeadlineHours: professional.cancelDeadlineHours,
+      })
+      .from(professional)
+      .where(eq(professional.id, professionalId)),
+  ]);
+  return { timezoneLocked, bookingSettings: row };
 }
 
 /**

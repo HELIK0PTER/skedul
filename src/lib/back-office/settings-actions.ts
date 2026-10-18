@@ -7,10 +7,18 @@
 import { eq, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 
+import { NOTICE_TOO_LONG, noticeExceedsHorizon } from "@/lib/back-office/notice";
 import { actionFail, fromEngine, type CoreResult, type ProCtx } from "@/lib/back-office/result";
+import { setAvailabilityRules, updateBookingSettings } from "@/lib/booking/catalog";
 import { failOf } from "@/lib/booking/types";
 import { G, lockRows, tryAtomic, ts, type Db } from "@/lib/db/atomic";
 import { professional } from "@/lib/db/schema";
+import {
+  availabilityRuleInputSchema,
+  bookingSettingsSchema,
+  type AvailabilityRuleInput,
+  type BookingSettings,
+} from "@/lib/tickets";
 import { BOUNDS } from "@/lib/tickets-vocab";
 import { isValidTimeZone } from "@/lib/timezones";
 import { parseFr } from "@/lib/zod-fr";
@@ -74,4 +82,53 @@ export async function updateProfileCore(db: Db, ctx: ProCtx, input: ProfileInput
   ]);
   if (!res.ok) return fromEngine(failOf(res), "profile");
   return { ok: true, effects: [] };
+}
+
+/* ───────────── Réservations and global RDV hours (Task 29) ───────────── */
+
+/**
+ * Booking window and client cancellation deadline (spec § 7). parseFr first, so the
+ * bounds speak French (« Réservable jusqu'à : maximum 365. »), then a notice longer
+ * than the horizon is refused: online booking would never open (OUT L106).
+ * Context "settings". The pro is the one of the context, never one of the input.
+ */
+export async function updateBookingSettingsCore(
+  db: Db,
+  ctx: ProCtx,
+  input: BookingSettings,
+  now: Date,
+): Promise<CoreResult> {
+  const parsed = parseFr(bookingSettingsSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  const settings = parsed.data;
+  if (noticeExceedsHorizon(settings.minNoticeMinutes, settings.bookingHorizonDays)) {
+    return actionFail(NOTICE_TOO_LONG);
+  }
+  const res = await updateBookingSettings(db, { professionalId: ctx.professionalId, settings }, now);
+  if (!res.ok) return fromEngine(res, "settings");
+  return { ok: true, effects: res.effects };
+}
+
+const globalHoursSchema = z.object({ rules: z.array(availabilityRuleInputSchema).max(168) });
+
+/**
+ * The global RDV hours (ticketTypeId null), replaced in one engine batch: the hours of
+ * a ticket type are untouched, an empty list closes every day. An inverted range is
+ * « Plage horaire invalide. » (the schema's own message). Context "settings".
+ */
+export async function saveAvailabilityCore(
+  db: Db,
+  ctx: ProCtx,
+  input: { rules: AvailabilityRuleInput[] },
+  now: Date,
+): Promise<CoreResult> {
+  const parsed = parseFr(globalHoursSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  const res = await setAvailabilityRules(
+    db,
+    { professionalId: ctx.professionalId, ticketTypeId: null, rules: parsed.data.rules },
+    now,
+  );
+  if (!res.ok) return fromEngine(res, "settings");
+  return { ok: true, effects: res.effects };
 }

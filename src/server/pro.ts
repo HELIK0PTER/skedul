@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
@@ -19,10 +19,15 @@ import { createSkedulCalendar } from "@/lib/google-calendar";
 import { getCurrentProfessional, getCurrentUser } from "@/lib/session";
 import { isHexColor, presetColor } from "@/lib/color";
 import type { ActionResult } from "@/lib/back-office/result";
-import { updateProfileCore, type ProfileInput } from "@/lib/back-office/settings-actions";
+import {
+  saveAvailabilityCore,
+  updateBookingSettingsCore,
+  updateProfileCore,
+  type ProfileInput,
+} from "@/lib/back-office/settings-actions";
 import { isValidTimeZone } from "@/lib/timezones";
 import { runProAction } from "@/server/pro-context";
-import { availabilityRuleInputSchema } from "@/lib/tickets";
+import type { AvailabilityRuleInput, BookingSettings } from "@/lib/tickets";
 import { checkSlug } from "@/lib/slug";
 import { slugify } from "@/lib/utils";
 
@@ -196,39 +201,24 @@ export async function updateBranding(input: {
   revalidatePath(`/${pro.slug}`);
 }
 
-/* ───────────────────────────── Availability ────────────────────── */
+/* ───────────── Réservations et disponibilités (RDV libre) ───────────── */
 
-/** Replaces the pro's global weekly hours (rules of a ticket type are untouched). */
-export async function saveAvailability(
-  rules: { dayOfWeek: number; startMinute: number; endMinute: number }[],
-): Promise<void> {
-  const pro = await requirePro();
-  // Rows the DB CHECKs would refuse are dropped, like the old `end > start` filter.
-  const valid = rules.flatMap((r) => {
-    const parsed = availabilityRuleInputSchema.safeParse(r);
-    return parsed.success ? [parsed.data] : [];
-  });
-  const clear = db
-    .delete(availabilityRule)
-    .where(
-      and(
-        eq(availabilityRule.professionalId, pro.id),
-        isNull(availabilityRule.ticketTypeId),
-      ),
-    );
-  if (valid.length > 0) {
-    // One batch = one transaction: the old hours never vanish without the new ones.
-    await db.batch([
-      clear,
-      db
-        .insert(availabilityRule)
-        .values(valid.map((r) => ({ ...r, professionalId: pro.id }))),
-    ]);
-  } else {
-    await clear;
-  }
-  revalidatePath("/dashboard/availability");
-  revalidatePath(`/${pro.slug}`);
+/** Booking horizon, minimum notice and client cancellation deadline of the pro. */
+export async function updateBookingSettingsAction(input: BookingSettings): Promise<ActionResult> {
+  return runProAction(
+    "updateBookingSettings",
+    (ctx, now) => updateBookingSettingsCore(db, ctx, input, now),
+    { publicPage: true },
+  );
+}
+
+/** Replaces the pro's global RDV hours (the hours of a ticket type are untouched). */
+export async function saveAvailabilityAction(rules: AvailabilityRuleInput[]): Promise<ActionResult> {
+  return runProAction(
+    "saveAvailability",
+    (ctx, now) => saveAvailabilityCore(db, ctx, { rules }, now),
+    { publicPage: true },
+  );
 }
 
 /* ──────────── Séances et planning (the P3 actions live in pro-planning.ts; only this stub is left, until Task 37) ──────────── */

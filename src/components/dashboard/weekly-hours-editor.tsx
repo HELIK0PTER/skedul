@@ -189,11 +189,13 @@ export function WeeklyHoursEditor({
             <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start">
               <button
                 type="button"
+                role="switch"
+                aria-checked={enabled}
                 onClick={() =>
                   update(day, enabled ? [] : [{ start: "09:00", end: "17:00" }])
                 }
                 className={cn(
-                  "flex w-32 shrink-0 items-center gap-2 text-sm font-medium",
+                  "flex w-32 shrink-0 items-center gap-2 rounded-md text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
                 )}
               >
                 <span
