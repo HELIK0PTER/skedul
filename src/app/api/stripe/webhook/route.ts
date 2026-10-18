@@ -1,12 +1,13 @@
 import type Stripe from "stripe";
-import { eq } from "drizzle-orm";
 
-import { db } from "@/lib/db";
-import { booking, packPurchase } from "@/lib/db/schema";
 import { env } from "@/lib/env";
-import { fulfillBooking, fulfillPackPurchase } from "@/lib/payments";
 import { stripe } from "@/lib/stripe";
 
+/**
+ * Stripe webhook. Payments are rebuilt on the tickets engine in P4
+ * (fulfillPurchase, releasePurchase); until then a verified event is only
+ * logged and acknowledged, so Stripe does not retry it.
+ */
 export async function POST(request: Request) {
   if (!stripe || !env.STRIPE_WEBHOOK_SECRET) {
     return new Response("Stripe not configured", { status: 200 });
@@ -28,32 +29,6 @@ export async function POST(request: Request) {
     return new Response("Invalid signature", { status: 400 });
   }
 
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object;
-    const kind = session.metadata?.kind;
-    const referenceId = session.metadata?.referenceId;
-    const paymentIntentId =
-      typeof session.payment_intent === "string"
-        ? session.payment_intent
-        : null;
-
-    if (referenceId && kind === "pack") {
-      await db
-        .update(packPurchase)
-        .set({
-          stripeSessionId: session.id,
-          stripePaymentIntentId: paymentIntentId,
-        })
-        .where(eq(packPurchase.id, referenceId));
-      await fulfillPackPurchase(referenceId);
-    } else if (referenceId && kind === "booking") {
-      await db
-        .update(booking)
-        .set({ stripeSessionId: session.id })
-        .where(eq(booking.id, referenceId));
-      await fulfillBooking(referenceId);
-    }
-  }
-
+  console.warn(`[stripe] ${event.type} ignored: payments are being rebuilt`);
   return new Response("ok", { status: 200 });
 }

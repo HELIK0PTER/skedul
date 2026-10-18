@@ -1,340 +1,494 @@
 import "./load-env";
 
 import { betterAuth } from "better-auth";
-import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { eq, sql } from "drizzle-orm";
+import { and, asc, eq, gt, lt, sql } from "drizzle-orm";
 
+import { buildAuthOptions } from "@/lib/auth-options";
+import { loadQuestions } from "@/lib/booking/answers";
+import { cancelOccurrence, createTimeOffWithConflicts } from "@/lib/booking/cancel";
+import { createTicketType, setTicketTypeArchived } from "@/lib/booking/catalog";
+import { bookRdv, bookWithHeldTicket, registerFree, registerPro, startBuyAndBook } from "@/lib/booking/claims";
+import { fulfillPurchase, startPurchase } from "@/lib/booking/fulfillment";
+import { checkInvariants } from "@/lib/booking/invariants";
+import { expireTickets } from "@/lib/booking/nightly";
+import { ensureHorizon } from "@/lib/booking/occurrences";
+import {
+  closeTickets,
+  convertTickets,
+  createCustomer,
+  offerTickets,
+  pointTickets,
+  upsertCustomer,
+} from "@/lib/booking/wallet";
+import { addDays, dayOfWeek, instantAt, todayKey, type DateKey } from "@/lib/civil-date";
 import { db } from "@/lib/db";
-import * as schema from "@/lib/db/schema";
-import { instantFromWallClock } from "@/lib/datetime";
+import { textArray } from "@/lib/db/atomic";
+import { occurrence, professional, session, user } from "@/lib/db/schema";
+import { env } from "@/lib/env";
 
-const {
-  user,
-  professional,
-  eventType,
-  availabilityRule,
-  pack,
-  customer,
-  packPurchase,
-  booking,
-} = schema;
+import { ALTINHA_PROFILE, SEED_CLIENT_EMAILS, altinhaCatalog } from "./content/altinha";
+import { applyCatalog, expectOk, type AppliedCatalog } from "./content/apply-catalog";
 
-// A seed-only auth instance WITHOUT the next-cookies plugin, so signUp works
-// outside of an HTTP request context.
-const seedAuth = betterAuth({
-  appName: "Skedul",
-  secret: process.env.BETTER_AUTH_SECRET!,
-  database: drizzleAdapter(db, {
-    provider: "pg",
-    schema: {
-      user: schema.user,
-      session: schema.session,
-      account: schema.account,
-      verification: schema.verification,
-    },
-  }),
-  emailAndPassword: { enabled: true, autoSignIn: false, minPasswordLength: 8 },
-});
+/**
+ * Seed v2 (spec § 15.4): the Altinha Paris demo, written ONLY through the
+ * engine with an injected clock, so the history (past séances, an expired
+ * carnet, a cancelled séance) is real data that passes checkInvariants.
+ *
+ *   ./node_modules/.bin/tsx scripts/seed.ts --wipe
+ *
+ * Guards: never with APP_ENV=production; only on a DATABASE_URL host listed
+ * in SEED_ALLOWED_HOSTS; --wipe deletes the demo users only (their pages
+ * cascade), never a TRUNCATE; without --wipe it refuses if they exist.
+ */
 
-const TZ = "Europe/Paris";
+const PASSWORD = "password123";
+const TZ = ALTINHA_PROFILE.timezone;
+const DEMO_USERS = sql`email like '%@skedul.app' or email like '%@skedul.test' or email = any(${textArray(SEED_CLIENT_EMAILS)})`;
 
-async function createUser(name: string, email: string, password: string) {
-  const res = await seedAuth.api.signUpEmail({
-    body: { name, email, password },
-  });
+/** T = the real now; every other instant of the story is local wall-clock time. */
+const T = new Date();
+const TODAY = todayKey(T, TZ);
+const at = (days: number, minute: number): Date => instantAt(addDays(TODAY, days), minute, TZ);
+const plusMinutes = (d: Date, minutes: number): Date => new Date(d.getTime() + minutes * 60_000);
+/** P: the pro opened the page 8 weeks ago, at 09:00. */
+const P = at(-56, 540);
+
+type Seance = typeof occurrence.$inferSelect;
+
+async function guard(wipe: boolean): Promise<void> {
+  const host = new URL(env.DATABASE_URL).host;
+  console.info(`→ ${host}`);
+  if (env.APP_ENV === "production") throw new Error("Refus : APP_ENV=production.");
+  const allowed = (process.env.SEED_ALLOWED_HOSTS ?? "")
+    .split(",")
+    .map((h) => h.trim())
+    .filter(Boolean);
+  if (!allowed.includes(host)) throw new Error(`Refus : ${host} n'est pas dans SEED_ALLOWED_HOSTS.`);
+  if (wipe) {
+    const res = await db.execute(sql`delete from "user" where ${DEMO_USERS}`);
+    console.info(`🧹 ${res.rowCount ?? 0} compte(s) de démo supprimé(s), avec leurs pages.`);
+    return;
+  }
+  const res = await db.execute<{ n: number }>(sql`select count(*)::int as n from "user" where ${DEMO_USERS}`);
+  if (Number(res.rows[0]?.n ?? 0) > 0) {
+    throw new Error("Des comptes de démo existent déjà : relancez avec --wipe pour les remplacer.");
+  }
+}
+
+const seedAuth = betterAuth(
+  buildAuthOptions({ db, baseURL: env.APP_URL, secret: env.BETTER_AUTH_SECRET, sendEmail: async () => {} }),
+);
+
+/**
+ * A password account with a confirmed address and its role. No e-mail leaves
+ * (sendEmail is a no-op); the session auto-created by the sign-up and its
+ * « Dernière connexion » stamp are removed: nobody has signed in yet.
+ */
+async function createUser(name: string, email: string, role: "admin" | "pro" | "client"): Promise<string> {
+  const res = await seedAuth.api.signUpEmail({ body: { name, email, password: PASSWORD } });
+  await db.update(user).set({ emailVerified: true, role, lastLoginAt: null }).where(eq(user.id, res.user.id));
+  await db.delete(session).where(eq(session.userId, res.user.id));
   return res.user.id;
 }
 
-async function wipe() {
-  await db.execute(sql`
-    TRUNCATE TABLE
-      booking, pack_purchase, customer, pack, availability_rule,
-      event_type, professional, "session", account, verification, "user"
-    RESTART IDENTITY CASCADE
-  `);
+async function seancesOf(eventId: string): Promise<Seance[]> {
+  return db.select().from(occurrence).where(eq(occurrence.eventId, eventId)).orderBy(asc(occurrence.startsAt));
+}
+
+function firstFrom(rows: readonly Seance[], from: Date, label: string): Seance {
+  const row = rows.find((o) => o.status === "scheduled" && o.startsAt.getTime() >= from.getTime());
+  if (!row) throw new Error(`Aucune séance ${label} après le ${from.toISOString()}`);
+  return row;
+}
+
+/** First local date ≥ today + `days` whose weekday is listed. */
+function dayFrom(days: number, weekdays: readonly number[]): DateKey {
+  let key = addDays(TODAY, days);
+  while (!weekdays.includes(dayOfWeek(key))) key = addDays(key, 1);
+  return key;
+}
+
+/** First local date ≥ today + `days` without any séance holding a seat (the time off must cancel nothing). */
+async function dayWithoutBookings(professionalId: string, days: number): Promise<DateKey> {
+  for (let i = 0; i < 14; i++) {
+    const key = addDays(TODAY, days + i);
+    const start = instantAt(key, 0, TZ);
+    const end = instantAt(addDays(key, 1), 0, TZ);
+    const [row] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(occurrence)
+      .where(
+        and(
+          eq(occurrence.professionalId, professionalId),
+          eq(occurrence.status, "scheduled"),
+          gt(occurrence.seatsTaken, 0),
+          lt(occurrence.blockStart, end),
+          gt(occurrence.blockEnd, start),
+        ),
+      );
+    if (Number(row?.n ?? 0) === 0) return key;
+  }
+  throw new Error("Aucun jour libre pour l'indisponibilité");
+}
+
+function offerOf(catalog: AppliedCatalog, key: string, index: number): string {
+  const id = catalog.offerIds[key]?.[index];
+  if (!id) throw new Error(`Offre ${key}[${index}] introuvable`);
+  return id;
 }
 
 async function main() {
-  console.info("🌱 Seeding Skedul (Neon: development branch)…");
-  await wipe();
+  const wipe = process.argv.includes("--wipe");
+  await guard(wipe);
+  console.info("🌱 Seed Skedul v2 (tickets et événements)…");
 
-  /* ── Admin account (no pro page; « Connexion rapide » hors prod) ── */
-  const adminUserId = await createUser(
-    "Admin Skedul",
-    "admin@skedul.test",
-    "password123",
-  );
-  await db.update(user).set({ role: "admin" }).where(eq(user.id, adminUserId));
+  /* ── 1. Accounts ─────────────────────────────────────────────── */
+  await createUser("Admin Skedul", "admin@skedul.test", "admin");
+  const proUserId = await createUser("Altinha Paris", "pro@skedul.app", "pro");
+  const beatrizUserId = await createUser("Beatriz Almeida", "beatriz@example.com", "client");
 
-  /* ── Professional account ─────────────────────────────────────── */
-  const proUserId = await createUser(
-    "Altinha Paris",
-    "pro@skedul.app",
-    "password123",
-  );
-  await db.update(user).set({ role: "pro" }).where(eq(user.id, proUserId));
-
+  /* ── 2. Pro page and catalog, as of 8 weeks ago ──────────────── */
   const [pro] = await db
     .insert(professional)
-    .values({
-      userId: proUserId,
-      slug: "altinha-paris",
-      businessName: "Altinha Paris",
-      headline: "Aulas de altinha em Paris, com a energia do Rio ☀️",
-      bio: "A gente começou a dar aulas pra compartilhar a altinha e fazer esse esporte crescer aqui em Paris. Nascemos e crescemos no Rio, então trazemos essa energia pra cá. As aulas duram 1h, em grupos pequenos organizados por nível, pra todo mundo evoluir no seu ritmo. De segunda a sábado, entre Nation e Tuileries. 🤍",
-      brandColor: "#d97706",
-      themePreset: "amber",
-      headerLayout: "vitrine",
-      avatarKind: "generated",
-      avatarStyle: "fun-emoji",
-      avatarSeed: "altinha-paris",
-      timezone: TZ,
-      currency: "eur",
-    })
-    .returning();
+    .values({ userId: proUserId, ...ALTINHA_PROFILE })
+    .returning({ id: professional.id });
+  const professionalId = pro.id;
+  const catalog = await applyCatalog(db, professionalId, altinhaCatalog(todayKey(P, TZ)), P);
+  const typeIds = catalog.typeIds;
+  const [debutantsQuestion] = await loadQuestions(db, { eventId: catalog.eventIds.debutants });
+  const [objectiveQuestion] = await loadQuestions(db, { ticketTypeId: typeIds.particulier });
+  if (!debutantsQuestion || !objectiveQuestion) throw new Error("Questions du catalogue introuvables");
+  const debutants = await seancesOf(catalog.eventIds.debutants);
+  const debutantsUpcoming = firstFrom(debutants, at(1, 0), "débutants");
 
-  /* ── Event types (aulas, toutes 1h) ───────────────────────────── */
-  const [experimental] = await db
-    .insert(eventType)
-    .values({
-      professionalId: pro.id,
-      title: "Aula experimental",
-      slug: "aula-experimental",
-      description:
-        "Sua primeira aula pra experimentar a altinha e sentir a vibe, sem compromisso.",
-      durationMinutes: 60,
-      priceCents: 1500,
-      color: "#f59e0b",
-    })
-    .returning();
-
-  const [individual] = await db
-    .insert(eventType)
-    .values({
-      professionalId: pro.id,
-      title: "Aula individual",
-      slug: "aula-individual",
-      description:
-        "Aula só pra você, com foco total na sua evolução e no seu ritmo.",
-      durationMinutes: 60,
-      priceCents: 3000,
-      color: "#0ea5e9",
-    })
-    .returning();
-
-  const [group] = await db
-    .insert(eventType)
-    .values({
-      professionalId: pro.id,
-      title: "Aula em grupo",
-      slug: "aula-em-grupo",
-      description:
-        "Grupo pequeno organizado por nível. A energia da altinha com a galera. Preço por pessoa.",
-      durationMinutes: 60,
-      priceCents: 2500,
-      color: "#16a34a",
-    })
-    .returning();
-
-  /* ── Availability: seg–sáb, 10h/11h/12h & 17h30/18h30/19h30 ───── */
-  // Créneaux de 1h → step = durée : 600–780 = 10h,11h,12h ; 1050–1230 = 17h30,18h30,19h30.
-  const rules: {
-    professionalId: string;
-    dayOfWeek: number;
-    startMinute: number;
-    endMinute: number;
-  }[] = [];
-  for (const day of [1, 2, 3, 4, 5, 6]) {
-    rules.push({ professionalId: pro.id, dayOfWeek: day, startMinute: 600, endMinute: 780 });
-    rules.push({ professionalId: pro.id, dayOfWeek: day, startMinute: 1050, endMinute: 1230 });
+  /** E9 + E10 (mock payment): the tickets of one paid purchase. */
+  async function buy(customerId: string, offerId: string, paidAt: Date): Promise<string[]> {
+    const started = expectOk("achat", await startPurchase(db, { professionalId, offerId, customerId }, paidAt));
+    const paid = await fulfillPurchase(
+      db,
+      started.purchaseId,
+      { sessionId: null, paymentIntentId: null, livemode: false },
+      plusMinutes(paidAt, 2),
+    );
+    if (paid.outcome !== "fulfilled") throw new Error(`Paiement ${started.purchaseId} : ${paid.outcome}`);
+    return paid.ticketIds;
   }
-  await db.insert(availabilityRule).values(rules);
 
-  /* ── Packs ────────────────────────────────────────────────────── */
-  const [pack4] = await db
-    .insert(pack)
-    .values({
-      professionalId: pro.id,
-      name: "Pack 4 aulas",
-      description:
-        "4 aulas em grupo pré-pagas, pra usar quando quiser. Economize 15€ vs. a aula avulsa. 🌞",
-      credits: 4,
-      priceCents: 8500,
-      eventTypeId: group.id,
-    })
-    .returning();
+  /* ── 3. Customers ────────────────────────────────────────────── */
+  const { customerId: beatriz } = await upsertCustomer(
+    db,
+    {
+      professionalId,
+      email: "beatriz@example.com",
+      name: "Beatriz Almeida",
+      phone: "+33 6 11 22 33 44",
+      userId: beatrizUserId,
+    },
+    P,
+  );
+  const newCustomer = async (name: string, email: string, now: Date): Promise<string> =>
+    expectOk(`client ${email}`, await createCustomer(db, { professionalId, name, email }, now)).customerId;
+  const rafael = await newCustomer("Rafael Souza", "rafael@example.com", at(-120, 590));
+  const thomas = await newCustomer("Thomas Leroy", "thomas@example.com", at(-53, 590));
+  const lea = await newCustomer("Léa Martin", "lea@example.com", at(-51, 590));
+  const marina = await newCustomer("Marina Costa", "marina@example.com", T);
 
-  /* ── Clients & customers ──────────────────────────────────────── */
-  const beatrizUserId = await createUser(
-    "Beatriz Almeida",
-    "beatriz@example.com",
-    "password123",
+  /* ── 4. Beatriz: carnet of 10, 3 past classes, pointed, converted, RDV, cancelled séance ── */
+  await buy(beatriz, offerOf(catalog, "collectif", 2), at(-55, 600));
+  const beatrizPast = debutants.filter((o) => o.startsAt >= at(-53, 0) && o.startsAt < T).slice(0, 3);
+  if (beatrizPast.length < 3) throw new Error("Pas assez de séances débutants passées");
+  for (const [i, o] of beatrizPast.entries()) {
+    expectOk(
+      "Beatriz, séance passée",
+      await bookWithHeldTicket(
+        db,
+        {
+          professionalId,
+          occurrenceId: o.id,
+          customerId: beatriz,
+          seenStartsAt: o.startsAt,
+          actorUserId: beatrizUserId,
+          answers: [{ questionId: debutantsQuestion.id, value: "Oui" }],
+          customerNotes: i === 0 ? "Bora! Tô amando as aulas 🙌" : null,
+        },
+        plusMinutes(o.startsAt, -2 * 24 * 60),
+      ),
+    );
+  }
+  expectOk(
+    "Beatriz, pointage",
+    await pointTickets(
+      db,
+      {
+        professionalId,
+        actorUserId: proUserId,
+        customerId: beatriz,
+        selection: { ticketTypeId: typeIds.collectif, quantity: 1 },
+        note: "Cours rattrapé au parc",
+      },
+      at(-36, 600),
+    ),
+  );
+  expectOk(
+    "Beatriz, conversion",
+    await convertTickets(
+      db,
+      {
+        professionalId,
+        actorUserId: proUserId,
+        customerId: beatriz,
+        selection: { ticketTypeId: typeIds.collectif, quantity: 1 },
+        toTicketTypeId: typeIds.particulier,
+      },
+      at(-26, 600),
+    ),
+  );
+  expectOk(
+    "Beatriz, cours particulier",
+    await bookRdv(
+      db,
+      {
+        professionalId,
+        ticketTypeId: typeIds.particulier,
+        startsAt: instantAt(dayFrom(5, [1, 2, 3, 4, 5, 6]), 660, TZ),
+        customerId: beatriz,
+        answers: [{ questionId: objectiveQuestion.id, value: "Tenir 50 touches sans faire tomber la balle" }],
+        actorUserId: beatrizUserId,
+        mode: "held_ticket",
+      },
+      T,
+    ),
+  );
+  const intermediaires = firstFrom(await seancesOf(catalog.eventIds.intermediaires), at(1, 0), "intermédiaires");
+  expectOk(
+    "Beatriz, intermédiaires",
+    await bookWithHeldTicket(
+      db,
+      {
+        professionalId,
+        occurrenceId: intermediaires.id,
+        customerId: beatriz,
+        seenStartsAt: intermediaires.startsAt,
+        actorUserId: beatrizUserId,
+      },
+      T,
+    ),
+  );
+  expectOk(
+    "séance annulée",
+    await cancelOccurrence(db, { professionalId, actorUserId: proUserId, occurrenceId: intermediaires.id }, plusMinutes(T, 5)),
   );
 
-  const [beatriz] = await db
-    .insert(customer)
-    .values({
-      professionalId: pro.id,
-      userId: beatrizUserId,
-      name: "Beatriz Almeida",
-      email: "beatriz@example.com",
-      phone: "+33 6 11 22 33 44",
-    })
-    .returning();
+  /* ── 5. Rafael: a carnet of 4 bought 4 months ago, expired unused ── */
+  await buy(rafael, offerOf(catalog, "collectif", 1), at(-120, 600));
 
-  const [rafael] = await db
-    .insert(customer)
-    .values({
-      professionalId: pro.id,
-      name: "Rafael Souza",
-      email: "rafael@example.com",
-    })
-    .returning();
+  /* ── 6. Thomas: a trial class, booked on the next débutants séance ── */
+  await buy(thomas, offerOf(catalog, "essai", 0), at(-53, 600));
+  expectOk(
+    "Thomas, débutants",
+    await bookWithHeldTicket(
+      db,
+      {
+        professionalId,
+        occurrenceId: debutantsUpcoming.id,
+        customerId: thomas,
+        seenStartsAt: debutantsUpcoming.startsAt,
+        actorUserId: null,
+        customerNotes: "Jamais joué, mais super curieux d'essayer !",
+      },
+      T,
+    ),
+  );
 
-  const [thomas] = await db
-    .insert(customer)
-    .values({
-      professionalId: pro.id,
-      name: "Thomas Leroy",
-      email: "thomas@example.com",
-    })
-    .returning();
+  /* ── 7. Marina: buy + book (T14 shape), one ticket closed, a free discovery call ── */
+  const bought = expectOk(
+    "Marina, achat + réservation",
+    await startBuyAndBook(
+      db,
+      {
+        professionalId,
+        occurrenceId: debutantsUpcoming.id,
+        customerId: marina,
+        seenStartsAt: debutantsUpcoming.startsAt,
+        offerId: offerOf(catalog, "collectif", 1),
+        answers: [{ questionId: debutantsQuestion.id, value: "Non" }],
+      },
+      T,
+    ),
+  );
+  const paid = await fulfillPurchase(
+    db,
+    bought.purchaseId,
+    { sessionId: null, paymentIntentId: null, livemode: false },
+    plusMinutes(T, 2),
+  );
+  if (paid.outcome !== "fulfilled" || !paid.bookingConfirmed) {
+    throw new Error(`Marina : paiement ${paid.outcome}, inscription confirmée = ${paid.bookingConfirmed}`);
+  }
+  expectOk(
+    "Marina, clôture",
+    await closeTickets(
+      db,
+      {
+        professionalId,
+        actorUserId: proUserId,
+        customerId: marina,
+        selection: { ticketTypeId: typeIds.collectif, quantity: 1 },
+        reason: "rembourse",
+        note: "Remboursé en espèces",
+      },
+      plusMinutes(T, 3),
+    ),
+  );
+  expectOk(
+    "Marina, appel découverte",
+    await bookRdv(
+      db,
+      {
+        professionalId,
+        ticketTypeId: typeIds.decouverte,
+        startsAt: instantAt(dayFrom(6, [1, 2, 3, 4, 5]), 720, TZ),
+        customerId: marina,
+        actorUserId: null,
+        mode: "free",
+      },
+      T,
+    ),
+  );
 
-  const [marina] = await db
-    .insert(customer)
-    .values({
-      professionalId: pro.id,
-      name: "Marina Costa",
-      email: "marina@example.com",
-    })
-    .returning();
+  /* ── 8. Léa: 2 trial tickets offered, registered by the pro, free roda ── */
+  expectOk(
+    "Léa, tickets offerts",
+    await offerTickets(
+      db,
+      {
+        professionalId,
+        actorUserId: proUserId,
+        customerId: lea,
+        ticketTypeId: typeIds.essai,
+        quantity: 2,
+        expiresAt: null,
+        reason: "Bienvenue chez Altinha Paris",
+        notify: false,
+      },
+      at(-51, 600),
+    ),
+  );
+  const leaSeance = debutants.find((o) => o.seriesDate !== null && o.seriesDate >= addDays(TODAY, -49));
+  if (!leaSeance || leaSeance.startsAt >= T) throw new Error("Aucune séance débutants passée pour Léa");
+  expectOk(
+    "Léa, inscrite par le pro",
+    await registerPro(
+      db,
+      { professionalId, actorUserId: proUserId, occurrenceId: leaSeance.id, customerId: lea, asGuest: false },
+      plusMinutes(leaSeance.startsAt, 120),
+    ),
+  );
+  const roda = firstFrom(await seancesOf(catalog.eventIds.roda), at(1, 0), "roda");
+  expectOk(
+    "Léa, roda",
+    await registerFree(db, { professionalId, occurrenceId: roda.id, customerId: lea, seenStartsAt: roda.startsAt }, T),
+  );
 
-  /* ── Pack purchases (paid, with remaining credits) ────────────── */
-  const [beatrizPurchase] = await db
-    .insert(packPurchase)
-    .values({
-      packId: pack4.id,
-      professionalId: pro.id,
-      customerId: beatriz.id,
-      creditsTotal: 4,
-      creditsRemaining: 2, // 2 used below (1 past + 1 upcoming)
-      amountPaidCents: 8500,
-      currency: "eur",
-      status: "paid",
-      stripeSessionId: "cs_test_seed_beatriz",
-    })
-    .returning();
+  /* ── 9. Alerts: 🔴 tickets of an archived type, 🟠 a type linked to nothing ── */
+  const summer = expectOk(
+    "type Stage d'été",
+    await createTicketType(
+      db,
+      { professionalId, type: { name: "Stage d'été 2026", description: "Le stage intensif de juillet.", color: "#ef4444" } },
+      at(-40, 600),
+    ),
+  ).ticketTypeId;
+  expectOk(
+    "Rafael, tickets du stage",
+    await offerTickets(
+      db,
+      {
+        professionalId,
+        actorUserId: proUserId,
+        customerId: rafael,
+        ticketTypeId: summer,
+        quantity: 2,
+        expiresAt: null,
+        reason: "Report du stage d'été",
+        notify: false,
+      },
+      at(-40, 610),
+    ),
+  );
+  expectOk(
+    "archivage du stage",
+    await setTicketTypeArchived(db, { professionalId, ticketTypeId: summer, archived: true }, at(-2, 600)),
+  );
+  const outdoor = expectOk(
+    "type Cours en plein air",
+    await createTicketType(db, { professionalId, type: { name: "Cours en plein air", color: "#84cc16" } }, at(-10, 600)),
+  ).ticketTypeId;
+  expectOk(
+    "Thomas, ticket plein air",
+    await offerTickets(
+      db,
+      {
+        professionalId,
+        actorUserId: proUserId,
+        customerId: thomas,
+        ticketTypeId: outdoor,
+        quantity: 1,
+        expiresAt: null,
+        reason: "Geste commercial",
+        notify: false,
+      },
+      at(-10, 610),
+    ),
+  );
 
-  const [rafaelPurchase] = await db
-    .insert(packPurchase)
-    .values({
-      packId: pack4.id,
-      professionalId: pro.id,
-      customerId: rafael.id,
-      creditsTotal: 4,
-      creditsRemaining: 3, // 1 used below (upcoming)
-      amountPaidCents: 8500,
-      currency: "eur",
-      status: "paid",
-      stripeSessionId: "cs_test_seed_rafael",
-    })
-    .returning();
+  /* ── 10. A day off in 3 weeks, on a day nobody booked ── */
+  const offDay = await dayWithoutBookings(professionalId, 21);
+  expectOk(
+    "indisponibilité",
+    await createTimeOffWithConflicts(
+      db,
+      {
+        professionalId,
+        actorUserId: proUserId,
+        startAt: instantAt(offDay, 0, TZ),
+        endAt: instantAt(addDays(offDay, 1), 0, TZ),
+        allDay: true,
+        reason: "Vacances",
+        seenOccurrenceIds: [],
+        cancelBooked: false,
+      },
+      T,
+    ),
+  );
 
-  /* ── Bookings (past + upcoming) ───────────────────────────────── */
-  const at = (
-    y: number,
-    m: number,
-    d: number,
-    minutes: number,
-    duration: number,
-  ) => {
-    const start = instantFromWallClock(y, m, d, minutes, TZ);
-    const end = instantFromWallClock(y, m, d, minutes + duration, TZ);
-    return { start, end };
-  };
+  /* ── 11. Today: nightly expiry, rolling horizon, invariants ── */
+  const { expired } = await expireTickets(db, T);
+  for (let i = 0; i < 5; i++) {
+    if (expectOk("horizon", await ensureHorizon(db, professionalId, T)).complete) break;
+  }
+  const violations = await checkInvariants(db, { proId: professionalId });
+  if (violations.length > 0) {
+    throw new Error(
+      `checkInvariants → ${violations.length}\n${violations.map((v) => `  ${v.invariant} ${v.rowId} ${v.detail}`).join("\n")}`,
+    );
+  }
+  console.info(`✓ ${expired} ticket(s) expiré(s) ; checkInvariants → 0`);
 
-  // Beatriz — pack credits: 1 past completed group + 1 upcoming confirmed group
-  const b1 = at(2026, 6, 17, 1110, 60); // Wed 17 June 18:30 (past)
-  const b2 = at(2026, 6, 22, 1110, 60); // Mon 22 June 18:30 (upcoming)
-  // Rafael — pack credit: 1 upcoming group
-  const r1 = at(2026, 6, 23, 1110, 60); // Tue 23 June 18:30 (upcoming)
-  // Thomas — direct-paid trial upcoming
-  const t1 = at(2026, 6, 24, 660, 60); // Wed 24 June 11:00 (upcoming)
-  // Marina — direct-paid individual upcoming
-  const m1 = at(2026, 6, 25, 1170, 60); // Thu 25 June 19:30 (upcoming)
-
-  await db.insert(booking).values([
-    {
-      professionalId: pro.id,
-      eventTypeId: group.id,
-      customerId: beatriz.id,
-      startAt: b1.start,
-      endAt: b1.end,
-      status: "completed",
-      paymentType: "credit",
-      amountPaidCents: 0,
-      packPurchaseId: beatrizPurchase.id,
-    },
-    {
-      professionalId: pro.id,
-      eventTypeId: group.id,
-      customerId: beatriz.id,
-      startAt: b2.start,
-      endAt: b2.end,
-      status: "confirmed",
-      paymentType: "credit",
-      amountPaidCents: 0,
-      packPurchaseId: beatrizPurchase.id,
-      customerNotes: "Bora! Tô amando as aulas 🙌",
-    },
-    {
-      professionalId: pro.id,
-      eventTypeId: group.id,
-      customerId: rafael.id,
-      startAt: r1.start,
-      endAt: r1.end,
-      status: "confirmed",
-      paymentType: "credit",
-      amountPaidCents: 0,
-      packPurchaseId: rafaelPurchase.id,
-    },
-    {
-      professionalId: pro.id,
-      eventTypeId: experimental.id,
-      customerId: thomas.id,
-      startAt: t1.start,
-      endAt: t1.end,
-      status: "confirmed",
-      paymentType: "direct",
-      amountPaidCents: 1500,
-      stripeSessionId: "cs_test_seed_thomas",
-      customerNotes: "Jamais joué, mais super curieux d'essayer !",
-    },
-    {
-      professionalId: pro.id,
-      eventTypeId: individual.id,
-      customerId: marina.id,
-      startAt: m1.start,
-      endAt: m1.end,
-      status: "confirmed",
-      paymentType: "direct",
-      amountPaidCents: 3000,
-      stripeSessionId: "cs_test_seed_marina",
-    },
-  ]);
-
+  /* ── 12. Summary ── */
   console.info("\n✅ Seed terminé.\n");
-  console.info("Comptes de démonstration :");
-  console.info("  • Admin  → admin@skedul.test    / password123");
-  console.info("  • Pro    → pro@skedul.app       / password123");
-  console.info("  • Client → beatriz@example.com  / password123");
-  console.info("\nPage publique : /altinha-paris");
+  console.info(`Comptes de démonstration (mot de passe : ${PASSWORD}) :`);
+  console.info("  • Admin  → admin@skedul.test");
+  console.info("  • Pro    → pro@skedul.app");
+  console.info("  • Client → beatriz@example.com");
+  console.info(`\nPage publique : /${ALTINHA_PROFILE.slug}`);
   console.info("Back-office   : /dashboard\n");
 }
 
 main()
   .then(() => process.exit(0))
   .catch((err) => {
-    console.error("❌ Seed failed:", err);
+    console.error("❌ Seed échoué :", err instanceof Error ? err.message : err);
+    if (err instanceof Error && err.cause) console.error(err.cause);
     process.exit(1);
   });
