@@ -279,32 +279,9 @@ export async function deleteTimeOff(id: string) {
 
 /* ──────────── Séances et planning (rebuilt in P3, same signatures) ──────────── */
 
-export async function updateSessionCapacity(input: {
-  sessionId: string;
-  capacity: number;
-}): Promise<void> {
-  await requirePro();
-  void input;
-}
-
 export async function cancelBooking(bookingId: string): Promise<Res> {
   await requirePro();
   void bookingId;
-  return COMING_SOON;
-}
-
-export async function moveAttendee(input: {
-  bookingId: string;
-  targetSessionId: string;
-}): Promise<Res> {
-  await requirePro();
-  void input;
-  return COMING_SOON;
-}
-
-export async function cancelSession(sessionId: string): Promise<Res> {
-  await requirePro();
-  void sessionId;
   return COMING_SOON;
 }
 
