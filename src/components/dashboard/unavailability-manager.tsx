@@ -104,6 +104,8 @@ export function UnavailabilityManager({
   /** Bumped with each failure of a server call: the effect below puts the focus on the error box once it is rendered. */
   const [errorFocus, setErrorFocus] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
+  /** Bumped with each success line, even when its text repeats (two deletions in a row): the effect below focuses it. */
+  const [noticeFocus, setNoticeFocus] = useState(0);
   const [viewMonth, setViewMonth] = useState<DateKey>(() => monthOf(todayKey));
   const [startDate, setStartDate] = useState<string>(todayKey);
   const [endDate, setEndDate] = useState<string>(todayKey);
@@ -125,8 +127,8 @@ export function UnavailabilityManager({
   }, [errorFocus]);
   // A new success line takes the focus too: the button that started the action (or the dialog) has gone by then.
   useEffect(() => {
-    if (notice) noticeBox.current?.focus();
-  }, [notice]);
+    if (noticeFocus > 0) noticeBox.current?.focus();
+  }, [noticeFocus]);
 
   const marked = useMemo(() => new Set(markedDays), [markedDays]);
   const grid = useMemo(() => monthDays(viewMonth), [viewMonth]);
@@ -146,6 +148,11 @@ export function UnavailabilityManager({
   function fail(message: string) {
     setError(message);
     setErrorFocus((n) => n + 1);
+  }
+
+  function succeed(message: string) {
+    setNotice(message);
+    setNoticeFocus((n) => n + 1);
   }
 
   function pickDay(day: DateKey) {
@@ -202,7 +209,7 @@ export function UnavailabilityManager({
     setReviewError(null);
     setReason("");
     setPicking("start");
-    setNotice(
+    succeed(
       cancelled > 0
         ? `Indisponibilité ajoutée. ${plural(cancelled, "séance annulée", "séances annulées")}.`
         : "Indisponibilité ajoutée.",
@@ -281,7 +288,7 @@ export function UnavailabilityManager({
           return;
         }
         setToDelete(null);
-        setNotice("Indisponibilité supprimée.");
+        succeed("Indisponibilité supprimée.");
       } catch {
         setDeleteError(REQUEST_FAILED);
       } finally {
@@ -362,7 +369,7 @@ export function UnavailabilityManager({
                   )}
                   <button
                     type="button"
-                    disabled={past}
+                    disabled={past || pending}
                     onClick={() => pickDay(day)}
                     onMouseEnter={() => setHoverKey(day)}
                     aria-label={`${labels.get(day) ?? day}${isMarked ? " (indisponibilité existante)" : ""}`}

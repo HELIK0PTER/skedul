@@ -13,6 +13,7 @@ import {
   retireTicketsCopy,
   revokeLinksCopy,
   timeOffConflictCopy,
+  timeOffConflictLine,
   unenrollCopy,
   type ConfirmCopy,
 } from "./confirm-copy";
@@ -174,25 +175,82 @@ test("deleteEventCopy: the whole event, a series from a date, nothing concerned"
   assert.equal(event().title, "Supprimer « Roda libre » ?", "no date, not whole: the plain title");
 });
 
-test("timeOffConflictCopy: plural and singular", () => {
-  assert.deepEqual(timeOffConflictCopy({ count: 2 }), {
+const RDV_NOTE = "Un rendez-vous compte avec ses marges avant et après.";
+
+test("timeOffConflictCopy: séances only, plural and singular", () => {
+  assert.deepEqual(timeOffConflictCopy({ seances: 2, rdvs: 0 }), {
     title: "Des séances ont des inscrits",
     intro: "Cette indisponibilité chevauche 2 séances avec des inscrits :",
     cancelLabel: "Annuler ces 2 séances (tickets rendus, clients prévenus)",
     keepLabel: "Les garder",
     keepNote:
       "Gardées, elles restent pour leurs inscrits mais ne sont plus réservables en ligne. Vous pouvez encore y inscrire quelqu'un.",
-    rdvNote: "Un rendez-vous compte avec ses marges avant et après.",
+    rdvNote: RDV_NOTE,
   });
-  assert.deepEqual(timeOffConflictCopy({ count: 1 }), {
+  assert.deepEqual(timeOffConflictCopy({ seances: 1, rdvs: 0 }), {
     title: "Des séances ont des inscrits",
     intro: "Cette indisponibilité chevauche 1 séance avec des inscrits :",
     cancelLabel: "Annuler cette séance (tickets rendus, clients prévenus)",
     keepLabel: "La garder",
     keepNote:
       "Gardée, elle reste pour ses inscrits mais n'est plus réservable en ligne. Vous pouvez encore y inscrire quelqu'un.",
-    rdvNote: "Un rendez-vous compte avec ses marges avant et après.",
+    rdvNote: RDV_NOTE,
   });
+});
+
+test("timeOffConflictCopy: rendez-vous only never says séance nor inscrit", () => {
+  assert.deepEqual(timeOffConflictCopy({ seances: 0, rdvs: 1 }), {
+    title: "Un rendez-vous est réservé",
+    intro: "Cette indisponibilité chevauche 1 rendez-vous réservé :",
+    cancelLabel: "Annuler ce rendez-vous (ticket rendu, client prévenu)",
+    keepLabel: "Le garder",
+    keepNote: "Gardé, il reste pour son client mais le créneau n'est plus réservable en ligne.",
+    rdvNote: RDV_NOTE,
+  });
+  assert.deepEqual(timeOffConflictCopy({ seances: 0, rdvs: 2 }), {
+    title: "Des rendez-vous sont réservés",
+    intro: "Cette indisponibilité chevauche 2 rendez-vous réservés :",
+    cancelLabel: "Annuler ces 2 rendez-vous (tickets rendus, clients prévenus)",
+    keepLabel: "Les garder",
+    keepNote: "Gardés, ils restent pour leurs clients mais les créneaux ne sont plus réservables en ligne.",
+    rdvNote: RDV_NOTE,
+  });
+});
+
+test("timeOffConflictCopy: séances and rendez-vous together", () => {
+  assert.deepEqual(timeOffConflictCopy({ seances: 2, rdvs: 1 }), {
+    title: "Des séances et des rendez-vous sont réservés",
+    intro: "Cette indisponibilité chevauche 2 séances avec des inscrits et 1 rendez-vous réservé :",
+    cancelLabel: "Annuler ces 3 séances et rendez-vous (tickets rendus, clients prévenus)",
+    keepLabel: "Les garder",
+    keepNote:
+      "Gardés, ils restent pour leurs inscrits et leurs clients mais ne sont plus réservables en ligne. Vous pouvez encore inscrire quelqu'un à une séance.",
+    rdvNote: RDV_NOTE,
+  });
+  const oneEach = timeOffConflictCopy({ seances: 1, rdvs: 1 });
+  assert.equal(oneEach.intro, "Cette indisponibilité chevauche 1 séance avec des inscrits et 1 rendez-vous réservé :");
+  assert.equal(oneEach.cancelLabel, "Annuler ces 2 séances et rendez-vous (tickets rendus, clients prévenus)");
+  assert.equal(
+    timeOffConflictCopy({ seances: 1, rdvs: 3 }).intro,
+    "Cette indisponibilité chevauche 1 séance avec des inscrits et 3 rendez-vous réservés :",
+  );
+});
+
+test("timeOffConflictLine: a séance has inscrits, a rendez-vous has a client", () => {
+  const when = "lun. 19 octobre 2026 · 12:00 à 12:15";
+  assert.equal(
+    timeOffConflictLine({ kind: "seance", whenLabel: when, title: "Altinha débutants", activeBookings: 3 }),
+    "lun. 19 octobre 2026 · 12:00 à 12:15 · Altinha débutants · 3 inscrits",
+  );
+  assert.equal(
+    timeOffConflictLine({ kind: "seance", whenLabel: when, title: "Altinha débutants", activeBookings: 1 }),
+    "lun. 19 octobre 2026 · 12:00 à 12:15 · Altinha débutants · 1 inscrit",
+  );
+  assert.equal(
+    timeOffConflictLine({ kind: "rdv", whenLabel: when, title: "Appel découverte", activeBookings: 1 }),
+    "lun. 19 octobre 2026 · 12:00 à 12:15 · Appel découverte · 1 client",
+  );
+  assert.equal(DASH.test(timeOffConflictLine({ kind: "rdv", whenLabel: when, title: "Appel", activeBookings: 2 })), false);
 });
 
 test("every text is non-empty for 0, 1 and 2 and carries no dash", () => {
@@ -209,8 +267,14 @@ test("every text is non-empty for 0, 1 and 2 and carries no dash", () => {
       deleteOfferCopy({ label: "Offre", sold: n === 1 }),
       event({ fromLabel: n === 0 ? null : "lun. 12/10", deletedSeances: n, cancelledSeances: n, registrants: n, ticketsReturned: n }),
     );
-    const conflict = timeOffConflictCopy({ count: n });
-    copies.push({ title: conflict.title, body: `${conflict.intro} ${conflict.keepNote} ${conflict.rdvNote}`, confirm: `${conflict.cancelLabel} ${conflict.keepLabel}` });
+    for (const [seances, rdvs] of [[n, 0], [0, n], [n, n]] as const) {
+      const conflict = timeOffConflictCopy({ seances, rdvs });
+      copies.push({
+        title: conflict.title,
+        body: `${conflict.intro} ${conflict.keepNote} ${conflict.rdvNote}`,
+        confirm: `${conflict.cancelLabel} ${conflict.keepLabel}`,
+      });
+    }
   }
   copies.push(
     restoreOccurrenceCopy(),

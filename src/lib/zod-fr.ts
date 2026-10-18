@@ -48,6 +48,7 @@ export const FIELD_LABELS: Readonly<Record<string, string>> = {
   cancelDeadlineHours: "Annulation par le client",
   startDate: "Date de début",
   startMinute: "Heure de début",
+  endMinute: "Heure de fin",
   interval: "Intervalle",
   weekdays: "Jours",
   untilDate: "Date de fin",

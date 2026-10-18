@@ -5,8 +5,7 @@ import { useEffect, useId, useRef } from "react";
 import { FormError } from "@/components/dashboard/form-error";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
-import { timeOffConflictCopy } from "@/lib/back-office/confirm-copy";
-import { plural } from "@/lib/back-office/format";
+import { timeOffConflictCopy, timeOffConflictLine } from "@/lib/back-office/confirm-copy";
 import type { TimeOffConflictVM } from "@/lib/back-office/time-off-actions";
 
 const noop = () => {};
@@ -35,8 +34,8 @@ export function TimeOffConflictDialog({
   onKeep: () => void;
   onClose: () => void;
 }) {
-  const copy = timeOffConflictCopy({ count: conflicts.length });
-  const hasRdv = conflicts.some((c) => c.kind === "rdv");
+  const rdvs = conflicts.filter((c) => c.kind === "rdv").length;
+  const copy = timeOffConflictCopy({ seances: conflicts.length - rdvs, rdvs });
   const bodyId = useId();
   const errorBox = useRef<HTMLParagraphElement>(null);
   const keepButton = useRef<HTMLButtonElement>(null);
@@ -56,11 +55,11 @@ export function TimeOffConflictDialog({
         <ul className="max-h-60 space-y-1.5 overflow-y-auto rounded-xl border border-border bg-muted/40 p-3 text-sm">
           {conflicts.map((c) => (
             <li key={c.occurrenceId} className="break-words">
-              {`${c.whenLabel} · ${c.title} · ${plural(c.activeBookings, "inscrit", "inscrits")}`}
+              {timeOffConflictLine(c)}
             </li>
           ))}
         </ul>
-        {hasRdv && <p className="text-xs text-zinc-600">{copy.rdvNote}</p>}
+        {rdvs > 0 && <p className="text-xs text-zinc-600">{copy.rdvNote}</p>}
         <p className="text-sm text-zinc-600">{copy.keepNote}</p>
         <FormError message={error} ref={errorBox} tabIndex={-1} />
         <div className="flex flex-col gap-2">

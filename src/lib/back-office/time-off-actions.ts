@@ -24,7 +24,8 @@ export const timeOffFormSchema = z.object({
   endDate: dateKeySchema,
   allDay: z.boolean(),
   startMinute: z.number().int().min(0).max(1439).optional(),
-  endMinute: z.number().int().min(1).max(1440).optional(),
+  // 0 is accepted here: « Fin 00:00 » on a timed range means the end of that day (see intervalOf).
+  endMinute: z.number().int().min(0).max(1440).optional(),
   reason: z.string().trim().max(BOUNDS.note).optional(),
 });
 export type TimeOffForm = z.input<typeof timeOffFormSchema>;
@@ -53,6 +54,14 @@ const MAX_DAYS = 366;
 
 type Interval = { startAt: Date; endAt: Date };
 
+/**
+ * A timed range typed « 17:00 to 00:00 » runs until the midnight that ends its day: an end of 0 after a start
+ * later than 0 reads as 1440. A start of 0 with an end of 0 stays 0 and is refused like any end before its start.
+ */
+function midnightEnd(form: z.output<typeof timeOffFormSchema>): z.output<typeof timeOffFormSchema> {
+  return !form.allDay && form.endMinute === 0 && (form.startMinute ?? 0) > 0 ? { ...form, endMinute: 1440 } : form;
+}
+
 /** The pro-tz instants of a parsed form, or the French reason they cannot be built. */
 function intervalOf(
   form: z.output<typeof timeOffFormSchema>,
@@ -60,7 +69,7 @@ function intervalOf(
 ): { ok: true; interval: Interval } | ActionFail {
   let interval: Interval;
   try {
-    interval = buildTimeOffInterval(form, tz);
+    interval = buildTimeOffInterval(midnightEnd(form), tz);
   } catch (e) {
     return actionFail(e instanceof Error ? e.message : "Entrée invalide.");
   }

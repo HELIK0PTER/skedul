@@ -160,8 +160,13 @@ export function deleteTimeOffCopy(): ConfirmCopy {
   };
 }
 
-/** The dialog opened when a time off overlaps séances that have registrants. A single séance gets the singular wording. */
-export function timeOffConflictCopy(a: { count: number }): {
+/**
+ * The dialog opened when a time off overlaps séances with registrants and/or booked rendez-vous. The wording follows
+ * what is listed: séances only (« inscrits »), rendez-vous only (« client », « réservé »), or both. One item takes the
+ * singular. The tickets of a séance or of a rendez-vous are given back whichever way they were paid, as the other
+ * cancellation texts say; a free booking simply has none to give back.
+ */
+export function timeOffConflictCopy(a: { seances: number; rdvs: number }): {
   title: string;
   intro: string;
   cancelLabel: string;
@@ -169,17 +174,56 @@ export function timeOffConflictCopy(a: { count: number }): {
   keepNote: string;
   rdvNote: string;
 } {
-  const single = a.count === 1;
+  const rdvNote = "Un rendez-vous compte avec ses marges avant et après.";
+  const prevented = "(tickets rendus, clients prévenus)";
+  if (a.rdvs > 0 && a.seances > 0) {
+    return {
+      title: "Des séances et des rendez-vous sont réservés",
+      intro: `Cette indisponibilité chevauche ${plural(a.seances, "séance", "séances")} avec des inscrits et ${plural(a.rdvs, "rendez-vous réservé", "rendez-vous réservés")} :`,
+      cancelLabel: `Annuler ces ${a.seances + a.rdvs} séances et rendez-vous ${prevented}`,
+      keepLabel: "Les garder",
+      keepNote:
+        "Gardés, ils restent pour leurs inscrits et leurs clients mais ne sont plus réservables en ligne. Vous pouvez encore inscrire quelqu'un à une séance.",
+      rdvNote,
+    };
+  }
+  if (a.rdvs > 0) {
+    const single = a.rdvs === 1;
+    return {
+      title: single ? "Un rendez-vous est réservé" : "Des rendez-vous sont réservés",
+      intro: `Cette indisponibilité chevauche ${plural(a.rdvs, "rendez-vous réservé", "rendez-vous réservés")} :`,
+      cancelLabel: single
+        ? "Annuler ce rendez-vous (ticket rendu, client prévenu)"
+        : `Annuler ces ${plural(a.rdvs, "rendez-vous", "rendez-vous")} ${prevented}`,
+      keepLabel: single ? "Le garder" : "Les garder",
+      keepNote: single
+        ? "Gardé, il reste pour son client mais le créneau n'est plus réservable en ligne."
+        : "Gardés, ils restent pour leurs clients mais les créneaux ne sont plus réservables en ligne.",
+      rdvNote,
+    };
+  }
+  const single = a.seances === 1;
   return {
     title: "Des séances ont des inscrits",
-    intro: `Cette indisponibilité chevauche ${plural(a.count, "séance", "séances")} avec des inscrits :`,
+    intro: `Cette indisponibilité chevauche ${plural(a.seances, "séance", "séances")} avec des inscrits :`,
     cancelLabel: single
-      ? "Annuler cette séance (tickets rendus, clients prévenus)"
-      : `Annuler ces ${plural(a.count, "séance", "séances")} (tickets rendus, clients prévenus)`,
+      ? `Annuler cette séance ${prevented}`
+      : `Annuler ces ${plural(a.seances, "séance", "séances")} ${prevented}`,
     keepLabel: single ? "La garder" : "Les garder",
     keepNote: single
       ? "Gardée, elle reste pour ses inscrits mais n'est plus réservable en ligne. Vous pouvez encore y inscrire quelqu'un."
       : "Gardées, elles restent pour leurs inscrits mais ne sont plus réservables en ligne. Vous pouvez encore y inscrire quelqu'un.",
-    rdvNote: "Un rendez-vous compte avec ses marges avant et après.",
+    rdvNote,
   };
+}
+
+/** One line of the conflict list: « {when} · {title} · 2 inscrits » for a séance, « ... · 1 client » for a rendez-vous. */
+export function timeOffConflictLine(c: {
+  kind: "seance" | "rdv";
+  whenLabel: string;
+  title: string;
+  activeBookings: number;
+}): string {
+  const who = c.kind === "rdv" ? plural(c.activeBookings, "client", "clients") : plural(c.activeBookings, "inscrit", "inscrits");
+  return `${c.whenLabel} · ${c.title} · ${who}`;
 }

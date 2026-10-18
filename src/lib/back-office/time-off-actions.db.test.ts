@@ -6,9 +6,10 @@ import { formatWhen } from "@/lib/back-office/format";
 import { setAvailabilityRules } from "@/lib/booking/catalog";
 import { bookRdv, registerPro } from "@/lib/booking/claims";
 import { checkInvariants } from "@/lib/booking/invariants";
-import { addDays, instantAt } from "@/lib/civil-date";
+import { addDays, diffDays, instantAt, nthWeekdayOfMonth, parseKey, todayKey, type DateKey } from "@/lib/civil-date";
 import type { Db } from "@/lib/db/atomic";
 import { occurrence, timeOff } from "@/lib/db/schema";
+import { coveredDayKeys } from "@/lib/timeoff";
 import { addMinutes, createTestPro, dbTest, deleteTestUser, type TestPro } from "@/test/db";
 import { dayIn, getBooking, getOccurrence, giveTickets, makeCustomer, makeEvent, makeType, ticketsOf } from "@/test/fixtures";
 import { proCtx } from "@/test/pro-ctx";
@@ -367,6 +368,129 @@ dbTest("preview and create agree on a séance held only by an elapsed pending bo
   must(res, "creation with the previewed list");
   assert.equal((await rowsOf(db, pro.proId)).length, 1);
   assert.equal((await getBooking(db, bookingId)).status, "pending");
+});
+
+dbTest("a timed range ending at 00:00 runs to the end of that day", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const day = dayIn(pro, 4);
+  const typeId = await makeType(db, pro);
+  const {
+    occurrences: [lateEvening],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeId], rule: { startDate: day, startMinute: 1380 } });
+  const {
+    occurrences: [nextMorning],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeId], rule: { startDate: addDays(day, 1), startMinute: 0 } });
+  for (const occ of [lateEvening, nextMorning]) {
+    const customerId = await makeCustomer(db, pro);
+    must(
+      await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: occ.id, customerId, asGuest: true }),
+      "registration",
+    );
+  }
+
+  // « Début 17:00, Fin 00:00 » means until midnight: the 23:00 séance is covered, the one starting at midnight is not.
+  const form = { startDate: day, endDate: day, allDay: false, startMinute: 1020, endMinute: 0, reason: "Soirée" };
+  const preview = await previewTimeOffCore(db, ctx, form, now);
+  must(preview, "preview of 17:00 to 00:00");
+  assert.deepEqual(
+    preview.conflicts.map((c) => c.occurrenceId),
+    [lateEvening.id],
+  );
+  const created = await createTimeOffCore(db, ctx, { ...form, seenOccurrenceIds: [lateEvening.id], cancelBooked: false }, now);
+  must(created, "creation of 17:00 to 00:00");
+  const [row] = await rowsOf(db, pro.proId);
+  assert.equal(row.allDay, false);
+  assert.equal(row.startAt.getTime(), instantAt(day, 1020, pro.tz).getTime());
+  assert.equal(row.endAt.getTime(), instantAt(addDays(day, 1), 0, pro.tz).getTime());
+  assert.equal(row.reason, "Soirée");
+});
+
+dbTest("a timed range that really ends before it starts still gives the French message, with a label for a stray end", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const day = dayIn(pro, 4);
+  const now = new Date();
+  const range = (startMinute: number, endMinute: number) => ({ startDate: day, endDate: day, allDay: false, startMinute, endMinute });
+
+  for (const [start, end] of [
+    [1080, 1020],
+    [1020, 1020],
+    [0, 0],
+  ]) {
+    const res = await previewTimeOffCore(db, ctx, range(start, end), now);
+    mustFail(res, `${start} to ${end}`);
+    assert.equal(res.error, "L'heure de fin doit être après l'heure de début.");
+  }
+  const created = await createTimeOffCore(db, ctx, { ...range(1080, 1020), ...NONE }, now);
+  mustFail(created, "creation of 18:00 to 17:00");
+  assert.equal(created.error, "L'heure de fin doit être après l'heure de début.");
+
+  const tooLate = await previewTimeOffCore(db, ctx, range(1020, 1441), now);
+  mustFail(tooLate, "end after 24:00");
+  assert.match(tooLate.error, /^Heure de fin : /);
+  assert.equal((await rowsOf(db, pro.proId)).length, 0);
+});
+
+/** The next last Sunday of October (the Europe/Paris fall-back day, 25 hours long) with at least three days before it. */
+function nextFallBack(tz: string, now: Date): DateKey {
+  const today = todayKey(now, tz);
+  const year = parseKey(today).y;
+  for (const y of [year, year + 1]) {
+    const sunday = nthWeekdayOfMonth(y, 10, 0, -1);
+    if (diffDays(today, sunday) >= 3) return sunday;
+  }
+  throw new Error("no fall-back day found");
+}
+
+dbTest("an all-day time off over the autumn clock change lists, covers and cancels exactly its days", async ({ db, pro }) => {
+  assert.equal(pro.tz, "Europe/Paris");
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const sunday = nextFallBack(pro.tz, now);
+  const typeId = await makeType(db, pro);
+  const seance = async (day: DateKey, startMinute: number, title: string) => {
+    const {
+      occurrences: [occ],
+    } = await makeEvent(db, pro, { title, ticketTypeIds: [typeId], rule: { startDate: day, startMinute } });
+    const customerId = await makeCustomer(db, pro);
+    must(
+      await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: occ.id, customerId, asGuest: true }),
+      `registration on ${title}`,
+    );
+    return occ;
+  };
+  // 23:00 to 24:00 ends exactly when the range starts; 00:00 two days later starts exactly when it ends.
+  const evening = await seance(addDays(sunday, -2), 1380, "Soir avant");
+  const saturday = await seance(addDays(sunday, -1), 1140, "Samedi soir");
+  const night = await seance(sunday, 150, "Nuit du changement");
+  const monday = await seance(addDays(sunday, 1), 1140, "Lundi soir");
+  const midnight = await seance(addDays(sunday, 2), 0, "Minuit après");
+  const form = { startDate: addDays(sunday, -1), endDate: addDays(sunday, 1), allDay: true };
+
+  const preview = await previewTimeOffCore(db, ctx, form, now);
+  must(preview, "preview over the clock change");
+  assert.deepEqual(
+    preview.conflicts.map((c) => [c.occurrenceId, c.title]),
+    [
+      [saturday.id, "Samedi soir"],
+      [night.id, "Nuit du changement"],
+      [monday.id, "Lundi soir"],
+    ],
+  );
+
+  const seen = preview.conflicts.map((c) => c.occurrenceId);
+  must(await createTimeOffCore(db, ctx, { ...form, seenOccurrenceIds: seen, cancelBooked: false }, now), "time off that keeps");
+  const [row] = await rowsOf(db, pro.proId);
+  assert.equal(row.startAt.getTime(), instantAt(addDays(sunday, -1), 0, pro.tz).getTime());
+  assert.equal(row.endAt.getTime(), instantAt(addDays(sunday, 2), 0, pro.tz).getTime());
+  assert.equal(row.endAt.getTime() - row.startAt.getTime(), 73 * 3_600_000, "three days and the repeated hour");
+  assert.deepEqual(coveredDayKeys(row.startAt, row.endAt, pro.tz), [addDays(sunday, -1), sunday, addDays(sunday, 1)]);
+
+  const cancelled = await createTimeOffCore(db, ctx, { ...form, seenOccurrenceIds: seen, cancelBooked: true }, now);
+  must(cancelled, "time off that cancels");
+  assert.equal(cancelled.cancelledOccurrences, 3);
+  for (const occ of [saturday, night, monday]) assert.equal((await getOccurrence(db, occ.id)).status, "cancelled");
+  for (const occ of [evening, midnight]) assert.equal((await getOccurrence(db, occ.id)).status, "scheduled");
 });
 
 // A creation accepts at most 500 « seen » ids. A preview that listed more would offer a choice the creation then refuses.

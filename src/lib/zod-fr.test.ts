@@ -131,6 +131,7 @@ test("FIELD_LABELS is the contract table", () => {
     cancelDeadlineHours: "Annulation par le client",
     startDate: "Date de début",
     startMinute: "Heure de début",
+    endMinute: "Heure de fin",
     interval: "Intervalle",
     weekdays: "Jours",
     untilDate: "Date de fin",
