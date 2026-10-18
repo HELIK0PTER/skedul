@@ -10,6 +10,7 @@ import {
   format,
   isBefore,
   isSameMonth,
+  parseISO,
   startOfDay,
   startOfMonth,
   startOfWeek,
@@ -58,6 +59,9 @@ export function UnavailabilityManager({
   const [startTime, setStartTime] = useState("09:00");
   const [endTime, setEndTime] = useState("17:00");
   const [reason, setReason] = useState("");
+  // which bound the next calendar click sets; "end" right after a start is picked
+  const [picking, setPicking] = useState<"start" | "end">("start");
+  const [hoverKey, setHoverKey] = useState<string | null>(null);
 
   const marked = useMemo(() => new Set(markedDays), [markedDays]);
 
@@ -67,12 +71,32 @@ export function UnavailabilityManager({
     return eachDayOfInterval({ start, end });
   }, [viewMonth]);
 
+  const choosingEnd = allDay && picking === "end";
+  // while choosing the end, hovering a later day previews the range
+  const previewing = choosingEnd && hoverKey !== null && hoverKey >= startDate;
+  const shownEnd = previewing ? hoverKey : allDay ? endDate : startDate;
+
   function pickDay(day: Date) {
     const key = format(day, "yyyy-MM-dd");
-    setStartDate(key);
-    // keep the range coherent: bump endDate if it's now before startDate
-    setEndDate((prev) => (prev < key ? key : prev));
     setError(null);
+    if (!allDay) {
+      setStartDate(key);
+      setEndDate(key);
+      return;
+    }
+    if (picking === "end" && key >= startDate) {
+      setEndDate(key);
+      setPicking("start");
+      return;
+    }
+    // first click, or a day before the current start: the range restarts there
+    setStartDate(key);
+    setEndDate(key);
+    setPicking("end");
+  }
+
+  function showMonthOf(key: string) {
+    if (key) setViewMonth(startOfMonth(parseISO(key)));
   }
 
   function submit() {
@@ -91,6 +115,7 @@ export function UnavailabilityManager({
         return;
       }
       setReason("");
+      setPicking("start");
       router.refresh();
     });
   }
@@ -129,7 +154,15 @@ export function UnavailabilityManager({
             </Button>
           </div>
 
-          <div className="grid grid-cols-7 gap-1 text-center text-xs text-muted-foreground">
+          <p className="mb-2 text-center text-xs text-muted-foreground" aria-live="polite">
+            {!allDay
+              ? "Choisissez le jour."
+              : picking === "start"
+                ? "Choisissez le premier jour."
+                : "Choisissez le dernier jour, ou le même pour une seule journée."}
+          </p>
+
+          <div className="grid grid-cols-7 text-center text-xs text-muted-foreground">
             {WEEKDAYS.map((d) => (
               <div key={d} className="py-1">
                 {d}
@@ -137,38 +170,88 @@ export function UnavailabilityManager({
             ))}
           </div>
 
-          <div className="mt-1 grid grid-cols-7 gap-1">
-            {grid.map((day) => {
+          <div
+            className="mt-1 grid grid-cols-7 gap-y-1"
+            onMouseLeave={() => setHoverKey(null)}
+          >
+            {grid.map((day, i) => {
               const key = format(day, "yyyy-MM-dd");
               const inMonth = isSameMonth(day, viewMonth);
               const past = isBefore(day, today);
               const isMarked = marked.has(key);
-              const selected = key === startDate;
+              const isStart = key === startDate;
+              const isEnd = key === shownEnd;
+              const inBand =
+                shownEnd > startDate && key >= startDate && key <= shownEnd;
+              const solid = isStart || (isEnd && !previewing);
+              const col = i % 7;
               return (
-                <button
-                  key={key}
-                  type="button"
-                  disabled={past}
-                  onClick={() => pickDay(day)}
-                  className={cn(
-                    "aspect-square rounded-lg text-sm transition-colors",
-                    !inMonth && "text-muted-foreground/40",
-                    past && "cursor-not-allowed opacity-40",
-                    isMarked && "bg-primary text-primary-foreground",
-                    !isMarked && !past && "hover:bg-muted",
-                    selected && !isMarked && "ring-2 ring-primary",
+                <div key={key} className="relative">
+                  {/* range band; half-width on the bounds so it tucks under them */}
+                  {inBand && (
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "absolute inset-y-0 bg-primary-muted",
+                        isStart ? "left-1/2" : "left-0",
+                        isEnd ? "right-1/2" : "right-0",
+                        col === 0 && "rounded-l-lg",
+                        col === 6 && "rounded-r-lg",
+                      )}
+                    />
                   )}
-                >
-                  {format(day, "d")}
-                </button>
+                  <button
+                    type="button"
+                    disabled={past}
+                    onClick={() => pickDay(day)}
+                    onMouseEnter={() => setHoverKey(key)}
+                    aria-label={`${format(day, "EEEE d MMMM yyyy", { locale: fr })}${
+                      isMarked ? " (indisponibilité existante)" : ""
+                    }`}
+                    aria-pressed={isStart || isEnd}
+                    className={cn(
+                      "relative flex aspect-square w-full items-center justify-center rounded-lg text-sm transition-colors",
+                      !inMonth && "text-muted-foreground/40",
+                      past && "cursor-not-allowed opacity-40",
+                      inBand && !solid && "text-accent-foreground",
+                      !solid &&
+                        !past &&
+                        (inBand ? "hover:bg-primary/15" : "hover:bg-muted"),
+                      solid && "bg-primary font-medium text-primary-foreground",
+                      isEnd &&
+                        previewing &&
+                        !isStart &&
+                        "ring-2 ring-inset ring-primary",
+                    )}
+                  >
+                    {format(day, "d")}
+                    {isMarked && (
+                      <span
+                        aria-hidden
+                        className={cn(
+                          "absolute bottom-1.5 left-1/2 size-1 -translate-x-1/2 rounded-full",
+                          solid ? "bg-primary-foreground" : "bg-primary",
+                        )}
+                      />
+                    )}
+                  </button>
+                </div>
               );
             })}
           </div>
 
-          <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="inline-block size-3 rounded bg-primary" />
-            Jour avec indisponibilité
-          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            <span className="flex items-center gap-2">
+              <span className="inline-block size-3 rounded bg-primary" />
+              Période sélectionnée
+            </span>
+            <span className="flex items-center gap-2">
+              <span className="inline-flex size-3 items-center justify-center">
+                <span className="size-1.5 rounded-full bg-primary" />
+              </span>
+              Indisponibilité existante
+            </span>
+          </div>
         </CardContent>
       </Card>
 
@@ -185,11 +268,12 @@ export function UnavailabilityManager({
                   id="start"
                   type="date"
                   value={startDate}
+                  onFocus={() => setPicking("start")}
                   onChange={(e) => {
-                    setStartDate(e.target.value);
-                    setEndDate((prev) =>
-                      prev < e.target.value ? e.target.value : prev,
-                    );
+                    const v = e.target.value;
+                    setStartDate(v);
+                    setEndDate((prev) => (prev < v ? v : prev));
+                    showMonthOf(v);
                   }}
                 />
               </div>
@@ -201,14 +285,21 @@ export function UnavailabilityManager({
                   value={endDate}
                   min={startDate}
                   disabled={!allDay}
-                  onChange={(e) => setEndDate(e.target.value)}
+                  onFocus={() => setPicking("end")}
+                  onChange={(e) => {
+                    setEndDate(e.target.value);
+                    showMonthOf(e.target.value);
+                  }}
                 />
               </div>
             </div>
 
             <button
               type="button"
-              onClick={() => setAllDay((v) => !v)}
+              onClick={() => {
+                setAllDay((v) => !v);
+                setPicking("start");
+              }}
               className="flex items-center gap-2 text-sm font-medium"
             >
               <span
