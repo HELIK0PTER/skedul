@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
-import { expiryLabel } from "@/lib/back-office/format";
+import { expiryLabel, formatWhenShort } from "@/lib/back-office/format";
 import type { ProCtx } from "@/lib/back-office/result";
 import { registerPro } from "@/lib/booking/claims";
 import { checkInvariants } from "@/lib/booking/invariants";
 import { dayOfWeek, instantAt } from "@/lib/civil-date";
 import type { Db } from "@/lib/db/atomic";
-import { event } from "@/lib/db/schema";
+import { customer, event, ticketMovement, ticketType } from "@/lib/db/schema";
 import type { RecurrenceRule } from "@/lib/recurrence";
 import { addMinutes, createTestPro, dbTest, deleteTestUser, type TestPro } from "@/test/db";
 import {
@@ -19,6 +19,7 @@ import {
   makeCustomer,
   makeEvent,
   makeType,
+  movementsOf,
   ticketsOf,
 } from "@/test/fixtures";
 import { proCtx } from "@/test/pro-ctx";
@@ -37,6 +38,17 @@ import {
   unenrollCore,
   updateCapacityCore,
   updateOccurrenceCore,
+  CONVERSION_TYPE_UNAVAILABLE,
+  MOVE_NOT_MOVABLE,
+  REGISTER_NONE_GUEST,
+  REGISTER_NO_TICKET_MODE,
+  REGISTER_RDV,
+  moveAttendeeCore,
+  moveTargetsCore,
+  registerAttendeeCore,
+  registerOptionsCore,
+  searchCustomersCore,
+  type RegisterInput,
 } from "./planning-actions";
 
 const DAY = 86_400_000;
@@ -464,6 +476,592 @@ dbTest("previewFollowingCore / applyFollowingCore: this séance and the later on
   assert.ok(!stale.ok);
   assert.equal(stale.code, "stale");
   assert.equal(stale.error, "Les données ont changé entre-temps : rafraîchissez la page.");
+});
+
+/* ───────────────────────── Attendees: register and move ───────────────────────── */
+
+function reg(occurrenceId: string, customerId: string, over: Partial<RegisterInput> = {}): RegisterInput {
+  return {
+    occurrenceId,
+    customer: { kind: "existing", customerId },
+    coverage: "auto",
+    ticketId: null,
+    extraSeat: false,
+    answers: [],
+    ...over,
+  };
+}
+
+function move(
+  bookingId: string,
+  targetOccurrenceId: string,
+  over: { force?: boolean; convertToTicketTypeId?: string | null } = {},
+) {
+  return {
+    bookingId,
+    targetOccurrenceId,
+    force: over.force ?? false,
+    convertToTicketTypeId: over.convertToTicketTypeId ?? null,
+  };
+}
+
+const codeOf = (res: { ok: boolean }): string | undefined => (res as { code?: string }).code;
+
+dbTest("registerAttendeeCore: « auto » spends the ticket that expires first, a chosen ticket, a guest", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const typeId = await makeType(db, pro, { name: "Cours collectif" });
+  const {
+    occurrences: [occ],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeId], capacity: 5 });
+  const thomas = await makeCustomer(db, pro, { name: "Thomas Leroy" });
+  const marina = await makeCustomer(db, pro, { name: "Marina Costa" });
+  const lea = await makeCustomer(db, pro, { name: "Léa Martin" });
+  const expiresAt = instantAt(dayIn(pro, 30), 0, pro.tz);
+  const [foreverT] = await giveTickets(db, pro, thomas, typeId, 1);
+  const [soonT] = await giveTickets(db, pro, thomas, typeId, 1, { expiresAt });
+  const [foreverM] = await giveTickets(db, pro, marina, typeId, 1);
+  const [soonM] = await giveTickets(db, pro, marina, typeId, 1, { expiresAt });
+  await giveTickets(db, pro, lea, typeId, 1);
+
+  const auto = await registerAttendeeCore(db, ctx, reg(occ.id, thomas), now);
+  assert.ok(auto.ok, JSON.stringify(auto));
+  assert.deepEqual([auto.coverage, auto.customerId, auto.customerCreated], ["ticket", thomas, false]);
+  const thomasTickets = await ticketsOf(db, thomas);
+  assert.deepEqual(
+    thomasTickets.filter((t) => t.status === "booked").map((t) => [t.id, t.bookingId]),
+    [[soonT, auto.bookingId]],
+  );
+  assert.equal(thomasTickets.find((t) => t.id === foreverT)?.status, "available");
+  assert.deepEqual(auto.effects, [
+    { type: "email.booking_confirmed", bookingId: auto.bookingId },
+    { type: "google.sync_occurrence", occurrenceId: occ.id },
+  ]);
+  const row = await getBooking(db, auto.bookingId);
+  assert.deepEqual([row.createdBy, row.status, row.coverage], ["pro", "confirmed", "ticket"]);
+
+  // A chosen ticket wins over the consumption order (« auto » would have taken the expiring one).
+  const chosen = await registerAttendeeCore(db, ctx, reg(occ.id, marina, { ticketId: foreverM }), now);
+  assert.ok(chosen.ok, JSON.stringify(chosen));
+  const marinaTickets = await ticketsOf(db, marina);
+  assert.deepEqual(marinaTickets.filter((t) => t.status === "booked").map((t) => t.id), [foreverM]);
+  assert.equal(marinaTickets.find((t) => t.id === soonM)?.status, "available");
+
+  // « Invité »: no ticket is spent.
+  const guest = await registerAttendeeCore(db, ctx, reg(occ.id, lea, { coverage: "guest" }), now);
+  assert.ok(guest.ok, JSON.stringify(guest));
+  assert.equal(guest.coverage, "guest");
+  assert.equal((await ticketsOf(db, lea))[0].status, "available");
+  assert.equal((await getOccurrence(db, occ.id)).seatsTaken, 3);
+});
+
+dbTest("registerAttendeeCore: refusals by mode, séance and ticket, in French", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const typeId = await makeType(db, pro);
+  const otherType = await makeType(db, pro);
+  const {
+    occurrences: [none],
+  } = await makeEvent(db, pro, { bookingMode: "none" });
+  const {
+    occurrences: [free],
+  } = await makeEvent(db, pro, { bookingMode: "free" });
+  const {
+    occurrences: [paid],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeId] });
+  const {
+    occurrences: [toCancel],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeId] });
+  const {
+    occurrences: [open],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeId] });
+  const customerId = await makeCustomer(db, pro);
+  const [ticketId] = await giveTickets(db, pro, customerId, typeId, 1);
+  const [foreign] = await giveTickets(db, pro, customerId, otherType, 1);
+
+  assert.equal(REGISTER_RDV, "Un rendez-vous ne s'inscrit pas depuis le planning.");
+  assert.equal(REGISTER_NONE_GUEST, "Séance sans réservation en ligne : inscrivez ce client comme invité.");
+  assert.equal(REGISTER_NO_TICKET_MODE, "Cette séance n'accepte pas de ticket : choisissez « Invité ».");
+
+  check("none + auto", await registerAttendeeCore(db, ctx, reg(none.id, customerId), now), REGISTER_NONE_GUEST);
+  check("none + auto + ticket", await registerAttendeeCore(db, ctx, reg(none.id, customerId, { ticketId }), now), REGISTER_NONE_GUEST);
+  check("free + ticket", await registerAttendeeCore(db, ctx, reg(free.id, customerId, { ticketId }), now), REGISTER_NO_TICKET_MODE);
+  check(
+    "guest + ticket",
+    await registerAttendeeCore(db, ctx, reg(paid.id, customerId, { coverage: "guest", ticketId }), now),
+    REGISTER_NO_TICKET_MODE,
+  );
+  assert.deepEqual(
+    (await Promise.all([none, free, paid].map((o) => getOccurrence(db, o.id)))).map((o) => o.seatsTaken),
+    [0, 0, 0],
+    "the refusals wrote nothing",
+  );
+
+  const guestOnNone = await registerAttendeeCore(db, ctx, reg(none.id, customerId, { coverage: "guest" }), now);
+  assert.ok(guestOnNone.ok, JSON.stringify(guestOnNone));
+  assert.equal(guestOnNone.coverage, "guest");
+  const onFree = await registerAttendeeCore(db, ctx, reg(free.id, customerId), now);
+  assert.ok(onFree.ok, JSON.stringify(onFree));
+  assert.equal(onFree.coverage, "free");
+
+  const rdvType = await rowRdvType(db, pro);
+  const rdvId = await rowRdv(db, pro, rdvType, { startsAt: instantAt(dayIn(pro, 5), 840, pro.tz) });
+  await rowBooking(db, pro, { occurrenceId: rdvId, customerId: await makeCustomer(db, pro) });
+  check("RDV", await registerAttendeeCore(db, ctx, reg(rdvId, customerId), now), REGISTER_RDV);
+
+  const cancelled = await cancelOccurrenceCore(db, ctx, { occurrenceId: toCancel.id }, now);
+  assert.ok(cancelled.ok, JSON.stringify(cancelled));
+  const onCancelled = await registerAttendeeCore(db, ctx, reg(toCancel.id, customerId), now);
+  check("cancelled", onCancelled, "Cette séance est annulée : rétablissez-la pour inscrire quelqu'un.");
+  assert.equal(codeOf(onCancelled), "unavailable");
+  check("unknown séance", await registerAttendeeCore(db, ctx, reg("inconnu", customerId), now), "Séance introuvable.");
+
+  const noTicket = await registerAttendeeCore(db, ctx, reg(open.id, await makeCustomer(db, pro)), now);
+  check(
+    "no usable ticket",
+    noTicket,
+    "Ce client n'a aucun ticket utilisable ici : inscrivez-le comme invité, ou offrez-lui un ticket depuis sa fiche.",
+  );
+  assert.equal(codeOf(noTicket), "no_ticket");
+  const notAccepted = await registerAttendeeCore(db, ctx, reg(open.id, customerId, { ticketId: foreign }), now);
+  check("ticket of another type", notAccepted, "Ce ticket n'est pas utilisable sur cette séance.");
+  assert.equal(codeOf(notAccepted), "not_eligible");
+  assert.equal((await getOccurrence(db, open.id)).seatsTaken, 0);
+});
+
+dbTest("registerAttendeeCore: twice, full, and « +1 place »", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const {
+    occurrences: [small],
+  } = await makeEvent(db, pro, { bookingMode: "free", capacity: 1 });
+  const a = await makeCustomer(db, pro);
+  const b = await makeCustomer(db, pro);
+
+  const first = await registerAttendeeCore(db, ctx, reg(small.id, a), now);
+  assert.ok(first.ok, JSON.stringify(first));
+  assert.equal(first.coverage, "free");
+  const twice = await registerAttendeeCore(db, ctx, reg(small.id, a), now);
+  check("twice", twice, "Ce client est déjà inscrit à cette séance.");
+  assert.equal(codeOf(twice), "already_booked");
+  const full = await registerAttendeeCore(db, ctx, reg(small.id, b), now);
+  check("full", full, "Complet : cochez « +1 place » pour l'inscrire quand même.");
+  assert.equal(codeOf(full), "full");
+  check(
+    "twice with +1",
+    await registerAttendeeCore(db, ctx, reg(small.id, a, { extraSeat: true }), now),
+    "Ce client est déjà inscrit à cette séance.",
+  );
+  assert.equal((await getOccurrence(db, small.id)).capacity, 1, "« +1 place » is not applied to a client already registered");
+
+  const extra = await registerAttendeeCore(db, ctx, reg(small.id, b, { extraSeat: true }), now);
+  assert.ok(extra.ok, JSON.stringify(extra));
+  const row = await getOccurrence(db, small.id);
+  assert.deepEqual([row.capacity, row.seatsTaken, row.capacityOverride], [2, 2, true]);
+});
+
+dbTest("registerAttendeeCore: a new client is created, an existing e-mail is reused, bad details are refused", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const { occurrences } = await makeEvent(db, pro, { bookingMode: "free", rule: weekly(pro, 2) });
+  const [first, second] = occurrences;
+  const fresh = (occurrenceId: string, name: string, email: string, phone: string | null = null): RegisterInput =>
+    reg(occurrenceId, "", { customer: { kind: "new", name, email, phone }, coverage: "guest" });
+  const customerCount = async () =>
+    (await db.select({ id: customer.id }).from(customer).where(eq(customer.professionalId, pro.proId))).length;
+
+  const created = await registerAttendeeCore(db, ctx, fresh(first.id, "  Léa Martin ", " Lea.Martin@Example.com ", "06 12 34 56 78"), now);
+  assert.ok(created.ok, JSON.stringify(created));
+  assert.equal(created.customerCreated, true);
+  assert.equal(created.coverage, "guest");
+  assert.deepEqual(created.effects, [
+    { type: "email.booking_confirmed", bookingId: created.bookingId },
+    { type: "google.sync_occurrence", occurrenceId: first.id },
+  ]);
+  const [row] = await db.select().from(customer).where(eq(customer.id, created.customerId));
+  assert.deepEqual([row.professionalId, row.name, row.email, row.phone], [pro.proId, "Léa Martin", "lea.martin@example.com", "06 12 34 56 78"]);
+
+  const reused = await registerAttendeeCore(db, ctx, fresh(second.id, "Léa Martin", "LEA.MARTIN@example.com"), now);
+  assert.ok(reused.ok, JSON.stringify(reused));
+  assert.equal(reused.customerCreated, false);
+  assert.equal(reused.customerId, created.customerId);
+  assert.equal(await customerCount(), 1);
+
+  const badMail = await registerAttendeeCore(db, ctx, fresh(second.id, "Paul", "pas-un-email"), now);
+  assert.ok(!badMail.ok);
+  assert.match(badMail.error, /adresse email invalide/i);
+  const noName = await registerAttendeeCore(db, ctx, fresh(second.id, "   ", "paul@example.com"), now);
+  assert.ok(!noName.ok);
+  assert.match(noName.error, /ce champ est obligatoire/i);
+  assert.equal(await customerCount(), 1, "a refused form creates nothing");
+});
+
+dbTest("moveAttendeeCore: to a target that accepts the ticket, with the move effects, twice in a row", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const typeX = await makeType(db, pro, { name: "Cours collectif" });
+  const src = await makeEvent(db, pro, { title: "Source", ticketTypeIds: [typeX] });
+  const tgt = await makeEvent(db, pro, { title: "Cible", ticketTypeIds: [typeX], rule: { startDate: dayIn(pro, 4) } });
+  const [from] = src.occurrences;
+  const [to] = tgt.occurrences;
+  const customerId = await makeCustomer(db, pro);
+  const [ticketId] = await giveTickets(db, pro, customerId, typeX, 1);
+  const bookingId = await register(db, pro, from.id, customerId, { asGuest: false });
+
+  const res = await moveAttendeeCore(db, ctx, move(bookingId, to.id), now);
+  assert.ok(res.ok, JSON.stringify(res));
+  assert.equal(res.converted, false);
+  assert.deepEqual(res.effects, [
+    { type: "email.attendee_moved", bookingId, fromOccurrenceId: from.id },
+    { type: "google.sync_occurrence", occurrenceId: from.id },
+    { type: "google.sync_occurrence", occurrenceId: to.id },
+  ]);
+  const moved = await getBooking(db, bookingId);
+  assert.equal(moved.occurrenceId, to.id);
+  assert.notEqual(moved.movedAt, null);
+  assert.deepEqual([(await getOccurrence(db, from.id)).seatsTaken, (await getOccurrence(db, to.id)).seatsTaken], [0, 1]);
+  const [spent] = await ticketsOf(db, customerId);
+  assert.deepEqual([spent.id, spent.status, spent.bookingId], [ticketId, "booked", bookingId]);
+
+  const back = await moveAttendeeCore(db, ctx, move(bookingId, from.id), now);
+  assert.ok(back.ok, JSON.stringify(back));
+  assert.equal((await getBooking(db, bookingId)).occurrenceId, from.id);
+});
+
+dbTest("moveAttendeeCore: a target that does not accept the ticket needs a conversion to an active, non rdv_free type", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const typeX = await makeType(db, pro, { name: "Cours collectif" });
+  const typeY = await makeType(db, pro, { name: "Cours d'essai" });
+  const typeFree = await makeType(db, pro, { name: "Appel découverte", rdvEnabled: true, rdvFree: true, rdvDurationMin: 30 });
+  const typeOld = await makeType(db, pro, { name: "Stage d'été" });
+  await db.update(ticketType).set({ archivedAt: new Date() }).where(eq(ticketType.id, typeOld));
+  const src = await makeEvent(db, pro, { title: "Source", ticketTypeIds: [typeX] });
+  const tgt = await makeEvent(db, pro, { title: "Cible Y", ticketTypeIds: [typeY], rule: { startDate: dayIn(pro, 4) } });
+  const [from] = src.occurrences;
+  const [to] = tgt.occurrences;
+  const customerId = await makeCustomer(db, pro);
+  const [ticketId] = await giveTickets(db, pro, customerId, typeX, 1);
+  const bookingId = await register(db, pro, from.id, customerId, { asGuest: false });
+
+  const notAccepted = await moveAttendeeCore(db, ctx, move(bookingId, to.id), now);
+  check(
+    "not accepted",
+    notAccepted,
+    "Cette séance n'accepte pas le ticket de ce client : choisissez un type vers lequel le convertir.",
+  );
+  assert.equal(codeOf(notAccepted), "not_eligible");
+
+  assert.equal(CONVERSION_TYPE_UNAVAILABLE, "Ce type ne peut pas recevoir de tickets.");
+  for (const [name, type] of [
+    ["rdv_free", typeFree],
+    ["archived", typeOld],
+    ["unknown", "inconnu"],
+  ] as const) {
+    check(name, await moveAttendeeCore(db, ctx, move(bookingId, to.id, { convertToTicketTypeId: type }), now), CONVERSION_TYPE_UNAVAILABLE);
+  }
+  check(
+    "same type",
+    await moveAttendeeCore(db, ctx, move(bookingId, to.id, { convertToTicketTypeId: typeX }), now),
+    "Choisissez un autre type de ticket.",
+  );
+  assert.equal((await getBooking(db, bookingId)).occurrenceId, from.id, "nothing moved");
+
+  const converted = await moveAttendeeCore(db, ctx, move(bookingId, to.id, { convertToTicketTypeId: typeY }), now);
+  assert.ok(converted.ok, JSON.stringify(converted));
+  assert.equal(converted.converted, true);
+  const [after] = await ticketsOf(db, customerId);
+  assert.deepEqual([after.ticketTypeId, after.status, after.bookingId], [typeY, "booked", bookingId]);
+  const kinds = (await movementsOf(db, ticketId)).map((m) => m.kind);
+  assert.equal(kinds[kinds.length - 1], "convert");
+});
+
+dbTest("moveAttendeeCore: an expiring ticket asks to force; booked, full, cancelled and unknown refusals", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const typeX = await makeType(db, pro, { name: "Cours collectif" });
+  const mk = (title: string, day: number, over: { capacity?: number } = {}) =>
+    makeEvent(db, pro, { title, ticketTypeIds: [typeX], ...over, rule: { startDate: dayIn(pro, day) } });
+  const [s] = (await mk("Source", 3)).occurrences;
+  const [t4] = (await mk("Jour 4", 4, { capacity: 1 })).occurrences;
+  const [t6] = (await mk("Jour 6", 6)).occurrences;
+
+  // An expiring ticket: the move beyond its validity asks for confirmation, then goes through with force.
+  const expiring = await makeCustomer(db, pro);
+  await giveTickets(db, pro, expiring, typeX, 1, { expiresAt: instantAt(dayIn(pro, 5), 0, pro.tz) });
+  const bookExpiring = await register(db, pro, s.id, expiring, { asGuest: false });
+  const refused = await moveAttendeeCore(db, ctx, move(bookExpiring, t6.id), now);
+  check("expiry", refused, "Ticket expiré à la date de cette séance : déplacer quand même ?");
+  assert.equal(codeOf(refused), "ticket_expires_before");
+  assert.equal((await getBooking(db, bookExpiring)).occurrenceId, s.id);
+  const forced = await moveAttendeeCore(db, ctx, move(bookExpiring, t6.id, { force: true }), now);
+  assert.ok(forced.ok, JSON.stringify(forced));
+  assert.equal((await getBooking(db, bookExpiring)).occurrenceId, t6.id);
+
+  // Already on the target / target full.
+  const twice = await makeCustomer(db, pro);
+  await giveTickets(db, pro, twice, typeX, 2);
+  const bookTwiceSource = await register(db, pro, s.id, twice, { asGuest: false });
+  await register(db, pro, t4.id, twice, { asGuest: false });
+  const already = await moveAttendeeCore(db, ctx, move(bookTwiceSource, t4.id), now);
+  check("already booked", already, "Ce client est déjà inscrit à la séance choisie.");
+  assert.equal(codeOf(already), "already_booked");
+  const other = await makeCustomer(db, pro);
+  await giveTickets(db, pro, other, typeX, 1);
+  const bookOther = await register(db, pro, s.id, other, { asGuest: false });
+  const full = await moveAttendeeCore(db, ctx, move(bookOther, t4.id), now);
+  check("full", full, "La séance choisie est complète.");
+  assert.equal(codeOf(full), "full");
+
+  // A booking that is no longer confirmed, unknown ids, an RDV booking.
+  const left = await unenrollCore(db, ctx, { occurrenceId: s.id, bookingIds: [bookOther], reason: null }, now);
+  assert.ok(left.ok, JSON.stringify(left));
+  const ended = await moveAttendeeCore(db, ctx, move(bookOther, t6.id), now);
+  check("cancelled booking", ended, "Cette inscription a changé entre-temps : rafraîchissez la page.");
+  assert.equal(codeOf(ended), "stale");
+  check("unknown target", await moveAttendeeCore(db, ctx, move(bookTwiceSource, "inconnu"), now), "Inscription ou séance introuvable.");
+  check("unknown booking", await moveAttendeeCore(db, ctx, move("inconnu", t6.id), now), "Inscription ou séance introuvable.");
+  const rdvType = await rowRdvType(db, pro);
+  const rdvId = await rowRdv(db, pro, rdvType, { startsAt: instantAt(dayIn(pro, 5), 840, pro.tz) });
+  const rdvBooking = await rowBooking(db, pro, { occurrenceId: rdvId, customerId: await makeCustomer(db, pro) });
+  check(
+    "RDV booking",
+    await moveAttendeeCore(db, ctx, move(rdvBooking, t6.id), now),
+    "Un rendez-vous ne se déplace pas : annulez-le puis réservez à nouveau.",
+  );
+});
+
+dbTest("searchCustomersCore, registerOptionsCore and moveTargetsCore return client data with labels", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const typeX = await makeType(db, pro, { name: "Cours collectif" });
+  const typeY = await makeType(db, pro, { name: "Cours d'essai" });
+  const alice = await makeCustomer(db, pro, { name: "Alice Dupont" });
+  const bruno = await makeCustomer(db, pro, { name: "Bruno Dupont" });
+
+  const search = await searchCustomersCore(db, ctx, { q: "  dupont " }, now);
+  assert.ok(search.ok, JSON.stringify(search));
+  assert.deepEqual(search.customers.map((c) => c.id), [alice, bruno]);
+  assert.deepEqual(Object.keys(search.customers[0]).sort(), ["email", "id", "name", "phone"]);
+  const short = await searchCustomersCore(db, ctx, { q: "d" }, now);
+  assert.ok(short.ok, JSON.stringify(short));
+  assert.deepEqual(short.customers, []);
+  const long = await searchCustomersCore(db, ctx, { q: "x".repeat(300) }, now);
+  assert.ok(!long.ok);
+  assert.match(long.error, /254 caractères/);
+
+  const expiresAt = instantAt(dayIn(pro, 5), 0, pro.tz);
+  const src = await makeEvent(db, pro, { title: "Source", ticketTypeIds: [typeX] });
+  const [occ] = src.occurrences;
+  const [foreverId] = await giveTickets(db, pro, alice, typeX, 1);
+  const [soonId] = await giveTickets(db, pro, alice, typeX, 1, { expiresAt });
+  const options = await registerOptionsCore(db, ctx, { occurrenceId: occ.id, customerId: alice }, now);
+  assert.ok(options.ok, JSON.stringify(options));
+  assert.deepEqual([options.mode, options.alreadyBooked], ["tickets", false]);
+  assert.deepEqual(options.usable, [
+    { id: soonId, label: `Cours collectif · ${expiryLabel(expiresAt, pro.tz, now)} · offert` },
+    { id: foreverId, label: "Cours collectif · sans limite de validité · offert" },
+  ]);
+  assert.match(options.usable[0].label, /^Cours collectif · valable jusqu'au \d{2}\/\d{2}(\/\d{4})? inclus · offert$/);
+  check(
+    "unknown séance",
+    await registerOptionsCore(db, ctx, { occurrenceId: "inconnu", customerId: alice }, now),
+    "Séance ou client introuvable.",
+  );
+
+  const bookingId = await register(db, pro, occ.id, alice, { asGuest: false });
+  const targetA = await makeEvent(db, pro, { title: "Cible", ticketTypeIds: [typeX], rule: { startDate: dayIn(pro, 4) } });
+  const targetB = await makeEvent(db, pro, { title: "Conversion", ticketTypeIds: [typeY], rule: { startDate: dayIn(pro, 5) } });
+  const noon = instantAt(dayIn(pro, 0), 720, pro.tz);
+  const targets = await moveTargetsCore(db, ctx, { bookingId, seriesRootId: null }, noon);
+  assert.ok(targets.ok, JSON.stringify(targets));
+  assert.deepEqual(targets.series, [
+    { seriesRootId: targetA.eventId, title: "Cible" },
+    { seriesRootId: targetB.eventId, title: "Conversion" },
+  ]);
+  const [a, b] = targets.targets;
+  assert.deepEqual(
+    [a.occurrenceId, a.seriesRootId, a.title, a.whenLabel, a.dayKey, a.seatsShown, a.capacity, a.full, a.accepted, a.conversionTypes, a.expiresBefore],
+    [
+      targetA.occurrences[0].id,
+      targetA.eventId,
+      "Cible",
+      formatWhenShort(targetA.occurrences[0].startsAt, pro.tz),
+      dayIn(pro, 4),
+      12,
+      12,
+      false,
+      true,
+      [],
+      false,
+    ],
+  );
+  assert.deepEqual(
+    [b.title, b.dayKey, b.accepted, b.conversionTypes, b.expiresBefore],
+    ["Conversion", dayIn(pro, 5), false, [{ id: typeY, name: "Cours d'essai" }], true],
+  );
+  const onlyB = await moveTargetsCore(db, ctx, { bookingId, seriesRootId: targetB.eventId }, noon);
+  assert.ok(onlyB.ok, JSON.stringify(onlyB));
+  assert.deepEqual(onlyB.targets.map((t) => t.title), ["Conversion"]);
+  assert.equal(onlyB.series.length, 2);
+  assert.equal(MOVE_NOT_MOVABLE, "Cette inscription ne peut pas être déplacée.");
+  check("unknown booking", await moveTargetsCore(db, ctx, { bookingId: "inconnu", seriesRootId: null }, noon), MOVE_NOT_MOVABLE);
+});
+
+dbTest("every attendee core refuses another pro's ids with the not-found wording and writes nothing", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const typeX = await makeType(db, pro);
+  const {
+    occurrences: [mine],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeX] });
+  const customerId = await makeCustomer(db, pro, { name: "Alice Dupont" });
+  await giveTickets(db, pro, customerId, typeX, 1);
+  const myBooking = await register(db, pro, mine.id, customerId, { asGuest: false });
+
+  const other = await createTestPro(db);
+  try {
+    const otherType = await makeType(db, other);
+    const {
+      occurrences: [theirs],
+    } = await makeEvent(db, other, { ticketTypeIds: [otherType] });
+    const theirCustomer = await makeCustomer(db, other, { name: "Alice Dupont" });
+    const [theirTicket] = await giveTickets(db, other, theirCustomer, otherType, 1);
+    const theirBooking = await register(db, other, theirs.id, theirCustomer, { asGuest: false });
+
+    check("register, foreign séance", await registerAttendeeCore(db, ctx, reg(theirs.id, customerId), now), "Séance introuvable.");
+    check(
+      "register, foreign customer",
+      await registerAttendeeCore(db, ctx, reg(mine.id, theirCustomer, { coverage: "guest" }), now),
+      "Séance ou client introuvable.",
+    );
+    const foreignTicket = await registerAttendeeCore(db, ctx, reg(mine.id, customerId, { ticketId: theirTicket }), now);
+    check("register, foreign ticket", foreignTicket, "Ce ticket n'est pas utilisable sur cette séance.");
+    assert.equal(codeOf(foreignTicket), "not_eligible");
+    check("move, foreign booking", await moveAttendeeCore(db, ctx, move(theirBooking, mine.id), now), "Inscription ou séance introuvable.");
+    check("move, foreign target", await moveAttendeeCore(db, ctx, move(myBooking, theirs.id), now), "Inscription ou séance introuvable.");
+    check(
+      "move, foreign conversion type",
+      await moveAttendeeCore(db, ctx, move(myBooking, mine.id, { convertToTicketTypeId: otherType }), now),
+      CONVERSION_TYPE_UNAVAILABLE,
+    );
+    const found = await searchCustomersCore(db, ctx, { q: "alice" }, now);
+    assert.ok(found.ok, JSON.stringify(found));
+    assert.deepEqual(found.customers.map((c) => c.id), [customerId], "the other pro's Alice is not listed");
+    check(
+      "options, foreign séance",
+      await registerOptionsCore(db, ctx, { occurrenceId: theirs.id, customerId }, now),
+      "Séance ou client introuvable.",
+    );
+    check(
+      "options, foreign customer",
+      await registerOptionsCore(db, ctx, { occurrenceId: mine.id, customerId: theirCustomer }, now),
+      "Séance ou client introuvable.",
+    );
+    check(
+      "targets, foreign booking",
+      await moveTargetsCore(db, ctx, { bookingId: theirBooking, seriesRootId: null }, now),
+      "Cette inscription ne peut pas être déplacée.",
+    );
+
+    // Nothing moved or was created on the other side.
+    assert.equal((await getBooking(db, theirBooking)).occurrenceId, theirs.id);
+    assert.equal((await getOccurrence(db, theirs.id)).seatsTaken, 1);
+    assert.equal((await getBooking(db, myBooking)).occurrenceId, mine.id);
+    assert.equal((await db.select({ id: customer.id }).from(customer).where(eq(customer.professionalId, other.proId))).length, 1);
+    assert.deepEqual(await checkInvariants(db, { proId: other.proId }), []);
+    assert.equal((await ticketsOf(db, theirCustomer)).find((t) => t.id === theirTicket)?.bookingId, theirBooking, "their ticket was not touched");
+  } finally {
+    await deleteTestUser(db, other.userId);
+  }
+});
+
+dbTest("registerAttendeeCore takes the pro and the actor from ctx, and a typed client never takes a user id from input", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const other = await createTestPro(db);
+  try {
+    const typeX = await makeType(db, pro);
+    const {
+      occurrences: [occ],
+    } = await makeEvent(db, pro, { ticketTypeIds: [typeX] });
+    const {
+      occurrences: [free],
+    } = await makeEvent(db, pro, { bookingMode: "free" });
+    const holder = await makeCustomer(db, pro);
+    const [ticketId] = await giveTickets(db, pro, holder, typeX, 1);
+
+    // Keys the schema does not know are dropped by the validation, before they can reach the engine.
+    const smuggled = { ...reg(occ.id, holder), professionalId: other.proId, actorUserId: other.userId } as RegisterInput;
+    const res = await registerAttendeeCore(db, ctx, smuggled, now);
+    assert.ok(res.ok, JSON.stringify(res));
+    assert.equal((await getBooking(db, res.bookingId)).professionalId, pro.proId);
+    const spend = await db
+      .select({ proId: ticketMovement.professionalId, actor: ticketMovement.actor, actorUserId: ticketMovement.actorUserId })
+      .from(ticketMovement)
+      .where(and(eq(ticketMovement.ticketId, ticketId), eq(ticketMovement.kind, "spend")));
+    assert.deepEqual(spend, [{ proId: pro.proId, actor: "pro", actorUserId: pro.userId }]);
+
+    const typed = {
+      kind: "new",
+      name: "Léa Martin",
+      email: "lea.martin@example.com",
+      phone: null,
+      userId: other.userId,
+      professionalId: other.proId,
+    } as unknown as RegisterInput["customer"];
+    const created = await registerAttendeeCore(db, ctx, reg(free.id, "", { customer: typed, coverage: "guest" }), now);
+    assert.ok(created.ok, JSON.stringify(created));
+    const [row] = await db.select().from(customer).where(eq(customer.id, created.customerId));
+    assert.deepEqual([row.professionalId, row.userId], [pro.proId, null]);
+    assert.equal((await db.select({ id: customer.id }).from(customer).where(eq(customer.professionalId, other.proId))).length, 0);
+  } finally {
+    await deleteTestUser(db, other.userId);
+  }
+});
+
+dbTest("moveTargetsCore flags the targets where the client already holds a seat (customerBooked)", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const typeX = await makeType(db, pro, { name: "Cours collectif" });
+  const mk = (title: string, day: number) =>
+    makeEvent(db, pro, { title, ticketTypeIds: [typeX], rule: { startDate: dayIn(pro, day) } });
+  const [s] = (await mk("Source", 3)).occurrences;
+  const [t4] = (await mk("Jour 4", 4)).occurrences;
+  const [t5] = (await mk("Jour 5", 5)).occurrences;
+  const customerId = await makeCustomer(db, pro);
+  await giveTickets(db, pro, customerId, typeX, 2);
+  const bookingId = await register(db, pro, s.id, customerId, { asGuest: false });
+  await register(db, pro, t4.id, customerId, { asGuest: false });
+
+  const res = await moveTargetsCore(db, ctx, { bookingId, seriesRootId: null }, new Date());
+  assert.ok(res.ok, JSON.stringify(res));
+  assert.deepEqual(
+    res.targets.map((t) => [t.occurrenceId, t.customerBooked]),
+    [
+      [t4.id, true],
+      [t5.id, false],
+    ],
+  );
+});
+
+dbTest("every attendee core refuses a malformed input in French, before any read or write", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const english = /\b(invalid|expected|required|too (small|big)|string|number)\b/i;
+  const bad = [
+    await registerAttendeeCore(db, ctx, reg("", "x"), now),
+    await registerAttendeeCore(db, ctx, { ...reg("x", "x"), extraSeat: "oui" } as unknown as RegisterInput, now),
+    await registerAttendeeCore(db, ctx, { ...reg("x", "x"), coverage: "ticket" } as unknown as RegisterInput, now),
+    await moveAttendeeCore(db, ctx, { ...move("x", "y"), force: "oui" } as never, now),
+    await moveAttendeeCore(db, ctx, move("", "y"), now),
+    await searchCustomersCore(db, ctx, { q: 3 } as never, now),
+    await registerOptionsCore(db, ctx, { occurrenceId: "", customerId: "x" }, now),
+    await moveTargetsCore(db, ctx, { bookingId: "", seriesRootId: null }, now),
+  ];
+  for (const res of bad) {
+    assert.ok(!res.ok, JSON.stringify(res));
+    assert.ok(res.error.length > 0 && !english.test(res.error), res.error);
+  }
 });
 
 test("followingRuleOf: the rule that starts at the séance, with the remaining count in count mode", () => {

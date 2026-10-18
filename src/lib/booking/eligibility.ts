@@ -49,7 +49,9 @@ export function pickTicket(args: { customerId: string; occurrenceId: string; tic
 /**
  * One statement: book the picked ticket on `bookingId` and write its `spend`
  * movement (marked with the action id). The booking INSERT must come before
- * it in the batch (FK); follow with assertSpent.
+ * it in the batch (FK); follow with assertSpent. The statement ends with
+ * RETURNING ticket_id: the id of the ticket it booked is in the batch result
+ * (`results[i].rows[0].ticket_id`), so no read after the commit is needed.
  */
 export function spendTicket(
   c: BatchCtx,
@@ -66,7 +68,8 @@ export function spendTicket(
       to_status, ticket_type_id, booking_id, purchase_id, actor, actor_user_id, created_at)
     select professional_id, customer_id, id, ${c.aid}, 'spend', 'available', 'booked',
       ticket_type_id, ${args.bookingId}, purchase_id, ${args.by.actor}::actor, ${args.by.userId}, ${ts(c.now)}
-    from u`);
+    from u
+    returning ticket_id`);
 }
 
 /** G(a ticket is booked on this booking, 'no_ticket'). */

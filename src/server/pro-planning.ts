@@ -9,10 +9,19 @@ import {
   unenrollCore,
   updateCapacityCore,
   updateOccurrenceCore,
+  moveAttendeeCore,
+  moveTargetsCore,
+  registerAttendeeCore,
+  registerOptionsCore,
+  searchCustomersCore,
+  type MoveTargetVM,
   type OccurrenceEditInput,
+  type RegisterInput,
 } from "@/lib/back-office/planning-actions";
+import type { CustomerHit } from "@/lib/back-office/planning-reads";
 import type { ActionResult } from "@/lib/back-office/result";
 import type { DateKey } from "@/lib/civil-date";
+import type { BookingCoverage, BookingMode } from "@/lib/tickets-vocab";
 import { db } from "@/lib/db";
 import { runProAction, runProQuery } from "@/server/pro-context";
 
@@ -63,6 +72,43 @@ export async function unenrollAction(input: {
 }): Promise<ActionResult<{ cancelled: number; ticketsReturned: number }>> {
   return runProAction("unenroll", (ctx, now) => unenrollCore(db, ctx, input, now), { publicPage: true });
 }
+
+/* ───────────────────────── Attendees ───────────────────────── */
+
+export async function registerAttendeeAction(
+  input: RegisterInput,
+): Promise<ActionResult<{ bookingId: string; customerId: string; coverage: BookingCoverage; customerCreated: boolean }>> {
+  return runProAction("registerAttendee", (ctx, now) => registerAttendeeCore(db, ctx, input, now), { publicPage: true });
+}
+
+export async function moveAttendeeAction(input: {
+  bookingId: string;
+  targetOccurrenceId: string;
+  force: boolean;
+  convertToTicketTypeId: string | null;
+}): Promise<ActionResult<{ converted: boolean }>> {
+  return runProAction("moveAttendee", (ctx, now) => moveAttendeeCore(db, ctx, input, now), { publicPage: true });
+}
+
+export async function searchCustomersAction(input: { q: string }): Promise<ActionResult<{ customers: CustomerHit[] }>> {
+  return runProQuery("searchCustomers", (ctx, now) => searchCustomersCore(db, ctx, input, now));
+}
+
+export async function registerOptionsAction(input: {
+  occurrenceId: string;
+  customerId: string;
+}): Promise<ActionResult<{ mode: BookingMode; alreadyBooked: boolean; usable: { id: string; label: string }[] }>> {
+  return runProQuery("registerOptions", (ctx, now) => registerOptionsCore(db, ctx, input, now));
+}
+
+export async function moveTargetsAction(input: {
+  bookingId: string;
+  seriesRootId: string | null;
+}): Promise<ActionResult<{ series: { seriesRootId: string; title: string }[]; targets: MoveTargetVM[] }>> {
+  return runProQuery("moveTargets", (ctx, now) => moveTargetsCore(db, ctx, input, now));
+}
+
+/* ───────────────────────── « Cette séance et les suivantes » ───────────────────────── */
 
 export async function previewFollowingAction(input: {
   occurrenceId: string;

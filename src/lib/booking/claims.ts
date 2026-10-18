@@ -32,7 +32,6 @@ import {
   eventTicketType,
   occurrence,
   professional,
-  ticket,
   ticketOffer,
   ticketPurchase,
   ticketType,
@@ -548,10 +547,17 @@ function confirmedEffects(bookingId: string, occurrenceId: string, byClient: boo
   return [...effects, ...syncEffects([occurrenceId])];
 }
 
-async function bookedTicketOf(db: Db, bookingId: string): Promise<string> {
-  const [row] = await db.select({ id: ticket.id }).from(ticket).where(eq(ticket.bookingId, bookingId));
-  if (!row) throw new Error(`booking ${bookingId}: no booked ticket after a committed spend`);
-  return row.id;
+/**
+ * The ticket spendTicket booked, read from the batch result of that statement
+ * (INSERT … RETURNING ticket_id) at `index`: the same transaction as the
+ * booking, so a ticket cancelled or changed right after the commit can neither
+ * fail the action nor give another id.
+ */
+function spentTicketId(results: readonly unknown[], index: number | undefined, bookingId: string): string {
+  if (index === undefined) throw new Error(`booking ${bookingId}: the plan did not spend a ticket`);
+  const row = (results[index] as { rows?: { ticket_id: string }[] } | undefined)?.rows?.[0];
+  if (!row) throw new Error(`booking ${bookingId}: the spend returned no ticket`);
+  return row.ticket_id;
 }
 
 /**
@@ -565,7 +571,7 @@ export async function bookWithHeldTicket(
   input: ClientClaimBase & { actorUserId: string | null },
   now: Date = new Date(),
 ): Promise<EngineResult<{ bookingId: string; ticketId: string }>> {
-  const planned: { bookingId?: string } = {};
+  const planned: { bookingId?: string; spendAt?: number } = {};
   const res = await tryAtomic(db, async () => {
     const notes = cleanNotes(input.customerNotes);
     const [target] = await Promise.all([
@@ -584,7 +590,7 @@ export async function bookWithHeldTicket(
     return (aid) => {
       const c: BatchCtx = { db, aid, now };
       const { professionalId, occurrenceId, customerId } = input;
-      return [
+      const queries: Query[] = [
         lockRows(db, "occurrence", [occurrenceId]),
         R(c, occurrenceId),
         assertNotBooked(c, occurrenceId, customerId),
@@ -601,6 +607,9 @@ export async function bookWithHeldTicket(
           createdBy: "client",
           customerNotes: notes,
         }),
+      ];
+      planned.spendAt = queries.length;
+      queries.push(
         spendTicket(c, {
           bookingId,
           customerId,
@@ -609,7 +618,8 @@ export async function bookWithHeldTicket(
         }),
         assertSpent(c, bookingId),
         ...insertAnswers(c, { professionalId, bookingId, rows: answerRows }),
-      ];
+      );
+      return queries;
     };
   });
   if (!res.ok) return failOf(res);
@@ -619,7 +629,7 @@ export async function bookWithHeldTicket(
     ok: true,
     effects: confirmedEffects(bookingId, input.occurrenceId, true),
     bookingId,
-    ticketId: await bookedTicketOf(db, bookingId),
+    ticketId: spentTicketId(res.results, planned.spendAt, bookingId),
   };
 }
 
@@ -721,7 +731,7 @@ export async function registerPro(
   },
   now: Date = new Date(),
 ): Promise<EngineResult<{ bookingId: string; coverage: BookingCoverage; ticketId: string | null }>> {
-  const planned: { bookingId?: string; coverage?: BookingCoverage } = {};
+  const planned: { bookingId?: string; coverage?: BookingCoverage; spendAt?: number } = {};
   const res = await tryAtomic(db, async () => {
     const [target] = await Promise.all([
       readEventTarget(db, input.professionalId, input.occurrenceId),
@@ -764,7 +774,9 @@ export async function registerPro(
           customerNotes: null,
         }),
       ];
+      planned.spendAt = undefined;
       if (coverage === "ticket") {
+        planned.spendAt = queries.length;
         queries.push(
           spendTicket(c, {
             bookingId,
@@ -788,7 +800,7 @@ export async function registerPro(
     effects: confirmedEffects(bookingId, input.occurrenceId, false),
     bookingId,
     coverage,
-    ticketId: coverage === "ticket" ? await bookedTicketOf(db, bookingId) : null,
+    ticketId: coverage === "ticket" ? spentTicketId(res.results, planned.spendAt, bookingId) : null,
   };
 }
 

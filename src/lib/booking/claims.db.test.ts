@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { and, eq, sql } from "drizzle-orm";
+import { nanoid } from "nanoid";
 
 import { bookWithHeldTicket, registerFree, registerPro } from "@/lib/booking/claims";
-import { ticket, ticketMovement } from "@/lib/db/schema";
+import { assertSpent, spendTicket } from "@/lib/booking/eligibility";
+import { SEAT, atomic, lockRows, type BatchCtx } from "@/lib/db/atomic";
+import { booking as bookingTable, ticket, ticketMovement } from "@/lib/db/schema";
 import { addMinutes, dbTest, inParallel, type DbHarness } from "@/test/db";
 import {
   dayIn,
@@ -292,6 +295,85 @@ dbTest("E3 the same client twice for the last seat is already_booked, not full",
   assert.equal(codeOf(await registerFree(h.db, input(a))), "already_booked");
   assert.equal(codeOf(await registerFree(h.db, input(b))), "full");
   assert.equal((await getOccurrence(h.db, occ.id)).seatsTaken, 1);
+});
+
+dbTest("spendTicket returns the id of the ticket it booked (INSERT … RETURNING ticket_id)", async (h) => {
+  const typeId = await makeType(h.db, h.pro);
+  const {
+    occurrences: [occ],
+  } = await makeEvent(h.db, h.pro, { ticketTypeIds: [typeId] });
+  const customerId = await makeCustomer(h.db, h.pro);
+  await giveTickets(h.db, h.pro, customerId, typeId, 1);
+  const [soon] = await giveTickets(h.db, h.pro, customerId, typeId, 1, { expiresAt: addMinutes(occ.startsAt, 1440) });
+  const bookingId = nanoid();
+  const now = new Date();
+
+  const { results } = await atomic(h.db, async () => (aid) => {
+    const c: BatchCtx = { db: h.db, aid, now };
+    return [
+      lockRows(h.db, "occurrence", [occ.id]),
+      SEAT(c, occ.id, 1),
+      h.db.insert(bookingTable).values({
+        id: bookingId,
+        professionalId: h.pro.proId,
+        occurrenceId: occ.id,
+        customerId,
+        status: "confirmed",
+        coverage: "ticket",
+        createdBy: "pro",
+        confirmedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      }),
+      spendTicket(c, { bookingId, customerId, occurrenceId: occ.id, by: { actor: "pro", userId: h.pro.userId } }),
+      assertSpent(c, bookingId),
+    ];
+  });
+  assert.deepEqual((results[3] as { rows: { ticket_id: string }[] }).rows, [{ ticket_id: soon }]);
+  const booked = (await ticketsOf(h.db, customerId)).filter((t) => t.bookingId === bookingId);
+  assert.deepEqual(booked.map((t) => t.id), [soon]);
+});
+
+dbTest("bookWithHeldTicket and registerPro return the id of the ticket booked on their booking", async (h) => {
+  const typeId = await makeType(h.db, h.pro);
+  const customerId = await makeCustomer(h.db, h.pro);
+  const [forever] = await giveTickets(h.db, h.pro, customerId, typeId, 1);
+  const {
+    occurrences: [e1],
+  } = await makeEvent(h.db, h.pro, { ticketTypeIds: [typeId] });
+  const [soon] = await giveTickets(h.db, h.pro, customerId, typeId, 1, { expiresAt: addMinutes(e1.startsAt, 1440) });
+  const [last] = await giveTickets(h.db, h.pro, customerId, typeId, 1);
+  const {
+    occurrences: [e2],
+  } = await makeEvent(h.db, h.pro, { ticketTypeIds: [typeId] });
+  const {
+    occurrences: [e3],
+  } = await makeEvent(h.db, h.pro, { ticketTypeIds: [typeId] });
+  const {
+    occurrences: [e4],
+  } = await makeEvent(h.db, h.pro, { bookingMode: "none" });
+  const bookedOn = async (bookingId: string) =>
+    (await ticketsOf(h.db, customerId)).filter((t) => t.bookingId === bookingId).map((t) => t.id);
+
+  const viaHeld = await bookWithHeldTicket(h.db, held(h, e1, customerId));
+  assert.ok(viaHeld.ok, JSON.stringify(viaHeld));
+  assert.equal(viaHeld.ticketId, soon, "the soonest expiry is spent");
+  assert.deepEqual(await bookedOn(viaHeld.bookingId), [viaHeld.ticketId]);
+
+  const forced = await registerPro(h.db, { ...pro(h, e2, customerId), ticketId: forever });
+  assert.ok(forced.ok, JSON.stringify(forced));
+  assert.equal(forced.ticketId, forever);
+  assert.deepEqual(await bookedOn(forced.bookingId), [forever]);
+
+  const auto = await registerPro(h.db, pro(h, e3, customerId));
+  assert.ok(auto.ok, JSON.stringify(auto));
+  assert.equal(auto.ticketId, last, "the only ticket left");
+  assert.deepEqual(await bookedOn(auto.bookingId), [auto.ticketId]);
+
+  const guest = await registerPro(h.db, { ...pro(h, e4, customerId), asGuest: true });
+  assert.ok(guest.ok, JSON.stringify(guest));
+  assert.equal(guest.ticketId, null);
+  assert.deepEqual(await bookedOn(guest.bookingId), []);
 });
 
 dbTest("registerPro: the same client twice for the last seat is already_booked, whatever the coverage", async (h) => {

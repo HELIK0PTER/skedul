@@ -8,12 +8,14 @@
  * fromEngine(res, context). Effects are returned for the wrapper to run after
  * commit.
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 
-import { expiryLabel } from "@/lib/back-office/format";
+import { expiryLabel, formatWhenShort } from "@/lib/back-office/format";
+import { moveTargets, registerOptions, searchCustomers, type CustomerHit } from "@/lib/back-office/planning-reads";
 import { actionFail, fromEngine, type ActionFail, type ActionResult, type CoreResult, type ProCtx } from "@/lib/back-office/result";
 import { cancelBookingsByPro, cancelOccurrence, restoreOccurrence } from "@/lib/booking/cancel";
+import { registerPro } from "@/lib/booking/claims";
 import { ruleOf } from "@/lib/booking/occurrences";
 import {
   bookingsExpiringBefore,
@@ -24,13 +26,25 @@ import {
   type OccurrencePatch,
 } from "@/lib/booking/series";
 import { fail } from "@/lib/booking/types";
+import { createCustomer, moveAttendee } from "@/lib/booking/wallet";
 import { instantAt, type DateKey } from "@/lib/civil-date";
+import { dayKeyInTz } from "@/lib/datetime";
 import type { Db } from "@/lib/db/atomic";
-import { event, occurrence } from "@/lib/db/schema";
+import { event, occurrence, ticketType } from "@/lib/db/schema";
 import type { ProErrorContext } from "@/lib/pro-messages";
 import { expandDates, remainingCount, type RecurrenceRule } from "@/lib/recurrence";
 import { describeSeriesEdit } from "@/lib/series-plan";
-import { BOUNDS, dateKeySchema, idSchema, type OccurrenceStatus, type RecurrenceRuleInput } from "@/lib/tickets";
+import {
+  BOUNDS,
+  answersInputSchema,
+  customerInputSchema,
+  dateKeySchema,
+  idSchema,
+  type BookingCoverage,
+  type BookingMode,
+  type OccurrenceStatus,
+  type RecurrenceRuleInput,
+} from "@/lib/tickets";
 import { parseFr } from "@/lib/zod-fr";
 
 export const TIME_PARTS_REQUIRED = "Indiquez la date et l'heure.";
@@ -446,3 +460,253 @@ export async function applyFollowingCore(
 }
 
 /* ───────────────────────── Attendees: register and move ───────────────────────── */
+
+export const REGISTER_RDV = "Un rendez-vous ne s'inscrit pas depuis le planning.";
+export const REGISTER_NONE_GUEST = "Séance sans réservation en ligne : inscrivez ce client comme invité.";
+export const REGISTER_NO_TICKET_MODE = "Cette séance n'accepte pas de ticket : choisissez « Invité ».";
+export const CONVERSION_TYPE_UNAVAILABLE = "Ce type ne peut pas recevoir de tickets.";
+export const MOVE_NOT_MOVABLE = "Cette inscription ne peut pas être déplacée.";
+
+export const registerInputSchema = z.object({
+  occurrenceId: idSchema,
+  customer: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("existing"), customerId: idSchema }),
+    z.object({ kind: z.literal("new"), name: z.string(), email: z.string(), phone: z.string().nullable() }),
+  ]),
+  coverage: z.enum(["auto", "guest"]),
+  ticketId: idSchema.nullable(),
+  extraSeat: z.boolean(),
+  answers: answersInputSchema,
+});
+export type RegisterInput = z.input<typeof registerInputSchema>;
+
+/**
+ * E2 pro « Inscrire » (steps in this exact order): 1) validate; 2) the
+ * occurrence of the pro: unknown « Séance introuvable. », an RDV
+ * REGISTER_RDV, a cancelled one the register « unavailable » wording; 3) mode
+ * « none » needs « Invité » (REGISTER_NONE_GUEST), a ticket needs the tickets
+ * mode and no « Invité » (REGISTER_NO_TICKET_MODE); 4) the customer: an
+ * existing id (the engine checks it belongs to the pro) or a new one made
+ * with the engine's createCustomer (name, e-mail trimmed and validated, the
+ * e-mail is the key: an existing e-mail is reused, `customerCreated` false);
+ * 5) registerPro (ticket in tickets mode, free in free mode, « Invité » on
+ * request; « +1 place » through `extraSeat`). A refused registration after a
+ * new client was typed leaves that client in the list, like any started
+ * booking. Context "register" (the customer creation uses "customer").
+ *
+ * Identity: professionalId and actorUserId are ctx's. The schema is not
+ * passthrough, so a key the form does not know (a professionalId, an
+ * actorUserId, a userId on the typed client) is dropped by parseFr and can
+ * never reach the engine; a typed client is created without any user id, and
+ * the engine does not check that the actor belongs to the pro, which is why
+ * only ctx may feed it. The engine's refusals reach the pro in pro wording
+ * (proErrorMessage, "register" context): already_booked is « Ce client est
+ * déjà inscrit à cette séance. », never the client's « Vous êtes déjà
+ * inscrit(e) ».
+ */
+export async function registerAttendeeCore(
+  db: Db,
+  ctx: ProCtx,
+  input: RegisterInput,
+  now: Date,
+): Promise<CoreResult<{ bookingId: string; customerId: string; coverage: BookingCoverage; customerCreated: boolean }>> {
+  const parsed = parseFr(registerInputSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  const p = parsed.data;
+
+  const [occ] = await db
+    .select({ eventId: occurrence.eventId, status: occurrence.status, mode: event.bookingMode })
+    .from(occurrence)
+    .leftJoin(event, eq(event.id, occurrence.eventId))
+    .where(and(eq(occurrence.id, p.occurrenceId), eq(occurrence.professionalId, ctx.professionalId)));
+  if (!occ) return notFound("occurrence");
+  if (occ.eventId === null || occ.mode === null) return actionFail(REGISTER_RDV);
+  if (occ.status !== "scheduled") return fromEngine(fail("unavailable"), "register");
+
+  if (occ.mode === "none" && p.coverage === "auto") return actionFail(REGISTER_NONE_GUEST);
+  if (p.ticketId !== null && (p.coverage === "guest" || occ.mode !== "tickets")) return actionFail(REGISTER_NO_TICKET_MODE);
+
+  let customerId: string;
+  let customerCreated = false;
+  if (p.customer.kind === "existing") {
+    customerId = p.customer.customerId;
+  } else {
+    const typed = parseFr(customerInputSchema, {
+      name: p.customer.name,
+      email: p.customer.email.trim(),
+      phone: p.customer.phone ?? undefined,
+    });
+    if (!typed.ok) return actionFail(typed.error);
+    const created = await createCustomer(
+      db,
+      { professionalId: ctx.professionalId, name: typed.data.name, email: typed.data.email, phone: typed.data.phone ?? null },
+      now,
+    );
+    if (!created.ok) return fromEngine(created, "customer");
+    customerId = created.customerId;
+    customerCreated = created.created;
+  }
+
+  const res = await registerPro(
+    db,
+    {
+      professionalId: ctx.professionalId,
+      actorUserId: ctx.actorUserId,
+      occurrenceId: p.occurrenceId,
+      customerId,
+      asGuest: p.coverage === "guest",
+      ticketId: p.ticketId,
+      extraSeat: p.extraSeat,
+      answers: p.answers,
+    },
+    now,
+  );
+  if (!res.ok) return fromEngine(res, "register");
+  return { ok: true, effects: res.effects, bookingId: res.bookingId, customerId, coverage: res.coverage, customerCreated };
+}
+
+const moveSchema = z.object({
+  bookingId: idSchema,
+  targetOccurrenceId: idSchema,
+  force: z.boolean(),
+  convertToTicketTypeId: idSchema.nullable(),
+});
+
+/**
+ * E8 « Déplacer »: a conversion type must be an active, non rdv_free type of
+ * the pro (CONVERSION_TYPE_UNAVAILABLE), then moveAttendee. The engine's
+ * `ticket_expires_before` comes back with that code and the pro wording, so
+ * the UI offers « Déplacer quand même » (force). Context "move".
+ */
+export async function moveAttendeeCore(
+  db: Db,
+  ctx: ProCtx,
+  input: { bookingId: string; targetOccurrenceId: string; force: boolean; convertToTicketTypeId: string | null },
+  now: Date,
+): Promise<CoreResult<{ converted: boolean }>> {
+  const parsed = parseFr(moveSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  const p = parsed.data;
+
+  if (p.convertToTicketTypeId !== null) {
+    const [usable] = await db
+      .select({ id: ticketType.id })
+      .from(ticketType)
+      .where(
+        and(
+          eq(ticketType.id, p.convertToTicketTypeId),
+          eq(ticketType.professionalId, ctx.professionalId),
+          isNull(ticketType.archivedAt),
+          eq(ticketType.rdvFree, false),
+        ),
+      );
+    if (!usable) return actionFail(CONVERSION_TYPE_UNAVAILABLE);
+  }
+
+  const res = await moveAttendee(
+    db,
+    {
+      professionalId: ctx.professionalId,
+      actorUserId: ctx.actorUserId,
+      bookingId: p.bookingId,
+      targetOccurrenceId: p.targetOccurrenceId,
+      force: p.force,
+      convertToTicketTypeId: p.convertToTicketTypeId ?? undefined,
+    },
+    now,
+  );
+  if (!res.ok) return fromEngine(res, "move");
+  return { ok: true, effects: res.effects, converted: res.conversion !== null };
+}
+
+const searchSchema = z.object({ q: z.string().max(254) });
+
+/** The customer search of « Inscrire » behind validation (the read trims, needs 2 characters, escapes wildcards). */
+export async function searchCustomersCore(
+  db: Db,
+  ctx: ProCtx,
+  input: { q: string },
+  now: Date,
+): Promise<ActionResult<{ customers: CustomerHit[] }>> {
+  void now;
+  const parsed = parseFr(searchSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  return { ok: true, customers: await searchCustomers(db, ctx.professionalId, parsed.data.q) };
+}
+
+const registerOptionsSchema = z.object({ occurrenceId: idSchema, customerId: idSchema });
+
+/** registerOptions as client data: each usable ticket as « {type} · {validité} » (+ « · offert »). A null read is « Séance ou client introuvable. ». */
+export async function registerOptionsCore(
+  db: Db,
+  ctx: ProCtx,
+  input: { occurrenceId: string; customerId: string },
+  now: Date,
+): Promise<ActionResult<{ mode: BookingMode; alreadyBooked: boolean; usable: { id: string; label: string }[] }>> {
+  const parsed = parseFr(registerOptionsSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  const options = await registerOptions(db, ctx.professionalId, parsed.data.occurrenceId, parsed.data.customerId, now);
+  if (!options) return fromEngine(fail("not_found"), "register");
+  return {
+    ok: true,
+    mode: options.mode,
+    alreadyBooked: options.alreadyBooked,
+    usable: options.usable.map((u) => ({
+      id: u.id,
+      label: `${u.typeName} · ${expiryLabel(u.expiresAt, ctx.timezone, now)}${u.purchased ? "" : " · offert"}`,
+    })),
+  };
+}
+
+export type MoveTargetVM = {
+  occurrenceId: string;
+  seriesRootId: string;
+  title: string;
+  /** « lun. 12/10 · 19:00 » in the pro zone */
+  whenLabel: string;
+  /** the local day, to group the targets */
+  dayKey: DateKey;
+  seatsShown: number;
+  capacity: number;
+  full: boolean;
+  accepted: boolean;
+  conversionTypes: { id: string; name: string }[];
+  expiresBefore: boolean;
+  /** the moved client already holds a live seat there: the move is refused with « already_booked », so the UI disables the target */
+  customerBooked: boolean;
+};
+
+const moveTargetsSchema = z.object({ bookingId: idSchema, seriesRootId: idSchema.nullable() });
+
+/** moveTargets as client data (labels and days computed in the pro zone). A null read is MOVE_NOT_MOVABLE. */
+export async function moveTargetsCore(
+  db: Db,
+  ctx: ProCtx,
+  input: { bookingId: string; seriesRootId: string | null },
+  now: Date,
+): Promise<ActionResult<{ series: { seriesRootId: string; title: string }[]; targets: MoveTargetVM[] }>> {
+  const parsed = parseFr(moveTargetsSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  const res = await moveTargets(db, ctx.professionalId, parsed.data.bookingId, now, { seriesRootId: parsed.data.seriesRootId });
+  if (!res) return actionFail(MOVE_NOT_MOVABLE);
+  return {
+    ok: true,
+    series: res.series,
+    targets: res.targets.map(
+      (t): MoveTargetVM => ({
+        occurrenceId: t.occurrenceId,
+        seriesRootId: t.seriesRootId,
+        title: t.title,
+        whenLabel: formatWhenShort(t.startsAt, ctx.timezone),
+        dayKey: dayKeyInTz(t.startsAt, ctx.timezone),
+        seatsShown: t.seatsShown,
+        capacity: t.capacity,
+        full: t.full,
+        accepted: t.accepted,
+        conversionTypes: t.conversionTypes,
+        expiresBefore: t.expiresBefore,
+        customerBooked: t.customerBooked,
+      }),
+    ),
+  };
+}
