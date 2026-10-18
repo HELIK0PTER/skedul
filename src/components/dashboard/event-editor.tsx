@@ -72,7 +72,12 @@ export type EventInfoValue = {
   questions: QuestionDraft[];
 };
 
-/** The EventInfoInput of a form value ("" becomes null, questions go through inputsFromDrafts). */
+/**
+ * The EventInfoInput of a form value ("" becomes null, questions go through inputsFromDrafts).
+ * The ticked types are sent only for a « Sur tickets » event: the list is hidden in the other
+ * modes, so ids ticked before switching must not link types to a free-registration event (the
+ * form value keeps them, switching back restores the ticks).
+ */
 export function eventInfoInput(v: EventInfoValue): EventInfoInput {
   return {
     title: v.title,
@@ -83,7 +88,7 @@ export function eventInfoInput(v: EventInfoValue): EventInfoInput {
     isPrivate: v.isPrivate,
     capacity: v.capacity,
     overrides: v.overrides,
-    ticketTypeIds: v.ticketTypeIds,
+    ticketTypeIds: v.bookingMode === "tickets" ? v.ticketTypeIds : [],
     questions: inputsFromDrafts(v.questions),
   };
 }
@@ -114,6 +119,42 @@ function firstErrorUnder(errors: Record<string, string>, prefix: string): string
   }
   return null;
 }
+
+/** `errors` without the messages whose dotted key is, or sits under, one of `prefixes`; the same object when nothing goes. */
+function withoutErrorsUnder(errors: Record<string, string>, prefixes: readonly string[]): Record<string, string> {
+  const kept = Object.entries(errors).filter(
+    ([key]) => !prefixes.some((prefix) => key === prefix || key.startsWith(`${prefix}.`)),
+  );
+  return kept.length === Object.keys(errors).length ? errors : Object.fromEntries(kept);
+}
+
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((item, i) => item === b[i]);
+  return a === b;
+}
+
+/** The keys of a form value that differ between two states. */
+function changedKeys<T extends object>(prev: T, next: T): (keyof T)[] {
+  return (Object.keys(next) as (keyof T)[]).filter((key) => !sameValue(prev[key], next[key]));
+}
+
+/**
+ * The error keys (parseFr dotted paths) that editing each recurrence field can resolve. Some rule errors
+ * are blamed on another field than the one that causes them (« interval » on « freq », « untilDate » on
+ * the start date), so those are listed too. A field added to RecurrenceFormValue must be listed here.
+ */
+const RECURRENCE_ERROR_KEYS: Record<keyof RecurrenceFormValue, readonly string[]> = {
+  startDate: ["rule.startDate", "rule.untilDate"],
+  startTime: ["rule.startMinute"],
+  durationMin: ["durationMin"],
+  freq: ["rule.freq", "rule.interval", "rule.weekdays", "rule.monthlyBy", "rule.monthWeek"],
+  interval: ["rule.interval", "rule.freq"],
+  weekdays: ["rule.weekdays"],
+  monthlyChoice: ["rule.monthlyBy", "rule.monthWeek"],
+  endMode: ["rule.endMode", "rule.untilDate", "rule.occurrenceCount"],
+  untilDate: ["rule.untilDate"],
+  occurrenceCount: ["rule.occurrenceCount"],
+};
 
 function describedBy(id: string, hasHelp: boolean, error: string | null): string | undefined {
   const ids: string[] = [];
@@ -293,7 +334,7 @@ export function EventInfoFields({
         <fieldset
           disabled={disabled}
           className="min-w-0 space-y-2"
-          aria-describedby={describedBy(typesId, typeRows.length > 0, typesError)}
+          aria-describedby={describedBy(typesId, true, typesError)}
         >
           <legend className={LEGEND_CLASS}>Tickets acceptés</legend>
           {typeRows.length === 0 ? (
@@ -307,28 +348,27 @@ export function EventInfoFields({
               </Link>
             </div>
           ) : (
-            <>
-              <div className="flex flex-col">
-                {typeRows.map((row) => (
-                  // Type names are typed by the pro: a long unbroken one wraps inside the row instead of widening the page.
-                  <label key={row.id} className="flex min-h-10 min-w-0 cursor-pointer items-center gap-2 wrap-anywhere">
-                    <input
-                      type="checkbox"
-                      checked={value.ticketTypeIds.includes(row.id)}
-                      onChange={() => toggleType(row.id)}
-                      className="size-4 shrink-0 cursor-pointer accent-primary"
-                    />
-                    <span className="min-w-0">
-                      <TypeChip name={row.name} color={row.color} archived={row.archived} />
-                    </span>
-                  </label>
-                ))}
-              </div>
-              <p id={`${typesId}-help`} className="text-xs text-muted-foreground">
-                {"Une liste vide n'accepte personne : l'événement sera signalé."}
-              </p>
-            </>
+            <div className="flex flex-col">
+              {typeRows.map((row) => (
+                // Type names are typed by the pro: a long unbroken one wraps inside the row instead of widening the page.
+                <label key={row.id} className="flex min-h-10 min-w-0 cursor-pointer items-center gap-2 wrap-anywhere">
+                  <input
+                    type="checkbox"
+                    checked={value.ticketTypeIds.includes(row.id)}
+                    onChange={() => toggleType(row.id)}
+                    className="size-4 shrink-0 cursor-pointer accent-primary"
+                  />
+                  <span className="min-w-0">
+                    <TypeChip name={row.name} color={row.color} archived={row.archived} />
+                  </span>
+                </label>
+              ))}
+            </div>
           )}
+          {/* With no type to tick the list is just as empty: the warning applies in both cases. */}
+          <p id={`${typesId}-help`} className="text-xs text-muted-foreground">
+            {"Une liste vide n'accepte personne : l'événement sera signalé."}
+          </p>
           <GroupError id={`${typesId}-error`} message={typesError} />
         </fieldset>
       )}
@@ -407,6 +447,7 @@ export function EventCreateForm({
 }) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
+  const errorBox = useRef<HTMLParagraphElement>(null);
   const submitting = useRef(false);
   const [pending, startTransition] = useTransition();
   const [created, setCreated] = useState(false);
@@ -416,10 +457,37 @@ export function EventCreateForm({
   );
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
+  /** Bumped with each failure of the create call itself: the effect below puts the focus on the error box once it is rendered. */
+  const [errorFocus, setErrorFocus] = useState(0);
   const [preview, setPreview] = useState<NewEventPreview | null>(null);
 
   const locked = pending || created;
   const built = useMemo(() => submittableRule(recurrence), [recurrence]);
+
+  // The submit button is disabled while the call runs, which drops the focus on the page: a keyboard or screen-reader user lands on the message.
+  useEffect(() => {
+    if (errorFocus > 0) errorBox.current?.focus();
+  }, [errorFocus]);
+
+  /**
+   * An edit drops the messages of the fields it changed (their aria-invalid goes with them) and the summary
+   * box above the button: the box describes the last submit, and the per-field messages that remain still
+   * say what is wrong. The next submit validates everything again.
+   */
+  function editInfo(next: EventInfoValue) {
+    // The ticket list only exists in « Sur tickets »: leaving or entering that mode settles its messages too.
+    const keys = changedKeys(info, next).flatMap((key) => (key === "bookingMode" ? [key, "ticketTypeIds"] : [key]));
+    setFieldErrors((errors) => withoutErrorsUnder(errors, keys));
+    setFormError(null);
+    setInfo(next);
+  }
+
+  function editRecurrence(next: RecurrenceFormValue) {
+    const keys = changedKeys(recurrence, next).flatMap((key) => RECURRENCE_ERROR_KEYS[key]);
+    setFieldErrors((errors) => withoutErrorsUnder(errors, keys));
+    setFormError(null);
+    setRecurrence(next);
+  }
 
   useEffect(() => {
     if (!built) return;
@@ -484,6 +552,7 @@ export function EventCreateForm({
         if (!res.ok) {
           submitting.current = false;
           setFormError(res.error);
+          setErrorFocus((n) => n + 1);
           return;
         }
         setCreated(true);
@@ -491,6 +560,7 @@ export function EventCreateForm({
       } catch {
         submitting.current = false;
         setFormError(REQUEST_FAILED);
+        setErrorFocus((n) => n + 1);
       }
     });
   }
@@ -505,7 +575,7 @@ export function EventCreateForm({
           <EventInfoFields
             idPrefix="new-event"
             value={info}
-            onChange={setInfo}
+            onChange={editInfo}
             typeOptions={typeOptions}
             linkedArchivedTypes={NO_LINKED_ARCHIVED}
             proWindow={proWindow}
@@ -523,7 +593,7 @@ export function EventCreateForm({
           <RecurrenceEditor
             idPrefix="new-event-rec"
             value={recurrence}
-            onChange={setRecurrence}
+            onChange={editRecurrence}
             minDate={todayKey}
             fieldErrors={fieldErrors}
             disabled={locked}
@@ -547,7 +617,7 @@ export function EventCreateForm({
       </Card>
 
       <div className="space-y-3">
-        <FormError message={formError} />
+        <FormError message={formError} ref={errorBox} tabIndex={-1} />
         <Button type="submit" disabled={locked}>
           {locked && <Loader2 className="size-4 animate-spin" />}
           {"Créer l'événement"}
