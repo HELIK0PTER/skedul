@@ -308,28 +308,6 @@ export async function cancelSession(sessionId: string): Promise<Res> {
   return COMING_SOON;
 }
 
-export async function fetchManualDaySlots(
-  eventTypeId: string,
-  dayKey: string,
-): Promise<{ startISO: string; label: string }[]> {
-  await requirePro();
-  void eventTypeId;
-  void dayKey;
-  return [];
-}
-
-export async function createManualBooking(input: {
-  eventTypeId: string;
-  startISO: string;
-  customerName: string;
-  customerEmail: string;
-  answers?: { questionId: string; value: string }[];
-}): Promise<Res> {
-  await requirePro();
-  void input;
-  return COMING_SOON;
-}
-
 /* ─────────────────────── Google Calendar ───────────────────────── */
 
 /** After the Google OAuth redirect: create the Skedul calendar + store its id. */
