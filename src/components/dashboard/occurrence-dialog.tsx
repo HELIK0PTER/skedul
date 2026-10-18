@@ -2,11 +2,13 @@
 
 import { useEffect, useId, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { ArrowUpRight, Ban, CircleCheck, MapPin, RotateCcw, UserMinus } from "lucide-react";
+import { ArrowRightLeft, ArrowUpRight, Ban, CircleCheck, MapPin, Pencil, RotateCcw, UserMinus } from "lucide-react";
 
 import { BookingStatusBadge } from "@/components/dashboard/booking-status-badge";
 import { ConfirmDialog } from "@/components/dashboard/confirm-dialog";
 import { CoverageBadge } from "@/components/dashboard/coverage-badge";
+import { MoveAttendeeDialog } from "@/components/dashboard/move-attendee-dialog";
+import { OccurrenceEditForm } from "@/components/dashboard/occurrence-edit-form";
 import { SessionCapacityControl } from "@/components/dashboard/session-capacity-control";
 import { TypeChip } from "@/components/dashboard/type-chip";
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +33,7 @@ function AttendeeRow({
   disabled,
   onToggle,
   onUnenroll,
+  onMove,
 }: {
   attendee: PlanningAttendeeVM;
   selectable: boolean;
@@ -38,6 +41,7 @@ function AttendeeRow({
   disabled: boolean;
   onToggle: () => void;
   onUnenroll: () => void;
+  onMove?: () => void;
 }) {
   return (
     <li className="rounded-xl border border-border p-3 text-sm">
@@ -91,17 +95,30 @@ function AttendeeRow({
               <p className="mt-1 text-xs text-muted-foreground wrap-anywhere">{`Note : ${attendee.notes}`}</p>
             )}
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onUnenroll}
-            disabled={disabled}
-            aria-label={`Désinscrire ${attendee.name}`}
-            className="shrink-0 self-start"
-          >
-            <UserMinus />
-            Désinscrire
-          </Button>
+          <div className="flex shrink-0 flex-wrap items-center gap-1 self-start sm:flex-col sm:items-stretch">
+            {onMove && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onMove}
+                disabled={disabled}
+                aria-label={`Déplacer ${attendee.name}`}
+              >
+                <ArrowRightLeft />
+                Déplacer
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onUnenroll}
+              disabled={disabled}
+              aria-label={`Désinscrire ${attendee.name}`}
+            >
+              <UserMinus />
+              Désinscrire
+            </Button>
+          </div>
         </div>
       </div>
     </li>
@@ -168,16 +185,28 @@ export function OccurrenceDialog(props: DialogProps) {
   );
 }
 
-function OccurrenceDialogBody({ item, tz, onClose, onLine }: DialogProps & { onLine: (line: string | null) => void }) {
+function OccurrenceDialogBody({
+  item,
+  tz,
+  nowIso,
+  onClose,
+  onLine,
+}: DialogProps & { onLine: (line: string | null) => void }) {
   const summaryId = useId();
   const reasonId = useId();
   const statusRef = useRef<HTMLParagraphElement>(null);
+  const editButtonRef = useRef<HTMLButtonElement>(null);
+  const refocusEditButton = useRef(false);
   const [done, setDone] = useState<{ text: string } | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
   const [pending, startTransition] = useTransition();
+  const [editing, setEditing] = useState(false);
+  // True while the edit form has a request in flight: the dialog cannot be left then.
+  const [editBusy, setEditBusy] = useState(false);
+  const [moving, setMoving] = useState<{ bookingId: string; customerName: string } | null>(null);
 
   // An action that answers after this séance was swapped for another one must not touch the page any more.
   const alive = useRef(true);
@@ -192,6 +221,14 @@ function OccurrenceDialogBody({ item, tz, onClose, onLine }: DialogProps & { onL
   useEffect(() => {
     if (done) statusRef.current?.focus();
   }, [done]);
+
+  // Back from the edit form without saving: the button that opened it takes the focus back (it was unmounted meanwhile).
+  useEffect(() => {
+    if (!editing && refocusEditButton.current) {
+      refocusEditButton.current = false;
+      editButtonRef.current?.focus();
+    }
+  }, [editing]);
 
   const cancelled = item.status === "cancelled";
   const scheduled = item.status === "scheduled";
@@ -231,11 +268,26 @@ function OccurrenceDialogBody({ item, tz, onClose, onLine }: DialogProps & { onL
   }
 
   // `Dialog` calls its onClose with the click event (backdrop, close button): never pass `onClose` itself, it reads a notice.
-  // Escape and the backdrop close the confirmation first, never both dialogs at once.
+  // Escape and the backdrop close a sub-dialog (the confirmation, « Déplacer ») first, never both dialogs at once.
   function closeSelf() {
-    if (confirming || pending) return;
+    if (confirming || pending || moving !== null) return;
     onLine(null);
     onClose();
+  }
+
+  // « Modifier cette séance » swaps the body of the dialog for the form; Escape, the backdrop and the close button go
+  // back to the details (never close the whole séance dialog) and the button that opened the form takes the focus back.
+  function leaveEdit() {
+    if (editBusy) return;
+    refocusEditButton.current = true;
+    setEditing(false);
+  }
+
+  // The success line of an edit or of a move, shown in the details and handed to the page if the séance leaves its data.
+  function announce(text: string) {
+    if (!alive.current) return;
+    onLine(text);
+    setDone({ text });
   }
 
   function run() {
@@ -297,6 +349,26 @@ function OccurrenceDialogBody({ item, tz, onClose, onLine }: DialogProps & { onL
         setError(REQUEST_FAILED);
       }
     });
+  }
+
+  // The edit view is a Dialog at the same place of the tree as the details one, so React keeps the same dialog (and the
+  // element it hands the focus back to when it closes) and only swaps what is inside.
+  if (editing && isSeance && scheduled) {
+    return (
+      <Dialog open onClose={leaveEdit} title={item.title}>
+        <OccurrenceEditForm
+          item={item}
+          tz={tz}
+          nowIso={nowIso}
+          onCancel={leaveEdit}
+          onBusyChange={setEditBusy}
+          onDone={(text) => {
+            setEditing(false);
+            announce(text);
+          }}
+        />
+      </Dialog>
+    );
   }
 
   return (
@@ -381,6 +453,11 @@ function OccurrenceDialogBody({ item, tz, onClose, onLine }: DialogProps & { onL
                   )
                 }
                 onUnenroll={() => setConfirm({ kind: "unenroll", ids: [a.bookingId] })}
+                onMove={
+                  isSeance && scheduled && a.status === "confirmed"
+                    ? () => setMoving({ bookingId: a.bookingId, customerName: a.name })
+                    : undefined
+                }
               />
             ))}
           </ul>
@@ -388,6 +465,22 @@ function OccurrenceDialogBody({ item, tz, onClose, onLine }: DialogProps & { onL
 
         <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-4">
           <div className="flex flex-wrap items-center gap-2">
+            {isSeance && scheduled && (
+              <Button
+                ref={editButtonRef}
+                variant="secondary"
+                size="sm"
+                disabled={pending}
+                onClick={() => {
+                  setDone(null);
+                  onLine(null);
+                  setEditing(true);
+                }}
+              >
+                <Pencil />
+                Modifier cette séance
+              </Button>
+            )}
             {scheduled && (
               <Button
                 variant="outline"
@@ -442,6 +535,18 @@ function OccurrenceDialogBody({ item, tz, onClose, onLine }: DialogProps & { onL
             </div>
           )}
         </ConfirmDialog>
+      )}
+
+      {moving && (
+        <MoveAttendeeDialog
+          bookingId={moving.bookingId}
+          customerName={moving.customerName}
+          onClose={() => setMoving(null)}
+          onDone={(text) => {
+            setMoving(null);
+            announce(text);
+          }}
+        />
       )}
     </>
   );
