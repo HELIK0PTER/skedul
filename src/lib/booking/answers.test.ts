@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+import { BOOLEAN_ANSWERS } from "../tickets";
 import { buildAnswers, type QuestionRow } from "./answers";
 
 const q = (over: Partial<QuestionRow> & Pick<QuestionRow, "id" | "label">): QuestionRow => ({
@@ -55,6 +56,18 @@ test("a choice must be one of the options and a boolean Oui or Non", () => {
     ok: false,
     message: "Réponse invalide pour : Avez-vous un ballon ?",
   });
+});
+
+test("a boolean question takes exactly the shared BOOLEAN_ANSWERS, spelled as is", () => {
+  assert.deepEqual([...BOOLEAN_ANSWERS], ["Oui", "Non"]);
+  for (const value of BOOLEAN_ANSWERS) {
+    const res = buildAnswers(questions, [{ questionId: "q2", value }], { enforceRequired: false });
+    assert.equal(res.ok, true, value);
+  }
+  for (const value of ["oui", "NON", "Peut-être"]) {
+    const res = buildAnswers(questions, [{ questionId: "q2", value }], { enforceRequired: false });
+    assert.equal(res.ok, false, value);
+  }
 });
 
 test("an unknown question, a duplicate answer or an over-long value is invalid", () => {

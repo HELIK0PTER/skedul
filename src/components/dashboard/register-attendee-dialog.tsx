@@ -12,13 +12,13 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { changedKeys, withoutErrorsUnder } from "@/lib/back-office/form-errors";
+import { plural } from "@/lib/back-office/format";
 import type { RegisterInput } from "@/lib/back-office/planning-actions";
 import type { CustomerHit } from "@/lib/back-office/planning-reads";
 import type { PlanningItemVM } from "@/lib/back-office/planning-view";
+import { newClientProblems, type NewClientValue } from "@/lib/back-office/register-form";
 import { PRO_ERROR_MESSAGES, REQUEST_FAILED } from "@/lib/pro-messages";
-import { customerInputSchema } from "@/lib/tickets";
-import { BOUNDS, type BookingMode } from "@/lib/tickets-vocab";
-import { parseFr } from "@/lib/zod-fr";
+import { BOOLEAN_ANSWERS, BOUNDS, type BookingMode } from "@/lib/tickets-vocab";
 import {
   registerAttendeeAction,
   registerOptionsAction,
@@ -30,10 +30,6 @@ const SEARCH_DEBOUNCE_MS = 250;
 const SEARCH_MIN_CHARS = 2;
 /** Same limit as the core's search schema and the customer e-mail schema. */
 const EMAIL_MAX = 254;
-const NAME_REQUIRED = "Indiquez le nom du client.";
-const EMAIL_REQUIRED = "Indiquez l'adresse email du client.";
-/** The answers a yes/no question takes (the engine's BOOLEAN_ANSWERS: a client component cannot import the engine). */
-const BOOLEAN_CHOICES = ["Oui", "Non"];
 
 const noop = () => {};
 
@@ -48,7 +44,6 @@ type Options =
   | { ok: false; error: string };
 /** auto = the engine's mode-driven coverage (earliest-expiring ticket, or free); specific = auto with a forced ticket; guest = « Invité ». */
 type Choice = "auto" | "specific" | "guest";
-type NewClientValue = { name: string; email: string; phone: string };
 /** Where the focus goes once the next render is on screen (the button that was pressed is disabled by then). */
 type Attention = { target: "field" | "error" };
 
@@ -68,24 +63,6 @@ const CHOICE_LABELS: Record<BookingMode, Partial<Record<Choice, string>>> = {
   free: { auto: "Inscription libre", guest: "Invité" },
   none: { guest: "Invité" },
 };
-
-/**
- * The new client as the core will read it (same schema, so a refusal never comes as a surprise): the messages of each
- * wrong field, or null when the form is fine. An empty name or e-mail reads as a missing field, not as an invalid one.
- */
-function newClientProblems(value: NewClientValue): Record<string, string> | null {
-  const phone = value.phone.trim();
-  const parsed = parseFr(customerInputSchema, {
-    name: value.name,
-    email: value.email.trim(),
-    phone: phone === "" ? undefined : phone,
-  });
-  if (parsed.ok) return null;
-  const errors = { ...parsed.fieldErrors };
-  if (value.name.trim() === "") errors.name = NAME_REQUIRED;
-  if (value.email.trim() === "") errors.email = EMAIL_REQUIRED;
-  return errors;
-}
 
 /** « Inscrire »: search or create a client, pick how the seat is covered, answer the questions. */
 export function RegisterAttendeeDialog({
@@ -160,6 +137,14 @@ export function RegisterAttendeeDialog({
   // An answer for an older query is never shown: neither its hits nor its refusal.
   const found = searchKey !== null && searched !== null && searched.key === searchKey ? searched : null;
   const searching = searchKey !== null && found === null;
+  // What the status line under the search field says: the wait, then how many clients answer (null = nothing to say yet).
+  const searchStatus: string | null = searching
+    ? "Recherche…"
+    : found !== null && found.ok
+      ? found.customers.length === 0
+        ? "Aucun client trouvé."
+        : plural(found.customers.length, "client trouvé", "clients trouvés")
+      : null;
 
   const existing = client?.kind === "existing" ? client : null;
   const existingOptions = existing !== null ? (optionsById[existing.id] ?? null) : null;
@@ -267,8 +252,8 @@ export function RegisterAttendeeDialog({
         }
         onDone(
           res.customerCreated
-            ? `${displayName} est inscrit. Sa fiche client a été créée et un email de confirmation lui a été envoyé.`
-            : `${displayName} est inscrit. Un email de confirmation lui a été envoyé.`,
+            ? `${displayName} est inscrit(e). Sa fiche client a été créée et un email de confirmation lui a été envoyé.`
+            : `${displayName} est inscrit(e). Un email de confirmation lui a été envoyé.`,
         );
       } catch {
         setError(REQUEST_FAILED);
@@ -301,36 +286,32 @@ export function RegisterAttendeeDialog({
                 onChange={(e) => setQuery(e.target.value)}
               />
             </FormField>
-            {searching && (
-              <p role="status" className="flex items-center gap-2 text-sm text-zinc-600">
-                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                Recherche…
-              </p>
-            )}
+            {/* Always mounted, only its content changes: a live region that appears with its text is not reliably announced. Idle, it is empty and takes no room. */}
+            <p
+              role="status"
+              className={searchStatus === null ? "sr-only" : "flex items-center gap-2 text-sm text-zinc-600"}
+            >
+              {searching && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+              {searchStatus}
+            </p>
             {found !== null && !found.ok && <FormError message={found.error} />}
-            {found !== null &&
-              found.ok &&
-              (found.customers.length === 0 ? (
-                <p role="status" className="text-sm text-zinc-600">
-                  Aucun client trouvé.
-                </p>
-              ) : (
-                <ul className="space-y-1.5" aria-label="Clients trouvés">
-                  {found.customers.map((hit) => (
-                    <li key={hit.id}>
-                      <button
-                        type="button"
-                        onClick={() => chooseExisting(hit)}
-                        className="w-full cursor-pointer rounded-xl border border-border px-3 py-2 text-left text-sm break-words transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      >
-                        <span className="font-medium">{hit.name}</span>
-                        {" · "}
-                        <span className="text-zinc-600">{hit.email}</span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ))}
+            {found !== null && found.ok && found.customers.length > 0 && (
+              <ul className="space-y-1.5" aria-label="Clients trouvés">
+                {found.customers.map((hit) => (
+                  <li key={hit.id}>
+                    <button
+                      type="button"
+                      onClick={() => chooseExisting(hit)}
+                      className="w-full cursor-pointer rounded-xl border border-border px-3 py-2 text-left text-sm break-words transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <span className="font-medium">{hit.name}</span>
+                      {" · "}
+                      <span className="text-zinc-600">{hit.email}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
             <Button type="button" variant="secondary" size="sm" onClick={startNew}>
               <Plus />
               Nouveau client
@@ -402,7 +383,7 @@ export function RegisterAttendeeDialog({
         {optionsLoading && (
           <p role="status" className="flex items-center gap-2 text-sm text-zinc-600">
             <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            Recherche des tickets…
+            {"Vérification de l'inscription…"}
           </p>
         )}
         <FormError message={optionsFailure} />
@@ -503,7 +484,7 @@ export function RegisterAttendeeDialog({
                 {item.questions.map((q) => {
                   const id = `${uid}-q-${q.id}`;
                   const value = answers[q.id] ?? "";
-                  const choices = q.type === "choice" ? (q.options ?? []) : BOOLEAN_CHOICES;
+                  const choices: readonly string[] = q.type === "choice" ? (q.options ?? []) : BOOLEAN_ANSWERS;
                   const setAnswer = (next: string) => {
                     setAnswers((prev) => ({ ...prev, [q.id]: next }));
                     setError(null);

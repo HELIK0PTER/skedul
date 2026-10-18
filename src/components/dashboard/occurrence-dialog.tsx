@@ -195,6 +195,7 @@ function OccurrenceDialogBody({
 }: DialogProps & { onLine: (line: string | null) => void }) {
   const summaryId = useId();
   const reasonId = useId();
+  const registerHelpId = useId();
   const statusRef = useRef<HTMLParagraphElement>(null);
   const editButtonRef = useRef<HTMLButtonElement>(null);
   const refocusEditButton = useRef(false);
@@ -428,6 +429,7 @@ function OccurrenceDialogBody({
               variant="secondary"
               size="sm"
               disabled={!scheduled || pending}
+              aria-describedby={cancelled ? registerHelpId : undefined}
               onClick={() => {
                 setDone(null);
                 onLine(null);
@@ -439,7 +441,7 @@ function OccurrenceDialogBody({
             </Button>
             {cancelled && (
               // A past séance cannot be restored (no « Rétablir » then): the line must not point to a button that is not there.
-              <p className="text-xs text-zinc-600">
+              <p id={registerHelpId} className="text-xs text-zinc-600">
                 {item.canRestore
                   ? "Rétablissez la séance pour inscrire quelqu'un."
                   : "Une séance annulée ne prend plus d'inscription."}

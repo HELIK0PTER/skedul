@@ -60,6 +60,9 @@ export type MovementKind = (typeof MOVEMENT_KINDS)[number];
 export const QUESTION_TYPES = ["text", "choice", "boolean"] as const;
 export type QuestionType = (typeof QUESTION_TYPES)[number];
 
+/** The answers a boolean question accepts (the engine checks them, the forms offer them). */
+export const BOOLEAN_ANSWERS = ["Oui", "Non"] as const;
+
 /* ───────────────────────────── Labels (FR) ───────────────────────────── */
 
 export const BOOKING_MODE_LABELS: Record<BookingMode, string> = {

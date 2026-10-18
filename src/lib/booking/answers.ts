@@ -9,7 +9,7 @@ import { nanoid } from "nanoid";
 
 import type { BatchCtx, Db, Query } from "@/lib/db/atomic";
 import { bookingAnswer, question } from "@/lib/db/schema";
-import { BOUNDS, ENGINE_ERROR_MESSAGES, type AnswerInput, type QuestionType } from "@/lib/tickets";
+import { BOOLEAN_ANSWERS, BOUNDS, ENGINE_ERROR_MESSAGES, type AnswerInput, type QuestionType } from "@/lib/tickets";
 
 export type QuestionRow = {
   id: string;
@@ -20,9 +20,6 @@ export type QuestionRow = {
   position: number;
 };
 export type AnswerRow = { questionId: string; questionLabel: string; value: string };
-
-/** The answers a boolean question accepts. */
-export const BOOLEAN_ANSWERS = ["Oui", "Non"] as const;
 
 /** Questions of an event, or the RDV questions of a ticket type, by position. */
 export async function loadQuestions(
