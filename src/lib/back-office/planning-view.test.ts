@@ -169,6 +169,49 @@ test("toPlanningVM flags started and past against now", () => {
   assert.deepEqual([done.started, done.past], [true, true]);
 });
 
+test("toPlanningVM with the week days drops an item of another day, which then never widens the grid", () => {
+  const days = week(MONDAY);
+  const carriedOver = item("prev", at("2026-10-11", 1380), 90); // Sunday 23:00 to Monday 00:30 of the previous week
+  const early = item("early", at("2026-10-19", 360), 60); // next Monday 06:00
+  const inside = item("in", at(MONDAY, 600), 60);
+  const sunday = item("sun", at("2026-10-18", 1380), 90); // the week's own Sunday 23:00, ending next Monday 00:30
+  const vms = toPlanningVM([carriedOver, early, inside, sunday], [], PARIS, NOW, days);
+  assert.deepEqual(vms.map((v) => v.id), ["in", "sun"]);
+  assert.deepEqual(gridHours(toPlanningVM([carriedOver, early, inside], [], PARIS, NOW, days)), { startHour: 8, endHour: 21 });
+  assert.deepEqual(gridHours(vms), { startHour: 8, endHour: 24 }, "the kept Sunday séance still runs to midnight");
+  // Without the days every item is placed on its own day (the previous signature).
+  assert.deepEqual(
+    toPlanningVM([carriedOver, early, inside], [], PARIS, NOW).map((v) => [v.id, v.dayKey]),
+    [
+      ["prev", "2026-10-11"],
+      ["in", MONDAY],
+      ["early", "2026-10-19"],
+    ],
+  );
+});
+
+test("toPlanningVM: holdLapsed marks a pending booking whose hold has ended, at the instant included", () => {
+  const now = at(MONDAY, 600); // 10:00
+  const people = [
+    attendee({ bookingId: "past", status: "pending", holdExpiresAt: at(MONDAY, 599) }),
+    attendee({ bookingId: "exact", status: "pending", holdExpiresAt: at(MONDAY, 600) }),
+    attendee({ bookingId: "live", status: "pending", holdExpiresAt: at(MONDAY, 601) }),
+    attendee({ bookingId: "sure", status: "confirmed", holdExpiresAt: null }),
+    attendee({ bookingId: "stale", status: "confirmed", holdExpiresAt: at(MONDAY, 500) }),
+  ];
+  const [vm] = toPlanningVM([item("s", at(MONDAY, 700), 60, { seatsTaken: 5, attendees: people })], [], PARIS, now);
+  assert.deepEqual(
+    vm.attendees.map((a) => [a.bookingId, a.holdLapsed, a.holdUntil]),
+    [
+      ["past", true, "09:59"],
+      ["exact", true, "10:00"],
+      ["live", false, "10:01"],
+      ["sure", false, null],
+      ["stale", false, null],
+    ],
+  );
+});
+
 test("toPlanningVM: attendee labels and hold time are read in the given time zone", () => {
   const people = [
     attendee({
@@ -347,5 +390,27 @@ test("unenrolledMessage: one name or several, tickets returned or not, no dash",
   ]);
   // The count, not the number of names, decides the plural (a name list can lag the engine's count).
   assert.equal(unenrolledMessage(["A", "B"], 1, 0), "1 inscription annulée. Le client est prévenu par email.");
-  for (const m of messages) assert.doesNotMatch(m, NO_DASH);
+  assert.equal(unenrolledMessage([], 1, 1), "1 inscription annulée. Le ticket est rendu au client, qui est prévenu par email.");
+});
+
+test("unenrolledMessage: the head and the tail always agree, whatever the number of names", () => {
+  // One name against a count of 2 (or 0) used to read « Inscription de X annulée. Les clients ... ».
+  const lagging = [
+    unenrolledMessage(["Thomas Leroy"], 2, 2),
+    unenrolledMessage(["Thomas Leroy"], 2, 0),
+    unenrolledMessage(["Thomas Leroy"], 0, 0),
+    unenrolledMessage(["Thomas Leroy"], 0, 1),
+    unenrolledMessage([], 0, 0),
+  ];
+  assert.deepEqual(lagging, [
+    "2 inscriptions annulées. Les tickets sont rendus aux clients, qui sont prévenus par email.",
+    "2 inscriptions annulées. Les clients sont prévenus par email.",
+    "Aucune inscription annulée.",
+    "Aucune inscription annulée.",
+    "Aucune inscription annulée.",
+  ]);
+  for (const m of lagging) assert.doesNotMatch(m, NO_DASH);
+  // A single cancellation is named only when exactly one name is known.
+  assert.match(unenrolledMessage(["Thomas Leroy"], 1, 0), /^Inscription de Thomas Leroy annulée\. Le client est/);
+  assert.match(unenrolledMessage(["Thomas Leroy", "Marina Costa"], 1, 0), /^1 inscription annulée\. Le client est/);
 });

@@ -58,7 +58,7 @@ export async function getPlanningPage(
     getPlanningRange(db, pro.id, weekBounds(weekStart, tz), now),
     minGeneratedUntil(db, pro.id, now),
   ]);
-  const vms = toPlanningVM(items, timeOff, tz, now);
+  const vms = toPlanningVM(items, timeOff, tz, now, days);
   const today = todayKey(now, tz);
   return {
     tz,

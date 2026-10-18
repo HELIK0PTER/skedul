@@ -28,6 +28,8 @@ export type PlanningAttendeeVM = {
   ticketLabel: string | null;
   /** « 19:45 », only while the booking is pending */
   holdUntil: string | null;
+  /** pending and the hold has ended (`holdExpiresAt <= now`): the seat is already free, `holdUntil` is in the past */
+  holdLapsed: boolean;
   answers: { label: string; value: string }[];
   notes: string | null;
   moved: boolean;
@@ -114,6 +116,7 @@ function attendeeVM(a: PlanningAttendee, tz: string, now: Date): PlanningAttende
     coverage: a.coverage,
     ticketLabel,
     holdUntil: a.status === "pending" && a.holdExpiresAt ? formatTime(a.holdExpiresAt, tz) : null,
+    holdLapsed: a.status === "pending" && a.holdExpiresAt !== null && a.holdExpiresAt.getTime() <= now.getTime(),
     answers: a.answers,
     notes: a.customerNotes,
     moved: a.movedAt !== null,
@@ -124,13 +127,19 @@ function attendeeVM(a: PlanningAttendee, tz: string, now: Date): PlanningAttende
  * Items → view models in tz: hidden ones dropped, wall-clock minutes (endMinute
  * 1440 when the end falls on a later day), lanes per day via layoutLanes, ISO
  * instants, ordered by start. `started` / `past` are measured against `now`.
+ * With `days` (the displayed week), an item whose start day is not one of them
+ * is dropped too: the range read also returns what only overlaps the week (a
+ * séance of the previous Sunday 23:00 to Monday 00:30), which no column shows
+ * and which must not widen the grid hours.
  */
 export function toPlanningVM(
   items: readonly PlanningItem[],
   timeOff: readonly PlanningTimeOff[],
   tz: string,
   now: Date,
+  days?: readonly DateKey[],
 ): PlanningItemVM[] {
+  const shown = days === undefined ? null : new Set<string>(days);
   const placed = items
     .filter((i) => !hiddenByTimeOff(i, timeOff))
     .map((i) => {
@@ -141,6 +150,7 @@ export function toPlanningVM(
       const endMinute = sameDay ? Math.min(1440, Math.max(wallClockMinutes(i.endsAt, tz), startMinute + 5)) : 1440;
       return { item: i, dayKey, startMinute, endMinute };
     })
+    .filter((p) => shown === null || shown.has(p.dayKey))
     .sort(
       (a, b) =>
         a.item.startsAt.getTime() - b.item.startsAt.getTime() ||
@@ -286,14 +296,19 @@ export function dayLongLabel(day: DateKey): string {
  * The status line after « Désinscrire »: « Inscription de Thomas Leroy annulée.
  * Le ticket est rendu au client, qui est prévenu par email. » for one person,
  * « 2 inscriptions annulées. Les clients sont prévenus par email. » for several.
- * `cancelled` and `ticketsReturned` are the engine's counts.
+ * `cancelled` and `ticketsReturned` are the engine's counts. One count decides
+ * the whole sentence, `cancelled` (a name list can lag the engine): the head
+ * and the tail are both singular only when it is exactly 1 (the name is used
+ * when exactly one is known), both plural above, and nothing is said about the
+ * clients when it is 0.
  */
 export function unenrolledMessage(names: readonly string[], cancelled: number, ticketsReturned: number): string {
+  if (cancelled <= 0) return "Aucune inscription annulée.";
+  const one = cancelled === 1;
   const who =
-    names.length === 1
+    one && names.length === 1
       ? `Inscription de ${names[0]} annulée.`
       : `${plural(cancelled, "inscription annulée", "inscriptions annulées")}.`;
-  const one = cancelled === 1;
   const tail =
     ticketsReturned > 0
       ? one
