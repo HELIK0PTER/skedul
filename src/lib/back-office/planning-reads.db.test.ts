@@ -4,9 +4,11 @@ import { nanoid } from "nanoid";
 
 import { cancelBookingsByPro, cancelOccurrence } from "@/lib/booking/cancel";
 import { registerPro } from "@/lib/booking/claims";
+import { moveAttendee } from "@/lib/booking/wallet";
 import { addDays, dayOfWeek, instantAt } from "@/lib/civil-date";
+import type { Db } from "@/lib/db/atomic";
 import { event, question, timeOff } from "@/lib/db/schema";
-import { addMinutes, createTestPro, dbTest, deleteTestUser } from "@/test/db";
+import { addMinutes, createTestPro, dbTest, deleteTestUser, type TestPro } from "@/test/db";
 import { dayIn, giveTickets, makeCustomer, makeEvent, makeType } from "@/test/fixtures";
 import {
   rowBooking,
@@ -25,6 +27,27 @@ import {
 import { getPlanningItem, getPlanningRange, moveTargets, registerOptions, searchCustomers } from "./planning-reads";
 
 const DAY = 86_400_000;
+
+/**
+ * A pending booking (ticket coverage) backed by a purchase of `typeId` through `offerId`, as « buy and book » leaves
+ * it until the client pays: a new customer unless `customerId` is given, `holdExpiresAt` past or future.
+ */
+async function pendingHold(
+  db: Db,
+  pro: TestPro,
+  args: { occurrenceId: string; typeId: string; offerId: string; holdExpiresAt: Date; customerId?: string },
+): Promise<string> {
+  const customerId = args.customerId ?? (await rowCustomer(db, pro));
+  const purchaseId = await rowPurchase(db, pro, { customerId, offerId: args.offerId, ticketTypeId: args.typeId });
+  return rowBooking(db, pro, {
+    occurrenceId: args.occurrenceId,
+    customerId,
+    status: "pending",
+    coverage: "ticket",
+    purchaseId,
+    holdExpiresAt: args.holdExpiresAt,
+  });
+}
 
 dbTest("range: séances and RDVs kept, cancelled RDV dropped, cancelled séance kept, half-open bounds, one pro only", async ({ db, pro }) => {
   const now = new Date();
@@ -259,11 +282,8 @@ dbTest("elapsed holds are counted per séance, in the range read and in the move
     rowSeance(db, pro, await rowEvent(db, pro, { capacity }), { startsAt: startsIn(hours), capacity, seatsTaken });
   const confirmed = async (occurrenceId: string) =>
     rowBooking(db, pro, { occurrenceId, customerId: await rowCustomer(db, pro) });
-  const pending = async (occurrenceId: string, holdExpiresAt: Date) => {
-    const customerId = await rowCustomer(db, pro);
-    const purchaseId = await rowPurchase(db, pro, { customerId, offerId, ticketTypeId: typeId });
-    await rowBooking(db, pro, { occurrenceId, customerId, status: "pending", coverage: "ticket", purchaseId, holdExpiresAt });
-  };
+  const pending = (occurrenceId: string, holdExpiresAt: Date) =>
+    pendingHold(db, pro, { occurrenceId, typeId, offerId, holdExpiresAt });
 
   const source = await seance(12, 5, 1);
   await confirmed(source);
@@ -305,6 +325,72 @@ dbTest("elapsed holds are counted per séance, in the range read and in the move
       [oneLive, 4, 5, false],
     ],
   );
+});
+
+// Spec § 7: an RDV occupies a slot only with a confirmed booking or a pending one whose hold has not ended. A buy-mode
+// RDV the client abandoned stays `scheduled` with seats_taken 1 until the nightly sweep, but it is not an appointment.
+dbTest("phantom RDV: a lapsed hold alone leaves nothing on the planning; a live hold, a confirmed RDV and séances stay", async ({ db, pro }) => {
+  const now = new Date();
+  const startsIn = (hours: number) => new Date(now.getTime() + hours * 3_600_000);
+  const rdvType = await rowRdvType(db, pro, { name: "Cours particulier" });
+  const offerId = await rowOffer(db, pro, rdvType);
+  const hold = (occurrenceId: string, holdExpiresAt: Date) =>
+    pendingHold(db, pro, { occurrenceId, typeId: rdvType, offerId, holdExpiresAt });
+
+  const abandoned = await rowRdv(db, pro, rdvType, { startsAt: startsIn(24) });
+  await hold(abandoned, addMinutes(now, -10));
+  const holding = await rowRdv(db, pro, rdvType, { startsAt: startsIn(26) });
+  await hold(holding, addMinutes(now, 30));
+  const confirmed = await rowRdv(db, pro, rdvType, { startsAt: startsIn(28) });
+  await rowBooking(db, pro, { occurrenceId: confirmed, customerId: await rowCustomer(db, pro) });
+  // A séance with only a lapsed hold is unchanged: it stays, with its seat shown as free.
+  const seance = await rowSeance(db, pro, await rowEvent(db, pro, { capacity: 3 }), {
+    startsAt: startsIn(30),
+    capacity: 3,
+    seatsTaken: 1,
+  });
+  await hold(seance, addMinutes(now, -10));
+
+  const { items } = await getPlanningRange(db, pro.proId, { start: now, end: startsIn(48) }, now);
+  assert.deepEqual(
+    items.map((i) => [i.id, i.kind, i.seatsTaken, i.elapsedHolds, i.seatsShown]),
+    [
+      [holding, "rdv", 1, 0, 0],
+      [confirmed, "rdv", 1, 0, 0],
+      [seance, "seance", 1, 1, 3],
+    ],
+  );
+  assert.equal(await getPlanningItem(db, pro.proId, abandoned, now), null, "the abandoned RDV is not readable by id either");
+  assert.deepEqual(
+    (await getPlanningItem(db, pro.proId, holding, now))?.attendees.map((a) => a.status),
+    ["pending"],
+  );
+  assert.equal((await getPlanningItem(db, pro.proId, confirmed, now))?.kind, "rdv");
+  assert.equal((await getPlanningItem(db, pro.proId, seance, now))?.attendees.length, 1);
+
+  // The hold is read against the given now: ten minutes earlier the abandoned RDV was still waiting for its payment,
+  // and the live hold of the other one lapses an hour later.
+  assert.equal((await getPlanningItem(db, pro.proId, abandoned, addMinutes(now, -30)))?.kind, "rdv");
+  assert.equal(await getPlanningItem(db, pro.proId, holding, addMinutes(now, 60)), null);
+});
+
+dbTest("attendees: the customer join is scoped to the pro too", async ({ db, pro }) => {
+  const now = new Date();
+  const other = await createTestPro(db);
+  const occId = await rowSeance(db, pro, await rowEvent(db, pro, { capacity: 3 }), { capacity: 3, seatsTaken: 2 });
+  await rowBooking(db, pro, { occurrenceId: occId, customerId: await rowCustomer(db, pro, { name: "Marina Costa" }) });
+  // A row the engine never writes: this pro's booking pointing at another pro's customer.
+  const foreign = await rowCustomer(db, other, { name: "Client de l'autre" });
+  const stray = await rowBooking(db, pro, { occurrenceId: occId, customerId: foreign });
+  try {
+    const found = await getPlanningItem(db, pro.proId, occId, now);
+    assert.deepEqual(found?.attendees.map((a) => a.name), ["Marina Costa"]);
+  } finally {
+    // booking.customer_id has no cascade: the stray row has to go before the other pro does.
+    await db.execute(sql`delete from booking where id = ${stray}`);
+    await db.execute(sql`update occurrence set seats_taken = 1 where id = ${occId}`);
+    await deleteTestUser(db, other.userId);
+  }
 });
 
 dbTest("item facts: location, accepted types, questions, recurring and canRestore", async ({ db, pro }) => {
@@ -645,4 +731,129 @@ dbTest("moveTargets: a guest booking sees every scheduled séance; series filter
   });
   assert.ok(left.ok, JSON.stringify(left));
   assert.equal(await moveTargets(db, pro.proId, booked.bookingId, noon), null, "a cancelled booking is not movable");
+});
+
+// The 500 row cap of moveTargets is a backstop: what the pro can never move to (wrong booking mode, no usable type,
+// another series) must be left out in SQL, before the cap, or it fills it and hides the real targets. `maxTargets`
+// lowers the cap so a handful of rows shows it.
+dbTest("moveTargets: booking mode and usable types are filtered before the cap, and so is the series list", async ({ db, pro }) => {
+  const typeX = await makeType(db, pro, { name: "Cours collectif" });
+  const typeY = await makeType(db, pro, { name: "Cours d'essai" });
+  const typeFree = await makeType(db, pro, { name: "Appel découverte", rdvEnabled: true, rdvFree: true, rdvDurationMin: 30 });
+  const typeOld = await makeType(db, pro, { name: "Ancien cours" });
+  const mk = (title: string, day: number, over: MakeEventOver = {}) =>
+    makeEvent(db, pro, { title, ...over, rule: { startDate: dayIn(pro, day), ...over.rule } });
+
+  const source = await mk("Source", 3, { ticketTypeIds: [typeX] });
+  await mk("Libre 1", 4, { bookingMode: "free" });
+  await mk("Libre 2", 5, { bookingMode: "free" });
+  await mk("Sans lien", 6);
+  await mk("Appel seul", 7, { ticketTypeIds: [typeFree] });
+  await mk("Ancien", 8, { ticketTypeIds: [typeOld] });
+  await db.execute(sql`update ticket_type set archived_at = now() where id = ${typeOld}`);
+  const accepted = await mk("Acceptée", 9, { ticketTypeIds: [typeX] });
+  const conversion = await mk("Conversion", 10, { ticketTypeIds: [typeY] });
+  const thomas = await makeCustomer(db, pro, { name: "Thomas Leroy" });
+  await giveTickets(db, pro, thomas, typeX, 1);
+  const booked = await registerPro(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    occurrenceId: source.occurrences[0].id,
+    customerId: thomas,
+    asGuest: false,
+  });
+  assert.ok(booked.ok, JSON.stringify(booked));
+
+  const noon = instantAt(dayIn(pro, 0), 720, pro.tz);
+  const res = await moveTargets(db, pro.proId, booked.bookingId, noon, { maxTargets: 3 });
+  assert.deepEqual(
+    res?.targets.map((t) => [t.title, t.occurrenceId, t.accepted, t.conversionTypes.map((c) => c.name)]),
+    [
+      ["Acceptée", accepted.occurrences[0].id, true, []],
+      ["Conversion", conversion.occurrences[0].id, false, ["Cours d'essai"]],
+    ],
+  );
+  assert.deepEqual(res?.series.map((s) => s.title), ["Acceptée", "Conversion"]);
+});
+
+dbTest("moveTargets: the series filter is applied before the cap and the series list is complete", async ({ db, pro }) => {
+  const typeX = await makeType(db, pro, { name: "Cours collectif" });
+  const mk = (title: string, day: number, over: MakeEventOver = {}) =>
+    makeEvent(db, pro, { title, ...over, rule: { startDate: dayIn(pro, day), ...over.rule } });
+  const source = await mk("Source", 3, { ticketTypeIds: [typeX] });
+  const premier = await mk("Premier", 4, { rule: { freq: "daily", interval: 1, endMode: "count", occurrenceCount: 3 } });
+  const cible = await mk("Cible", 9);
+  const autre = await mk("Autre", 10);
+  assert.equal(premier.occurrences.length, 3);
+  const customerId = await makeCustomer(db, pro);
+  const booked = await registerPro(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    occurrenceId: source.occurrences[0].id,
+    customerId,
+    asGuest: true,
+  });
+  assert.ok(booked.ok, JSON.stringify(booked));
+
+  const noon = instantAt(dayIn(pro, 0), 720, pro.tz);
+  const series = [
+    { seriesRootId: autre.eventId, title: "Autre" },
+    { seriesRootId: cible.eventId, title: "Cible" },
+    { seriesRootId: premier.eventId, title: "Premier" },
+  ];
+  const capped = await moveTargets(db, pro.proId, booked.bookingId, noon, { maxTargets: 3 });
+  assert.deepEqual(capped?.targets.map((t) => t.occurrenceId), premier.occurrences.map((o) => o.id), "the cap keeps the first three");
+  assert.deepEqual(capped?.series, series, "every series is listed, the cap only limits the targets");
+  const only = await moveTargets(db, pro.proId, booked.bookingId, noon, { maxTargets: 3, seriesRootId: cible.eventId });
+  assert.deepEqual(only?.targets.map((t) => t.occurrenceId), [cible.occurrences[0].id]);
+  assert.deepEqual(only?.series, series, "the series list ignores the filter");
+});
+
+dbTest("moveTargets: customerBooked is the already_booked refusal of the move, target by target", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await rowType(db, pro);
+  const offerId = await rowOffer(db, pro, typeId);
+  const startsIn = (hours: number) => new Date(now.getTime() + hours * 3_600_000);
+  // One event per séance: (event_id, series_date) is unique.
+  const seance = async (hours: number, seatsTaken: number) =>
+    rowSeance(db, pro, await rowEvent(db, pro, { capacity: 5 }), { startsAt: startsIn(hours), capacity: 5, seatsTaken });
+  const thomas = await rowCustomer(db, pro, { name: "Thomas Leroy" });
+  const marina = await rowCustomer(db, pro, { name: "Marina Costa" });
+
+  const source = await seance(12, 1);
+  const sourceBooking = await rowBooking(db, pro, { occurrenceId: source, customerId: thomas });
+  const confirmedHere = await seance(24, 1);
+  await rowBooking(db, pro, { occurrenceId: confirmedHere, customerId: thomas });
+  const liveHold = await seance(26, 1);
+  await pendingHold(db, pro, { occurrenceId: liveHold, typeId, offerId, customerId: thomas, holdExpiresAt: addMinutes(now, 30) });
+  const lapsedHold = await seance(28, 1);
+  await pendingHold(db, pro, { occurrenceId: lapsedHold, typeId, offerId, customerId: thomas, holdExpiresAt: addMinutes(now, -10) });
+  const cancelledHere = await seance(30, 0);
+  await rowBooking(db, pro, { occurrenceId: cancelledHere, customerId: thomas, status: "cancelled" });
+  const someoneElse = await seance(32, 1);
+  await rowBooking(db, pro, { occurrenceId: someoneElse, customerId: marina });
+  const empty = await seance(34, 0);
+
+  const res = await moveTargets(db, pro.proId, sourceBooking, now);
+  assert.deepEqual(
+    res?.targets.map((t) => [t.occurrenceId, t.customerBooked]),
+    [
+      [confirmedHere, true],
+      [liveHold, true],
+      [lapsedHold, false],
+      [cancelledHere, false],
+      [someoneElse, false],
+      [empty, false],
+    ],
+  );
+
+  // The engine agrees: it refuses the two `true` targets, and moves onto the one whose hold has lapsed.
+  const move = (targetOccurrenceId: string) =>
+    moveAttendee(db, { professionalId: pro.proId, actorUserId: pro.userId, bookingId: sourceBooking, targetOccurrenceId, force: true }, now);
+  for (const target of [confirmedHere, liveHold]) {
+    const refused = await move(target);
+    assert.ok(!refused.ok && refused.code === "already_booked", JSON.stringify(refused));
+  }
+  const moved = await move(lapsedHold);
+  assert.ok(moved.ok, JSON.stringify(moved));
 });

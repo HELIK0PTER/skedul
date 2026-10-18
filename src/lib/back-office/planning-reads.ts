@@ -5,7 +5,7 @@
  * server-only, next/* nor the db index. Every query filters on professional_id
  * and every id that comes from the caller is checked against it.
  */
-import { and, asc, eq, gt, ilike, inArray, isNotNull, lt, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, exists, gt, gte, ilike, inArray, isNotNull, isNull, lt, min, ne, or, sql, type SQL } from "drizzle-orm";
 
 import { activeBookingOf } from "@/lib/booking/claims";
 import { usableTickets } from "@/lib/booking/eligibility";
@@ -171,7 +171,7 @@ async function loadAttendees(db: Db, professionalId: string, occurrenceIds: read
       ticketTypeName: ticketType.name,
     })
     .from(booking)
-    .innerJoin(customer, eq(customer.id, booking.customerId))
+    .innerJoin(customer, and(eq(customer.id, booking.customerId), eq(customer.professionalId, professionalId)))
     .leftJoin(ticket, eq(ticket.bookingId, booking.id))
     .leftJoin(ticketType, eq(ticketType.id, ticket.ticketTypeId))
     .where(
@@ -285,6 +285,17 @@ async function loadQuestionsByOwner(
   return { byEvent, byType };
 }
 
+/**
+ * A scheduled RDV that nobody holds any more (spec § 7: an RDV occupies a slot only with a confirmed booking or a
+ * pending one whose hold has not ended). A client who abandons a buy-mode checkout leaves seats_taken at 1 and a
+ * pending booking whose hold lapses; the RDV stays `scheduled` until the nightly sweep, but it is not an appointment.
+ * A cancelled RDV is not concerned (it is cancelled, whatever its seats), and séances are never dropped: an empty
+ * séance is still on offer.
+ */
+function isPhantomRdv(i: Pick<PlanningItem, "kind" | "status" | "seatsTaken" | "elapsedHolds">): boolean {
+  return i.kind === "rdv" && i.status === "scheduled" && i.seatsTaken - i.elapsedHolds <= 0;
+}
+
 async function loadItems(db: Db, professionalId: string, rows: readonly OccurrenceData[], now: Date): Promise<PlanningItem[]> {
   if (rows.length === 0) return [];
   const ids = rows.map((r) => r.id);
@@ -297,7 +308,7 @@ async function loadItems(db: Db, professionalId: string, rows: readonly Occurren
     loadQuestionsByOwner(db, professionalId, eventIds, rdvTypeIds),
   ]);
 
-  return rows.map((r): PlanningItem => {
+  const items = rows.map((r): PlanningItem => {
     const elapsedHolds = elapsed.get(r.id) ?? 0;
     const isSeance = r.eventId !== null;
     const segmentLive = r.archivedAt === null && (r.untilDate === null || (r.seriesDate !== null && r.seriesDate <= r.untilDate));
@@ -332,13 +343,15 @@ async function loadItems(db: Db, professionalId: string, rows: readonly Occurren
       attendees: attendees.get(r.id) ?? [],
     };
   });
+  return items.filter((i) => !isPhantomRdv(i));
 }
 
 /**
  * Occurrences overlapping [start, end) (starts_at < end AND ends_at > start),
- * cancelled RDVs excluded, cancelled séances kept; attendees, answers, ticket
- * and accepted types loaded in bulk; the time off overlapping the same range.
- * Never hides anything else (planning-view does).
+ * cancelled RDVs and phantom RDVs (only a lapsed hold left, see isPhantomRdv)
+ * excluded, cancelled séances kept; attendees, answers, ticket and accepted
+ * types loaded in bulk; the time off overlapping the same range. Never hides
+ * anything else (planning-view does).
  */
 export async function getPlanningRange(
   db: Db,
@@ -365,7 +378,7 @@ export async function getPlanningRange(
   return { items: await loadItems(db, professionalId, rows, now), timeOff: offRows };
 }
 
-/** One occurrence of the pro (null otherwise), cancelled or not. */
+/** One occurrence of the pro (null otherwise, or for a phantom RDV), cancelled or not. */
 export async function getPlanningItem(
   db: Db,
   professionalId: string,
@@ -468,6 +481,11 @@ export type MoveTarget = {
   accepted: boolean;
   conversionTypes: { id: string; name: string }[];
   expiresBefore: boolean;
+  /**
+   * The moved booking's customer already holds a live seat on this séance (a confirmed booking, or a pending one whose
+   * hold has not elapsed): the move is refused with « already_booked », whether the séance is full or not.
+   */
+  customerBooked: boolean;
 };
 
 const MOVE_DAYS = 60;
@@ -475,27 +493,104 @@ const MOVE_TARGETS_MAX = 500;
 const DAY_MS = 86_400_000;
 
 /**
+ * Ticket coverage: the event accepts the booked ticket's type (a live link, archived or not) or offers an active type
+ * that is not rdv_free (a conversion). A correlated EXISTS over a joined select, so the outer `event.id` is qualified.
+ */
+function acceptsOrConverts(db: Db, professionalId: string, heldTypeId: string): SQL {
+  return exists(
+    db
+      .select({ one: sql`1` })
+      .from(eventTicketType)
+      .innerJoin(ticketType, eq(ticketType.id, eventTicketType.ticketTypeId))
+      .where(
+        and(
+          eq(eventTicketType.eventId, event.id),
+          eq(eventTicketType.professionalId, professionalId),
+          or(eq(eventTicketType.ticketTypeId, heldTypeId), and(isNull(ticketType.archivedAt), eq(ticketType.rdvFree, false))),
+        ),
+      ),
+  );
+}
+
+type TargetLink = { id: string; name: string; archived: boolean; rdvFree: boolean };
+
+async function loadTargetLinks(db: Db, professionalId: string, eventIds: readonly string[]): Promise<Map<string, TargetLink[]>> {
+  const links = new Map<string, TargetLink[]>();
+  if (eventIds.length === 0) return links;
+  const rows = await db
+    .select({
+      eventId: eventTicketType.eventId,
+      id: ticketType.id,
+      name: ticketType.name,
+      archivedAt: ticketType.archivedAt,
+      rdvFree: ticketType.rdvFree,
+    })
+    .from(eventTicketType)
+    .innerJoin(ticketType, eq(ticketType.id, eventTicketType.ticketTypeId))
+    .where(and(eq(eventTicketType.professionalId, professionalId), inArray(eventTicketType.eventId, [...eventIds])))
+    .orderBy(asc(ticketType.position), asc(ticketType.name), asc(ticketType.id));
+  for (const l of rows) {
+    const list = links.get(l.eventId) ?? [];
+    list.push({ id: l.id, name: l.name, archived: l.archivedAt !== null, rdvFree: l.rdvFree });
+    links.set(l.eventId, list);
+  }
+  return links;
+}
+
+/**
+ * The occurrences among `occurrenceIds` where the customer holds a live seat: what moveAttendee refuses as
+ * « already_booked » (assertNotBooked, placed after R, which has just expired every hold with hold_expires_at < now),
+ * so confirmed, or pending with a hold not elapsed. activeBookingOf only differs at the very instant of the expiry.
+ */
+async function liveSeatsOf(
+  db: Db,
+  professionalId: string,
+  customerId: string,
+  occurrenceIds: readonly string[],
+  now: Date,
+): Promise<Set<string>> {
+  if (occurrenceIds.length === 0) return new Set();
+  const rows = await db
+    .select({ occurrenceId: booking.occurrenceId })
+    .from(booking)
+    .where(
+      and(
+        eq(booking.professionalId, professionalId),
+        eq(booking.customerId, customerId),
+        inArray(booking.occurrenceId, [...occurrenceIds]),
+        or(eq(booking.status, "confirmed"), and(eq(booking.status, "pending"), gte(booking.holdExpiresAt, now))),
+      ),
+    );
+  return new Set(rows.map((r) => r.occurrenceId));
+}
+
+/**
  * Q18: for a confirmed booking of the pro on an event séance, the scheduled
  * event séances of the next `days` (default 60) other than the source. Ticket
  * coverage keeps only tickets-mode targets: `accepted` = the booked ticket's
  * type is linked, else `conversionTypes` = the active non-rdv_free linked types
  * (a target without any is dropped); `expiresBefore` = the ticket expires at or
- * before the target start. Other coverages see every target, accepted. `series`
- * lists the roots of the targets (before the `seriesRootId` filter). Null when
- * the booking is not the pro's or not movable.
+ * before the target start. Other coverages see every target, accepted.
+ * `customerBooked` flags the targets the customer already holds a live seat on.
+ * `series` lists the roots of the targets that match everything above except the
+ * `seriesRootId` filter, from a query of its own so that neither the filter nor
+ * the cap hides a series. Null when the booking is not the pro's or not movable.
+ * Every predicate (mode, usable types, series) is part of the SQL WHERE: the cap
+ * of 500 targets is only a backstop. `opts.maxTargets` (test-only) lowers it.
  */
 export async function moveTargets(
   db: Db,
   professionalId: string,
   bookingId: string,
   now: Date,
-  opts: { seriesRootId?: string | null; days?: number } = {},
+  opts: { seriesRootId?: string | null; days?: number; maxTargets?: number } = {},
 ): Promise<{ series: { seriesRootId: string; title: string }[]; targets: MoveTarget[] } | null> {
   const [source] = await db
     .select({
       id: booking.id,
       status: booking.status,
       coverage: booking.coverage,
+      customerId: booking.customerId,
       occurrenceId: booking.occurrenceId,
       sourceEventId: occurrence.eventId,
     })
@@ -515,74 +610,70 @@ export async function moveTargets(
   }
 
   const until = new Date(now.getTime() + (opts.days ?? MOVE_DAYS) * DAY_MS);
-  const rows = await db
-    .select({
-      occurrenceId: occurrence.id,
-      eventId: event.id,
-      seriesRootId: event.seriesRootId,
-      title: event.title,
-      startsAt: occurrence.startsAt,
-      endsAt: occurrence.endsAt,
-      capacity: occurrence.capacity,
-      seatsTaken: occurrence.seatsTaken,
-      bookingMode: event.bookingMode,
-    })
-    .from(occurrence)
-    .innerJoin(event, eq(event.id, occurrence.eventId))
-    .where(
-      and(
-        eq(occurrence.professionalId, professionalId),
-        eq(occurrence.status, "scheduled"),
-        ne(occurrence.id, source.occurrenceId),
-        gt(occurrence.startsAt, now),
-        lt(occurrence.startsAt, until),
-      ),
-    )
-    .orderBy(asc(occurrence.startsAt), asc(occurrence.id))
-    .limit(MOVE_TARGETS_MAX);
-
-  const ticketCoverage = held !== null;
+  const cap = Math.min(MOVE_TARGETS_MAX, Math.max(1, Math.trunc(opts.maxTargets ?? MOVE_TARGETS_MAX)));
   const heldTypeId = held?.ticketTypeId ?? null;
   const heldExpiresAt = held?.expiresAt ?? null;
-  const candidates = ticketCoverage ? rows.filter((r) => r.bookingMode === "tickets") : rows;
-  const links = new Map<string, { id: string; name: string; archived: boolean; rdvFree: boolean }[]>();
-  if (ticketCoverage && candidates.length > 0) {
-    const linkRows = await db
+  const reachable = and(
+    eq(occurrence.professionalId, professionalId),
+    eq(occurrence.status, "scheduled"),
+    ne(occurrence.id, source.occurrenceId),
+    gt(occurrence.startsAt, now),
+    lt(occurrence.startsAt, until),
+    heldTypeId === null ? undefined : and(eq(event.bookingMode, "tickets"), acceptsOrConverts(db, professionalId, heldTypeId)),
+  );
+  const wanted = opts.seriesRootId ?? null;
+  const inSeries =
+    wanted === null ? undefined : or(eq(event.seriesRootId, wanted), and(isNull(event.seriesRootId), eq(event.id, wanted)));
+
+  const [seriesRows, rows] = await Promise.all([
+    // One row per event with a target, earliest first (the title of a series is its first séance's): bounded by the
+    // number of events, not of séances, and blind to the series filter.
+    db
+      .select({ eventId: event.id, seriesRootId: event.seriesRootId, title: event.title })
+      .from(occurrence)
+      .innerJoin(event, eq(event.id, occurrence.eventId))
+      .where(reachable)
+      .groupBy(event.id)
+      .orderBy(asc(min(occurrence.startsAt)), asc(event.id))
+      .limit(MOVE_TARGETS_MAX),
+    db
       .select({
-        eventId: eventTicketType.eventId,
-        id: ticketType.id,
-        name: ticketType.name,
-        archivedAt: ticketType.archivedAt,
-        rdvFree: ticketType.rdvFree,
+        occurrenceId: occurrence.id,
+        eventId: event.id,
+        seriesRootId: event.seriesRootId,
+        title: event.title,
+        startsAt: occurrence.startsAt,
+        endsAt: occurrence.endsAt,
+        capacity: occurrence.capacity,
+        seatsTaken: occurrence.seatsTaken,
       })
-      .from(eventTicketType)
-      .innerJoin(ticketType, eq(ticketType.id, eventTicketType.ticketTypeId))
-      .where(
-        and(
-          eq(eventTicketType.professionalId, professionalId),
-          inArray(eventTicketType.eventId, [...new Set(candidates.map((r) => r.eventId))]),
-        ),
-      )
-      .orderBy(asc(ticketType.position), asc(ticketType.name), asc(ticketType.id));
-    for (const l of linkRows) {
-      const list = links.get(l.eventId) ?? [];
-      list.push({ id: l.id, name: l.name, archived: l.archivedAt !== null, rdvFree: l.rdvFree });
-      links.set(l.eventId, list);
-    }
-  }
-  const elapsed = await elapsedHoldsOf(db, professionalId, candidates.map((r) => r.occurrenceId), now);
+      .from(occurrence)
+      .innerJoin(event, eq(event.id, occurrence.eventId))
+      .where(and(reachable, inSeries))
+      .orderBy(asc(occurrence.startsAt), asc(occurrence.id))
+      .limit(cap),
+  ]);
+
+  const occurrenceIds = rows.map((r) => r.occurrenceId);
+  const [links, elapsed, booked] = await Promise.all([
+    heldTypeId === null
+      ? Promise.resolve(new Map<string, TargetLink[]>())
+      : loadTargetLinks(db, professionalId, [...new Set(rows.map((r) => r.eventId))]),
+    elapsedHoldsOf(db, professionalId, occurrenceIds, now),
+    liveSeatsOf(db, professionalId, source.customerId, occurrenceIds, now),
+  ]);
 
   const targets: MoveTarget[] = [];
-  for (const r of candidates) {
+  for (const r of rows) {
     let accepted = true;
     let conversionTypes: { id: string; name: string }[] = [];
     let expiresBefore = false;
-    if (ticketCoverage) {
+    if (heldTypeId !== null) {
       const linked = links.get(r.eventId) ?? [];
       accepted = linked.some((l) => l.id === heldTypeId);
       if (!accepted) {
         conversionTypes = linked.filter((l) => !l.archived && !l.rdvFree).map((l) => ({ id: l.id, name: l.name }));
-        if (conversionTypes.length === 0) continue;
+        if (conversionTypes.length === 0) continue; // already left out by the WHERE
       }
       expiresBefore = heldExpiresAt !== null && heldExpiresAt.getTime() <= r.startsAt.getTime();
     }
@@ -599,14 +690,17 @@ export async function moveTargets(
       accepted,
       conversionTypes,
       expiresBefore,
+      customerBooked: booked.has(r.occurrenceId),
     });
   }
 
   const roots = new Map<string, string>();
-  for (const t of targets) if (!roots.has(t.seriesRootId)) roots.set(t.seriesRootId, t.title);
+  for (const s of seriesRows) {
+    const root = s.seriesRootId ?? s.eventId;
+    if (!roots.has(root)) roots.set(root, s.title);
+  }
   const series = Array.from(roots, ([seriesRootId, title]) => ({ seriesRootId, title })).sort(
     (a, b) => a.title.localeCompare(b.title, "fr") || a.seriesRootId.localeCompare(b.seriesRootId),
   );
-  const wanted = opts.seriesRootId ?? null;
-  return { series, targets: wanted === null ? targets : targets.filter((t) => t.seriesRootId === wanted) };
+  return { series, targets };
 }
