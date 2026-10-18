@@ -20,6 +20,12 @@ import { moveAttendeeAction, moveTargetsAction } from "@/server/pro-planning";
 
 const EXPIRES_BEFORE = PRO_ERROR_MESSAGES.ticket_expires_before;
 const CONVERT_REQUIRED = "Choisissez le type de ticket.";
+/**
+ * The refusals of moveAttendeeCore that say the list on screen is out of date: the target is not a scheduled séance
+ * any more or does not take this ticket (not_eligible), is full, or already holds this client, or is gone (not_found).
+ * A refusal without a code is the core's own « Ce type ne peut pas recevoir de tickets » (a stale conversion type).
+ */
+const LIST_CHANGED: ReadonlySet<string> = new Set(["not_eligible", "full", "already_booked", "not_found"]);
 
 const noop = () => {};
 
@@ -70,8 +76,10 @@ export function MoveAttendeeDialog({
   const [forceNeeded, setForceNeeded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attention, setAttention] = useState<Attention | null>(null);
+  const [reload, setReload] = useState(0);
 
-  const key = `${bookingId}|${seriesRootId ?? "all"}`;
+  // `reload` is bumped to read the same list again (see `submit`): a new key makes the loaded answer stale.
+  const key = `${bookingId}|${seriesRootId ?? "all"}|${reload}`;
 
   useEffect(() => {
     let stale = false;
@@ -127,6 +135,8 @@ export function MoveAttendeeDialog({
     const targetOccurrenceId = selected.occurrenceId;
     const convertToTicketTypeId = needsConversion ? convertTo : null;
     const force = expiryWarning;
+    const targetLabel = `${selected.title} (${selected.whenLabel})`;
+    const typeName = needsConversion ? selected.conversionTypes.find((t) => t.id === convertTo)?.name : undefined;
     setError(null);
     startTransition(async () => {
       try {
@@ -137,13 +147,26 @@ export function MoveAttendeeDialog({
           convertToTicketTypeId,
         });
         if (res.ok) {
-          onDone("Inscription déplacée. Le client est prévenu par email.");
+          onDone(
+            res.converted
+              ? `${customerName} est déplacé(e) vers ${targetLabel}. Son ticket a été converti en ${typeName ?? "le type choisi"}. Le client est prévenu par email.`
+              : "Inscription déplacée. Le client est prévenu par email.",
+          );
           return;
         }
         if (res.code === "ticket_expires_before") {
           setForceNeeded(true);
           setAttention({ target: "warning" });
           return;
+        }
+        // The list on screen is out of date (the target is gone, full, taken meanwhile, or the conversion type is no
+        // longer usable): the same pick would fail again, so the targets are read again and nothing stays chosen.
+        if (res.code === undefined || LIST_CHANGED.has(res.code)) {
+          setTargetId(null);
+          setConvertTo("");
+          setConvertError(null);
+          setForceNeeded(false);
+          setReload((n) => n + 1);
         }
         setError(res.error);
         setAttention({ target: "error" });
@@ -221,7 +244,7 @@ export function MoveAttendeeDialog({
                       />
                       <span className="flex min-w-0 flex-1 flex-col gap-1.5">
                         <span className={cn("wrap-anywhere", unavailable && "text-zinc-600")}>
-                          {`${t.whenLabel} · ${t.title} · ${plural(t.seatsShown, "place", "places")}`}
+                          {`${t.whenLabel} · ${t.title} · ${plural(t.seatsShown, "place libre", "places libres")}`}
                         </span>
                         <span className="flex flex-wrap gap-1.5">
                           {t.accepted ? (

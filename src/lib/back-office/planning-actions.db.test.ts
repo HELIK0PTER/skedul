@@ -1591,7 +1591,7 @@ dbTest("previewFollowingCore and applyFollowingCore refuse a séance that was mo
 
   assert.equal(
     FOLLOWING_TIME_DETACHED,
-    "Cette séance a été modifiée seule : elle ne suit plus l'horaire de la série. Modifiez-la avec « Cette séance », ou appliquez le changement à partir de la séance suivante.",
+    "Cette séance a été modifiée seule : elle ne suit plus l'horaire de la série. Enregistrez le changement pour cette séance seulement, ou ouvrez la séance suivante et choisissez « Appliquer aussi aux séances suivantes ».",
   );
   await sameFollowingRefusal(
     db,

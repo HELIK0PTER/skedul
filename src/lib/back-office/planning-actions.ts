@@ -50,7 +50,7 @@ import { parseFr } from "@/lib/zod-fr";
 export const TIME_PARTS_REQUIRED = "Indiquez la date et l'heure.";
 export const FOLLOWING_DETACHED = "Cette séance ne fait plus partie de la série : modifiez-la seule.";
 export const FOLLOWING_TIME_DETACHED =
-  "Cette séance a été modifiée seule : elle ne suit plus l'horaire de la série. Modifiez-la avec « Cette séance », ou appliquez le changement à partir de la séance suivante.";
+  "Cette séance a été modifiée seule : elle ne suit plus l'horaire de la série. Enregistrez le changement pour cette séance seulement, ou ouvrez la séance suivante et choisissez « Appliquer aussi aux séances suivantes ».";
 
 /** The engine's own texts for the refusals updateOccurrence makes while it plans (src/lib/booking/series.ts). */
 const RDV_NOT_MOVABLE = "Un rendez-vous se déplace en l'annulant puis en le réservant à nouveau.";

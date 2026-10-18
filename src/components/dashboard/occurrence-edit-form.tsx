@@ -49,6 +49,7 @@ const DURATION_HELP = `De ${DURATION_RANGE}.`;
 const DURATION_FIELD_ERROR = "Indiquez une durée valide.";
 const DURATION_ERROR = `Durée : indiquez une durée valide (de ${DURATION_RANGE}).`;
 const STARTED_NOTE = "Cette séance a commencé : seul le lieu se modifie ici.";
+const DETACHED_NOTE = "Cette séance a été modifiée seule : elle ne suit plus l'horaire de la série.";
 
 /** "19:30" to minutes from midnight; null for an empty or malformed field. */
 function parseTime(value: string): number | null {
@@ -144,7 +145,11 @@ export function OccurrenceEditForm({
   const startKey = `${date}|${time}`;
   const followKey = `${time}|${duration}`;
   const activeExpiring = expiring !== null && expiring.key === startKey ? expiring : null;
-  const activeFollowing = following !== null && following.key === followKey ? following : null;
+  // The preview counts only for the time and duration it was computed for, and only while the option is still offered:
+  // after an edit of the date or the place the form can only save this séance, so the preview goes away.
+  const activeFollowing = canFollow && following !== null && following.key === followKey ? following : null;
+  // A recurring séance moved alone no longer follows the series time: the « suivantes » option is replaced by a note.
+  const detachedNote = item.recurring && item.timeDetached && !item.started;
 
   // The buttons are disabled while a request runs, which drops the focus on the page: it lands on what the pro must read next.
   useEffect(() => {
@@ -255,7 +260,8 @@ export function OccurrenceEditForm({
         fail(res.error);
         return;
       }
-      onDone("Séance modifiée.");
+      // A new date can take the séance out of the week shown: the line then says where it went.
+      onDone(dateChanged ? `Séance modifiée. Elle a lieu le ${formatDayMonth(date)} à ${time}.` : "Séance modifiée.");
     });
   }
 
@@ -419,6 +425,8 @@ export function OccurrenceEditForm({
           <p className="text-zinc-600">{`À partir du ${formatDayMonth(activeFollowing.fromDate)}.`}</p>
         </div>
       )}
+
+      {detachedNote && <p className="text-sm text-zinc-600">{DETACHED_NOTE}</p>}
 
       <FormError message={formError} ref={errorBox} tabIndex={-1} />
 
