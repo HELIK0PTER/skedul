@@ -32,6 +32,7 @@ import { Textarea } from "@/components/ui/textarea";
 import type { TypeOption } from "@/lib/back-office/catalog-reads";
 import { EVENT_DEFAULTS } from "@/lib/back-office/event-defaults";
 import { plural } from "@/lib/back-office/format";
+import { changedKeys, RECURRENCE_ERROR_KEYS, withoutErrorsUnder } from "@/lib/back-office/form-errors";
 import { MODE_HELP } from "@/lib/back-office/labels";
 import {
   defaultRecurrenceForm,
@@ -125,42 +126,6 @@ function firstErrorUnder(errors: Record<string, string>, prefix: string): string
   }
   return null;
 }
-
-/** `errors` without the messages whose dotted key is, or sits under, one of `prefixes`; the same object when nothing goes. */
-export function withoutErrorsUnder(errors: Record<string, string>, prefixes: readonly string[]): Record<string, string> {
-  const kept = Object.entries(errors).filter(
-    ([key]) => !prefixes.some((prefix) => key === prefix || key.startsWith(`${prefix}.`)),
-  );
-  return kept.length === Object.keys(errors).length ? errors : Object.fromEntries(kept);
-}
-
-function sameValue(a: unknown, b: unknown): boolean {
-  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((item, i) => item === b[i]);
-  return a === b;
-}
-
-/** The keys of a form value that differ between two states. */
-export function changedKeys<T extends object>(prev: T, next: T): (keyof T)[] {
-  return (Object.keys(next) as (keyof T)[]).filter((key) => !sameValue(prev[key], next[key]));
-}
-
-/**
- * The error keys (parseFr dotted paths) that editing each recurrence field can resolve. Some rule errors
- * are blamed on another field than the one that causes them (« interval » on « freq », « untilDate » on
- * the start date), so those are listed too. A field added to RecurrenceFormValue must be listed here.
- */
-export const RECURRENCE_ERROR_KEYS: Record<keyof RecurrenceFormValue, readonly string[]> = {
-  startDate: ["rule.startDate", "rule.untilDate"],
-  startTime: ["rule.startMinute"],
-  durationMin: ["durationMin"],
-  freq: ["rule.freq", "rule.interval", "rule.weekdays", "rule.monthlyBy", "rule.monthWeek"],
-  interval: ["rule.interval", "rule.freq"],
-  weekdays: ["rule.weekdays"],
-  monthlyChoice: ["rule.monthlyBy", "rule.monthWeek"],
-  endMode: ["rule.endMode", "rule.untilDate", "rule.occurrenceCount"],
-  untilDate: ["rule.untilDate"],
-  occurrenceCount: ["rule.occurrenceCount"],
-};
 
 function describedBy(id: string, hasHelp: boolean, error: string | null): string | undefined {
   const ids: string[] = [];

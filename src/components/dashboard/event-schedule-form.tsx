@@ -4,13 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Info, Loader2 } from "lucide-react";
 
-import {
-  REQUEST_FAILED,
-  RECURRENCE_ERROR_KEYS,
-  changedKeys,
-  focusFirstInvalid,
-  withoutErrorsUnder,
-} from "@/components/dashboard/event-editor";
+import { REQUEST_FAILED, focusFirstInvalid } from "@/components/dashboard/event-editor";
 import { FormError } from "@/components/dashboard/form-error";
 import {
   RecurrenceEditor,
@@ -23,6 +17,7 @@ import {
 } from "@/components/dashboard/recurrence-editor";
 import { Button } from "@/components/ui/button";
 import type { SchedulePreview } from "@/lib/back-office/event-actions";
+import { changedKeys, RECURRENCE_ERROR_KEYS, withoutErrorsUnder } from "@/lib/back-office/form-errors";
 import { plural } from "@/lib/back-office/format";
 import { ruleFromForm, type RecurrenceFormValue } from "@/lib/back-office/recurrence-form";
 import { formatDayMonth, formatDayMonthYear, type DateKey } from "@/lib/civil-date";
