@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
-import { Loader2 } from "lucide-react";
+import { Check, Info, Loader2 } from "lucide-react";
 
 import { FormError } from "@/components/dashboard/form-error";
 import { FormField } from "@/components/dashboard/form-field";
@@ -40,10 +40,16 @@ import {
 } from "@/lib/back-office/recurrence-form";
 import type { BookingWindow } from "@/lib/booking-window";
 import type { DateKey } from "@/lib/civil-date";
-import { eventInputSchema, type EventInfoInput, type EventInput, type WindowOverrides } from "@/lib/tickets";
+import {
+  eventInfoSchema,
+  eventInputSchema,
+  type EventInfoInput,
+  type EventInput,
+  type WindowOverrides,
+} from "@/lib/tickets";
 import { BOOKING_MODES, BOOKING_MODE_LABELS, BOUNDS, type BookingMode } from "@/lib/tickets-vocab";
 import { parseFr } from "@/lib/zod-fr";
-import { createEventAction, previewNewEventAction } from "@/server/pro-catalog";
+import { createEventAction, editEventInfoAction, previewNewEventAction } from "@/server/pro-catalog";
 
 const PREVIEW_DEBOUNCE_MS = 600;
 /** Dot colour of an archived type that is still linked (the page only knows its id and name). */
@@ -121,7 +127,7 @@ function firstErrorUnder(errors: Record<string, string>, prefix: string): string
 }
 
 /** `errors` without the messages whose dotted key is, or sits under, one of `prefixes`; the same object when nothing goes. */
-function withoutErrorsUnder(errors: Record<string, string>, prefixes: readonly string[]): Record<string, string> {
+export function withoutErrorsUnder(errors: Record<string, string>, prefixes: readonly string[]): Record<string, string> {
   const kept = Object.entries(errors).filter(
     ([key]) => !prefixes.some((prefix) => key === prefix || key.startsWith(`${prefix}.`)),
   );
@@ -134,7 +140,7 @@ function sameValue(a: unknown, b: unknown): boolean {
 }
 
 /** The keys of a form value that differ between two states. */
-function changedKeys<T extends object>(prev: T, next: T): (keyof T)[] {
+export function changedKeys<T extends object>(prev: T, next: T): (keyof T)[] {
   return (Object.keys(next) as (keyof T)[]).filter((key) => !sameValue(prev[key], next[key]));
 }
 
@@ -143,7 +149,7 @@ function changedKeys<T extends object>(prev: T, next: T): (keyof T)[] {
  * are blamed on another field than the one that causes them (« interval » on « freq », « untilDate » on
  * the start date), so those are listed too. A field added to RecurrenceFormValue must be listed here.
  */
-const RECURRENCE_ERROR_KEYS: Record<keyof RecurrenceFormValue, readonly string[]> = {
+export const RECURRENCE_ERROR_KEYS: Record<keyof RecurrenceFormValue, readonly string[]> = {
   startDate: ["rule.startDate", "rule.untilDate"],
   startTime: ["rule.startMinute"],
   durationMin: ["durationMin"],
@@ -172,10 +178,10 @@ function GroupError({ id, message }: { id: string; message: string | null }) {
   );
 }
 
-/** After a refused submit: the controls rendered with aria-invalid take focus (the first one wins). */
-function focusFirstInvalid(form: HTMLFormElement | null) {
+/** After a refused submit: the controls rendered with aria-invalid take focus (the first one wins). `root` is the form, or the block that holds the fields. */
+export function focusFirstInvalid(root: HTMLElement | null) {
   window.setTimeout(() => {
-    form?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
+    root?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
   }, 0);
 }
 
@@ -623,6 +629,131 @@ export function EventCreateForm({
           {"Créer l'événement"}
         </Button>
       </div>
+    </form>
+  );
+}
+
+/** The information card of an existing event, edited in place (the page owns the Card chrome). */
+export function EventInfoForm({
+  eventId,
+  seenVersion,
+  initial,
+  typeOptions,
+  linkedArchivedTypes,
+  proWindow,
+  futureRegistrants,
+  readOnly,
+}: {
+  eventId: string;
+  seenVersion: number;
+  initial: EventInfoValue;
+  typeOptions: TypeOption[];
+  linkedArchivedTypes: { id: string; name: string }[];
+  proWindow: BookingWindow;
+  futureRegistrants: number;
+  readOnly: boolean;
+}) {
+  const formRef = useRef<HTMLFormElement>(null);
+  const errorBox = useRef<HTMLParagraphElement>(null);
+  const submitting = useRef(false);
+  const [pending, startTransition] = useTransition();
+  const [value, setValue] = useState<EventInfoValue>(initial);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [formError, setFormError] = useState<string | null>(null);
+  /** Bumped with each failure of the save call itself: the effect below puts the focus on the error box once it is rendered. */
+  const [errorFocus, setErrorFocus] = useState(0);
+  const [saved, setSaved] = useState(false);
+
+  // The submit button is disabled while the call runs, which drops the focus on the page: a keyboard or screen-reader user lands on the message.
+  useEffect(() => {
+    if (errorFocus > 0) errorBox.current?.focus();
+  }, [errorFocus]);
+
+  /** An edit drops the messages of the fields it changed and the summary box above the button, like the create form. */
+  function edit(next: EventInfoValue) {
+    // The ticket list only exists in « Sur tickets »: leaving or entering that mode settles its messages too.
+    const keys = changedKeys(value, next).flatMap((key) => (key === "bookingMode" ? [key, "ticketTypeIds"] : [key]));
+    setFieldErrors((errors) => withoutErrorsUnder(errors, keys));
+    setFormError(null);
+    setSaved(false);
+    setValue(next);
+  }
+
+  /** The saved location is the prop (it follows the page after every save), never the value the form started with. */
+  const locationChanged = value.location.trim() !== initial.location.trim();
+
+  function submit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (readOnly || submitting.current) return;
+    const info = eventInfoInput(value);
+    const parsed = parseFr(eventInfoSchema, info);
+    setSaved(false);
+    if (!parsed.ok) {
+      setFieldErrors(parsed.fieldErrors);
+      setFormError(parsed.error);
+      focusFirstInvalid(formRef.current);
+      return;
+    }
+    setFieldErrors({});
+    setFormError(null);
+    submitting.current = true;
+    startTransition(async () => {
+      try {
+        // seenVersion is this render's prop: after a save the page re-renders with the new version.
+        const res = await editEventInfoAction({ eventId, seenVersion, info });
+        if (!res.ok) {
+          setFormError(res.error);
+          setErrorFocus((n) => n + 1);
+          return;
+        }
+        setSaved(true);
+      } catch {
+        setFormError(REQUEST_FAILED);
+        setErrorFocus((n) => n + 1);
+      } finally {
+        submitting.current = false;
+      }
+    });
+  }
+
+  return (
+    <form ref={formRef} noValidate onSubmit={submit} className="space-y-5">
+      <EventInfoFields
+        idPrefix={`event-${eventId}`}
+        value={value}
+        onChange={edit}
+        typeOptions={typeOptions}
+        linkedArchivedTypes={linkedArchivedTypes}
+        proWindow={proWindow}
+        fieldErrors={fieldErrors}
+        disabled={readOnly || pending}
+      />
+      {locationChanged && futureRegistrants > 0 && (
+        <p className="flex items-start gap-2 rounded-xl bg-muted px-3 py-2 text-sm">
+          <Info className="mt-0.5 size-4 shrink-0 text-zinc-600" aria-hidden="true" />
+          <span>
+            {`${plural(futureRegistrants, "inscrit des séances à venir sera prévenu", "inscrits des séances à venir seront prévenus")} du changement de lieu.`}
+          </span>
+        </p>
+      )}
+      <FormError message={formError} ref={errorBox} tabIndex={-1} />
+      {!readOnly && (
+        <div className="flex flex-wrap items-center gap-3">
+          <Button type="submit" disabled={pending}>
+            {pending && <Loader2 className="size-4 animate-spin" />}
+            Enregistrer les informations
+          </Button>
+          {/* Always mounted, so a screen reader announces the confirmation when it appears. */}
+          <p role="status" className="flex items-center gap-1.5 text-sm">
+            {saved && (
+              <>
+                <Check className="size-4 text-green-700" aria-hidden="true" />
+                Informations enregistrées.
+              </>
+            )}
+          </p>
+        </div>
+      )}
     </form>
   );
 }

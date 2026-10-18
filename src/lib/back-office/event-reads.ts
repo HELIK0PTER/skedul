@@ -77,8 +77,20 @@ export type EventEditorData = {
   fromDate: DateKey | null;
   /** remainingCount(ruleOf(event), fromDate) in count mode. */
   remainingCount: number | null;
-  /** The next 10 séances (scheduled or cancelled) of this segment. */
-  upcoming: { id: string; startsAt: Date; endsAt: Date; status: OccurrenceStatus; seatsTaken: number; capacity: number }[];
+  /**
+   * The next 10 séances (scheduled or cancelled) of this segment. `seatsTaken` still counts the pending holds that
+   * have lapsed and that nobody has released yet; `elapsedHolds` is how many those are (the engine's
+   * expireElapsedHolds rule: pending and hold_expires_at < now), so that seatsShown() gives the truthful figure.
+   */
+  upcoming: {
+    id: string;
+    startsAt: Date;
+    endsAt: Date;
+    status: OccurrenceStatus;
+    seatsTaken: number;
+    elapsedHolds: number;
+    capacity: number;
+  }[];
   /** Same root, other segments, by firstDate. */
   otherSegments: EventSegmentView[];
   /** Active and not rdv_free. */
@@ -330,6 +342,10 @@ export async function getEventEditor(
         endsAt: occurrence.endsAt,
         status: occurrence.status,
         seatsTaken: occurrence.seatsTaken,
+        // Written "occurrence.id", not ${occurrence.id}: in a single-table select drizzle drops the table name of an
+        // interpolated column, and a bare "id" would resolve to booking.id inside the subquery.
+        elapsedHolds: sql<number>`(select count(*)::int from booking b where b.occurrence_id = occurrence.id
+          and b.status = 'pending' and b.hold_expires_at < ${ts(now)})`.mapWith(Number),
         capacity: occurrence.capacity,
       })
       .from(occurrence)

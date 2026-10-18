@@ -234,6 +234,7 @@ dbTest("getEventEditor: the current segment with its cut date, remaining count, 
     status: "scheduled",
     seatsTaken: 0,
     capacity: 8,
+    elapsedHolds: 0,
   });
   assert.deepEqual(data.otherSegments, []);
   assert.deepEqual(
@@ -482,4 +483,55 @@ dbTest("deleteFromPreview: a pending hold that has lapsed is not a registrant", 
     registrants: 1,
     ticketsReturned: 0,
   });
+});
+
+dbTest("getEventEditor: each upcoming séance counts its lapsed pending holds, the ones the engine releases before a claim", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await rowType(db, pro);
+  const offerId = await rowOffer(db, pro, typeId);
+  const eventId = await rowEvent(db, pro, { capacity: 4 }, now);
+  const otherEventId = await rowEvent(db, pro, { capacity: 4 }, now);
+  const at = (days: number) => new Date(now.getTime() + days * DAY);
+  const seance = (id: string, days: number, seatsTaken: number) =>
+    rowSeance(db, pro, id, { startsAt: at(days), capacity: 4, seatsTaken }, now);
+  const hold = async (occurrenceId: string, holdExpiresAt: Date) => {
+    const customerId = await rowCustomer(db, pro);
+    const purchaseId = await rowPurchase(db, pro, { customerId, offerId, ticketTypeId: typeId }, now);
+    await rowBooking(db, pro, { occurrenceId, customerId, status: "pending", coverage: "ticket", purchaseId, holdExpiresAt }, now);
+  };
+  const liveUntil = new Date(now.getTime() + 45 * 60_000);
+  const lapsedSince = new Date(now.getTime() - 60_000);
+
+  // a confirmed guest, a live hold and a lapsed hold: only the lapsed one counts
+  const mixed = await seance(eventId, 3, 3);
+  await rowBooking(db, pro, { occurrenceId: mixed, customerId: await rowCustomer(db, pro) }, now);
+  await hold(mixed, liveUntil);
+  await hold(mixed, lapsedSince);
+  // two lapsed holds, one per customer
+  const twice = await seance(eventId, 4, 2);
+  await hold(twice, lapsedSince);
+  await hold(twice, new Date(now.getTime() - 3_600_000));
+  // a live hold only, and an empty séance
+  const live = await seance(eventId, 5, 1);
+  await hold(live, liveUntil);
+  const empty = await seance(eventId, 6, 0);
+  // a lapsed hold on another event's séance is that séance's own
+  const elsewhere = await seance(otherEventId, 3, 1);
+  await hold(elsewhere, lapsedSince);
+
+  const data = editorOf(await getEventEditor(db, pro.proId, eventId, now));
+  assert.deepEqual(
+    data.upcoming.map((u) => [u.id, u.seatsTaken, u.elapsedHolds]),
+    [
+      [mixed, 3, 1],
+      [twice, 2, 2],
+      [live, 1, 0],
+      [empty, 0, 0],
+    ],
+  );
+  const other = editorOf(await getEventEditor(db, pro.proId, otherEventId, now));
+  assert.deepEqual(
+    other.upcoming.map((u) => [u.id, u.seatsTaken, u.elapsedHolds]),
+    [[elsewhere, 1, 1]],
+  );
 });

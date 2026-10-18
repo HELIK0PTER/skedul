@@ -52,7 +52,7 @@ export function Dialog({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-start justify-between gap-4">
-          <h2 id={titleId} className="text-base font-semibold">
+          <h2 id={titleId} className="min-w-0 text-base font-semibold wrap-anywhere">
             {title}
           </h2>
           <button
