@@ -10,7 +10,7 @@
  * No server import: only `import type` from the reads module.
  */
 import { addDays, parseKey, type DateKey } from "@/lib/civil-date";
-import { dayKeyInTz, formatTime, startOfDayKey, wallClockMinutes } from "@/lib/datetime";
+import { dayKeyInTz, dayOrdinal, formatTime, frenchFirst, startOfDayKey, wallClockMinutes } from "@/lib/datetime";
 import { expiryLabel, plural } from "@/lib/back-office/format";
 import type { PlanningAttendee, PlanningItem, PlanningQuestion, PlanningTimeOff } from "@/lib/back-office/planning-reads";
 import { layoutLanes, type LaneSlot } from "@/lib/lanes";
@@ -245,16 +245,21 @@ export function gridHours(items: readonly PlanningItemVM[]): { startHour: number
   return { startHour: Math.max(0, startHour), endHour: Math.min(24, endHour) };
 }
 
-/** « 12 au 18 octobre 2026 », « 28 septembre au 4 octobre 2026 », « 29 décembre 2026 au 4 janvier 2027 ». */
+/**
+ * « 12 au 18 octobre 2026 », « 28 septembre au 4 octobre 2026 », « 29 décembre 2026 au 4 janvier 2027 »;
+ * the first of a month is written « 1er » (« 26 octobre au 1er novembre 2026 »).
+ */
 export function weekTitle(days: readonly DateKey[]): string {
   if (days.length === 0) return "";
   const first = parseKey(days[0]);
   const last = parseKey(days[days.length - 1]);
   const firstMonth = MONTHS_FR[first.m - 1];
   const lastMonth = MONTHS_FR[last.m - 1];
-  if (first.y === last.y && first.m === last.m) return `${first.d} au ${last.d} ${lastMonth} ${last.y}`;
-  if (first.y === last.y) return `${first.d} ${firstMonth} au ${last.d} ${lastMonth} ${last.y}`;
-  return `${first.d} ${firstMonth} ${first.y} au ${last.d} ${lastMonth} ${last.y}`;
+  const a = dayOrdinal(first.d);
+  const b = dayOrdinal(last.d);
+  if (first.y === last.y && first.m === last.m) return `${a} au ${b} ${lastMonth} ${last.y}`;
+  if (first.y === last.y) return `${a} ${firstMonth} au ${b} ${lastMonth} ${last.y}`;
+  return `${a} ${firstMonth} ${first.y} au ${b} ${lastMonth} ${last.y}`;
 }
 
 /** Minute of a click offset in a day column, rounded down to 30, within 0..1410. */
@@ -287,10 +292,12 @@ export function dayShortLabel(day: DateKey): string {
   return new Intl.DateTimeFormat("fr-FR", { weekday: "short", day: "numeric", timeZone: "UTC" }).format(civilNoon(day));
 }
 
-/** « lundi 12 octobre » */
+/** « lundi 12 octobre », « dimanche 1er novembre » */
 export function dayLongLabel(day: DateKey): string {
-  return new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }).format(
-    civilNoon(day),
+  return frenchFirst(
+    new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }).format(
+      civilNoon(day),
+    ),
   );
 }
 

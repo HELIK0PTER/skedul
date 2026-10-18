@@ -340,7 +340,12 @@ test("weekTitle: same month, two months, two years", () => {
   assert.equal(weekTitle(week("2026-10-12")), "12 au 18 octobre 2026");
   assert.equal(weekTitle(week("2026-09-28")), "28 septembre au 4 octobre 2026");
   assert.equal(weekTitle(week("2026-12-29")), "29 décembre 2026 au 4 janvier 2027");
-  for (const monday of ["2026-10-12", "2026-09-28", "2026-12-29"]) {
+  // « 1er » on the first of the month, as first day (same month) and as last day (month change, year change).
+  assert.equal(weekTitle(week("2026-06-01")), "1er au 7 juin 2026");
+  assert.equal(weekTitle(week("2026-10-26")), "26 octobre au 1er novembre 2026");
+  assert.equal(weekTitle(week("2022-12-26")), "26 décembre 2022 au 1er janvier 2023");
+  assert.equal(weekTitle(week("2026-11-30")), "30 novembre au 6 décembre 2026");
+  for (const monday of ["2026-10-12", "2026-09-28", "2026-12-29", "2026-06-01", "2026-10-26", "2022-12-26"]) {
     assert.doesNotMatch(weekTitle(week(monday)), NO_DASH);
   }
 });
@@ -374,7 +379,13 @@ test("dayShortLabel and dayLongLabel read a civil day, whatever the host zone", 
   assert.equal(dayLongLabel("2026-12-31"), "jeudi 31 décembre");
   // The 25 hour day of Paris and the 25 hour day of Los Angeles keep their own weekday.
   assert.equal(dayShortLabel("2026-10-25"), "dim. 25");
-  assert.equal(dayLongLabel("2026-11-01"), "dimanche 1 novembre");
+  assert.equal(dayLongLabel("2026-11-01"), "dimanche 1er novembre");
+  // Only the 1st takes the ordinal; the short label keeps the bare number.
+  assert.equal(dayShortLabel("2026-11-01"), "dim. 1");
+  assert.equal(dayLongLabel("2026-10-11"), "dimanche 11 octobre");
+  assert.equal(dayLongLabel("2026-10-21"), "mercredi 21 octobre");
+  assert.equal(dayLongLabel("2026-10-31"), "samedi 31 octobre");
+  assert.equal(dayLongLabel("2026-01-01"), "jeudi 1er janvier");
   for (const day of week(MONDAY)) {
     assert.doesNotMatch(`${dayShortLabel(day)}${dayLongLabel(day)}`, NO_DASH);
   }

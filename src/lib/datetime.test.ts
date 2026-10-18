@@ -4,6 +4,12 @@ import assert from "node:assert/strict";
 import {
   addDaysToKey,
   dayOfWeekForKey,
+  dayOrdinal,
+  formatDateLong,
+  formatDateShort,
+  formatDateTimeShort,
+  formatSlot,
+  frenchFirst,
   instantFromWallClock,
   startOfDayKey,
   wallClockMinutes,
@@ -103,4 +109,63 @@ test("wallClockMinutes reads the wall clock, not time elapsed since midnight", (
   assert.equal(wallClockMinutes(new Date("2026-10-25T18:00:00Z"), TZ), 19 * 60);
   // 29 Mar 2026, 19:00 Paris (UTC+2) = 17:00Z. Only 18 hours have elapsed.
   assert.equal(wallClockMinutes(new Date("2026-03-29T17:00:00Z"), TZ), 19 * 60);
+});
+
+test("dayOrdinal: only the first of the month takes the ordinal", () => {
+  assert.equal(dayOrdinal(1), "1er");
+  for (const d of [2, 10, 11, 21, 31]) assert.equal(dayOrdinal(d), String(d));
+});
+
+test("frenchFirst writes « 1er » for a day 1 followed by a month name, long or short", () => {
+  assert.equal(frenchFirst("dimanche 1 novembre"), "dimanche 1er novembre");
+  assert.equal(frenchFirst("dim. 1 novembre 2026"), "dim. 1er novembre 2026");
+  assert.equal(frenchFirst("1 janvier 2027"), "1er janvier 2027");
+  assert.equal(frenchFirst("1 mai"), "1er mai");
+  assert.equal(frenchFirst("1 août 2026"), "1er août 2026");
+  assert.equal(frenchFirst("1 déc. 2026, 09:05"), "1er déc. 2026, 09:05");
+  for (const short of ["janv.", "févr.", "avr.", "juil.", "sept.", "oct.", "nov.", "déc."]) {
+    assert.equal(frenchFirst(`1 ${short} 2026`), `1er ${short} 2026`);
+  }
+  // The space may be a no-break one.
+  assert.equal(frenchFirst("1\u00a0novembre"), "1er\u00a0novembre");
+  // Both ends of a sentence, and more than one date.
+  assert.equal(frenchFirst("du 1 mars au 1 avril"), "du 1er mars au 1er avril");
+});
+
+test("frenchFirst leaves every other number alone", () => {
+  for (const same of [
+    "lundi 11 octobre",
+    "mercredi 21 octobre",
+    "samedi 31 octobre",
+    "dim. 10 novembre 2026",
+    "lun. 12 octobre 2026 · 19:01 à 20:01",
+    "01:30 à 01:30",
+    "1 inscrit sur 12",
+    "1 séance",
+    "à 1 heure",
+    "1 marseille",
+    "2026 11 mai",
+    "1er novembre",
+    "dim. 1",
+  ]) {
+    assert.equal(frenchFirst(same), same);
+  }
+  // Idempotent.
+  assert.equal(frenchFirst(frenchFirst("dimanche 1 novembre")), "dimanche 1er novembre");
+});
+
+test("the long date labels of datetime.ts write « 1er » on the first of the month, host zone ignored", () => {
+  const first = new Date("2026-11-01T10:00:00Z");
+  const end = new Date("2026-11-01T11:00:00Z");
+  assert.equal(formatDateLong(first, TZ), "dimanche 1er novembre");
+  assert.equal(formatDateShort(first, TZ), "1er nov. 2026");
+  assert.equal(formatDateTimeShort(first, TZ), "1er nov. 2026, 11:00");
+  assert.ok(formatSlot(first, end, TZ).startsWith("dim. 1er novembre 2026 · 11:00"));
+  // Other days keep their number.
+  const eleventh = new Date("2026-11-11T10:00:00Z");
+  assert.equal(formatDateLong(eleventh, TZ), "mercredi 11 novembre");
+  assert.equal(formatDateShort(eleventh, TZ), "11 nov. 2026");
+  const thirtyFirst = new Date("2026-10-31T10:00:00Z");
+  assert.equal(formatDateLong(thirtyFirst, TZ), "samedi 31 octobre");
+  assert.equal(formatDateTimeShort(thirtyFirst, TZ), "31 oct. 2026, 11:00");
 });

@@ -51,8 +51,18 @@ test("formatWhen on the DST days of Paris and Los Angeles", () => {
   );
   assert.equal(
     formatWhen(at("2026-11-01T08:30:00Z"), at("2026-11-01T09:30:00Z"), LA),
-    "dim. 1 novembre 2026 · 01:30 à 01:30",
+    "dim. 1er novembre 2026 · 01:30 à 01:30",
   );
+});
+
+test("formatWhen writes « 1er » on the first of a month and keeps 11, 21 and 31", () => {
+  const hour = (iso: string) => [at(iso), at(new Date(Date.parse(iso) + 3_600_000).toISOString())] as const;
+  assert.equal(formatWhen(...hour("2026-12-01T09:00:00Z"), PARIS), "mar. 1er décembre 2026 · 10:00 à 11:00");
+  assert.equal(formatWhen(...hour("2026-10-11T09:00:00Z"), PARIS), "dim. 11 octobre 2026 · 11:00 à 12:00");
+  assert.equal(formatWhen(...hour("2026-10-21T09:00:00Z"), PARIS), "mer. 21 octobre 2026 · 11:00 à 12:00");
+  assert.equal(formatWhen(...hour("2026-10-31T09:00:00Z"), PARIS), "sam. 31 octobre 2026 · 10:00 à 11:00");
+  // The 1 of a time or a count is not a day.
+  assert.equal(formatWhen(...hour("2026-10-12T17:01:00Z"), PARIS), "lun. 12 octobre 2026 · 19:01 à 20:01");
 });
 
 test("formatWhenShort, formatDayMonthOf and formatDayMonthTime", () => {

@@ -10,6 +10,25 @@ export const DAYS_FR = [
   "Samedi",
 ];
 
+/** A day of the month in French: the first takes the ordinal (« 1er »), every other day keeps its number. */
+export function dayOrdinal(day: number): string {
+  return day === 1 ? "1er" : String(day);
+}
+
+const FRENCH_MONTHS =
+  "janvier|février|mars|avril|mai|juin|juillet|août|septembre|octobre|novembre|décembre|janv\\.|févr\\.|avr\\.|juil\\.|sept\\.|oct\\.|nov\\.|déc\\.";
+// A day 1 (not the end of 11, 21, 31 nor of a time like 19:01) followed by a month name, long or short.
+const FIRST_OF_MONTH = new RegExp(`(^|[^0-9])1(\\s+)(?=(?:${FRENCH_MONTHS})(?![a-zà-ÿ]))`, "g");
+
+/**
+ * Makes the « 1 novembre » that Intl writes in fr-FR read « 1er novembre », as French
+ * writes the first of a month. Only a day 1 right before a month name changes: other
+ * days, times and counts (« 19:01 », « 1 inscrit ») are left as they are.
+ */
+export function frenchFirst(text: string): string {
+  return text.replace(FIRST_OF_MONTH, (_match, before: string, space: string) => `${before}1er${space}`);
+}
+
 export function minutesToLabel(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
@@ -117,13 +136,15 @@ export function instantFromWallClock(
 
 /** Format a slot range, e.g. "lun. 23 juin 2026 · 14:00 – 15:00". */
 export function formatSlot(start: Date, end: Date, tz: string): string {
-  const date = new Intl.DateTimeFormat("fr-FR", {
-    weekday: "short",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-    timeZone: tz,
-  }).format(start);
+  const date = frenchFirst(
+    new Intl.DateTimeFormat("fr-FR", {
+      weekday: "short",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      timeZone: tz,
+    }).format(start),
+  );
   const t = (d: Date) =>
     new Intl.DateTimeFormat("fr-FR", {
       hour: "2-digit",
@@ -142,12 +163,14 @@ export function formatTime(d: Date, tz: string): string {
 }
 
 export function formatDateLong(d: Date, tz: string): string {
-  return new Intl.DateTimeFormat("fr-FR", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    timeZone: tz,
-  }).format(d);
+  return frenchFirst(
+    new Intl.DateTimeFormat("fr-FR", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      timeZone: tz,
+    }).format(d),
+  );
 }
 
 /** Returns YYYY-MM-DD for a date as seen in `tz` (stable grouping key). */
@@ -163,24 +186,28 @@ export function dayKeyInTz(d: Date, tz: string): string {
 
 /** "7 oct. 2026" */
 export function formatDateShort(d: Date, tz: string): string {
-  return new Intl.DateTimeFormat("fr-FR", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    timeZone: tz,
-  }).format(d);
+  return frenchFirst(
+    new Intl.DateTimeFormat("fr-FR", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      timeZone: tz,
+    }).format(d),
+  );
 }
 
 /** "7 oct. 2026, 14:32" */
 export function formatDateTimeShort(d: Date, tz: string): string {
-  return new Intl.DateTimeFormat("fr-FR", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: tz,
-  }).format(d);
+  return frenchFirst(
+    new Intl.DateTimeFormat("fr-FR", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: tz,
+    }).format(d),
+  );
 }
 
 /** Adds `n` calendar days to a YYYY-MM-DD key (civil arithmetic, no time zone). */

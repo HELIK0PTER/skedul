@@ -4,6 +4,7 @@
  * contains an em or en dash (UI rule), unlike datetime.formatSlot.
  */
 import { formatDayMonth, formatDayMonthYear, mondayOf, parseKey, todayKey } from "@/lib/civil-date";
+import { frenchFirst } from "@/lib/datetime";
 import { lastValidDay } from "@/lib/ticket-expiry";
 
 const formatters = new Map<string, Intl.DateTimeFormat>();
@@ -31,9 +32,9 @@ export function formatTimeRange(start: Date, end: Date, tz: string): string {
   return `${time.format(start)} à ${time.format(end)}`;
 }
 
-/** « lun. 12 octobre 2026 · 19:00 à 20:00 » in tz (the dash-free twin of datetime.formatSlot). */
+/** « lun. 12 octobre 2026 · 19:00 à 20:00 » in tz (the dash-free twin of datetime.formatSlot); « dim. 1er novembre 2026 » on a first. */
 export function formatWhen(start: Date, end: Date, tz: string): string {
-  return `${formatter(tz, "dateLong").format(start)} · ${formatTimeRange(start, end, tz)}`;
+  return `${frenchFirst(formatter(tz, "dateLong").format(start))} · ${formatTimeRange(start, end, tz)}`;
 }
 
 /** « lun. 12/10 · 19:00 » in tz. */
