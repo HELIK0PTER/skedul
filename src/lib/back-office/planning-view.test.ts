@@ -5,12 +5,14 @@ import { addDays, instantAt, type DateKey } from "@/lib/civil-date";
 
 import type { PlanningAttendee, PlanningItem, PlanningTimeOff } from "./planning-reads";
 import {
+  blockLabel,
   dayLongLabel,
   dayShortLabel,
   gridHours,
   hhmm,
   hiddenByTimeOff,
   minuteFromOffset,
+  previewTitle,
   timeOffSegments,
   tintOf,
   toPlanningVM,
@@ -435,4 +437,69 @@ test("unenrolledMessage: the head and the tail always agree, whatever the number
   // A single cancellation is named only when exactly one name is known.
   assert.match(unenrolledMessage(["Thomas Leroy"], 1, 0), /^Inscription de Thomas Leroy annulée\. Le client est/);
   assert.match(unenrolledMessage(["Thomas Leroy", "Marina Costa"], 1, 0), /^1 inscription annulée\. Le client est/);
+});
+
+const blockOf = (over: Partial<Parameters<typeof blockLabel>[0]> = {}): Parameters<typeof blockLabel>[0] => ({
+  title: "Altinha débutants",
+  kind: "seance",
+  startsAt: at("2026-10-12", 1140).toISOString(),
+  endsAt: at("2026-10-12", 1200).toISOString(),
+  status: "scheduled",
+  seatsTaken: 2,
+  capacity: 12,
+  attendees: [],
+  ...over,
+});
+
+test("blockLabel: the accessible name of a séance block is title, when and seats", () => {
+  assert.equal(blockLabel(blockOf(), PARIS), "Altinha débutants, lun. 12 octobre 2026 · 19:00 à 20:00, 2 inscrits sur 12");
+  assert.equal(
+    blockLabel(blockOf({ seatsTaken: 0 }), PARIS),
+    "Altinha débutants, lun. 12 octobre 2026 · 19:00 à 20:00, 0 inscrit sur 12",
+  );
+  assert.equal(
+    blockLabel(blockOf({ seatsTaken: 1 }), PARIS),
+    "Altinha débutants, lun. 12 octobre 2026 · 19:00 à 20:00, 1 inscrit sur 12",
+  );
+});
+
+test("blockLabel: a cancelled block says so in its name, a first of the month is written « 1er »", () => {
+  assert.equal(
+    blockLabel(blockOf({ status: "cancelled", seatsTaken: 0 }), PARIS),
+    "Altinha débutants, lun. 12 octobre 2026 · 19:00 à 20:00, 0 inscrit sur 12, annulée",
+  );
+  const first = blockOf({ startsAt: at("2026-11-01", 1140).toISOString(), endsAt: at("2026-11-01", 1200).toISOString() });
+  assert.equal(blockLabel(first, PARIS), "Altinha débutants, dim. 1er novembre 2026 · 19:00 à 20:00, 2 inscrits sur 12");
+});
+
+test("blockLabel: an RDV block names its client, as the block shows it, instead of a seat count", () => {
+  const client = { name: "Beatriz Almeida" };
+  const rdv = blockOf({
+    title: "Cours particulier",
+    kind: "rdv",
+    capacity: 1,
+    seatsTaken: 1,
+    attendees: [client],
+    startsAt: at("2026-10-13", 660).toISOString(),
+    endsAt: at("2026-10-13", 720).toISOString(),
+  });
+  assert.equal(blockLabel(rdv, PARIS), "Cours particulier, mar. 13 octobre 2026 · 11:00 à 12:00, Beatriz Almeida");
+  assert.equal(
+    blockLabel({ ...rdv, status: "cancelled" }, PARIS),
+    "Cours particulier, mar. 13 octobre 2026 · 11:00 à 12:00, Beatriz Almeida, annulée",
+  );
+  // No attendee to name: the seat count is the fallback.
+  assert.equal(
+    blockLabel({ ...rdv, attendees: [] }, PARIS),
+    "Cours particulier, mar. 13 octobre 2026 · 11:00 à 12:00, 1 inscrit sur 1",
+  );
+  assert.doesNotMatch(blockLabel(rdv, PARIS), NO_DASH);
+});
+
+test("previewTitle: the dashboard card names the week, today, or the day shown", () => {
+  assert.equal(previewTitle("week", "2026-10-14", "2026-10-14"), "Cette semaine");
+  assert.equal(previewTitle("week", "2026-10-15", "2026-10-14"), "Cette semaine");
+  assert.equal(previewTitle("day", "2026-10-14", "2026-10-14"), "Aujourd'hui");
+  assert.equal(previewTitle("day", "2026-10-15", "2026-10-14"), "jeudi 15 octobre");
+  assert.equal(previewTitle("day", "2026-11-01", "2026-10-14"), "dimanche 1er novembre");
 });

@@ -8,7 +8,7 @@ import { OccurrenceDialog } from "@/components/dashboard/occurrence-dialog";
 import { OFF_PATTERN, dayLongLabel, dayShortLabel, hhmm, tintOf } from "@/components/dashboard/planning-calendar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { PlanningItemVM, TimeOffSegmentVM } from "@/lib/back-office/planning-view";
+import { previewTitle, type PlanningItemVM, type TimeOffSegmentVM } from "@/lib/back-office/planning-view";
 import type { DateKey } from "@/lib/civil-date";
 import { cn } from "@/lib/utils";
 
@@ -50,7 +50,10 @@ export function WeekPreview({
   const todayIndex = days.indexOf(todayKey);
   const [dayIndex, setDayIndex] = useState(todayIndex >= 0 ? todayIndex : 0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selected = items.find((i) => i.id === selectedId) ?? null;
+  // An id that left the data (an RDV that an action ended) is dropped, so that it can never come back by itself.
+  const currentId = selectedId !== null && items.some((i) => i.id === selectedId) ? selectedId : null;
+  if (currentId !== selectedId) setSelectedId(currentId);
+  const selected = items.find((i) => i.id === currentId) ?? null;
   // The status line the dialog hands over when its occurrence leaves the data after an action (a cancelled RDV).
   const [notice, setNotice] = useState<string | null>(null);
   const openItem = (id: string) => {
@@ -88,7 +91,9 @@ export function WeekPreview({
                   className={cn("absolute inset-x-0.5 rounded", OFF_PATTERN)}
                   style={{ top, height: bottom - top }}
                   title={s.reason ?? "Indisponible"}
-                />
+                >
+                  <span className="sr-only">{s.reason ?? "Indisponible"}</span>
+                </div>
               );
             })}
           {items
@@ -102,7 +107,7 @@ export function WeekPreview({
                   onClick={() => openItem(i.id)}
                   className={cn(
                     "absolute overflow-hidden rounded-md border border-l-[3px] px-1 py-0.5 text-left text-[10px] leading-tight text-foreground shadow-sm transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                    cancelled && "opacity-60 line-through",
+                    cancelled && "opacity-75 line-through",
                   )}
                   style={{
                     top: (i.startMinute - startHour * 60) * MINUTE_PX,
@@ -138,7 +143,7 @@ export function WeekPreview({
   return (
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
-        <CardTitle>{view === "day" ? "Aujourd'hui" : "Cette semaine"}</CardTitle>
+        <CardTitle className="first-letter:uppercase">{previewTitle(view, days[dayIndex], todayKey)}</CardTitle>
         <div className="flex items-center gap-2">
           <div className="inline-flex rounded-lg border border-border p-0.5">
             {(["day", "week"] as const).map((v) => (

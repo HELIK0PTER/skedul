@@ -8,8 +8,9 @@ import { CalendarDays, ChevronLeft, ChevronRight, CircleCheck, Plus, UserRound }
 import { OccurrenceDialog } from "@/components/dashboard/occurrence-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { formatWhen, plural } from "@/lib/back-office/format";
+import { plural } from "@/lib/back-office/format";
 import {
+  blockLabel,
   dayLongLabel,
   dayShortLabel,
   hhmm,
@@ -50,16 +51,14 @@ function ItemBlock({
   const top = (item.startMinute - startHour * 60) * MINUTE_PX;
   const height = Math.max(22, (item.endMinute - item.startMinute) * MINUTE_PX);
   const second = item.kind === "seance" ? `${item.seatsTaken}/${item.capacity}` : (item.attendees[0]?.name ?? "");
-  // The accessible name replaces the content of a button: « annulée » must be part of it, not only of a hidden child.
-  const label = `${item.title}, ${formatWhen(new Date(item.startsAt), new Date(item.endsAt), tz)}, ${seatsText(item)}${cancelled ? ", annulée" : ""}`;
   return (
     <button
       type="button"
       onClick={() => onOpen(item.id)}
-      aria-label={label}
+      aria-label={blockLabel(item, tz)}
       className={cn(
         "absolute overflow-hidden rounded-lg border border-l-4 px-1.5 py-1 text-left text-[11px] leading-tight text-foreground shadow-sm transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.99]",
-        cancelled && "opacity-60 line-through",
+        cancelled && "opacity-75 line-through",
       )}
       style={{
         top,
@@ -75,7 +74,7 @@ function ItemBlock({
         {item.kind === "rdv" && <UserRound className="size-3 shrink-0" aria-hidden="true" />}
         <span className="truncate">{`${hhmm(item.startMinute)} ${item.title}`}</span>
       </span>
-      <span className="block truncate text-foreground/80">{second}</span>
+      <span className={cn("block truncate", !cancelled && "text-foreground/80")}>{second}</span>
       {cancelled && <span className="sr-only">annulée</span>}
     </button>
   );
@@ -93,7 +92,11 @@ function OffBlock({ segment, startHour, endHour }: { segment: TimeOffSegmentVM; 
       style={{ top, height }}
       title={label}
     >
-      {height >= 20 && <span className="block truncate text-[11px] text-muted-foreground">{label}</span>}
+      {height >= 20 ? (
+        <span className="block truncate text-[11px] text-zinc-700">{label}</span>
+      ) : (
+        <span className="sr-only">{label}</span>
+      )}
     </div>
   );
 }
@@ -150,7 +153,7 @@ function MobileDay({
               className={cn("rounded-xl border border-dashed border-border px-3 py-2.5", OFF_PATTERN)}
             >
               <p className="text-sm font-medium wrap-anywhere">{s.reason ?? "Indisponible"}</p>
-              <p className="text-xs text-muted-foreground tabular-nums">
+              <p className="text-xs text-zinc-700 tabular-nums">
                 {s.startMinute === 0 && s.endMinute === 1440 ? "Toute la journée" : `${hhmm(s.startMinute)} à ${hhmm(s.endMinute)}`}
               </p>
             </li>
@@ -228,14 +231,19 @@ export function PlanningCalendar({
   // The dialog is held by id: after an action the page data is refreshed and the
   // dialog shows the fresh séance. A new deep link (?seance=) opens its dialog
   // even though this component instance is reused between two navigations.
+  // An id that is not in the week shown (another week, an unknown deep link, an RDV that an action ended)
+  // is dropped, so that coming back to a week with Back and Forward never reopens a dialog by itself.
   const [selectedId, setSelectedId] = useState<string | null>(openOccurrenceId);
   const [seenOpenId, setSeenOpenId] = useState<string | null>(openOccurrenceId);
+  let currentId = selectedId;
   if (openOccurrenceId !== seenOpenId) {
     setSeenOpenId(openOccurrenceId);
-    setSelectedId(openOccurrenceId);
     setNotice(null);
+    currentId = openOccurrenceId;
   }
-  const selected = items.find((i) => i.id === selectedId) ?? null;
+  if (currentId !== null && !items.some((i) => i.id === currentId)) currentId = null;
+  if (currentId !== selectedId) setSelectedId(currentId);
+  const selected = items.find((i) => i.id === currentId) ?? null;
   const openItem = (id: string) => {
     setNotice(null);
     setSelectedId(id);

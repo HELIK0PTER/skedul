@@ -24,7 +24,9 @@ function AttendeeRow({ attendee }: { attendee: PlanningAttendeeVM }) {
         >
           {attendee.name}
         </Link>
-        <span className="min-w-0 truncate text-xs text-muted-foreground">{attendee.email}</span>
+        <span className="min-w-0 truncate text-xs text-muted-foreground" title={attendee.email}>
+          {attendee.email}
+        </span>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <CoverageBadge coverage={attendee.coverage} />

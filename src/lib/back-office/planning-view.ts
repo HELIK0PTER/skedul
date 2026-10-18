@@ -5,13 +5,13 @@
  * computed per day, an empty séance under a time off is hidden, ISO strings
  * replace dates so the result can cross the server/client boundary.
  * It also holds the small pure formatters the planning components share
- * (`hhmm`, `dayShortLabel`, `dayLongLabel`, `tintOf`, `unenrolledMessage`), so
+ * (`hhmm`, `dayShortLabel`, `dayLongLabel`, `tintOf`, `blockLabel`, `previewTitle`, `unenrolledMessage`), so
  * that their copy is covered by the pure suite and the dash scan.
  * No server import: only `import type` from the reads module.
  */
 import { addDays, parseKey, type DateKey } from "@/lib/civil-date";
 import { dayKeyInTz, dayOrdinal, formatTime, frenchFirst, startOfDayKey, wallClockMinutes } from "@/lib/datetime";
-import { expiryLabel, plural } from "@/lib/back-office/format";
+import { expiryLabel, formatWhen, plural } from "@/lib/back-office/format";
 import type { PlanningAttendee, PlanningItem, PlanningQuestion, PlanningTimeOff } from "@/lib/back-office/planning-reads";
 import { layoutLanes, type LaneSlot } from "@/lib/lanes";
 import type { BookingCoverage, BookingMode, OccurrenceStatus } from "@/lib/tickets-vocab";
@@ -299,6 +299,33 @@ export function dayLongLabel(day: DateKey): string {
       civilNoon(day),
     ),
   );
+}
+
+/**
+ * The accessible name of a block of the week grid: title, when, then what the
+ * block shows as its second line (the seats of a séance, the client of an RDV;
+ * the seat count again when an RDV has no client to name), and « annulée ». A
+ * button's name replaces its content, so the state must be part of it.
+ */
+export function blockLabel(
+  item: Pick<PlanningItemVM, "title" | "kind" | "startsAt" | "endsAt" | "status" | "seatsTaken" | "capacity"> & {
+    attendees: readonly { name: string }[];
+  },
+  tz: string,
+): string {
+  const when = formatWhen(new Date(item.startsAt), new Date(item.endsAt), tz);
+  const client = item.kind === "rdv" ? item.attendees[0]?.name : undefined;
+  const detail = client ?? `${plural(item.seatsTaken, "inscrit", "inscrits")} sur ${item.capacity}`;
+  return `${item.title}, ${when}, ${detail}${item.status === "cancelled" ? ", annulée" : ""}`;
+}
+
+/**
+ * Title of the dashboard week card: « Cette semaine » in the week view; in the
+ * day view « Aujourd'hui » for today, else the long label of the day shown.
+ */
+export function previewTitle(view: "day" | "week", shownDay: DateKey, todayKey: DateKey): string {
+  if (view === "week") return "Cette semaine";
+  return shownDay === todayKey ? "Aujourd'hui" : dayLongLabel(shownDay);
 }
 
 /**
