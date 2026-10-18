@@ -20,15 +20,22 @@ import {
 } from "@/lib/back-office/planning-actions";
 import type { CustomerHit } from "@/lib/back-office/planning-reads";
 import type { ActionResult } from "@/lib/back-office/result";
+import {
+  createTimeOffCore,
+  deleteTimeOffCore,
+  previewTimeOffCore,
+  type TimeOffConflictVM,
+  type TimeOffForm,
+} from "@/lib/back-office/time-off-actions";
 import type { DateKey } from "@/lib/civil-date";
 import type { BookingCoverage, BookingMode } from "@/lib/tickets-vocab";
 import { db } from "@/lib/db";
 import { runProAction, runProQuery } from "@/server/pro-context";
 
 /*
- * Thin wrappers of src/lib/back-office/planning-actions.ts: session context,
+ * Thin wrappers of src/lib/back-office/planning-actions.ts and time-off-actions.ts: session context,
  * core, revalidation of /dashboard and of the public page, effects after commit
- * (runProAction). The two previews use runProQuery (no revalidation, no effect).
+ * (runProAction). The previews use runProQuery (no revalidation, no effect).
  */
 
 /* ───────────────────────── Séance ───────────────────────── */
@@ -125,4 +132,22 @@ export async function applyFollowingAction(input: {
   durationMin: number;
 }): Promise<ActionResult<{ eventId: string; summaryText: string }>> {
   return runProAction("applyFollowing", (ctx, now) => applyFollowingCore(db, ctx, input, now), { publicPage: true });
+}
+
+/* ───────────────────────── Indisponibilités (E6c) ───────────────────────── */
+
+/** Preview: the séances and RDVs with registrants that the time off would overlap. */
+export async function previewTimeOffAction(input: TimeOffForm): Promise<ActionResult<{ conflicts: TimeOffConflictVM[] }>> {
+  return runProQuery("previewTimeOff", (ctx, now) => previewTimeOffCore(db, ctx, input, now));
+}
+
+/** Creates the time off; with `cancelBooked` the booked séances it covers are cancelled (tickets given back). */
+export async function createTimeOffAction(
+  input: TimeOffForm & { seenOccurrenceIds: string[]; cancelBooked: boolean },
+): Promise<ActionResult<{ cancelledOccurrences: number }>> {
+  return runProAction("createTimeOff", (ctx, now) => createTimeOffCore(db, ctx, input, now), { publicPage: true });
+}
+
+export async function deleteTimeOffAction(input: { timeOffId: string }): Promise<ActionResult> {
+  return runProAction("deleteTimeOff", (ctx, now) => deleteTimeOffCore(db, ctx, input, now), { publicPage: true });
 }

@@ -5,10 +5,12 @@ import {
   UnavailabilityManager,
   type TimeOffEntry,
 } from "@/components/dashboard/unavailability-manager";
+import { formatTimeRange } from "@/lib/back-office/format";
+import { todayKey } from "@/lib/civil-date";
+import { dayKeyInTz, formatDateLong } from "@/lib/datetime";
+import { coveredDayKeys } from "@/lib/timeoff";
 import { requireProfessional } from "@/server/pro-context";
 import { getProTimeOff } from "@/server/queries";
-import { coveredDayKeys } from "@/lib/timeoff";
-import { dayKeyInTz, formatDateLong, formatTime } from "@/lib/datetime";
 
 export const metadata: Metadata = { title: "Indisponibilités" };
 
@@ -32,10 +34,7 @@ export default async function UnavailabilityPage() {
           ? formatDateLong(r.startAt, tz)
           : `${formatDateLong(r.startAt, tz)} → ${formatDateLong(last, tz)}`;
     } else {
-      label = `${formatDateLong(r.startAt, tz)} · ${formatTime(
-        r.startAt,
-        tz,
-      )} à ${formatTime(r.endAt, tz)}`;
+      label = `${formatDateLong(r.startAt, tz)} · ${formatTimeRange(r.startAt, r.endAt, tz)}`;
     }
     return { id: r.id, label, allDay: r.allDay, reason: r.reason };
   });
@@ -46,7 +45,11 @@ export default async function UnavailabilityPage() {
         title="Indisponibilités"
         description={`Bloquez des journées ou des plages horaires (fuseau ${tz}). Ces créneaux n'apparaîtront pas pour vos clients.`}
       />
-      <UnavailabilityManager markedDays={markedDays} entries={entries} />
+      <UnavailabilityManager
+        markedDays={markedDays}
+        entries={entries}
+        todayKey={todayKey(new Date(), tz)}
+      />
     </>
   );
 }
