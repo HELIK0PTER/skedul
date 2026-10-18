@@ -5,7 +5,7 @@ import { ArrowLeft } from "lucide-react";
 
 import { EventDeleteCard } from "@/components/dashboard/event-delete-card";
 import { EventInfoForm, type EventInfoValue } from "@/components/dashboard/event-editor";
-import { EventScheduleForm } from "@/components/dashboard/event-schedule-form";
+import { EventScheduleSection } from "@/components/dashboard/event-schedule-form";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { StatusMark } from "@/components/dashboard/status-mark";
 import { Badge } from "@/components/ui/badge";
@@ -123,8 +123,8 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
             <CardTitle>Horaire et récurrence</CardTitle>
           </CardHeader>
           <CardContent>
-            <EventScheduleForm
-              key={scheduleKey}
+            <EventScheduleSection
+              formKey={scheduleKey}
               eventId={event.id}
               seenVersion={event.version}
               fromDate={data.fromDate}

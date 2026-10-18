@@ -39,6 +39,22 @@ type Previewed = {
   preview: SchedulePreview;
 };
 
+type ScheduleFormProps = {
+  eventId: string;
+  seenVersion: number;
+  fromDate: DateKey | null;
+  tz: string;
+  nowIso: string;
+  initial: RecurrenceFormValue;
+  remainingCount: number | null;
+  readOnly: boolean;
+};
+
+/**
+ * The schedule card content. The page keys it on the saved schedule, so a real change remounts it on the refreshed
+ * props: whatever must outlive that remount (the « Horaire appliqué. » confirmation) is owned by EventScheduleSection
+ * and reached through `onApplied` / `onClear`.
+ */
 export function EventScheduleForm({
   eventId,
   seenVersion,
@@ -48,15 +64,13 @@ export function EventScheduleForm({
   initial,
   remainingCount,
   readOnly,
-}: {
-  eventId: string;
-  seenVersion: number;
-  fromDate: DateKey | null;
-  tz: string;
-  nowIso: string;
-  initial: RecurrenceFormValue;
-  remainingCount: number | null;
-  readOnly: boolean;
+  onApplied,
+  onClear,
+}: ScheduleFormProps & {
+  /** The schedule was applied (called before the navigation). */
+  onApplied?: () => void;
+  /** A new edit or preview starts: a confirmation of the previous apply no longer holds. */
+  onClear?: () => void;
 }) {
   const router = useRouter();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -70,7 +84,6 @@ export function EventScheduleForm({
   const [formError, setFormError] = useState<string | null>(null);
   /** Bumped with each failure of a server call: the effect below puts the focus on the error box once it is rendered. */
   const [errorFocus, setErrorFocus] = useState(0);
-  const [applied, setApplied] = useState(false);
   const [previewing, startPreview] = useTransition();
   const [applying, startApply] = useTransition();
 
@@ -97,7 +110,7 @@ export function EventScheduleForm({
     const keys = changedKeys(value, next).flatMap((key) => RECURRENCE_ERROR_KEYS[key]);
     setFieldErrors((errors) => withoutErrorsUnder(errors, keys));
     setFormError(null);
-    setApplied(false);
+    onClear?.();
     setValue(next);
   }
 
@@ -129,6 +142,7 @@ export function EventScheduleForm({
     const built = validate();
     if (!built) return;
     setFormError(null);
+    onClear?.();
     inFlight.current = true;
     startPreview(async () => {
       try {
@@ -173,7 +187,7 @@ export function EventScheduleForm({
           setErrorFocus((n) => n + 1);
           return;
         }
-        setApplied(true);
+        onApplied?.();
         // The preview was for the schedule just applied: a new one is needed before the next apply.
         setPreviewed(null);
         router.push(`/dashboard/events/${res.eventId}`);
@@ -210,55 +224,58 @@ export function EventScheduleForm({
         rdvConflicts={current ? current.preview.rdvConflicts : null}
       />
 
-      {current && (
-        <div
-          aria-live="polite"
-          className="space-y-3 rounded-xl border border-primary/30 bg-primary-muted/50 p-4 text-sm"
-        >
-          <p className="font-medium">{summaryText}</p>
-          {orphanCount > 0 && (
-            <fieldset disabled={locked} className="min-w-0 space-y-1">
-              <legend className="mb-1 text-sm">
-                {`${plural(orphanCount, "séance avec inscrits n'est", "séances avec inscrits ne sont")} plus dans le nouvel horaire :`}
-              </legend>
-              <div className="flex flex-col">
-                <span className="inline-flex min-h-10 items-center gap-2">
-                  <input
-                    id={`${orphansName}-keep`}
-                    type="radio"
-                    name={orphansName}
-                    checked={orphans === "keep"}
-                    onChange={() => setOrphans("keep")}
-                    className="size-4 cursor-pointer accent-primary"
-                  />
-                  <label htmlFor={`${orphansName}-keep`} className="cursor-pointer">
-                    Garder (séance isolée)
-                  </label>
-                </span>
-                <span className="inline-flex min-h-10 items-center gap-2">
-                  <input
-                    id={`${orphansName}-cancel`}
-                    type="radio"
-                    name={orphansName}
-                    checked={orphans === "cancel"}
-                    onChange={() => setOrphans("cancel")}
-                    className="size-4 cursor-pointer accent-primary"
-                  />
-                  <label htmlFor={`${orphansName}-cancel`} className="cursor-pointer">
-                    Annuler (tickets rendus)
-                  </label>
-                </span>
-              </div>
-            </fieldset>
-          )}
-          {current.preview.inPlace && (
-            <p className="flex items-start gap-1.5 text-xs">
-              <Info className="mt-0.5 size-3.5 shrink-0 text-zinc-600" aria-hidden="true" />
-              <span>{IN_PLACE_NOTE}</span>
-            </p>
-          )}
-        </div>
-      )}
+      {/* Always mounted (sr-only while empty, so it takes no room), so a screen reader announces the summary when it appears. */}
+      <div
+        aria-live="polite"
+        className={current ? "space-y-3 rounded-xl border border-primary/30 bg-primary-muted/50 p-4 text-sm" : "sr-only"}
+      >
+        {current && (
+          <>
+            <p className="font-medium">{summaryText}</p>
+            {orphanCount > 0 && (
+              <fieldset disabled={locked} className="min-w-0 space-y-1">
+                <legend className="mb-1 text-sm">
+                  {`${plural(orphanCount, "séance avec inscrits n'est", "séances avec inscrits ne sont")} plus dans le nouvel horaire :`}
+                </legend>
+                <div className="flex flex-col">
+                  <span className="inline-flex min-h-10 items-center gap-2">
+                    <input
+                      id={`${orphansName}-keep`}
+                      type="radio"
+                      name={orphansName}
+                      checked={orphans === "keep"}
+                      onChange={() => setOrphans("keep")}
+                      className="size-4 cursor-pointer accent-primary"
+                    />
+                    <label htmlFor={`${orphansName}-keep`} className="cursor-pointer">
+                      Garder (séance isolée)
+                    </label>
+                  </span>
+                  <span className="inline-flex min-h-10 items-center gap-2">
+                    <input
+                      id={`${orphansName}-cancel`}
+                      type="radio"
+                      name={orphansName}
+                      checked={orphans === "cancel"}
+                      onChange={() => setOrphans("cancel")}
+                      className="size-4 cursor-pointer accent-primary"
+                    />
+                    <label htmlFor={`${orphansName}-cancel`} className="cursor-pointer">
+                      Annuler (tickets rendus)
+                    </label>
+                  </span>
+                </div>
+              </fieldset>
+            )}
+            {current.preview.inPlace && (
+              <p className="flex items-start gap-1.5 text-xs">
+                <Info className="mt-0.5 size-3.5 shrink-0 text-zinc-600" aria-hidden="true" />
+                <span>{IN_PLACE_NOTE}</span>
+              </p>
+            )}
+          </>
+        )}
+      </div>
 
       <FormError message={formError} ref={errorBox} tabIndex={-1} />
 
@@ -272,12 +289,27 @@ export function EventScheduleForm({
             {applying && <Loader2 className="size-4 animate-spin" />}
             {`Appliquer à partir du ${formatDayMonth(from)}`}
           </Button>
-          {/* Always mounted, so a screen reader announces the confirmation when it appears. */}
-          <p role="status" className="text-sm">
-            {applied && "Horaire appliqué."}
-          </p>
         </div>
       )}
+    </div>
+  );
+}
+
+const APPLIED = "Horaire appliqué.";
+
+/**
+ * The schedule card content as the page renders it: the form (keyed by the page on the saved schedule, so a
+ * real change remounts it on the refreshed props) and the confirmation line, which this component keeps across
+ * that remount. The line is always mounted, empty when there is nothing to say, so a screen reader announces it.
+ */
+export function EventScheduleSection({ formKey, ...props }: ScheduleFormProps & { formKey: string }) {
+  const [applied, setApplied] = useState(false);
+  return (
+    <div className="space-y-5">
+      <EventScheduleForm key={formKey} {...props} onApplied={() => setApplied(true)} onClear={() => setApplied(false)} />
+      <p role="status" className={applied ? "text-sm" : "sr-only"}>
+        {applied && APPLIED}
+      </p>
     </div>
   );
 }

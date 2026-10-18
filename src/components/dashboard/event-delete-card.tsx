@@ -198,7 +198,9 @@ export function EventDeleteCard({
         {done && DONE}
       </p>
 
+      {/* Keyed on the waiting state: « Retour » is disabled while the fresh answer (or the delete) is awaited, so its autoFocus is ignored at mount; the dialog remounts when the wait ends and « Retour » takes the focus (also after a failed delete). */}
       <ConfirmDialog
+        key={dialogPending ? "wait" : "ready"}
         open={target !== null}
         copy={copy}
         pending={dialogPending}

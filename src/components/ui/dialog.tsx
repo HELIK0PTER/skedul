@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect, useId } from "react";
+import { useEffect, useId, useRef } from "react";
 import { X } from "lucide-react";
 
 /**
  * A modal dialog. The title heading names it (`aria-labelledby`): its id is
  * `labelledBy` when given, else generated. `describedBy` is the id of the
  * element of `children` that explains the dialog (set on that element by the
- * caller); without it the dialog has no description.
+ * caller); without it the dialog has no description. When it opens and no
+ * control inside holds the focus (an `autoFocus` control that is disabled at
+ * mount does not), the panel itself takes it, so assistive technology is taken
+ * into the dialog.
  */
 export function Dialog({
   open,
@@ -26,6 +29,13 @@ export function Dialog({
 }) {
   const generatedTitleId = useId();
   const titleId = labelledBy ?? generatedTitleId;
+  const panel = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const el = panel.current;
+    if (el && !el.contains(document.activeElement)) el.focus();
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -44,11 +54,13 @@ export function Dialog({
       onClick={onClose}
     >
       <div
+        ref={panel}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={describedBy}
-        className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-border bg-card p-5 shadow-xl"
+        tabIndex={-1}
+        className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-border bg-card p-5 shadow-xl outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-start justify-between gap-4">
