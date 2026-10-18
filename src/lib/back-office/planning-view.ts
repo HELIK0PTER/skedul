@@ -62,6 +62,7 @@ export type PlanningItemVM = {
   questions: PlanningQuestion[];
   recurring: boolean;
   canRestore: boolean;
+  timeDetached: boolean;
   started: boolean;
   past: boolean;
   attendees: PlanningAttendeeVM[];
@@ -198,6 +199,7 @@ export function toPlanningVM(
       questions: i.questions,
       recurring: i.recurring,
       canRestore: i.canRestore,
+      timeDetached: i.timeDetached,
       started: i.startsAt.getTime() <= now.getTime(),
       past: i.endsAt.getTime() <= now.getTime(),
       attendees: i.attendees.map((a) => attendeeVM(a, tz, now)),

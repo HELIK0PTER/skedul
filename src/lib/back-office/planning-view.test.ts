@@ -56,6 +56,7 @@ function item(id: string, startsAt: Date, minutes: number, over: Partial<Plannin
     seriesDate: null,
     recurring: false,
     canRestore: false,
+    timeDetached: false,
     attendees: [],
     ...over,
   };
@@ -167,6 +168,16 @@ test("toPlanningVM flags started and past against now", () => {
   assert.deepEqual([a.started, a.past, c.started, c.past], [true, false, false, false]);
   const [done] = toPlanningVM([item("d", at(MONDAY, 480), 60)], [], PARIS, now);
   assert.deepEqual([done.started, done.past], [true, true]);
+});
+
+test("toPlanningVM carries timeDetached, so the dialog can hide « et les suivantes » for a séance moved alone", () => {
+  const [normal, alone] = toPlanningVM(
+    [item("normal", at(MONDAY, 600), 60), item("alone", at(MONDAY, 720), 60, { timeDetached: true })],
+    [],
+    PARIS,
+    NOW,
+  );
+  assert.deepEqual([normal.timeDetached, alone.timeDetached], [false, true]);
 });
 
 test("toPlanningVM with the week days drops an item of another day, which then never widens the grid", () => {

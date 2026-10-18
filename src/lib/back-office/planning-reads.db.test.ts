@@ -4,6 +4,7 @@ import { nanoid } from "nanoid";
 
 import { cancelBookingsByPro, cancelOccurrence } from "@/lib/booking/cancel";
 import { registerPro } from "@/lib/booking/claims";
+import { updateOccurrence } from "@/lib/booking/series";
 import { moveAttendee } from "@/lib/booking/wallet";
 import { addDays, dayOfWeek, instantAt } from "@/lib/civil-date";
 import type { Db } from "@/lib/db/atomic";
@@ -451,6 +452,49 @@ dbTest("item facts: location, accepted types, questions, recurring and canRestor
   const gone = await rowRdv(db, pro, rdvType, { status: "cancelled", seatsTaken: 0 });
   const rdv = await getPlanningItem(db, pro.proId, gone, now);
   assert.deepEqual([rdv?.kind, rdv?.status, rdv?.canRestore, rdv?.title], ["rdv", "cancelled", false, "Cours particulier"]);
+});
+
+dbTest("timeDetached: a séance moved alone reads true, a normal séance and an RDV read false", async ({ db, pro }) => {
+  const now = new Date();
+  const { occurrences } = await makeEvent(db, pro, {
+    rule: {
+      startDate: dayIn(pro, 3),
+      freq: "weekly",
+      interval: 1,
+      weekdays: [dayOfWeek(dayIn(pro, 3))],
+      endMode: "count",
+      occurrenceCount: 3,
+    },
+  });
+  const [first, second, third] = occurrences;
+  // A place-only edit keeps the séance on the series' time; a resize alone detaches it.
+  const place = await updateOccurrence(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: first.id, seenStartsAt: first.startsAt, patch: { locationOverride: "Salle C" } },
+    now,
+  );
+  assert.ok(place.ok, JSON.stringify(place));
+  const resized = await updateOccurrence(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: second.id, seenStartsAt: second.startsAt, patch: { durationMin: 90 } },
+    now,
+  );
+  assert.ok(resized.ok, JSON.stringify(resized));
+
+  const rdvType = await rowRdvType(db, pro);
+  const rdv = await rowRdv(db, pro, rdvType, { startsAt: instantAt(dayIn(pro, 2), 840, pro.tz) });
+  await rowBooking(db, pro, { occurrenceId: rdv, customerId: await rowCustomer(db, pro) });
+
+  const read = async (id: string) => (await getPlanningItem(db, pro.proId, id, now))?.timeDetached;
+  assert.deepEqual(
+    [await read(first.id), await read(second.id), await read(third.id), await read(rdv)],
+    [false, true, false, false],
+  );
+  const { items } = await getPlanningRange(db, pro.proId, { start: now, end: new Date(now.getTime() + 30 * DAY) }, now);
+  assert.deepEqual(
+    items.filter((i) => [first.id, second.id, third.id, rdv].includes(i.id)).map((i) => [i.id, i.timeDetached]).sort(),
+    [[first.id, false], [second.id, true], [third.id, false], [rdv, false]].sort(),
+  );
 });
 
 dbTest("searchCustomers: name or email, wildcards escaped, 2 characters minimum, this pro only", async ({ db, pro }) => {

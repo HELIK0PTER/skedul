@@ -85,6 +85,8 @@ export type PlanningItem = {
   recurring: boolean;
   /** cancelled event séance, starts_at > now, segment not archived and series_date ≤ until_date (or no until) */
   canRestore: boolean;
+  /** an event séance whose time was changed alone (occurrence.time_detached): « et les suivantes » leaves it where it is; false for an RDV */
+  timeDetached: boolean;
   /** pending + confirmed, by createdAt */
   attendees: PlanningAttendee[];
 };
@@ -105,6 +107,7 @@ function selectOccurrences(db: Db, where: SQL | undefined) {
       status: occurrence.status,
       capacity: occurrence.capacity,
       seatsTaken: occurrence.seatsTaken,
+      timeDetached: occurrence.timeDetached,
       locationOverride: occurrence.locationOverride,
       eventTitle: event.title,
       eventColor: event.color,
@@ -340,6 +343,7 @@ async function loadItems(db: Db, professionalId: string, rows: readonly Occurren
       seriesDate: r.seriesDate,
       recurring: r.freq !== null && r.freq !== "once",
       canRestore: isSeance && r.status === "cancelled" && r.startsAt.getTime() > now.getTime() && segmentLive,
+      timeDetached: isSeance && r.timeDetached,
       attendees: attendees.get(r.id) ?? [],
     };
   });

@@ -26,7 +26,7 @@ import { rowBooking, rowEvent, rowRdv, rowRdvType, rowSeance } from "@/test/rows
 
 import {
   FOLLOWING_DETACHED,
-  FOLLOWING_MONTH_DAY,
+  FOLLOWING_TIME_DETACHED,
   TIME_PARTS_REQUIRED,
   applyFollowingCore,
   cancelOccurrenceCore,
@@ -521,8 +521,9 @@ test("followingRuleOf: the rule that starts at the séance, with the remaining c
   });
   assert.equal(FOLLOWING_DETACHED, "Cette séance ne fait plus partie de la série : modifiez-la seule.");
 
-  // An impossible series_date is refused: a rule on the 31st never has a séance « 2026-02-28 » (the engine skips
-  // a month without that day), and moving the start there would change the day of every later month.
+  // A séance whose date is not a date of the rule is refused (one general check): a rule on the 31st never has a
+  // séance « 2026-02-28 » (the engine skips a month without that day), and moving the start there would change the
+  // day of every later month.
   const monthly: RecurrenceRule = {
     ...weeklyRule,
     startDate: "2026-01-31",
@@ -533,16 +534,47 @@ test("followingRuleOf: the rule that starts at the séance, with the remaining c
     endMode: "never",
     occurrenceCount: null,
   };
-  assert.deepEqual(followingRuleOf(monthly, "2026-02-28", 600), { ok: false, error: FOLLOWING_MONTH_DAY });
-  assert.equal(
-    FOLLOWING_MONTH_DAY,
-    "Cette séance tombe un autre jour du mois que la série : modifiez l'horaire depuis la page de l'événement.",
-  );
+  assert.deepEqual(followingRuleOf(monthly, "2026-02-28", 600), { ok: false, error: FOLLOWING_DETACHED });
   const sameDay = followingRuleOf(monthly, "2026-03-31", 600);
   assert.ok(sameDay.ok);
   assert.equal(sameDay.rule.startDate, "2026-03-31");
-  const nthWeekday = followingRuleOf({ ...monthly, monthlyBy: "weekday", monthWeek: 2 }, "2026-02-10", 600);
-  assert.ok(nthWeekday.ok, "only the day-of-month mode is guarded");
+  // The 2nd Saturday of February 2026 is the 14th (the rule starts on a Saturday): the 10th is not a date of the rule.
+  const nthWeekdayRule: RecurrenceRule = { ...monthly, monthlyBy: "weekday", monthWeek: 2 };
+  const nthWeekday = followingRuleOf(nthWeekdayRule, "2026-02-14", 600);
+  assert.ok(nthWeekday.ok, "the 2nd Saturday belongs to the rule");
+  assert.deepEqual(followingRuleOf(nthWeekdayRule, "2026-02-10", 600), { ok: false, error: FOLLOWING_DETACHED });
+});
+
+test("followingRuleOf: a date that is not one of the rule's dates is refused, whatever the end mode", () => {
+  const weeklyRule: RecurrenceRule = {
+    startDate: "2026-10-12",
+    startMinute: 600,
+    durationMin: 60,
+    freq: "weekly",
+    interval: 1,
+    weekdays: [1, 3],
+    monthlyBy: null,
+    monthWeek: null,
+    endMode: "count",
+    untilDate: null,
+    occurrenceCount: 6,
+  };
+  // 2026-10-13 is a Tuesday: before the last counted date, yet off the Monday and Wednesday pattern.
+  assert.deepEqual(followingRuleOf(weeklyRule, "2026-10-13", 600), { ok: false, error: FOLLOWING_DETACHED });
+  assert.deepEqual(followingRuleOf({ ...weeklyRule, endMode: "never", occurrenceCount: null }, "2026-10-13", 600), {
+    ok: false,
+    error: FOLLOWING_DETACHED,
+  });
+  // Every other week: the week of 2026-10-19 is skipped.
+  const biweekly: RecurrenceRule = { ...weeklyRule, interval: 2, endMode: "never", occurrenceCount: null };
+  assert.deepEqual(followingRuleOf(biweekly, "2026-10-19", 600), { ok: false, error: FOLLOWING_DETACHED });
+  assert.ok(followingRuleOf(biweekly, "2026-10-26", 600).ok);
+  // Before the rule starts.
+  assert.deepEqual(followingRuleOf(weeklyRule, "2026-10-07", 600), { ok: false, error: FOLLOWING_DETACHED });
+  // A one-off event has a single date.
+  const once: RecurrenceRule = { ...weeklyRule, freq: "once", weekdays: null, occurrenceCount: 1 };
+  assert.ok(followingRuleOf(once, "2026-10-12", 600).ok);
+  assert.deepEqual(followingRuleOf(once, "2026-10-14", 600), { ok: false, error: FOLLOWING_DETACHED });
 });
 
 test("followingRuleOf: a séance past the until date no longer belongs to the series either", () => {
@@ -561,9 +593,11 @@ test("followingRuleOf: a séance past the until date no longer belongs to the se
   };
   // The new rule would end before it starts (« La fin précède le début. » from the engine): say why instead.
   assert.deepEqual(followingRuleOf(untilRule, "2027-01-04", 600), { ok: false, error: FOLLOWING_DETACHED });
-  const lastDay = followingRuleOf(untilRule, "2026-12-31", 600);
-  assert.ok(lastDay.ok, "the until date itself is still in the series");
+  // 2026-12-30 is the last Wednesday of the rule, still in the series; 2026-12-31 is a Thursday, no date of the rule.
+  const lastDay = followingRuleOf(untilRule, "2026-12-30", 600);
+  assert.ok(lastDay.ok, "the last date of the rule is still in the series");
   assert.equal(lastDay.rule.untilDate, "2026-12-31");
+  assert.deepEqual(followingRuleOf(untilRule, "2026-12-31", 600), { ok: false, error: FOLLOWING_DETACHED });
 });
 
 dbTest("expiringBeforeCore: lists the bookings whose ticket ends before the new start, expiry in the pro zone", async ({ db, pro }) => {
@@ -789,4 +823,84 @@ dbTest("expiringBeforeCore refuses the moves updateOccurrenceCore refuses, with 
   const cancelled = await cancelOccurrenceCore(db, ctx, { occurrenceId: occ.id }, new Date());
   assert.ok(cancelled.ok, JSON.stringify(cancelled));
   await sameRefusal("cancelled", occ.id, seen, new Date(), move, "La séance a changé entre-temps : rafraîchissez la page.", "changed");
+});
+
+dbTest("previewFollowingCore and applyFollowingCore refuse a séance that was moved alone, and write nothing", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const { eventId, occurrences } = await makeEvent(db, pro, { rule: weekly(pro, 3) });
+  const [first, second, third] = occurrences;
+
+  // « Cette séance » takes the second séance to another day and hour: it no longer follows the series' time.
+  const moved = await updateOccurrenceCore(
+    db,
+    ctx,
+    { occurrenceId: second.id, seenStartsAt: second.startsAt.toISOString(), date: dayIn(pro, 12), startMinute: 840 },
+    now,
+  );
+  assert.ok(moved.ok, JSON.stringify(moved));
+  const apart = await getOccurrence(db, second.id);
+  assert.equal(apart.timeDetached, true);
+
+  assert.equal(
+    FOLLOWING_TIME_DETACHED,
+    "Cette séance a été modifiée seule : elle ne suit plus l'horaire de la série. Modifiez-la avec « Cette séance », ou appliquez le changement à partir de la séance suivante.",
+  );
+  await sameFollowingRefusal(
+    db,
+    ctx,
+    "moved alone",
+    { occurrenceId: second.id, startMinute: 1080, durationMin: 90 },
+    now,
+    FOLLOWING_TIME_DETACHED,
+    undefined,
+  );
+  const unchanged = async () => {
+    const rows = await Promise.all(occurrences.map((o) => getOccurrence(db, o.id)));
+    const [ev] = await db.select({ version: event.version }).from(event).where(eq(event.id, eventId));
+    return { times: rows.map((r) => [r.startsAt.getTime(), r.endsAt.getTime(), r.eventId]), version: ev.version };
+  };
+  assert.deepEqual(await unchanged(), {
+    times: [
+      [first.startsAt.getTime(), first.endsAt.getTime(), eventId],
+      [apart.startsAt.getTime(), apart.endsAt.getTime(), eventId],
+      [third.startsAt.getTime(), third.endsAt.getTime(), eventId],
+    ],
+    version: 1,
+  });
+
+  // The way out the text gives works: from the next séance, the one moved alone stays where it was put.
+  const next = await applyFollowingCore(db, ctx, { occurrenceId: third.id, seenVersion: 1, startMinute: 1080, durationMin: 90 }, now);
+  assert.ok(next.ok, JSON.stringify(next));
+  assert.equal(next.summaryText, "1 séance modifiée");
+  const stays = await getOccurrence(db, second.id);
+  assert.deepEqual([stays.startsAt.getTime(), stays.endsAt.getTime(), stays.eventId], [apart.startsAt.getTime(), apart.endsAt.getTime(), eventId]);
+});
+
+dbTest("previewFollowingCore and applyFollowingCore refuse a séance off the rule brought back by « Rétablir »", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const { eventId, occurrences } = await makeEvent(db, pro, { rule: weekly(pro, 3) });
+
+  // The day after the first séance is no weekday of the rule, yet inside its count: the old case-by-case guards let it through.
+  const offDate = dayIn(pro, 4);
+  const stray = await rowSeance(db, pro, eventId, {
+    seriesDate: offDate,
+    startsAt: instantAt(offDate, 600, pro.tz),
+    status: "cancelled",
+  });
+  const restored = await restoreOccurrenceCore(db, ctx, { occurrenceId: stray }, now);
+  assert.ok(restored.ok, JSON.stringify(restored));
+  assert.equal((await getOccurrence(db, stray)).status, "scheduled");
+
+  await sameFollowingRefusal(db, ctx, "off the rule", { occurrenceId: stray, startMinute: 1080, durationMin: 90 }, now, FOLLOWING_DETACHED, undefined);
+
+  assert.equal((await getOccurrence(db, stray)).status, "scheduled", "the stray séance is still there");
+  const rows = await Promise.all(occurrences.map((o) => getOccurrence(db, o.id)));
+  assert.deepEqual(
+    rows.map((r) => [r.startsAt.getTime(), r.eventId]),
+    occurrences.map((o) => [o.startsAt.getTime(), eventId]),
+  );
+  const [ev] = await db.select({ version: event.version }).from(event).where(eq(event.id, eventId));
+  assert.equal(ev.version, 1);
 });

@@ -24,19 +24,19 @@ import {
   type OccurrencePatch,
 } from "@/lib/booking/series";
 import { fail } from "@/lib/booking/types";
-import { instantAt, parseKey, type DateKey } from "@/lib/civil-date";
+import { instantAt, type DateKey } from "@/lib/civil-date";
 import type { Db } from "@/lib/db/atomic";
 import { event, occurrence } from "@/lib/db/schema";
 import type { ProErrorContext } from "@/lib/pro-messages";
-import { remainingCount, type RecurrenceRule } from "@/lib/recurrence";
+import { expandDates, remainingCount, type RecurrenceRule } from "@/lib/recurrence";
 import { describeSeriesEdit } from "@/lib/series-plan";
 import { BOUNDS, dateKeySchema, idSchema, type OccurrenceStatus, type RecurrenceRuleInput } from "@/lib/tickets";
 import { parseFr } from "@/lib/zod-fr";
 
 export const TIME_PARTS_REQUIRED = "Indiquez la date et l'heure.";
-export const FOLLOWING_MONTH_DAY =
-  "Cette séance tombe un autre jour du mois que la série : modifiez l'horaire depuis la page de l'événement.";
 export const FOLLOWING_DETACHED = "Cette séance ne fait plus partie de la série : modifiez-la seule.";
+export const FOLLOWING_TIME_DETACHED =
+  "Cette séance a été modifiée seule : elle ne suit plus l'horaire de la série. Modifiez-la avec « Cette séance », ou appliquez le changement à partir de la séance suivante.";
 
 /** The engine's own texts for the refusals updateOccurrence makes while it plans (src/lib/booking/series.ts). */
 const RDV_NOT_MOVABLE = "Un rendez-vous se déplace en l'annulant puis en le réservant à nouveau.";
@@ -55,7 +55,13 @@ function notFound(context: ProErrorContext): ActionFail {
   return fromEngine(fail("not_found"), context);
 }
 
-type OccurrenceHead = { eventId: string | null; seriesDate: DateKey | null; status: OccurrenceStatus; startsAt: Date };
+type OccurrenceHead = {
+  eventId: string | null;
+  seriesDate: DateKey | null;
+  status: OccurrenceStatus;
+  startsAt: Date;
+  timeDetached: boolean;
+};
 
 /** The pro's occurrence (null for an unknown id or another pro's). */
 async function readOccurrenceOf(db: Db, professionalId: string, occurrenceId: string): Promise<OccurrenceHead | null> {
@@ -65,6 +71,7 @@ async function readOccurrenceOf(db: Db, professionalId: string, occurrenceId: st
       seriesDate: occurrence.seriesDate,
       status: occurrence.status,
       startsAt: occurrence.startsAt,
+      timeDetached: occurrence.timeDetached,
     })
     .from(occurrence)
     .where(and(eq(occurrence.id, occurrenceId), eq(occurrence.professionalId, professionalId)));
@@ -312,29 +319,24 @@ export async function unenrollCore(
  * The rule of Q8 « Cette séance et les suivantes » from the dialog: the
  * event's own rule with startDate = this séance's series_date and the new
  * start minute; count mode keeps the dates left from here
- * (remainingCount(old, seriesDate)). Cases that cannot be expressed that way are
- * refused with a clear text: a séance past the series' last counted date, or past
- * its until date (kept isolated by an earlier edit: the engine would answer that
- * the new end precedes the start), and, defensively, a monthly « jour du mois »
- * series whose series_date has a day different from the rule's (not produced by
- * the engine, which skips a month without that day; moving the start there would
- * change the day of every later month).
+ * (remainingCount(old, seriesDate)). It only makes sense for a séance that sits
+ * on a date of the old rule: any other (past the last counted or until date,
+ * off the weekday pattern or the interval, a month without that day) was kept
+ * apart or brought back by « Rétablir », and the new rule starting there would
+ * reshape the series around it (the planner would delete or cancel it). So when
+ * expandDates(old, seriesDate, seriesDate) is empty the séance is refused with
+ * FOLLOWING_DETACHED. That one check also covers the monthly « jour du mois »
+ * rule whose series_date has another day than the rule's (such a rule only
+ * produces dates on its own day), which is why there is no separate guard.
  */
 export function followingRuleOf(
   old: RecurrenceRule,
   seriesDate: DateKey,
   startMinute: number,
 ): { ok: true; rule: RecurrenceRuleInput } | { ok: false; error: string } {
-  if (old.freq === "monthly" && old.monthlyBy === "day_of_month" && parseKey(seriesDate).d !== parseKey(old.startDate).d) {
-    return { ok: false, error: FOLLOWING_MONTH_DAY };
-  }
-  if (old.endMode === "until" && old.untilDate !== null && seriesDate > old.untilDate) {
-    return { ok: false, error: FOLLOWING_DETACHED };
-  }
+  if (expandDates(old, seriesDate, seriesDate).length === 0) return { ok: false, error: FOLLOWING_DETACHED };
+  // A counted date of the rule: at least this one is left.
   const occurrenceCount = old.endMode === "count" ? remainingCount(old, seriesDate) : old.occurrenceCount;
-  if (old.endMode === "count" && (occurrenceCount === null || occurrenceCount < 1)) {
-    return { ok: false, error: FOLLOWING_DETACHED };
-  }
   return {
     ok: true,
     rule: {
@@ -354,7 +356,11 @@ export function followingRuleOf(
 
 type FollowingTarget = { ok: true; eventId: string; fromDate: DateKey; rule: RecurrenceRuleInput };
 
-/** The event segment owning this séance (the pro's, not archived) and the rule to apply from the séance's date. */
+/**
+ * The event segment owning this séance (the pro's, not archived) and the rule to apply from the séance's date.
+ * A séance whose time was changed alone (time_detached) is refused: the planner keeps such a row where it is
+ * (reparentOnly), so the preview would count it among the séances to change while the apply leaves it behind.
+ */
 async function followingTarget(
   db: Db,
   ctx: ProCtx,
@@ -368,6 +374,7 @@ async function followingTarget(
     .from(event)
     .where(and(eq(event.id, occ.eventId), eq(event.professionalId, ctx.professionalId)));
   if (!ev || ev.archivedAt !== null) return notFound("series");
+  if (occ.timeDetached) return actionFail(FOLLOWING_TIME_DETACHED);
   const built = followingRuleOf(ruleOf(ev), occ.seriesDate, startMinute);
   if (!built.ok) return actionFail(built.error);
   return { ok: true, eventId: ev.id, fromDate: occ.seriesDate, rule: built.rule };
