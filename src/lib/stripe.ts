@@ -5,7 +5,7 @@ import { env } from "@/lib/env";
 import { logSafeMessage } from "@/lib/log-safe";
 
 /**
- * Stripe client. `null` when no real key is configured — the app then runs in
+ * Stripe client. `null` when no real key is configured: the app then runs in
  * "mock payment" mode (checkout is simulated locally, see /api/mock-checkout).
  */
 export const stripe = env.STRIPE_ENABLED
@@ -77,15 +77,21 @@ export async function createCheckoutUrl(params: CheckoutParams): Promise<string>
  * when the session is already complete or expired (retrieved first, so Stripe
  * is never asked to expire what is not open); "expired" after sessions.expire;
  * "failed" on any error. Never throws.
+ *
+ * `options` are Stripe per-request options applied to both calls. Without them
+ * the client defaults apply (80 s timeout, 2 retries), which suits a background
+ * effect; the account deletion passes a short timeout and no retry so that a
+ * hung Stripe cannot hold it (DELETION_STRIPE_OPTIONS, src/lib/admin-deletion.ts).
  */
 export async function expireCheckoutSession(
   checkoutSessionId: string,
+  options?: { timeout?: number; maxNetworkRetries?: number },
 ): Promise<"expired" | "not_open" | "mock" | "failed"> {
   if (!stripe) return "mock";
   try {
-    const session = await stripe.checkout.sessions.retrieve(checkoutSessionId);
+    const session = await stripe.checkout.sessions.retrieve(checkoutSessionId, undefined, options);
     if (session.status !== "open") return "not_open";
-    await stripe.checkout.sessions.expire(checkoutSessionId);
+    await stripe.checkout.sessions.expire(checkoutSessionId, undefined, options);
     return "expired";
   } catch (err) {
     console.error(`[stripe] expire failed: ${logSafeMessage(err)}`);

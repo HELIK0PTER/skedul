@@ -7,10 +7,10 @@ import { del, list } from "@vercel/blob";
 import { eq } from "drizzle-orm";
 
 import { auth } from "@/lib/auth";
-import { pendingCheckoutSessions } from "@/lib/booking/account";
 import { db } from "@/lib/db";
 import { professional, session, user } from "@/lib/db/schema";
 import { getAdminUser, type AdminUser } from "@/lib/admin";
+import { DELETION_STRIPE_OPTIONS, expireOpenCheckoutsCore } from "@/lib/admin-deletion";
 import {
   BAN_DURATIONS,
   deletionConfirmed,
@@ -18,7 +18,6 @@ import {
   type UserRole,
 } from "@/lib/admin-params";
 import { env } from "@/lib/env";
-import { logSafeMessage } from "@/lib/log-safe";
 import { getSession } from "@/lib/session";
 import { expireCheckoutSession } from "@/lib/stripe";
 import { isSuspended } from "@/lib/suspension";
@@ -201,9 +200,9 @@ export async function setAdminRole(input: {
 
 /**
  * Permanently deletes an account. First the open Stripe Checkout sessions of
- * its pro page are expired (best effort, E13): a client can no longer pay a
- * purchase that is about to disappear; a payment that still lands is an
- * orphan, counted on the admin health card. Then one DELETE on "user" cascades
+ * its pro page are expired (best effort and time-boxed, E13): a client can no
+ * longer pay a purchase that is about to disappear; a payment that still lands
+ * is an orphan, counted on the admin health card. Then one DELETE on "user" cascades
  * to its sessions, accounts and pro page with all its data (ticket types,
  * offers, events, séances, availability, clients, bookings, purchases, tickets
  * and their ledger, time off); its client records with other pros are kept but
@@ -240,26 +239,21 @@ export async function deleteUser(input: {
 }
 
 /**
- * Expires the pro's open Stripe Checkout sessions (E13). Best effort and never
- * throws: expireCheckoutSession never does, and a failure to list the sessions
- * is caught here, so Stripe being unreachable cannot block a deletion the admin
- * confirmed (a payment that still lands is an orphan, counted by healthCounts).
- * Only counts and a scrubbed message are logged: no session id, no e-mail.
+ * Expires the pro's open Stripe Checkout sessions (E13), through the tested core
+ * (src/lib/admin-deletion.ts): all sessions at once, each call capped at 8 s
+ * with no retry, the whole step at 15 s. It never throws and never outlives its
+ * deadline, so a hung Stripe cannot block a deletion the admin confirmed (a
+ * payment that still lands is an orphan, counted by healthCounts). The core logs
+ * scrubbed lines; this adds one summary with counts and the pro id only.
  */
 async function expireOpenCheckouts(professionalId: string) {
-  try {
-    const sessions = await pendingCheckoutSessions(db, professionalId);
-    let failed = 0;
-    for (const s of sessions) {
-      if ((await expireCheckoutSession(s.checkoutSessionId)) === "failed") failed += 1;
-    }
-    if (failed > 0) {
-      console.error(
-        `[admin] ${failed} of ${sessions.length} open checkout sessions of pro ${professionalId} could not be expired before its deletion`,
-      );
-    }
-  } catch (err) {
-    console.error(`[admin] could not list the open checkout sessions of pro ${professionalId}: ${logSafeMessage(err)}`);
+  const report = await expireOpenCheckoutsCore(db, professionalId, (sessionId) =>
+    expireCheckoutSession(sessionId, DELETION_STRIPE_OPTIONS),
+  );
+  if (report.failed > 0 || report.unfinished > 0 || report.timedOut || report.listFailed) {
+    console.error(
+      `[admin] checkout expiry before the deletion of pro ${professionalId}: ${report.closed} closed, ${report.failed} failed, ${report.unfinished} unfinished of ${report.total} listed${report.timedOut ? ", deadline reached" : ""}${report.listFailed ? ", sessions not listed" : ""}`,
+    );
   }
 }
 
