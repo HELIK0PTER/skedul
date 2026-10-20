@@ -30,10 +30,29 @@ const UA = {
 };
 
 test("isTrackedPath keeps public pages and drops back-office, admin and API", () => {
-  for (const p of ["/", "/demo", "/sign-in", "/aide", "/altinha-paris", "/altinha-paris/book/abc", "/dashboardx"]) {
+  for (const p of ["/", "/demo", "/sign-in", "/aide", "/altinha-paris", "/altinha-paris/book/abc", "/dashboardx", "/espace", "/x/espacex", "/mon-espacex"]) {
     assert.equal(isTrackedPath(p), true, p);
   }
-  for (const p of ["/dashboard", "/dashboard/planning", "/onboarding", "/admin", "/admin/users", "/api/track", "/aide/demandes", "/aide/demandes/abc", "relative"]) {
+  for (const p of [
+    "/dashboard",
+    "/dashboard/planning",
+    "/onboarding",
+    "/admin",
+    "/admin/users",
+    "/api/track",
+    "/aide/demandes",
+    "/aide/demandes/abc",
+    "relative",
+    "/altinha-paris/espace",
+    "/altinha-paris/espace/",
+    "/x/espace/y",
+    "/altinha-paris/espace?lien=invalide",
+    "/mon-espace",
+    "/mon-espace/reservations",
+    "/mon-espace?x=1",
+    "/altinha-paris/espace#top",
+    "/dashboard?tab=1",
+  ]) {
     assert.equal(isTrackedPath(p), false, p);
   }
 });
@@ -41,13 +60,13 @@ test("isTrackedPath keeps public pages and drops back-office, admin and API", ()
 test("proSlugFromPath returns the pro slug of public pro pages only", () => {
   assert.equal(proSlugFromPath("/altinha-paris"), "altinha-paris");
   assert.equal(proSlugFromPath("/altinha-paris/book/abc"), "altinha-paris");
-  for (const p of ["/", "/demo", "/sign-in", "/sign-up", "/Altinha"]) {
+  for (const p of ["/", "/demo", "/sign-in", "/sign-up", "/Altinha", "/mon-espace"]) {
     assert.equal(proSlugFromPath(p), null, p);
   }
 });
 
 test("isReservedSegment flags app routes, never a pro slug", () => {
-  for (const s of ["aide", "admin", "api", "dashboard", "demo", "forgot-password", "link-google", "onboarding", "reset-password", "sign-in", "sign-up", "_next"]) {
+  for (const s of ["aide", "admin", "api", "dashboard", "demo", "forgot-password", "link-google", "mon-espace", "onboarding", "reset-password", "sign-in", "sign-up", "_next"]) {
     assert.equal(isReservedSegment(s), true, s);
   }
   for (const s of ["altinha-paris", "admin-2", "administration", "aides", "dashboards", ""]) {
