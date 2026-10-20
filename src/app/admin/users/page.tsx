@@ -137,14 +137,14 @@ export default async function AdminUsersPage({
                           /{u.slug}
                         </Link>
                       ) : (
-                        <span className="text-muted-foreground">—</span>
+                        <span className="text-muted-foreground">Aucune page</span>
                       )}
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">
                       {formatDateShort(u.createdAt, ADMIN_TZ)}
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">
-                      {u.lastLoginAt ? formatDateShort(u.lastLoginAt, ADMIN_TZ) : "—"}
+                      {u.lastLoginAt ? formatDateShort(u.lastLoginAt, ADMIN_TZ) : "Jamais"}
                     </td>
                     <td className="px-4 py-3">
                       <SuspensionBadge banned={u.banned} banExpires={u.banExpires} />

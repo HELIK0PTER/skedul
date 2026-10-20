@@ -10,8 +10,20 @@ import test from "node:test";
 
 const DASH = new RegExp("[" + String.fromCharCode(0x2013, 0x2014) + "]");
 
-/** Always scanned: these directories exist from P3 on. */
-const DIRECTORIES = ["src/components/dashboard", "src/app/dashboard", "src/lib/back-office", "src/lib/emails"];
+/**
+ * Always scanned: these directories exist from P3 on. The admin space and the
+ * public pages are walked whole, so a new file there is covered at once.
+ */
+const DIRECTORIES = [
+  "src/components/dashboard",
+  "src/app/dashboard",
+  "src/lib/back-office",
+  "src/lib/emails",
+  "src/app/admin",
+  "src/components/admin",
+  "src/app/[slug]",
+  "src/components/public",
+];
 
 /** Scanned when they exist (a directory is walked); later tasks create most of them. */
 const OPTIONAL = [
@@ -19,11 +31,8 @@ const OPTIONAL = [
   "src/lib/zod-fr.ts",
   "src/lib/google-event.ts",
   "src/lib/email-layout.ts",
-  "src/components/public/customer-space.tsx",
-  "src/app/[slug]/espace",
-  "src/app/admin/activity/page.tsx",
-  "src/components/admin/app-health-card.tsx",
-  "src/components/admin/delete-user-card.tsx",
+  "src/lib/admin-metrics.ts",
+  "src/lib/auth-admin.ts",
 ];
 
 /** 1-based numbers of the lines holding a dash (LF or CRLF). */

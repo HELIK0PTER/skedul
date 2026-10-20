@@ -43,7 +43,7 @@ export function dayLabel(key: string): string {
   }).format(new Date(Date.UTC(y, m - 1, d)));
 }
 
-/** Rounds up to 1, 2 or 5 × 10ⁿ — a clean top for a chart's y-axis. */
+/** Rounds up to 1, 2 or 5 × 10ⁿ: a clean top for a chart's y-axis. */
 export function niceCeil(n: number): number {
   if (n <= 1) return 1;
   const magnitude = 10 ** Math.floor(Math.log10(n));

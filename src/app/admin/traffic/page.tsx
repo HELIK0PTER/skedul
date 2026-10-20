@@ -27,7 +27,7 @@ const DEVICE_LABELS: Record<string, string> = {
   desktop: "Ordinateur",
 };
 const fmt = (n: number) => n.toLocaleString("fr-FR");
-/** "1 visiteur" / "12 visiteurs" — French treats 0 and 1 as singular. */
+/** "1 visiteur" / "12 visiteurs" (French treats 0 and 1 as singular). */
 const withUnit = (n: number, one: string, other: string) =>
   `${fmt(n)} ${n > 1 ? other : one}`;
 
@@ -86,7 +86,7 @@ export default async function AdminTrafficPage({
             <StatCard
               icon={Layers}
               label="Pages par visiteur"
-              value={visitors ? (views / visitors).toLocaleString("fr-FR", { maximumFractionDigits: 1 }) : "—"}
+              value={visitors ? (views / visitors).toLocaleString("fr-FR", { maximumFractionDigits: 1 }) : "0"}
             />
             <StatCard
               icon={Smartphone}
