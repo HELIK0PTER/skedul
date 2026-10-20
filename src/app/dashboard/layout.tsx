@@ -43,9 +43,9 @@ export default async function DashboardLayout({
             sticky children (settings preview) working. */}
         <main className="min-w-0 flex-1 overflow-x-clip bg-background">
           <div className="mx-auto max-w-5xl px-5 py-8">
-            {/* Hidden while an admin impersonates: an admin must not verify the pro's address. */}
-            {!session.user.emailVerified && !session.session.impersonatedBy && (
-              <VerifyEmailBanner email={session.user.email} />
+            {/* Hidden while an admin impersonates: an admin must not verify the pro's address. Rendered for a verified account too: it stays mounted when the code is accepted, to announce « Adresse confirmée. ». */}
+            {!session.session.impersonatedBy && (
+              <VerifyEmailBanner email={session.user.email} verified={session.user.emailVerified} />
             )}
             {children}
           </div>

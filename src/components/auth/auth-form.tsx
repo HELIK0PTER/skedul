@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { signIn, signUp } from "@/lib/auth-client";
+import { authFormErrorMessage } from "@/lib/auth-messages";
 import { resolvePostSignIn, type PostSignIn } from "@/server/entry";
 import { EntryChooser } from "@/components/auth/entry-chooser";
 import { GoogleLogo } from "@/components/auth/google-logo";
@@ -87,11 +88,8 @@ export function AuthForm({
       : await signIn.email({ email, password });
 
     if (result.error) {
-      setError(
-        result.error.status === 429
-          ? "Trop de demandes. Réessayez dans quelques minutes."
-          : (result.error.message ?? "Une erreur est survenue."),
-      );
+      // By status and code only: the `message` of Better Auth is English.
+      setError(authFormErrorMessage(result.error));
       setLoading(false);
       return;
     }
@@ -195,7 +193,7 @@ export function AuthForm({
         </div>
 
         {error && (
-          <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-rose-700">
             {error}
           </p>
         )}
