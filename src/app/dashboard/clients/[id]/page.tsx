@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Info } from "lucide-react";
 
+import { ClientBookings } from "@/components/dashboard/client-bookings";
 import { ClientHeader } from "@/components/dashboard/client-header";
 import { ClientPurchases } from "@/components/dashboard/client-purchases";
 import { ClientWallet } from "@/components/dashboard/client-wallet";
@@ -57,7 +58,7 @@ export default async function ClientRecordPage({
         </p>
       </OneTimeNotice>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 lg:grid-rows-[auto_auto_1fr] lg:items-start">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 lg:grid-rows-[auto_auto_auto_1fr] lg:items-start">
         <div className="lg:col-start-3 lg:row-start-1">
           <ClientHeader
             customer={{
@@ -77,11 +78,17 @@ export default async function ClientRecordPage({
             todayKey={today}
           />
         </div>
-        {/* Task 35 anchor: <div className="lg:col-span-2 lg:col-start-1 lg:row-start-3"><ClientBookings customerName={customer.name} upcoming={record.bookings.upcoming} past={record.bookings.past} /></div> */}
-        <div className="lg:col-start-3 lg:row-span-2 lg:row-start-2">
+        <div className="lg:col-span-2 lg:col-start-1 lg:row-start-3">
+          <ClientBookings
+            customerName={customer.name}
+            upcoming={record.bookings.upcoming}
+            past={record.bookings.past}
+          />
+        </div>
+        <div className="lg:col-start-3 lg:row-span-3 lg:row-start-2">
           <ClientPurchases purchases={record.purchases} tz={ctx.timezone} />
         </div>
-        <div className="lg:col-span-2 lg:col-start-1 lg:row-start-3">
+        <div className="lg:col-span-2 lg:col-start-1 lg:row-start-4">
           <LedgerList lines={record.history} />
         </div>
       </div>

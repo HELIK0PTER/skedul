@@ -3,6 +3,7 @@ import { Ticket } from "lucide-react";
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { StatusMark } from "@/components/dashboard/status-mark";
 import { TypeChip } from "@/components/dashboard/type-chip";
+import { OfferTicketsButton, WalletGroupActions } from "@/components/dashboard/wallet-actions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { TypeOption } from "@/lib/back-office/catalog-reads";
 import { formatCount, plural } from "@/lib/back-office/format";
@@ -52,7 +53,15 @@ function GroupAlert({ alert }: { alert: NonNullable<WalletGroup["alert"]> }) {
   );
 }
 
-function WalletGroupSection({ group }: { group: WalletGroup }) {
+function WalletGroupSection({
+  customerId,
+  group,
+  typeOptions,
+}: {
+  customerId: string;
+  group: WalletGroup;
+  typeOptions: TypeOption[];
+}) {
   const live = [...group.usable, ...group.booked, ...group.expired];
   const headingId = `wallet-group-${group.ticketTypeId}`;
   return (
@@ -61,7 +70,6 @@ function WalletGroupSection({ group }: { group: WalletGroup }) {
         <h4 id={headingId} className="min-w-0 text-sm font-semibold wrap-anywhere">
           <TypeChip name={group.name} color={group.color} archived={group.archived} />
         </h4>
-        {/* Task 35 anchor: <WalletGroupActions customerId={customerId} group={{ ticketTypeId: group.ticketTypeId, name: group.name, ids: group.ids }} typeOptions={typeOptions} /> */}
       </div>
 
       {group.alert && <GroupAlert alert={group.alert} />}
@@ -97,31 +105,42 @@ function WalletGroupSection({ group }: { group: WalletGroup }) {
           </ul>
         </details>
       )}
+
+      <WalletGroupActions
+        customerId={customerId}
+        group={{ ticketTypeId: group.ticketTypeId, name: group.name, ids: group.ids }}
+        typeOptions={typeOptions}
+      />
     </section>
   );
 }
 
-/** « Portefeuille »: one section per ticket type the client holds tickets of (read-only until Task 35). */
-export function ClientWallet({ groups }: ClientWalletProps) {
+/** « Portefeuille »: one section per ticket type the client holds tickets of, with the pro's wallet actions. */
+export function ClientWallet({ customerId, groups, typeOptions, todayKey }: ClientWalletProps) {
   return (
     <Card>
-      <CardHeader className="flex-row items-center justify-between gap-3">
+      <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
         <CardTitle>Portefeuille</CardTitle>
-        {/* Task 35 anchor: <OfferTicketsButton customerId={customerId} typeOptions={typeOptions} todayKey={todayKey} /> */}
+        <OfferTicketsButton customerId={customerId} typeOptions={typeOptions} todayKey={todayKey} />
       </CardHeader>
       <CardContent>
         {groups.length === 0 ? (
-          // Task 35 anchor: action={<OfferTicketsButton customerId={customerId} typeOptions={typeOptions} todayKey={todayKey} />}
           <EmptyState
             bare
             icon={Ticket}
             title="Aucun ticket"
             description="Les tickets achetés ou offerts à ce client apparaîtront ici."
+            action={<OfferTicketsButton customerId={customerId} typeOptions={typeOptions} todayKey={todayKey} />}
           />
         ) : (
           <div className="divide-y divide-border">
             {groups.map((group) => (
-              <WalletGroupSection key={group.ticketTypeId} group={group} />
+              <WalletGroupSection
+                key={group.ticketTypeId}
+                customerId={customerId}
+                group={group}
+                typeOptions={typeOptions}
+              />
             ))}
           </div>
         )}
