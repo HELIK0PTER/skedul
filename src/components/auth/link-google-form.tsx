@@ -5,13 +5,14 @@ import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { authClient, signIn } from "@/lib/auth-client";
+import { authFormErrorMessage, GENERIC_ERROR } from "@/lib/auth-messages";
 import { oauthErrorMessage } from "@/lib/oauth-errors";
 import { GoogleLogo } from "@/components/auth/google-logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-const LINK_FAILED = "Impossible de relier ce compte Google. Réessayez.";
+const LINK_FAILED = oauthErrorMessage("unable_to_link_account") ?? GENERIC_ERROR;
 
 /**
  * Links Google to an existing email/password account. Better Auth refuses to
@@ -68,13 +69,8 @@ export function LinkGoogleForm({
       password: String(form.get("password")),
     });
     if (result.error) {
-      setError(
-        result.error.code === "BANNED_USER"
-          ? oauthErrorMessage("BANNED_USER")
-          : result.error.code === "INVALID_EMAIL_OR_PASSWORD"
-            ? "Email ou mot de passe incorrect."
-            : (result.error.message ?? "Une erreur est survenue."),
-      );
+      // By status and code only (same mapping as the sign-in form): the `message` of Better Auth is English.
+      setError(authFormErrorMessage(result.error));
       setLoading(false);
       return;
     }
