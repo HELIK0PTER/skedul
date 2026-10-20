@@ -19,7 +19,9 @@ export type HealthAlert = {
  * The alerts to show under the health rows, in a stable order; empty when all is well.
  * Pending holds and purchases are information « à surveiller », not failures: they
  * wait for the nightly job, a webhook or a delayed payment and clear by themselves.
- * Orphan payments are the one alert that asks for a manual action (a refund).
+ * Orphan payments come from a counter that never resets, so the alert reads as a
+ * running total since the launch (with the date of the last one) and asks to
+ * check them in Stripe, never to refund: after the refunds it still shows.
  */
 export function healthAlerts(health: HealthCounts, tz: string): HealthAlert[] {
   const alerts: HealthAlert[] = [];
@@ -41,7 +43,7 @@ export function healthAlerts(health: HealthCounts, tz: string): HealthAlert[] {
     const { value, at } = health.orphanPayments;
     alerts.push({
       key: "orphans",
-      text: `${plural(value, "paiement orphelin", "paiements orphelins")} à rembourser dans Stripe (dernier le ${formatDateShort(at, tz)})`,
+      text: `${plural(value, "paiement orphelin enregistré", "paiements orphelins enregistrés")} depuis la mise en service (dernier le ${formatDateShort(at, tz)}) : vérifiez-les dans Stripe`,
       href: null,
     });
   }

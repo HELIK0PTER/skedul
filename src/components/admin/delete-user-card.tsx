@@ -7,9 +7,15 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  clientRecordsNote,
+  pageContentNote,
+  pendingPaymentsNote,
+  ticketsNote,
+  upcomingNote,
+} from "@/lib/admin-deletion-copy";
 import { deletionConfirmed, type UserRole } from "@/lib/admin-params";
 import type { ProStats } from "@/lib/admin-reads";
-import { plural } from "@/lib/back-office/format";
 import { deleteUser } from "@/server/admin";
 
 export function DeleteUserCard({
@@ -74,29 +80,29 @@ export function DeleteUserCard({
               <li>Le compte, ses connexions et ses sessions.</li>
               {pro && stats && (
                 <li>
-                  {`La page /${pro.slug} et tout son contenu : ${plural(stats.events, "événement", "événements")}, ${plural(stats.ticketTypes, "type de ticket", "types de ticket")}, ${plural(stats.confirmedBookings, "inscription confirmée", "inscriptions confirmées")}, ${plural(stats.clients, "client", "clients")}, ${plural(stats.paidPurchases, "achat payé", "achats payés")}.`}
+                  {pageContentNote(pro.slug, stats)}
                 </li>
               )}
             </ul>
 
             {stats && stats.upcoming > 0 && (
               <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-warning">
-                {`${plural(stats.upcoming, "inscription à venir disparaîtra", "inscriptions à venir disparaîtront")} sans que les clients soient prévenus.`}
+                {upcomingNote(stats.upcoming)}
               </p>
             )}
             {deletion.ticketsInCirculation > 0 && (
               <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-warning">
-                {`${plural(deletion.ticketsInCirculation, "ticket en circulation sera perdu", "tickets en circulation seront perdus")} pour ses clients, sans remboursement automatique.`}
+                {ticketsNote(deletion.ticketsInCirculation)}
               </p>
             )}
             {deletion.pendingPayments > 0 && (
               <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-warning">
-                {`${plural(deletion.pendingPayments, "paiement en cours", "paiements en cours")} : leurs sessions Stripe encore ouvertes seront expirées avant la suppression.`}
+                {pendingPaymentsNote(deletion.pendingPayments)}
               </p>
             )}
             {deletion.clientRecordsElsewhere > 0 && (
               <p className="text-sm text-muted-foreground">
-                {`Ses ${plural(deletion.clientRecordsElsewhere, "fiche client chez un autre pro est conservée", "fiches client chez d'autres pros sont conservées")}, mais détachées du compte.`}
+                {clientRecordsNote(deletion.clientRecordsElsewhere)}
               </p>
             )}
 

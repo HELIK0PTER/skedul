@@ -49,7 +49,7 @@ test("healthAlerts: exact copy, plural forms and links, in a stable order", () =
     },
     {
       key: "orphans",
-      text: `2 paiements orphelins à rembourser dans Stripe (dernier le ${formatDateShort(NIGHT, PARIS)})`,
+      text: `2 paiements orphelins enregistrés depuis la mise en service (dernier le ${formatDateShort(NIGHT, PARIS)}) : vérifiez-les dans Stripe`,
       href: null,
     },
     { key: "horizon", text: "4 séries en retard d'horizon", href: null },
@@ -72,7 +72,7 @@ test("healthAlerts: a count of one takes the singular", () => {
     [
       "1 place en attente de paiement depuis plus d'1 h, à surveiller",
       "1 achat en attente après l'expiration du paiement, à surveiller",
-      `1 paiement orphelin à rembourser dans Stripe (dernier le ${formatDateShort(NIGHT, PARIS)})`,
+      `1 paiement orphelin enregistré depuis la mise en service (dernier le ${formatDateShort(NIGHT, PARIS)}) : vérifiez-les dans Stripe`,
       "1 série en retard d'horizon",
     ],
   );
@@ -91,13 +91,22 @@ test("healthAlerts: pending holds and purchases are information to watch, never 
   }
 });
 
+test("healthAlerts: orphan payments are a running total since the launch, not a list of refunds to make", () => {
+  // The counter never resets: once refunded, an orphan still counts, so the alert must not ask for a refund.
+  const [alert] = healthAlerts({ ...NONE, orphanPayments: { value: 3, at: NIGHT } }, PARIS);
+  assert.equal(alert.key, "orphans");
+  assert.match(alert.text, /^3 paiements orphelins enregistrés depuis la mise en service/);
+  assert.match(alert.text, /vérifiez-les dans Stripe$/);
+  assert.doesNotMatch(alert.text, /à rembourser/);
+});
+
 test("healthAlerts: the date of the last orphan payment follows the time zone passed in", () => {
   const counts = { ...NONE, orphanPayments: { value: 1, at: NIGHT } };
   const paris = healthAlerts(counts, PARIS)[0].text;
   const la = healthAlerts(counts, LOS_ANGELES)[0].text;
   assert.notEqual(paris, la);
-  assert.ok(paris.endsWith(`${formatDateShort(NIGHT, PARIS)})`));
-  assert.ok(la.endsWith(`${formatDateShort(NIGHT, LOS_ANGELES)})`));
+  assert.ok(paris.includes(`(dernier le ${formatDateShort(NIGHT, PARIS)})`), paris);
+  assert.ok(la.includes(`(dernier le ${formatDateShort(NIGHT, LOS_ANGELES)})`), la);
 });
 
 test("nightlyCheck: never run, clean, or violations, with the date in the zone passed in", () => {
