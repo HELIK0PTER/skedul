@@ -341,6 +341,59 @@ dbTest("healthCounts: pending holds older than 1 h and pending purchases whose c
   assert.equal(last.pendingPurchases, after.pendingPurchases + 1);
 });
 
+dbTest("healthCounts: a delayed payment (processing_at set) is not a pending purchase anomaly", async ({ db, pro }) => {
+  const now = new Date();
+  const before = await healthCounts(db, now);
+  const twoHoursAgo = addMinutes(now, -120);
+  const typeId = await rowType(db, pro);
+  const offerId = await rowOffer(db, pro, typeId);
+
+  // Its checkout expired 89 minutes ago but the payment is still being processed (SEPA): the engine's stale rule
+  // (expireStalePurchases, deletionImpact) leaves it alone, so it is not an anomaly.
+  const delayed = await rowPurchase(db, pro, { customerId: await rowCustomer(db, pro), offerId, ticketTypeId: typeId }, twoHoursAgo);
+  await db
+    .update(schema.ticketPurchase)
+    .set({ processingAt: addMinutes(now, -100) })
+    .where(eq(schema.ticketPurchase.id, delayed));
+  assert.equal((await healthCounts(db, now)).pendingPurchases, before.pendingPurchases);
+
+  // The same purchase without processing_at is still counted.
+  await rowPurchase(db, pro, { customerId: await rowCustomer(db, pro), offerId, ticketTypeId: typeId }, twoHoursAgo);
+  assert.equal((await healthCounts(db, now)).pendingPurchases, before.pendingPurchases + 1);
+});
+
+dbTest("healthCounts: a hold lapsed less than 1 h after its creation is not counted yet, an older one is", async ({ db, pro }) => {
+  const now = new Date();
+  const before = await healthCounts(db, now);
+  const typeId = await rowType(db, pro);
+  const offerId = await rowOffer(db, pro, typeId);
+  const seance = await rowSeance(db, pro, await rowEvent(db, pro), { seatsTaken: 2 });
+
+  // Created 55 minutes ago, hold lapsed 50 minutes ago: past hold_expires_at but inside the 1 h grace period.
+  const young = await rowCustomer(db, pro);
+  const youngCreated = addMinutes(now, -55);
+  const youngPurchase = await rowPurchase(db, pro, { customerId: young, offerId, ticketTypeId: typeId }, youngCreated);
+  await rowBooking(
+    db,
+    pro,
+    { occurrenceId: seance, customerId: young, status: "pending", purchaseId: youngPurchase, holdExpiresAt: addMinutes(now, -50) },
+    youngCreated,
+  );
+  assert.equal((await healthCounts(db, now)).pendingHolds, before.pendingHolds);
+
+  // Created 61 minutes ago, lapsed 16 minutes ago: the cutoff is created_at, so it is counted.
+  const old = await rowCustomer(db, pro);
+  const oldCreated = addMinutes(now, -61);
+  const oldPurchase = await rowPurchase(db, pro, { customerId: old, offerId, ticketTypeId: typeId }, oldCreated);
+  await rowBooking(
+    db,
+    pro,
+    { occurrenceId: seance, customerId: old, status: "pending", purchaseId: oldPurchase, holdExpiresAt: addMinutes(now, -16) },
+    oldCreated,
+  );
+  assert.equal((await healthCounts(db, now)).pendingHolds, before.pendingHolds + 1);
+});
+
 dbTest("healthCounts: horizonLag counts live segments that can still produce dates and are behind", async ({ db, pro }) => {
   const now = new Date();
   const start = dayIn(pro, 3, now);

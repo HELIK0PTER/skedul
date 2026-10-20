@@ -215,13 +215,20 @@ export type HealthCounts = {
   /**
    * Pending bookings created more than 1 h ago, whether or not their
    * hold_expires_at has elapsed. A hold lives HOLD_MINUTES (45), so such a
-   * booking is lapsed and should already have been released (lazily, or by
-   * the nightly job): lapsed holds ARE counted, but only once they are over
+   * booking is lapsed: lapsed holds ARE counted, but only once they are over
    * 1 h old. A hold lapsed for less than that is not counted yet (grace
-   * period), and a live hold never is.
+   * period), and a live hold never is. The timely release of a hold is the
+   * checkout.session.expired webhook (P4, about 31 min after creation, via
+   * releasePurchase). Until it runs, a mock or delayed-payment hold stays
+   * until the nightly job or a booking on that same séance releases it, so
+   * this counter can show such holds for hours without any failure.
    */
   pendingHolds: number;
-  /** Pending purchases whose checkout has expired. */
+  /**
+   * Pending purchases whose checkout has expired and whose payment is not
+   * being processed (processing_at null): a delayed payment (SEPA) is not an
+   * anomaly, same rule as expireStalePurchases and deletionImpact.
+   */
   pendingPurchases: number;
   /** Live segments that can still produce dates, generated less than HORIZON_REFRESH_DAYS ahead (pro time zone). */
   horizonLag: number;
@@ -263,7 +270,7 @@ export async function healthCounts(db: Db, now: Date): Promise<HealthCounts> {
     db.execute<{ holds: number; purchases: number }>(sql`
       select
         (select count(*)::int from booking where status = 'pending' and created_at < ${ts(holdCutoff)}) as holds,
-        (select count(*)::int from ticket_purchase where status = 'pending' and checkout_expires_at < ${ts(now)}) as purchases`),
+        (select count(*)::int from ticket_purchase where status = 'pending' and processing_at is null and checkout_expires_at < ${ts(now)}) as purchases`),
     laggingSeries(db, now),
     readHealth(db),
   ]);
