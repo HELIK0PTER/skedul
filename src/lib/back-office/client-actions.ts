@@ -11,6 +11,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 
 import { actionFail, fromEngine, type CoreResult, type ProCtx } from "@/lib/back-office/result";
+import { LAST_CALENDAR_DAY, LAST_DAY_PAST, LAST_DAY_TOO_FAR } from "@/lib/back-office/wallet-form";
 import {
   closeTickets,
   convertTickets,
@@ -32,11 +33,9 @@ export const OFFER_RDV_FREE = "Un type « Gratuit » n'utilise pas de tickets : 
 export const CONVERT_TARGET_UNAVAILABLE = "Ce type ne peut pas recevoir de tickets.";
 /** The picker only offers other types, so this is a stale tab: the tickets were already converted. */
 export const CONVERT_SAME_TYPE = "Un de ces tickets a déjà ce type : rafraîchissez la page.";
-export const EXPIRY_IN_PAST = "La date de fin de validité doit être aujourd'hui ou plus tard.";
-
-/** The last key of the calendar: the midnight that follows it has no key, so expiryFromLastDay throws. */
-const LAST_CALENDAR_DAY = "9999-12-31";
-const EXPIRY_TOO_FAR = "La date de fin de validité est trop lointaine.";
+/** The wording and the last calendar day live in wallet-form.ts, so that the offer dialog checks the same rule in the browser. */
+export const EXPIRY_IN_PAST = LAST_DAY_PAST;
+const EXPIRY_TOO_FAR = LAST_DAY_TOO_FAR;
 
 /** The explicit ticket ids of a wallet action: 1 to 100. */
 export const ticketIdsSchema = z.array(idSchema).min(1).max(BOUNDS.walletQuantity);

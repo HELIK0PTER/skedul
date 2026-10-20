@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { BOUNDS } from "@/lib/tickets-vocab";
+
 import { formatCount } from "./format";
 import {
   checkClose,
   checkOffer,
+  countCap,
   countMessage,
   LAST_CALENDAR_DAY,
   LAST_DAY_PAST,
@@ -35,9 +38,22 @@ test("parseCount: the maximum is the number of tickets the action can still take
   assert.equal(countMessage(1500), `Indiquez un nombre entier entre 1 et ${formatCount(1500)}.`);
 });
 
-test("parseCount: with nothing left to act on, no count is valid", () => {
-  const res = parseCount("1", 0);
-  assert.equal(res.ok, false);
+test("parseCount: with nothing left to act on, no count is valid and the message says so", () => {
+  assert.deepEqual(parseCount("1", 0), { ok: false, error: "Aucun ticket disponible pour cette action." });
+  assert.equal(countMessage(0), "Aucun ticket disponible pour cette action.");
+  assert.equal(countMessage(-1), "Aucun ticket disponible pour cette action.");
+});
+
+test("countCap: the most one call can take is the tickets left, never more than the core's cap of one call", () => {
+  assert.equal(BOUNDS.walletQuantity, 100);
+  assert.equal(countCap(0), 0);
+  assert.equal(countCap(3), 3);
+  assert.equal(countCap(100), 100);
+  assert.equal(countCap(101), 100);
+  assert.equal(countCap(250), 100);
+  // A group of 250 tickets: « Entre 1 et 100 », and 101 is refused in the browser instead of by the core.
+  assert.deepEqual(parseCount("101", countCap(250)), { ok: false, error: "Indiquez un nombre entier entre 1 et 100." });
+  assert.deepEqual(parseCount("100", countCap(250)), { ok: true, count: 100 });
 });
 
 test("checkOffer: quantity and validity are checked together, each error under its own field", () => {

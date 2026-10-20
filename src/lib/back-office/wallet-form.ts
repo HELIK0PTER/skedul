@@ -15,20 +15,31 @@ import { parseFr } from "@/lib/zod-fr";
 /** The reasons « Clore » offers: « Retiré » is the action « Retirer », not a choice here. */
 export type CloseChoice = Exclude<TicketCloseReason, "retire">;
 
-/** The last key of the calendar: the midnight that follows it has no key, so the core refuses it. */
+/** The last key of the calendar: the midnight that follows it has no key, so the core refuses it. Shared with client-actions.ts. */
 export const LAST_CALENDAR_DAY: DateKey = "9999-12-31";
 
 export const LAST_DAY_REQUIRED = "Choisissez le dernier jour de validité.";
-/** Same wording as the core (client-actions.ts), which owns the rule. */
+/** The wording of the two refusals of an offer's last day: client-actions.ts imports them (its EXPIRY_IN_PAST), so the browser and the core always say the same. */
 export const LAST_DAY_PAST = "La date de fin de validité doit être aujourd'hui ou plus tard.";
 export const LAST_DAY_TOO_FAR = "La date de fin de validité est trop lointaine.";
 export const NOTE_REQUIRED = "Précisez le motif.";
 
 export type CountResult = { ok: true; count: number } | { ok: false; error: string };
 
-/** « Indiquez un nombre entier entre 1 et 100. » (« Indiquez 1. » when one ticket is all there is). */
+export const NOTHING_TO_ACT_ON = "Aucun ticket disponible pour cette action.";
+
+/**
+ * The most tickets one call can take: the tickets the action still applies to, and never more than the core accepts
+ * in one call (ticketIdsSchema: BOUNDS.walletQuantity). A group of 250 tickets reads « Entre 1 et 100 ».
+ */
+export function countCap(available: number): number {
+  return Math.min(available, BOUNDS.walletQuantity);
+}
+
+/** « Indiquez un nombre entier entre 1 et 100. » (« Indiquez 1. » when one ticket is all there is, a line of its own when none is). */
 export function countMessage(max: number): string {
-  return max <= 1 ? "Indiquez 1." : `Indiquez un nombre entier entre 1 et ${formatCount(max)}.`;
+  if (max < 1) return NOTHING_TO_ACT_ON;
+  return max === 1 ? "Indiquez 1." : `Indiquez un nombre entier entre 1 et ${formatCount(max)}.`;
 }
 
 /** A whole number from 1 to `max` (the tickets the action can still take). The text of the field, trimmed; empty and non-numeric read as wrong. */
