@@ -23,9 +23,12 @@ import { stripeMode, type MoneyTotal } from "@/lib/admin-metrics";
 import {
   ACTIVITY_LIMIT,
   activityCounts30d,
+  deletionImpactFor,
+  healthCounts,
   listRecentBookings as readRecentBookings,
   listRecentPurchases as readRecentPurchases,
   platformRevenue,
+  proStats,
   recentBookingEvents,
   recentPurchaseEvents,
   type ActivityEvent,
@@ -43,9 +46,7 @@ import { revenueLive } from "@/server/revenue";
  * Server-only wrappers of src/lib/admin-reads.ts: they bind the process db and
  * the Stripe mode, the queries themselves live there so the DB tests can run
  * them. Nothing here checks the caller: every export must only be called from
- * an admin page or action, behind requireAdmin() (src/lib/admin.ts). App
- * health, a pro's stats and the deletion impact are still stubbed below with
- * their exported shapes unchanged.
+ * an admin page or action, behind requireAdmin() (src/lib/admin.ts).
  */
 
 export { ACTIVITY_LIMIT };
@@ -166,9 +167,8 @@ export async function getRecentActivity(limit = 10): Promise<ActivityEvent[]> {
 
 export type AppHealth = Awaited<ReturnType<typeof getAppHealth>>;
 
-/** Integration modes and DB latency (pending payments return in P3). */
+/** Integration modes, DB latency and the platform's pending-work counters (Q24). */
 export async function getAppHealth(now: Date = new Date()) {
-  void now;
   const started = performance.now();
   await db.execute(sql`select 1`);
   const dbLatencyMs = Math.round(performance.now() - started);
@@ -182,8 +182,8 @@ export async function getAppHealth(now: Date = new Date()) {
     blob: env.BLOB_ENABLED,
     google: env.GOOGLE_CALENDAR_ENABLED,
     dbLatencyMs,
-    pendingBookings: 0,
-    pendingPurchases: 0,
+    // measured after the latency probe: these queries must not inflate it
+    ...(await healthCounts(db, now)),
   };
 }
 
@@ -240,19 +240,6 @@ export async function listUsers(opts: {
   return { rows, total: totals[0]?.value ?? 0 };
 }
 
-/** A pro's catalogue and booking counts. Stubbed until P3. */
-async function getProStats(professionalId: string, now: Date) {
-  void professionalId;
-  void now;
-  return {
-    eventTypes: 0,
-    bookings: 0,
-    upcoming: 0,
-    customers: 0,
-    packsSold: 0,
-  };
-}
-
 export async function getUserDetail(userId: string, now: Date = new Date()) {
   const [found] = await db
     .select({
@@ -294,9 +281,9 @@ export async function getUserDetail(userId: string, now: Date = new Date()) {
   ]);
   const pro = proRows[0] ?? null;
   const [stats, revenue, deletion] = await Promise.all([
-    pro ? getProStats(pro.id, now) : null,
+    pro ? proStats(db, pro.id, now) : null,
     pro ? getRevenue({ professionalId: pro.id }) : [],
-    getDeletionImpact(userId, pro?.id ?? null),
+    deletionImpactFor(db, userId, pro?.id ?? null, now),
   ]);
 
   return {
@@ -307,20 +294,6 @@ export async function getUserDetail(userId: string, now: Date = new Date()) {
     stats,
     revenue,
     deletion,
-  };
-}
-
-/**
- * What deleting this account changes beyond its own pro page: tickets its
- * clients would lose and client records it has with other pros. Stubbed until
- * P3 (src/lib/booking/account.ts deletionImpact).
- */
-async function getDeletionImpact(userId: string, professionalId: string | null) {
-  void userId;
-  void professionalId;
-  return {
-    creditsOutstanding: 0,
-    clientRecordsElsewhere: 0,
   };
 }
 

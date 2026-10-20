@@ -7,6 +7,7 @@ import { del, list } from "@vercel/blob";
 import { eq } from "drizzle-orm";
 
 import { auth } from "@/lib/auth";
+import { pendingCheckoutSessions } from "@/lib/booking/account";
 import { db } from "@/lib/db";
 import { professional, session, user } from "@/lib/db/schema";
 import { getAdminUser, type AdminUser } from "@/lib/admin";
@@ -17,7 +18,9 @@ import {
   type UserRole,
 } from "@/lib/admin-params";
 import { env } from "@/lib/env";
+import { logSafeMessage } from "@/lib/log-safe";
 import { getSession } from "@/lib/session";
+import { expireCheckoutSession } from "@/lib/stripe";
 import { isSuspended } from "@/lib/suspension";
 import { deleteSupportFiles } from "@/server/support-core";
 
@@ -197,12 +200,16 @@ export async function setAdminRole(input: {
 }
 
 /**
- * Permanently deletes an account. One DELETE on "user" cascades to its
- * sessions, accounts and pro page with all its data (services, sessions,
- * availability, packs, clients, bookings, purchases); its client records with
- * other pros are kept but detached (customer.user_id → NULL). Support requests
- * cascade too; their images (Blob support/<userId>/) are removed best effort.
- * Admins must be demoted first, and the account's email must be retyped.
+ * Permanently deletes an account. First the open Stripe Checkout sessions of
+ * its pro page are expired (best effort, E13): a client can no longer pay a
+ * purchase that is about to disappear; a payment that still lands is an
+ * orphan, counted on the admin health card. Then one DELETE on "user" cascades
+ * to its sessions, accounts and pro page with all its data (ticket types,
+ * offers, events, séances, availability, clients, bookings, purchases, tickets
+ * and their ledger, time off); its client records with other pros are kept but
+ * detached (customer.user_id → NULL). Support requests cascade too; their
+ * images (Blob support/<userId>/) are removed best effort. Admins must be
+ * demoted first, and the account's email must be retyped.
  */
 export async function deleteUser(input: {
   userId: string;
@@ -217,6 +224,8 @@ export async function deleteUser(input: {
   if (!deletionConfirmed(input.confirmEmail, target.email)) {
     return { ok: false, error: "L'email saisi ne correspond pas à ce compte." };
   }
+  // E13: before the delete, so no client can pay a session whose purchase is about to disappear
+  if (target.proId) await expireOpenCheckouts(target.proId);
   try {
     await db.delete(user).where(eq(user.id, target.id));
   } catch (err) {
@@ -228,6 +237,30 @@ export async function deleteUser(input: {
   revalidatePath("/admin");
   revalidatePath("/admin/users");
   redirect("/admin/users?deleted=1");
+}
+
+/**
+ * Expires the pro's open Stripe Checkout sessions (E13). Best effort and never
+ * throws: expireCheckoutSession never does, and a failure to list the sessions
+ * is caught here, so Stripe being unreachable cannot block a deletion the admin
+ * confirmed (a payment that still lands is an orphan, counted by healthCounts).
+ * Only counts and a scrubbed message are logged: no session id, no e-mail.
+ */
+async function expireOpenCheckouts(professionalId: string) {
+  try {
+    const sessions = await pendingCheckoutSessions(db, professionalId);
+    let failed = 0;
+    for (const s of sessions) {
+      if ((await expireCheckoutSession(s.checkoutSessionId)) === "failed") failed += 1;
+    }
+    if (failed > 0) {
+      console.error(
+        `[admin] ${failed} of ${sessions.length} open checkout sessions of pro ${professionalId} could not be expired before its deletion`,
+      );
+    }
+  } catch (err) {
+    console.error(`[admin] could not list the open checkout sessions of pro ${professionalId}: ${logSafeMessage(err)}`);
+  }
 }
 
 /** Best effort: the account is already gone, so a Blob failure is only logged. */
