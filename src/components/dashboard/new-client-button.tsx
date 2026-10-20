@@ -15,12 +15,14 @@ import { customerInputSchema } from "@/lib/tickets";
 import { parseFr } from "@/lib/zod-fr";
 import { createCustomerAction } from "@/server/pro-clients";
 
-const EMAIL_HELP = "L'email identifie la fiche : il ne se modifie pas.";
+const EMAIL_HELP =
+  "L'email identifie la fiche : il ne se modifie pas. Si cet email a déjà une fiche, elle s'ouvre et prend le nom saisi.";
 
 /**
  * « Nouveau client »: the check runs in the browser with the schema of the engine, so a bad field is named under its
  * own input and the dialog stays filled when the action fails. An e-mail that already has a record opens that record
- * (the action answers `created: false`, with the pro's name on it). Success is `router.push` alone.
+ * with the typed name on it (the action answers `created: false`, the help text says so beforehand, and the push carries
+ * `?existant=1` for the record page to say so afterwards). Success is `router.push` alone.
  */
 export function NewClientButton() {
   const router = useRouter();
@@ -92,7 +94,8 @@ export function NewClientButton() {
           setErrorFocus((n) => n + 1);
           return;
         }
-        router.push(`/dashboard/clients/${res.customerId}`);
+        // An e-mail that already had a record opens it with the typed name: the record page says so (?existant=1).
+        router.push(`/dashboard/clients/${res.customerId}${res.created ? "" : "?existant=1"}`);
       } catch {
         setError(REQUEST_FAILED);
         setErrorFocus((n) => n + 1);

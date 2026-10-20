@@ -58,4 +58,10 @@ export const ALERT_LABELS: Record<AlertTone, string> = {
   orange: "Type lié à aucun événement à venir",
 };
 
-export const ORIGIN_LABELS = { purchased: "Acheté", offered: "Offert" } as const;
+/** The alerts in a few words, for a narrow table cell; ALERT_LABELS says them in full (tooltip, cards, accessible name). */
+export const ALERT_SHORT_LABELS: Record<AlertTone, string> = {
+  red: "Type archivé",
+  orange: "Aucun événement à venir",
+};
+
+export const ORIGIN_LABELS ={ purchased: "Acheté", offered: "Offert" } as const;

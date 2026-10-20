@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Users } from "lucide-react";
 
 import { FilterChips } from "@/components/admin/filter-chips";
@@ -92,10 +93,13 @@ export default async function ClientsPage({
       </div>
 
       {rows.length === 0 ? (
-        <Card>
-          <p role="status" className="p-10 text-center text-sm text-zinc-600">
+        <Card className="flex flex-col items-center gap-4 px-6 py-10 text-center">
+          <p role="status" className="max-w-full text-sm text-zinc-600 wrap-anywhere">
             {emptyText}
           </p>
+          <Button asChild variant="secondary" size="sm">
+            <Link href={clientsHref("tous", "")}>Voir tous les clients</Link>
+          </Button>
         </Card>
       ) : (
         <>

@@ -5,6 +5,7 @@ import { BOOKING_MODES, QUESTION_TYPES, VALIDITY_UNITS } from "@/lib/tickets-voc
 
 import {
   ALERT_LABELS,
+  ALERT_SHORT_LABELS,
   MODE_HELP,
   MODE_SHORT_LABELS,
   ORIGIN_LABELS,
@@ -52,6 +53,11 @@ test("alert and origin labels are exact", () => {
   assert.deepEqual(ORIGIN_LABELS, { purchased: "Acheté", offered: "Offert" });
 });
 
+test("the short alert labels are exact and cover the same tones", () => {
+  assert.deepEqual(ALERT_SHORT_LABELS, { red: "Type archivé", orange: "Aucun événement à venir" });
+  assert.deepEqual(Object.keys(ALERT_SHORT_LABELS), Object.keys(ALERT_LABELS));
+});
+
 test("no label carries a dash", () => {
   const all = [
     ...Object.values(MODE_SHORT_LABELS),
@@ -60,6 +66,7 @@ test("no label carries a dash", () => {
     ...Object.values(VALIDITY_UNIT_LABELS),
     ...Object.values(WEEKDAY_NAMES),
     ...Object.values(ALERT_LABELS),
+    ...Object.values(ALERT_SHORT_LABELS),
     ...Object.values(ORIGIN_LABELS),
   ];
   for (const text of all) assert.equal(DASH.test(text), false, text);

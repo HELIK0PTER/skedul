@@ -5,7 +5,7 @@ import { TypeChip } from "@/components/dashboard/type-chip";
 import { Card } from "@/components/ui/card";
 import type { ClientListRow } from "@/lib/back-office/client-reads";
 import { plural } from "@/lib/back-office/format";
-import { ALERT_LABELS } from "@/lib/back-office/labels";
+import { ALERT_LABELS, ALERT_SHORT_LABELS } from "@/lib/back-office/labels";
 
 function Holdings({ row }: { row: ClientListRow }) {
   if (row.holdings.length === 0) {
@@ -20,14 +20,27 @@ function Holdings({ row }: { row: ClientListRow }) {
   );
 }
 
-/** Table cell: the marks alone, so each one keeps its accessible name and its tooltip (no visible text to rely on). */
+/**
+ * Table cell: the alert in a few words next to its dot, so the meaning never rests on the colour or on a tooltip
+ * (a touch screen has none). The dot is decorative; the full sentence stays in the tooltip.
+ */
 function AlertMarks({ row }: { row: ClientListRow }) {
   if (!row.red && !row.orange) return null;
   return (
-    <span className="inline-flex items-center gap-2">
-      {row.red && <StatusMark tone="red" />}
-      {row.orange && <StatusMark tone="orange" />}
-    </span>
+    <div className="space-y-1">
+      {row.red && (
+        <p title={ALERT_LABELS.red} className="flex items-start gap-2 text-xs text-rose-700">
+          <StatusMark tone="red" decorative className="mt-1" />
+          {ALERT_SHORT_LABELS.red}
+        </p>
+      )}
+      {row.orange && (
+        <p title={ALERT_LABELS.orange} className="flex items-start gap-2 text-xs text-warning">
+          <StatusMark tone="orange" decorative className="mt-1" />
+          {ALERT_SHORT_LABELS.orange}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -62,28 +75,28 @@ export function ClientList({ rows }: { rows: ClientListRow[] }) {
             <caption className="sr-only">Vos clients</caption>
             <thead className="bg-muted/50 text-left text-xs text-zinc-600">
               <tr>
-                <th scope="col" className="px-3 py-2.5 font-medium">Client</th>
-                <th scope="col" className="px-3 py-2.5 font-medium">Tickets</th>
-                <th scope="col" className="px-3 py-2.5 font-medium">À venir</th>
-                <th scope="col" className="px-3 py-2.5 font-medium">Alertes</th>
+                <th scope="col" className="px-2 lg:px-3 py-2.5 font-medium">Client</th>
+                <th scope="col" className="px-2 lg:px-3 py-2.5 font-medium">Tickets</th>
+                <th scope="col" className="px-2 lg:px-3 py-2.5 font-medium">À venir</th>
+                <th scope="col" className="px-2 lg:px-3 py-2.5 font-medium">Alertes</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {rows.map((r) => (
                 <tr key={r.id} className="hover:bg-muted/40">
-                  <td className="min-w-40 px-3 py-3">
+                  <td className="min-w-38 px-2 lg:px-3 py-3">
                     <Link href={`/dashboard/clients/${r.id}`} className="font-medium wrap-anywhere hover:underline">
                       {r.name}
                     </Link>
                     <p className="text-xs text-zinc-600 wrap-anywhere">{r.email}</p>
                   </td>
-                  <td className="px-3 py-3">
+                  <td className="px-2 lg:px-3 py-3">
                     <Holdings row={r} />
                   </td>
-                  <td className="whitespace-nowrap px-3 py-3 text-zinc-600">
+                  <td className="whitespace-nowrap px-2 lg:px-3 py-3 text-zinc-600">
                     {r.upcomingConfirmed > 0 ? plural(r.upcomingConfirmed, "inscription", "inscriptions") : "Aucune"}
                   </td>
-                  <td className="px-3 py-3">
+                  <td className="px-2 lg:px-3 py-3">
                     <AlertMarks row={r} />
                   </td>
                 </tr>
