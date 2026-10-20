@@ -64,6 +64,28 @@ test("kpiTiles: singular registrant, other currencies in the revenue hint, no pr
   assert.equal(tiles[3].hint, `${formatMoney(12000, "gbp")} · ${formatMoney(5000, "usd")}`);
 });
 
+test("kpiTiles: every count uses the fr-FR thousands format, the hint included", () => {
+  const thousands = (n: number) => n.toLocaleString("fr-FR");
+  assert.notEqual(thousands(1234), "1234");
+  const tiles = kpiTiles(kpi({ upcomingSeances7d: 1234, upcomingRegistrants7d: 1500, ticketsInCirculation: 1500, clients: 1234 }));
+  assert.deepEqual(
+    tiles.map((t) => [t.key, t.value, t.hint]),
+    [
+      ["seances", thousands(1234), `dont ${thousands(1500)} inscrits`],
+      ["tickets", thousands(1500), null],
+      ["clients", thousands(1234), null],
+      ["revenue", formatMoney(47500, "eur"), null],
+    ],
+  );
+});
+
+test("dashboardAlerts: the client counts use the fr-FR thousands format", () => {
+  const thousands = (n: number) => n.toLocaleString("fr-FR");
+  const alerts = dashboardAlerts({ redClients: 1500, orangeClients: 1234, eventsWithoutActiveType: [] });
+  assert.equal(alerts[0].text, `${thousands(1500)} clients ont des tickets d'un type archivé.`);
+  assert.equal(alerts[1].text, `${thousands(1234)} clients ont des tickets d'un type lié à aucun événement à venir.`);
+});
+
 test("dashboardAlerts: red first, plurals 1 and 2", () => {
   assert.deepEqual(dashboardAlerts({ redClients: 1, orangeClients: 1, eventsWithoutActiveType: [] }), [
     {

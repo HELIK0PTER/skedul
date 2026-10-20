@@ -60,9 +60,10 @@ function bigWallet(): WalletTicketRow[] {
     row("u1", { purchaseId: "p1", expiresAt: instantAt("2026-12-01", 0, PARIS) }),
     row("u2"),
     row("b1", { status: "booked", bookingStartsAt: new Date("2026-10-20T17:00:00Z") }),
+    row("b2", { status: "booked", bookingStartsAt: new Date("2026-10-16T17:00:00Z") }), // earlier séance, listed after b1
     row("d1", { status: "booked", bookingStartsAt: new Date("2026-10-10T17:00:00Z") }),
     row("e1", { expiresAt: instantAt("2026-10-02", 0, PARIS) }),
-    row("e2", { status: "expired", expiresAt: instantAt("2026-10-02", 0, PARIS) }),
+    row("e2", { status: "expired", expiresAt: instantAt("2026-10-09", 0, PARIS) }), // later expiry, listed after e1
     row("p1", { status: "used", statusChangedAt: new Date("2026-10-05T08:00:00Z") }),
     row("c1", {
       status: "closed",
@@ -142,12 +143,15 @@ test("groupWallet: buckets and exact lines (Paris)", () => {
     { id: "u2", origin: "Offert", line: "Disponible · sans limite de validité", tone: "ok", struck: false },
   ]);
   assert.equal(group.usableCount, 2);
+  // booked: the earliest séance first
   assert.deepEqual(group.booked, [
+    { id: "b2", origin: "Offert", line: "Réservé pour le 16/10", tone: "ok", struck: false },
     { id: "b1", origin: "Offert", line: "Réservé pour le 20/10", tone: "ok", struck: false },
   ]);
+  // expired: the latest expiry first
   assert.deepEqual(group.expired, [
+    { id: "e2", origin: "Offert", line: "Expiré (valable jusqu'au 08/10 inclus)", tone: "red", struck: false },
     { id: "e1", origin: "Offert", line: "Expiré (valable jusqu'au 01/10 inclus)", tone: "red", struck: false },
-    { id: "e2", origin: "Offert", line: "Expiré (valable jusqu'au 01/10 inclus)", tone: "red", struck: false },
   ]);
   assert.deepEqual(lines(group.done), [
     ["d1", "Utilisé le 10/10"],
@@ -322,6 +326,104 @@ test("groupWallet: the expiry summary names the year like the ticket lines when 
   const after = groupOf(groupWallet(january, TYPES, CLASSES, new Date("2026-12-31T23:30:00Z"), PARIS), "coll");
   assert.deepEqual(before.expirySummary, ["1 valable jusqu'au 10/01/2027 inclus"]);
   assert.deepEqual(after.expirySummary, ["1 valable jusqu'au 10/01 inclus"]);
+});
+
+test("groupWallet: expired, done and booked lines name the year when the day is not in now's year (Paris and Los Angeles)", () => {
+  const tickets = [
+    row("x1", { expiresAt: instantAt("2025-12-01", 0, PARIS) }), // available but past: last valid day 2025-11-30
+    row("x2", { status: "expired", expiresAt: instantAt("2026-10-02", 0, PARIS) }),
+    row("p1", { status: "used", statusChangedAt: new Date("2025-10-05T08:00:00Z") }),
+    row("r1", {
+      status: "closed",
+      closedReason: "retire",
+      closedNote: "doublon",
+      statusChangedAt: new Date("2025-12-31T23:30:00Z"), // 01/01/2026 in Paris, 31/12/2025 in Los Angeles
+    }),
+    row("c1", { status: "closed", closedReason: "autre", statusChangedAt: new Date("2025-11-01T08:00:00Z") }),
+    row("d1", { status: "booked", bookingStartsAt: new Date("2025-11-10T17:00:00Z") }),
+    row("b1", { status: "booked", bookingStartsAt: new Date("2027-01-05T17:00:00Z") }),
+    row("b2", { status: "booked", bookingStartsAt: new Date("2026-10-20T17:00:00Z") }),
+  ];
+  const paris = groupOf(groupWallet(tickets, TYPES, CLASSES, NOW, PARIS), "coll");
+  assert.deepEqual(lines(paris.expired), [
+    ["x2", "Expiré (valable jusqu'au 01/10 inclus)"],
+    ["x1", "Expiré (valable jusqu'au 30/11/2025 inclus)"],
+  ]);
+  assert.deepEqual(lines(paris.done), [
+    ["r1", "Retiré le 01/01 (doublon)"],
+    ["d1", "Utilisé le 10/11/2025"],
+    ["c1", "Clos le 01/11/2025 : Autre"],
+    ["p1", "Pointé le 05/10/2025"],
+  ]);
+  assert.deepEqual(lines(paris.booked), [
+    ["b2", "Réservé pour le 20/10"],
+    ["b1", "Réservé pour le 05/01/2027"],
+  ]);
+  const la = groupOf(groupWallet(tickets, TYPES, CLASSES, NOW, LA), "coll");
+  assert.deepEqual(lines(la.expired), [
+    ["x2", "Expiré (valable jusqu'au 01/10 inclus)"],
+    ["x1", "Expiré (valable jusqu'au 30/11/2025 inclus)"],
+  ]);
+  assert.deepEqual(lines(la.done), [
+    ["r1", "Retiré le 31/12/2025 (doublon)"],
+    ["d1", "Utilisé le 10/11/2025"],
+    ["c1", "Clos le 01/11/2025 : Autre"],
+    ["p1", "Pointé le 05/10/2025"],
+  ]);
+  assert.deepEqual(lines(la.booked), [
+    ["b2", "Réservé pour le 20/10"],
+    ["b1", "Réservé pour le 05/01/2027"],
+  ]);
+});
+
+test("groupWallet: the year of an expired or done line is read at now in the pro zone", () => {
+  const tickets = [
+    row("x1", { status: "expired", expiresAt: instantAt("2026-12-31", 0, PARIS) }), // last valid day 2026-12-30
+    row("p1", { status: "used", statusChangedAt: new Date("2026-12-30T08:00:00Z") }),
+  ];
+  const lastEveningOfTheYear = new Date("2026-12-31T22:30:00Z"); // Paris 23:30 on 31/12/2026
+  const firstNightOfTheYear = new Date("2026-12-31T23:30:00Z"); // Paris 00:30 on 01/01/2027, Los Angeles 15:30 on 31/12/2026
+  const view = (now: Date, tz: string) => groupOf(groupWallet(tickets, TYPES, CLASSES, now, tz), "coll");
+  assert.deepEqual(lines(view(lastEveningOfTheYear, PARIS).expired), [["x1", "Expiré (valable jusqu'au 30/12 inclus)"]]);
+  assert.deepEqual(lines(view(lastEveningOfTheYear, PARIS).done), [["p1", "Pointé le 30/12"]]);
+  assert.deepEqual(lines(view(firstNightOfTheYear, PARIS).expired), [["x1", "Expiré (valable jusqu'au 30/12/2026 inclus)"]]);
+  assert.deepEqual(lines(view(firstNightOfTheYear, PARIS).done), [["p1", "Pointé le 30/12/2026"]]);
+  assert.deepEqual(lines(view(firstNightOfTheYear, LA).expired), [["x1", "Expiré (valable jusqu'au 30/12 inclus)"]]);
+  assert.deepEqual(lines(view(firstNightOfTheYear, LA).done), [["p1", "Pointé le 30/12"]]);
+});
+
+test("groupWallet: ties in the expired and booked buckets are broken by id", () => {
+  const expiry = instantAt("2026-10-02", 0, PARIS);
+  const seance = new Date("2026-10-20T17:00:00Z");
+  const group = groupOf(
+    groupWallet(
+      [
+        row("e-b", { status: "expired", expiresAt: expiry }),
+        row("e-a", { status: "expired", expiresAt: expiry }),
+        row("b-b", { status: "booked", bookingStartsAt: seance }),
+        row("b-a", { status: "booked", bookingStartsAt: seance }),
+      ],
+      TYPES,
+      CLASSES,
+      NOW,
+      PARIS,
+    ),
+    "coll",
+  );
+  assert.deepEqual(group.expired.map((v) => v.id), ["e-a", "e-b"]);
+  assert.deepEqual(group.booked.map((v) => v.id), ["b-a", "b-b"]);
+});
+
+test("groupWallet: every count of the expiry summary uses the fr-FR thousands format", () => {
+  const dated = Array.from({ length: 1500 }, (_, i) => row(`d${i}`, { expiresAt: instantAt("2026-12-01", 0, PARIS) }));
+  const open = Array.from({ length: 1234 }, (_, i) => row(`o${i}`));
+  const group = groupOf(groupWallet([...dated, ...open], TYPES, CLASSES, NOW, PARIS), "coll");
+  assert.equal(group.usableCount, 2734);
+  assert.notEqual((1234).toLocaleString("fr-FR"), "1234");
+  assert.deepEqual(group.expirySummary, [
+    `${(1500).toLocaleString("fr-FR")} valables jusqu'au 30/11 inclus`,
+    `${(1234).toLocaleString("fr-FR")} sans limite de validité`,
+  ]);
 });
 
 test("groupWallet: no tickets, no group; no line contains a dash", () => {

@@ -28,7 +28,7 @@ export type ClientFacts = {
   upcomingConfirmed: number;
   red: boolean;
   orange: boolean;
-  /** confirmed or completed bookings, ever */
+  /** confirmed bookings, ever */
   confirmedBookings: number;
   /** tickets in any state */
   ticketsAny: number;

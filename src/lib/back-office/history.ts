@@ -5,7 +5,7 @@
  * Newest action first (by the highest seq of its movements); the lines of an
  * action follow seq. Pure: `tz` is an argument.
  */
-import { formatDayMonthOf, formatDayMonthTime } from "@/lib/back-office/format";
+import { formatCount, formatDayMonthOf, formatDayMonthTime } from "@/lib/back-office/format";
 import {
   ACTOR_LABELS,
   CLOSE_REASON_LABELS,
@@ -37,6 +37,7 @@ export const UNKNOWN_TYPE = "type supprimé";
 
 type Group = {
   label: string;
+  actor: string;
   kind: MovementKind;
   ticketTypeId: string;
   fromTicketTypeId: string | null;
@@ -68,6 +69,14 @@ function labelOf(row: LedgerMovementRow): string {
   return row.kind === "close" && row.closedReason === "retire" ? CLOSE_REASON_LABELS.retire : MOVEMENT_KIND_LABELS[row.kind];
 }
 
+/**
+ * The actor field. The fulfillment writes purchase movements with actor "system"
+ * (nobody acts in the back-office): the client bought online, so it reads « Client ».
+ */
+function actorLabelOf(row: LedgerMovementRow): string {
+  return row.kind === "purchase" && row.actor === "system" ? ACTOR_LABELS.client : ACTOR_LABELS[row.actor];
+}
+
 function nameOf(typeNames: ReadonlyMap<string, string>, id: string): string {
   return typeNames.get(id) ?? UNKNOWN_TYPE;
 }
@@ -77,8 +86,8 @@ function lineText(first: LedgerMovementRow, group: Group, typeNames: ReadonlyMap
     group.kind === "convert" && group.fromTicketTypeId !== null
       ? `${nameOf(typeNames, group.fromTicketTypeId)} → ${nameOf(typeNames, group.ticketTypeId)}`
       : nameOf(typeNames, group.ticketTypeId);
-  const what = `${group.label} ${group.count} ${type}${group.motif ? ` (${group.motif})` : ""}`;
-  const fields = [formatDayMonthTime(first.createdAt, tz), ACTOR_LABELS[first.actor], what];
+  const what = `${group.label} ${formatCount(group.count)} ${type}${group.motif ? ` (${group.motif})` : ""}`;
+  const fields = [formatDayMonthTime(first.createdAt, tz), group.actor, what];
   if (group.occurrence) {
     fields.push(`${group.occurrence.title} du ${formatDayMonthOf(group.occurrence.startsAt, tz)}`);
   }
@@ -113,6 +122,7 @@ export function historyLines(
     } else {
       action.groups.set(key, {
         label: labelOf(row),
+        actor: actorLabelOf(row),
         kind: row.kind,
         ticketTypeId: row.ticketTypeId,
         fromTicketTypeId: row.fromTicketTypeId,

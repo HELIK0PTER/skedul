@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   currencySymbol,
   expiryLabel,
+  formatCount,
   formatDayMonthOf,
   formatDayMonthTime,
   formatTimeRange,
@@ -107,6 +108,15 @@ test("plural: 0 and 1 take the singular, fr-FR thousands", () => {
   assert.equal(plural(1, "séance", "séances"), "1 séance");
   assert.equal(plural(2, "séance", "séances"), "2 séances");
   assert.equal(plural(1000, "séance", "séances"), `${(1000).toLocaleString("fr-FR")} séances`);
+});
+
+test("formatCount: fr-FR thousands, the format every count shown to the pro uses (plural included)", () => {
+  assert.equal(formatCount(0), "0");
+  assert.equal(formatCount(7), "7");
+  assert.equal(formatCount(999), "999");
+  assert.equal(formatCount(1500), (1500).toLocaleString("fr-FR"));
+  assert.notEqual(formatCount(1500), "1500");
+  assert.equal(plural(1500, "séance", "séances"), `${formatCount(1500)} séances`);
 });
 
 test("pluralWord: the word alone, 0 and 1 singular, an empty field (NaN) plural", () => {

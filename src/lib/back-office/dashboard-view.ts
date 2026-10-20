@@ -2,7 +2,8 @@
  * Overview view models: KPI tiles (Q25), alert lines (Q28), getting started
  * steps (Q29). Pure: the reads (dashboard-reads.ts, Task 37) feed the inputs.
  */
-import { plural } from "@/lib/back-office/format";
+import { clientsHref } from "@/lib/back-office/client-filters";
+import { formatCount, plural } from "@/lib/back-office/format";
 import type { AlertTone } from "@/lib/back-office/labels";
 import { formatMoney } from "@/lib/utils";
 
@@ -48,18 +49,18 @@ export function kpiTiles(input: KpiInput): KpiTile[] {
     {
       key: "seances",
       label: "Séances à venir (7 j)",
-      value: String(input.upcomingSeances7d),
+      value: formatCount(input.upcomingSeances7d),
       hint: `dont ${plural(input.upcomingRegistrants7d, "inscrit", "inscrits")}`,
       href: "/dashboard/planning",
     },
     {
       key: "tickets",
       label: "Tickets en circulation",
-      value: String(input.ticketsInCirculation),
+      value: formatCount(input.ticketsInCirculation),
       hint: null,
-      href: "/dashboard/clients?filter=tickets",
+      href: clientsHref("tickets", ""),
     },
-    { key: "clients", label: "Clients", value: String(input.clients), hint: null, href: "/dashboard/clients" },
+    { key: "clients", label: "Clients", value: formatCount(input.clients), hint: null, href: clientsHref("tous", "") },
     {
       key: "revenue",
       label: "Encaissé",
@@ -84,7 +85,7 @@ export function dashboardAlerts(input: {
       key: "red-clients",
       tone: "red",
       text: `${plural(input.redClients, "client a", "clients ont")} des tickets d'un type archivé.`,
-      href: "/dashboard/clients?filter=alertes",
+      href: clientsHref("alertes", ""),
     });
   }
   if (input.orangeClients > 0) {
@@ -92,7 +93,7 @@ export function dashboardAlerts(input: {
       key: "orange-clients",
       tone: "orange",
       text: `${plural(input.orangeClients, "client a", "clients ont")} des tickets d'un type lié à aucun événement à venir.`,
-      href: "/dashboard/clients?filter=alertes",
+      href: clientsHref("alertes", ""),
     });
   }
   for (const e of input.eventsWithoutActiveType) {

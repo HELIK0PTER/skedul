@@ -65,9 +65,14 @@ export function pluralWord(n: number, one: string, many: string): string {
   return Math.abs(n) < 2 ? one : many;
 }
 
+/** « 1 234 »: a count as the pro reads it (fr-FR thousands). Every count shown in the back-office goes through here. */
+export function formatCount(n: number): string {
+  return n.toLocaleString("fr-FR");
+}
+
 /** « 1 séance » / « 3 séances » (fr-FR thousands; 0 and 1 take the singular). */
 export function plural(n: number, one: string, many: string): string {
-  return `${n.toLocaleString("fr-FR")} ${pluralWord(n, one, many)}`;
+  return `${formatCount(n)} ${pluralWord(n, one, many)}`;
 }
 
 /** /dashboard/planning?semaine=<Monday DateKey of the séance, tz>&seance=<id> (Q20). */

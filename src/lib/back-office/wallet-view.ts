@@ -5,7 +5,7 @@
  * Pure: `now` and `tz` are arguments, the host zone never matters. Tickets of a
  * type that is not in `types` are ignored (the foreign key makes it impossible).
  */
-import { expiryLabel, formatDayMonthOf, plural } from "@/lib/back-office/format";
+import { expiryLabel, formatCount, plural } from "@/lib/back-office/format";
 import { ORIGIN_LABELS, type AlertTone } from "@/lib/back-office/labels";
 import {
   compareKeys,
@@ -69,6 +69,19 @@ type Bucket = "usable" | "booked" | "expired" | "done";
 
 const compareId = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
+/** The local year of an instant in tz. */
+const yearOf = (instant: Date, tz: string): number => parseKey(todayKey(instant, tz)).y;
+
+/** « 12/10 », or « 12/10/2025 » when that day is not in `thisYear` (the local year of now): the rule of `expiryLabel`. */
+function dayLabel(day: DateKey, thisYear: number): string {
+  return parseKey(day).y === thisYear ? formatDayMonth(day) : formatDayMonthYear(day);
+}
+
+/** The local day of an instant in tz, named like `dayLabel`. */
+function dayOf(instant: Date, tz: string, now: Date): string {
+  return dayLabel(todayKey(instant, tz), yearOf(now, tz));
+}
+
 /** A booked ticket on a séance that has started is « done » (spec § 7: derived, no state change). */
 function bucketOf(t: WalletTicketRow, now: Date): Bucket {
   if (isUsable(t, now)) return "usable";
@@ -98,29 +111,29 @@ function usableView(t: WalletTicketRow, now: Date, tz: string): WalletTicketView
   return view(t, `Disponible · ${expiryLabel(t.expiresAt, tz, now)}`, "ok", false);
 }
 
-function bookedView(t: WalletTicketRow, tz: string): WalletTicketView {
-  const line = t.bookingStartsAt ? `Réservé pour le ${formatDayMonthOf(t.bookingStartsAt, tz)}` : "Réservé";
+function bookedView(t: WalletTicketRow, tz: string, now: Date): WalletTicketView {
+  const line = t.bookingStartsAt ? `Réservé pour le ${dayOf(t.bookingStartsAt, tz, now)}` : "Réservé";
   return view(t, line, "ok", false);
 }
 
-function expiredView(t: WalletTicketRow, tz: string): WalletTicketView {
+function expiredView(t: WalletTicketRow, tz: string, now: Date): WalletTicketView {
   const line = t.expiresAt
-    ? `Expiré (valable jusqu'au ${formatDayMonth(lastValidDay(t.expiresAt, tz))} inclus)`
+    ? `Expiré (valable jusqu'au ${dayLabel(lastValidDay(t.expiresAt, tz), yearOf(now, tz))} inclus)`
     : "Expiré";
   return view(t, line, "red", false);
 }
 
-function doneView(t: WalletTicketRow, tz: string): WalletTicketView {
+function doneView(t: WalletTicketRow, tz: string, now: Date): WalletTicketView {
   if (t.status === "used") {
-    return view(t, `Pointé le ${formatDayMonthOf(t.statusChangedAt, tz)}`, "muted", true);
+    return view(t, `Pointé le ${dayOf(t.statusChangedAt, tz, now)}`, "muted", true);
   }
   if (t.status === "closed") {
-    const day = formatDayMonthOf(t.statusChangedAt, tz);
+    const day = dayOf(t.statusChangedAt, tz, now);
     if (t.closedReason === "retire") return view(t, withNote(`Retiré le ${day}`, t.closedNote), "muted", true);
     const reason = t.closedReason ? ` : ${CLOSE_REASON_LABELS[t.closedReason]}` : "";
     return view(t, withNote(`Clos le ${day}${reason}`, t.closedNote), "muted", true);
   }
-  return view(t, `Utilisé le ${formatDayMonthOf(t.bookingStartsAt ?? t.statusChangedAt, tz)}`, "muted", true);
+  return view(t, `Utilisé le ${dayOf(t.bookingStartsAt ?? t.statusChangedAt, tz, now)}`, "muted", true);
 }
 
 /** The instant a done ticket left the wallet: the séance for a booked one, else its last status change. */
@@ -139,14 +152,11 @@ function expirySummaryOf(usable: readonly WalletTicketRow[], tz: string, now: Da
     const day = lastValidDay(t.expiresAt, tz);
     perDay.set(day, (perDay.get(day) ?? 0) + 1);
   }
-  const thisYear = parseKey(todayKey(now, tz)).y;
+  const thisYear = yearOf(now, tz);
   const summary = [...perDay.entries()]
     .sort(([a], [b]) => compareKeys(a, b))
-    .map(([day, n]) => {
-      const date = parseKey(day).y === thisYear ? formatDayMonth(day) : formatDayMonthYear(day);
-      return `${plural(n, "valable", "valables")} jusqu'au ${date} inclus`;
-    });
-  if (unlimited > 0) summary.push(`${unlimited} sans limite de validité`);
+    .map(([day, n]) => `${plural(n, "valable", "valables")} jusqu'au ${dayLabel(day, thisYear)} inclus`);
+  if (unlimited > 0) summary.push(`${formatCount(unlimited)} sans limite de validité`);
   return summary;
 }
 
@@ -184,9 +194,9 @@ function buildGroup(
     usableCount: usableRows.length,
     expirySummary: expirySummaryOf(usableRows, tz, now),
     usable: usableRows.map((t) => usableView(t, now, tz)),
-    booked: bookedRows.map((t) => bookedView(t, tz)),
-    expired: expiredRows.map((t) => expiredView(t, tz)),
-    done: doneRows.map((t) => doneView(t, tz)),
+    booked: bookedRows.map((t) => bookedView(t, tz, now)),
+    expired: expiredRows.map((t) => expiredView(t, tz, now)),
+    done: doneRows.map((t) => doneView(t, tz, now)),
     ids: {
       point: [...usableIds],
       convert: [...usableIds],

@@ -133,7 +133,8 @@ test("historyLines: a deleted type reads « type supprimé »", () => {
 });
 
 test("historyLines: purchase, pointage, unpoint and expire lines", () => {
-  const purchases = Array.from({ length: 10 }, (_, i) => mv(i + 1, "k1", { kind: "purchase", actor: "client" }));
+  // The fulfillment writes purchase movements with actor "system" (src/lib/booking/fulfillment.ts); the client bought online.
+  const purchases = Array.from({ length: 10 }, (_, i) => mv(i + 1, "k1", { kind: "purchase", actor: "system" }));
   const expires = [14, 15, 16, 17].map((seq) => mv(seq, "k5", { kind: "expire", actor: "system" }));
   const rows = [
     ...purchases,
@@ -149,6 +150,33 @@ test("historyLines: purchase, pointage, unpoint and expire lines", () => {
     "12/10 14:03 · Vous · Pointé 1 Cours collectif (en salle)",
     "12/10 14:03 · Client · Acheté 10 Cours collectif",
   ]);
+});
+
+test("historyLines: a purchase reads « Client » whatever the actor column says, the other system movements read « Skedul »", () => {
+  const rows = [
+    mv(1, "p1", { kind: "purchase", actor: "system" }),
+    mv(2, "p2", { kind: "purchase", actor: "client" }),
+    mv(3, "e1", { kind: "expire", actor: "system" }),
+    mv(4, "o1", { kind: "offer", actor: "system" }),
+  ];
+  assert.deepEqual(texts(rows), [
+    "12/10 14:03 · Skedul · Offert 1 Cours collectif",
+    "12/10 14:03 · Skedul · Expiré 1 Cours collectif",
+    "12/10 14:03 · Client · Acheté 1 Cours collectif",
+    "12/10 14:03 · Client · Acheté 1 Cours collectif",
+  ]);
+});
+
+test("historyLines: a timestamp across the UTC day boundary reads the day of the zone (Paris and Los Angeles)", () => {
+  const rows = [mv(1, "n1", { createdAt: new Date("2026-10-11T22:30:00Z") })]; // Paris 00:30 on 12/10 (CEST), Los Angeles 15:30 on 11/10 (PDT)
+  assert.deepEqual(texts(rows), ["12/10 00:30 · Vous · Offert 1 Cours collectif"]);
+  assert.deepEqual(texts(rows, LA), ["11/10 15:30 · Vous · Offert 1 Cours collectif"]);
+});
+
+test("historyLines: the count uses the fr-FR thousands format", () => {
+  const rows = Array.from({ length: 1234 }, (_, i) => mv(i + 1, "big"));
+  assert.notEqual((1234).toLocaleString("fr-FR"), "1234");
+  assert.deepEqual(texts(rows), [`12/10 14:03 · Vous · Offert ${(1234).toLocaleString("fr-FR")} Cours collectif`]);
 });
 
 test("historyLines: dates around the DST changes, and no dash anywhere", () => {
