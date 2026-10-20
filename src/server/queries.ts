@@ -6,6 +6,8 @@ import { account, availabilityRule, professional, timeOff, user } from "@/lib/db
 import { env } from "@/lib/env";
 import { isTimezoneLocked } from "@/lib/back-office/settings-actions";
 import { userNotSuspended } from "@/lib/suspension";
+import { getPayments, type PaymentsPeriod } from "@/lib/back-office/payments-reads";
+import { revenueLive } from "@/server/revenue";
 import type { BookingSettings } from "@/lib/tickets";
 
 /*
@@ -15,6 +17,11 @@ import type { BookingSettings } from "@/lib/tickets";
  */
 
 export type AvailabilityRow = { dayOfWeek: number; startMinute: number; endMinute: number };
+
+/** /dashboard/payments: the pro's paid purchases and the « Encaissé » totals (a live Stripe key counts live payments only). */
+export async function getPaymentsPage(pro: { id: string }, period: PaymentsPeriod) {
+  return getPayments(db, pro.id, new Date(), { period, live: revenueLive() });
+}
 
 /** The pro's global weekly hours (ticket_type_id NULL); a type's own rules replace them for that type. */
 export async function getProAvailability(proId: string): Promise<AvailabilityRow[]> {
