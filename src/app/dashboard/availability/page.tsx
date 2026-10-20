@@ -16,7 +16,7 @@ export default async function AvailabilityPage() {
     <>
       <PageHeader
         title="Disponibilités (RDV libre)"
-        description={`Vos horaires pour les rendez-vous libres (fuseau ${timeZoneLabel(pro.timezone)}). Un type de ticket peut avoir ses propres horaires.`}
+        description={`Vos horaires pour les rendez-vous libres (fuseau : ${timeZoneLabel(pro.timezone)}). Un type de ticket peut avoir ses propres horaires.`}
       />
       <AvailabilityEditor
         initial={rules.map((r) => ({

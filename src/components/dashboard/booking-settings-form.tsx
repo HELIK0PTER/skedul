@@ -8,6 +8,9 @@ import { FormField } from "@/components/dashboard/form-field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { BOOKING_ERROR_KEYS, checkBookingSettings } from "@/lib/back-office/booking-settings-form";
+import { withoutErrorsUnder } from "@/lib/back-office/form-errors";
+import { pluralWord } from "@/lib/back-office/format";
 import { NOTICE_PRESETS, noticeLabel } from "@/lib/back-office/notice";
 import { REQUEST_FAILED } from "@/lib/pro-messages";
 import type { BookingSettings } from "@/lib/tickets";
@@ -52,10 +55,16 @@ function UnitInput({
 export function BookingSettingsForm({ initial }: { initial: BookingSettings }) {
   const uid = useId();
   const [pending, startTransition] = useTransition();
+  const formRef = useRef<HTMLFormElement>(null);
   const errorBox = useRef<HTMLParagraphElement>(null);
+  /** What the server refused or could not answer: the checks of the browser name their field instead. */
   const [error, setError] = useState<string | null>(null);
+  /** The message of each field the browser check refused, keyed by field name. */
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   /** Bumped with each failed save: the effect below puts the focus on the error box once it is rendered. */
   const [errorFocus, setErrorFocus] = useState(0);
+  /** Bumped with each refused check: the effect below puts the focus on the first field rendered aria-invalid. */
+  const [fieldFocus, setFieldFocus] = useState(0);
   const [saved, setSaved] = useState(false);
   const [horizon, setHorizon] = useState(String(initial.bookingHorizonDays));
   const [notice, setNotice] = useState(initial.minNoticeMinutes);
@@ -65,6 +74,10 @@ export function BookingSettingsForm({ initial }: { initial: BookingSettings }) {
   useEffect(() => {
     if (errorFocus > 0) errorBox.current?.focus();
   }, [errorFocus]);
+  // A refused check puts the focus on the first field that reads aria-invalid once the messages are rendered.
+  useEffect(() => {
+    if (fieldFocus > 0) formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
+  }, [fieldFocus]);
 
   // a value saved before the presets existed (« 45 min avant ») stays selectable
   const noticeOptions = NOTICE_PRESETS.some((p) => p.minutes === initial.minNoticeMinutes)
@@ -73,8 +86,12 @@ export function BookingSettingsForm({ initial }: { initial: BookingSettings }) {
         (a, b) => a.minutes - b.minutes,
       );
 
-  /** An edit drops the message of the previous attempt: the next save validates everything again. */
-  function edited() {
+  /**
+   * An edit drops the messages of the field it changed (the notice one too when the horizon changes) and the
+   * box above the button: the next save validates everything again.
+   */
+  function edited(field: keyof BookingSettings) {
+    setFieldErrors((errors) => withoutErrorsUnder(errors, BOOKING_ERROR_KEYS[field]));
     setError(null);
     setSaved(false);
   }
@@ -87,14 +104,24 @@ export function BookingSettingsForm({ initial }: { initial: BookingSettings }) {
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (pending) return;
-    edited();
+    setError(null);
+    setSaved(false);
+    const values: BookingSettings = {
+      bookingHorizonDays: toNumber(horizon),
+      minNoticeMinutes: notice,
+      cancelDeadlineHours: toNumber(deadline),
+    };
+    // The server applies the same rules: naming the field here saves the round trip.
+    const problems = checkBookingSettings(values);
+    if (problems) {
+      setFieldErrors(problems);
+      setFieldFocus((n) => n + 1);
+      return;
+    }
+    setFieldErrors({});
     startTransition(async () => {
       try {
-        const res = await updateBookingSettingsAction({
-          bookingHorizonDays: toNumber(horizon),
-          minNoticeMinutes: notice,
-          cancelDeadlineHours: toNumber(deadline),
-        });
+        const res = await updateBookingSettingsAction(values);
         if (!res.ok) {
           fail(res.error);
           return;
@@ -107,22 +134,23 @@ export function BookingSettingsForm({ initial }: { initial: BookingSettings }) {
   }
 
   return (
-    <form noValidate onSubmit={onSubmit} className="space-y-5">
+    <form ref={formRef} noValidate onSubmit={onSubmit} className="space-y-5">
       <FormField
         label="Réservable jusqu'à"
         htmlFor={`${uid}-horizon`}
         help="Au-delà, vos séances ne sont pas encore ouvertes aux réservations."
+        error={fieldErrors.bookingHorizonDays}
       >
         <UnitInput
           id={`${uid}-horizon`}
-          unit="jours à l'avance"
+          unit={`${pluralWord(toNumber(horizon), "jour", "jours")} à l'avance`}
           min={BOUNDS.bookingHorizonDays.min}
           max={BOUNDS.bookingHorizonDays.max}
           value={horizon}
           disabled={pending}
           onChange={(e) => {
             setHorizon(e.target.value);
-            edited();
+            edited("bookingHorizonDays");
           }}
         />
       </FormField>
@@ -131,6 +159,7 @@ export function BookingSettingsForm({ initial }: { initial: BookingSettings }) {
         label="Au plus tard"
         htmlFor={`${uid}-notice`}
         help="Passé ce délai, la séance affiche « Réservations fermées » en ligne. Vous pouvez toujours inscrire quelqu'un vous-même."
+        error={fieldErrors.minNoticeMinutes}
       >
         <Select
           id={`${uid}-notice`}
@@ -138,7 +167,7 @@ export function BookingSettingsForm({ initial }: { initial: BookingSettings }) {
           disabled={pending}
           onChange={(e) => {
             setNotice(Number(e.target.value));
-            edited();
+            edited("minNoticeMinutes");
           }}
         >
           {noticeOptions.map((p) => (
@@ -153,17 +182,18 @@ export function BookingSettingsForm({ initial }: { initial: BookingSettings }) {
         label="Annulation par le client jusqu'à"
         htmlFor={`${uid}-deadline`}
         help="Passé ce délai, vous seul pouvez annuler. Un client garde ce droit jusqu'au début si vous avez changé l'horaire ou l'avez déplacé."
+        error={fieldErrors.cancelDeadlineHours}
       >
         <UnitInput
           id={`${uid}-deadline`}
-          unit="heures avant le début"
+          unit={`${pluralWord(toNumber(deadline), "heure", "heures")} avant le début`}
           min={BOUNDS.cancelDeadlineHours.min}
           max={BOUNDS.cancelDeadlineHours.max}
           value={deadline}
           disabled={pending}
           onChange={(e) => {
             setDeadline(e.target.value);
-            edited();
+            edited("cancelDeadlineHours");
           }}
         />
       </FormField>

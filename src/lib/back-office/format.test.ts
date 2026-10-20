@@ -13,6 +13,7 @@ import {
   parseMoneyInput,
   planningHref,
   plural,
+  pluralWord,
 } from "./format";
 
 const PARIS = "Europe/Paris";
@@ -106,6 +107,15 @@ test("plural: 0 and 1 take the singular, fr-FR thousands", () => {
   assert.equal(plural(1, "séance", "séances"), "1 séance");
   assert.equal(plural(2, "séance", "séances"), "2 séances");
   assert.equal(plural(1000, "séance", "séances"), `${(1000).toLocaleString("fr-FR")} séances`);
+});
+
+test("pluralWord: the word alone, 0 and 1 singular, an empty field (NaN) plural", () => {
+  assert.equal(pluralWord(0, "jour", "jours"), "jour");
+  assert.equal(pluralWord(1, "jour", "jours"), "jour");
+  assert.equal(pluralWord(2, "jour", "jours"), "jours");
+  assert.equal(pluralWord(60, "heure", "heures"), "heures");
+  assert.equal(pluralWord(Number.NaN, "jour", "jours"), "jours");
+  assert.equal(plural(1, "jour", "jours"), `1 ${pluralWord(1, "jour", "jours")}`);
 });
 
 test("planningHref points at the Monday of the séance in the pro zone", () => {

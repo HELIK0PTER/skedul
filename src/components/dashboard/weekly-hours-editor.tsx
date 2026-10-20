@@ -7,22 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Popover } from "@/components/ui/popover";
 import { mergeRangeIntoDays, replaceDaysWith } from "@/lib/availability-copy";
+import { DAY_LABELS, DAY_ORDER } from "@/lib/back-office/week-hours";
 import { cn } from "@/lib/utils";
 
 export type Range = { start: string; end: string };
 export type ByDay = Record<number, Range[]>;
 export type Rule = { dayOfWeek: number; startMinute: number; endMinute: number };
-
-const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
-const DAY_LABELS: Record<number, string> = {
-  1: "Lundi",
-  2: "Mardi",
-  3: "Mercredi",
-  4: "Jeudi",
-  5: "Vendredi",
-  6: "Samedi",
-  0: "Dimanche",
-};
 
 export const toHHMM = (min: number) =>
   `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
@@ -158,13 +148,18 @@ function CopyToDaysPopover({
 
 type PopoverKey = { day: number; slot: number | "all" };
 
+/** A time input a parent flagged (aria-invalid): the day, the range position from 0 and which of the two. */
+export type InvalidTime = { day: number; index: number; field: "start" | "end" };
+
 /** Presentational weekly schedule grid. Owns no persistence. */
 export function WeeklyHoursEditor({
   value,
   onChange,
+  invalid = null,
 }: {
   value: ByDay;
   onChange: (next: ByDay) => void;
+  invalid?: InvalidTime | null;
 }) {
   const [openPopover, setOpenPopover] = useState<PopoverKey | null>(null);
 
@@ -178,6 +173,9 @@ export function WeeklyHoursEditor({
   function update(day: number, ranges: Range[]) {
     onChange({ ...value, [day]: ranges });
   }
+
+  const isInvalid = (day: number, index: number, field: "start" | "end") =>
+    invalid !== null && invalid.day === day && invalid.index === index && invalid.field === field;
 
   return (
     <div className="space-y-3">
@@ -222,24 +220,28 @@ export function WeeklyHoursEditor({
                   <div key={i} className="flex items-center gap-2">
                     <input
                       type="time"
+                      aria-label={`${DAY_LABELS[day]}, plage ${i + 1}, début`}
+                      aria-invalid={isInvalid(day, i, "start") || undefined}
                       value={r.start}
                       onChange={(e) => {
                         const next = [...ranges];
                         next[i] = { ...r, start: e.target.value };
                         update(day, next);
                       }}
-                      className="h-9 rounded-lg border border-input bg-card px-2 text-sm"
+                      className="h-9 rounded-lg border border-input bg-card px-2 text-sm aria-invalid:border-destructive aria-invalid:ring-2 aria-invalid:ring-destructive/30"
                     />
                     <span className="text-muted-foreground">à</span>
                     <input
                       type="time"
+                      aria-label={`${DAY_LABELS[day]}, plage ${i + 1}, fin`}
+                      aria-invalid={isInvalid(day, i, "end") || undefined}
                       value={r.end}
                       onChange={(e) => {
                         const next = [...ranges];
                         next[i] = { ...r, end: e.target.value };
                         update(day, next);
                       }}
-                      className="h-9 rounded-lg border border-input bg-card px-2 text-sm"
+                      className="h-9 rounded-lg border border-input bg-card px-2 text-sm aria-invalid:border-destructive aria-invalid:ring-2 aria-invalid:ring-destructive/30"
                     />
                     <CopyToDaysPopover
                       sourceDay={day}
@@ -254,6 +256,7 @@ export function WeeklyHoursEditor({
                           variant="ghost"
                           size="icon"
                           title="Dupliquer ce créneau vers d'autres jours"
+                          aria-label={`Copier la plage ${i + 1} du ${DAY_LABELS[day].toLowerCase()} vers d'autres jours`}
                           onClick={() => toggleOpen(day, i)}
                         >
                           <Copy className="size-4" />
@@ -265,6 +268,7 @@ export function WeeklyHoursEditor({
                       variant="ghost"
                       size="icon"
                       title="Supprimer ce créneau"
+                      aria-label={`Supprimer la plage ${i + 1} du ${DAY_LABELS[day].toLowerCase()}`}
                       onClick={() =>
                         update(
                           day,
@@ -282,6 +286,7 @@ export function WeeklyHoursEditor({
                       type="button"
                       variant="ghost"
                       size="sm"
+                      aria-label={`Ajouter une plage le ${DAY_LABELS[day].toLowerCase()}`}
                       onClick={() =>
                         update(day, [
                           ...ranges,

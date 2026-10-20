@@ -60,9 +60,14 @@ export function expiryLabel(expiresAt: Date | null, tz: string, now: Date): stri
   return `valable jusqu'au ${sameYear ? formatDayMonth(last) : formatDayMonthYear(last)} inclus`;
 }
 
+/** The word alone: « jour » for 0 and 1, « jours » for the rest, an empty field (NaN) included. */
+export function pluralWord(n: number, one: string, many: string): string {
+  return Math.abs(n) < 2 ? one : many;
+}
+
 /** « 1 séance » / « 3 séances » (fr-FR thousands; 0 and 1 take the singular). */
 export function plural(n: number, one: string, many: string): string {
-  return `${n.toLocaleString("fr-FR")} ${Math.abs(n) < 2 ? one : many}`;
+  return `${n.toLocaleString("fr-FR")} ${pluralWord(n, one, many)}`;
 }
 
 /** /dashboard/planning?semaine=<Monday DateKey of the séance, tz>&seance=<id> (Q20). */
