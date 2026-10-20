@@ -30,7 +30,8 @@ import { parseFr } from "@/lib/zod-fr";
 
 export const OFFER_RDV_FREE = "Un type « Gratuit » n'utilise pas de tickets : choisissez un autre type.";
 export const CONVERT_TARGET_UNAVAILABLE = "Ce type ne peut pas recevoir de tickets.";
-export const CONVERT_SAME_TYPE = "Choisissez un autre type de ticket.";
+/** The picker only offers other types, so this is a stale tab: the tickets were already converted. */
+export const CONVERT_SAME_TYPE = "Un de ces tickets a déjà ce type : rafraîchissez la page.";
 export const EXPIRY_IN_PAST = "La date de fin de validité doit être aujourd'hui ou plus tard.";
 
 /** The last key of the calendar: the midnight that follows it has no key, so expiryFromLastDay throws. */
