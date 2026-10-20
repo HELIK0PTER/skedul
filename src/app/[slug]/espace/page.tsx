@@ -7,8 +7,7 @@ import { CustomerSpaceView } from "@/components/public/customer-space";
 import { PublicShell } from "@/components/public/public-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { getCustomerSpacePage, resolveSpaceCustomer } from "@/server/client-queries";
-import { getPublicProfile } from "@/server/queries";
+import { getCustomerSpacePage, getSpaceProfile, resolveSpaceCustomer } from "@/server/client-queries";
 
 export const metadata: Metadata = { title: "Mon espace", robots: { index: false } };
 
@@ -29,8 +28,10 @@ export default async function EspacePage({ params, searchParams }: Props) {
   const { slug } = await params;
   const { lien } = await searchParams;
 
-  // An unknown or suspended pro is offline.
-  const profile = await getPublicProfile(slug);
+  // An unknown or suspended pro is offline. layout.tsx already answered the 404 before the
+  // loading boundary; the page keeps its own check because it needs `pro` and a layout cannot
+  // hand props down (layout and page render in parallel, so the page may not rely on it).
+  const profile = await getSpaceProfile(slug);
   if (!profile) notFound();
   const { pro } = profile;
 

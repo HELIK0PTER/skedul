@@ -1,6 +1,7 @@
 import "server-only";
 
 import { cookies } from "next/headers";
+import { cache } from "react";
 
 import type { ClientFilter } from "@/lib/back-office/client-filters";
 import {
@@ -15,6 +16,7 @@ import { db } from "@/lib/db";
 import { GUEST_COOKIE } from "@/lib/guest-link";
 import { getFreshSession } from "@/lib/session";
 import { guestKey } from "@/server/guest-key";
+import { getPublicProfile } from "@/server/queries";
 
 export type { SpaceIdentity };
 
@@ -35,6 +37,14 @@ export async function getClientRecordPage(
 }
 
 /* ───────────────────────────── Client space (/[slug]/espace) ───────────────────────────── */
+
+/**
+ * The pro of /[slug]/espace (null for an unknown or suspended pro), memoized for
+ * ONE request only (React `cache`, nothing shared between requests): the segment
+ * layout answers a real 404 with it and the page reads the branding with it, so
+ * the database is hit once. Public data only, no client data.
+ */
+export const getSpaceProfile = cache((slug: string) => getPublicProfile(slug));
 
 /**
  * Who is looking at this pro's espace (spec § 12, Decision 36): the session

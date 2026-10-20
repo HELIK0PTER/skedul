@@ -15,9 +15,13 @@ function notFound(): Response {
 /**
  * Personal link of a client e-mail (spec § 12): a valid link sets the
  * skedul_guest cookie for this pro's path and sends the client to the espace;
- * a revoked one clears the cookie and says so (Q21). The redirect target is the
- * slug of the customer's own pro, read from the database; the token is a
- * credential and is never logged.
+ * a revoked one only says so (303 to ?lien=invalide, Q21) and touches no
+ * cookie: the cookie is scoped to /<slug>, so the browser never sends it here,
+ * this route could not tell whose it would delete, and anyone could wipe a
+ * victim's valid cookie by making them open a revoked link. Clearing would add
+ * no security anyway: the espace re-checks link_version on every request. The
+ * redirect target is the slug of the customer's own pro, read from the
+ * database; the token is a credential and is never logged.
  */
 export async function GET(request: Request, { params }: { params: Promise<{ token: string }> }): Promise<Response> {
   const { token } = await params;
@@ -25,10 +29,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
   const decision = await resolveGuestLink(db, token, guestKey());
   if (decision.kind === "not_found") return notFound();
 
-  const secure = process.env.NODE_ENV === "production";
   if (decision.kind === "stale") {
     const res = NextResponse.redirect(new URL(`/${decision.slug}/espace?lien=invalide`, request.url), 303);
-    res.cookies.set(GUEST_COOKIE, "", { path: `/${decision.slug}`, maxAge: 0, httpOnly: true, sameSite: "lax", secure });
     res.headers.set("Cache-Control", "no-store");
     return res;
   }
@@ -36,7 +38,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
   const res = NextResponse.redirect(new URL(`/${decision.slug}/espace`, request.url), 303);
   res.cookies.set(GUEST_COOKIE, token, {
     httpOnly: true,
-    secure,
+    secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: `/${decision.slug}`,
     maxAge: GUEST_COOKIE_MAX_AGE,
