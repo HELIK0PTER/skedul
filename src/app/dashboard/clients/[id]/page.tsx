@@ -7,6 +7,7 @@ import { ClientHeader } from "@/components/dashboard/client-header";
 import { ClientPurchases } from "@/components/dashboard/client-purchases";
 import { ClientWallet } from "@/components/dashboard/client-wallet";
 import { LedgerList } from "@/components/dashboard/ledger-list";
+import { OneTimeNotice } from "@/components/dashboard/one-time-notice";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Button } from "@/components/ui/button";
 import { todayKey } from "@/lib/civil-date";
@@ -26,7 +27,8 @@ export default async function ClientRecordPage({
 }) {
   const ctx = await requireProContext();
   const { id } = await params;
-  // « Nouveau client » opens the record of an e-mail that already had one with ?existant=1 (a repeated param is ignored).
+  // « Nouveau client » opens the record of an e-mail that already had one with ?existant=1 (a repeated param is ignored);
+  // OneTimeNotice then takes the param out of the URL, so that a reload does not bring the notice back.
   const { existant } = await searchParams;
   const record = await getClientRecordPage(ctx.professionalId, id);
   if (!record) notFound();
@@ -48,12 +50,12 @@ export default async function ClientRecordPage({
         }
       />
 
-      {existant === "1" && (
+      <OneTimeNotice param="existant" active={existant === "1"}>
         <p role="status" className="mb-6 flex items-start gap-2 rounded-xl bg-primary-muted px-4 py-3 text-sm text-foreground">
           <Info className="mt-0.5 size-4 shrink-0 text-accent-foreground" aria-hidden="true" />
           <span>{EXISTING_RECORD_NOTICE}</span>
         </p>
-      )}
+      </OneTimeNotice>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 lg:grid-rows-[auto_auto_1fr] lg:items-start">
         <div className="lg:col-start-3 lg:row-start-1">

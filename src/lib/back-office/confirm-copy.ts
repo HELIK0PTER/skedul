@@ -79,6 +79,11 @@ export function revokeLinksCopy(a: { name: string }): ConfirmCopy {
   };
 }
 
+/** The line shown once the links are revoked: the client account, if any, stays linked (only the e-mailed links stop working). */
+export function revokeLinksDoneNotice(a: { linkedAccount: boolean }): string {
+  return a.linkedAccount ? "Liens déconnectés. Le compte client reste lié." : "Liens déconnectés.";
+}
+
 export function archiveTypeCopy(a: { name: string }): ConfirmCopy {
   return {
     title: `Archiver « ${a.name} » ?`,

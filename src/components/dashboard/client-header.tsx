@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { revokeLinksCopy } from "@/lib/back-office/confirm-copy";
+import { revokeLinksCopy, revokeLinksDoneNotice } from "@/lib/back-office/confirm-copy";
 import { withoutErrorsUnder } from "@/lib/back-office/form-errors";
 import { REQUEST_FAILED } from "@/lib/pro-messages";
 import { customerInputSchema } from "@/lib/tickets";
@@ -138,7 +138,7 @@ export function ClientHeader({ customer }: { customer: HeaderCustomer }) {
           return;
         }
         setRevokeOpen(false);
-        setNotice("Liens déconnectés.");
+        setNotice(revokeLinksDoneNotice({ linkedAccount: customer.linkedAccount }));
       });
     });
   }

@@ -64,4 +64,14 @@ export const ALERT_SHORT_LABELS: Record<AlertTone, string> = {
   orange: "Aucun événement à venir",
 };
 
+/**
+ * The alert as the client wallet writes it once under the type: what it means, and for the archived type what to do
+ * (the « Convertir » action of the group). ALERT_LABELS names the alert (accessible names, tooltips, cards),
+ * ALERT_SHORT_LABELS fits a table cell.
+ */
+export const ALERT_GROUP_NOTES: Record<AlertTone, string> = {
+  red: "Type archivé : ces tickets ne servent plus. Proposez « Convertir ».",
+  orange: "Lié à aucun événement à venir.",
+};
+
 export const ORIGIN_LABELS ={ purchased: "Acheté", offered: "Offert" } as const;

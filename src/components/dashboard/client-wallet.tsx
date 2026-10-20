@@ -6,6 +6,7 @@ import { TypeChip } from "@/components/dashboard/type-chip";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { TypeOption } from "@/lib/back-office/catalog-reads";
 import { formatCount, plural } from "@/lib/back-office/format";
+import { ALERT_GROUP_NOTES } from "@/lib/back-office/labels";
 import type { WalletGroup, WalletTicketView } from "@/lib/back-office/wallet-view";
 import type { DateKey } from "@/lib/civil-date";
 import { cn } from "@/lib/utils";
@@ -41,22 +42,23 @@ function GroupAlert({ alert }: { alert: NonNullable<WalletGroup["alert"]> }) {
   return alert === "red" ? (
     <p className="flex items-start gap-2 text-sm text-rose-700">
       <StatusMark tone="red" decorative className="mt-1.5" />
-      <span>Type archivé : ces tickets ne servent plus. Proposez « Convertir ».</span>
+      <span>{ALERT_GROUP_NOTES.red}</span>
     </p>
   ) : (
     <p className="flex items-start gap-2 text-sm text-warning">
       <StatusMark tone="orange" decorative className="mt-1.5" />
-      <span>Lié à aucun événement à venir.</span>
+      <span>{ALERT_GROUP_NOTES.orange}</span>
     </p>
   );
 }
 
 function WalletGroupSection({ group }: { group: WalletGroup }) {
   const live = [...group.usable, ...group.booked, ...group.expired];
+  const headingId = `wallet-group-${group.ticketTypeId}`;
   return (
-    <section aria-label={group.name} className="space-y-3 py-5 first:pt-0 last:pb-0">
+    <section aria-labelledby={headingId} className="space-y-3 py-5 first:pt-0 last:pb-0">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h4 className="min-w-0 text-sm font-semibold wrap-anywhere">
+        <h4 id={headingId} className="min-w-0 text-sm font-semibold wrap-anywhere">
           <TypeChip name={group.name} color={group.color} archived={group.archived} />
         </h4>
         {/* Task 35 anchor: <WalletGroupActions customerId={customerId} group={{ ticketTypeId: group.ticketTypeId, name: group.name, ids: group.ids }} typeOptions={typeOptions} /> */}
@@ -109,7 +111,13 @@ export function ClientWallet({ groups }: ClientWalletProps) {
       </CardHeader>
       <CardContent>
         {groups.length === 0 ? (
-          <EmptyState icon={Ticket} title="Aucun ticket" />
+          // Task 35 anchor: action={<OfferTicketsButton customerId={customerId} typeOptions={typeOptions} todayKey={todayKey} />}
+          <EmptyState
+            bare
+            icon={Ticket}
+            title="Aucun ticket"
+            description="Les tickets achetés ou offerts à ce client apparaîtront ici."
+          />
         ) : (
           <div className="divide-y divide-border">
             {groups.map((group) => (

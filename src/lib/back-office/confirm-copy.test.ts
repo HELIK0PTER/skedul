@@ -12,6 +12,7 @@ import {
   restoreOccurrenceCopy,
   retireTicketsCopy,
   revokeLinksCopy,
+  revokeLinksDoneNotice,
   timeOffConflictCopy,
   timeOffConflictLine,
   unenrollCopy,
@@ -288,4 +289,12 @@ test("every text is non-empty for 0, 1 and 2 and carries no dash", () => {
       assert.equal(DASH.test(text), false, text);
     }
   }
+});
+
+test("the revoke notice says that a linked client account stays linked", () => {
+  const plain = revokeLinksDoneNotice({ linkedAccount: false });
+  const linked = revokeLinksDoneNotice({ linkedAccount: true });
+  assert.equal(plain, "Liens déconnectés.");
+  assert.equal(linked, "Liens déconnectés. Le compte client reste lié.");
+  for (const text of [plain, linked]) assert.equal(DASH.test(text), false, text);
 });
