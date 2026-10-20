@@ -21,7 +21,7 @@ import { formatWhen, planningHref } from "@/lib/back-office/format";
 import { historyLines, type HistoryLine, type LedgerMovementRow } from "@/lib/back-office/history";
 import { groupWallet, type WalletGroup, type WalletTypeRow } from "@/lib/back-office/wallet-view";
 import { loadTypeFacts } from "@/lib/booking/wallet";
-import { ts, type Db } from "@/lib/db/atomic";
+import { textArray, ts, type Db } from "@/lib/db/atomic";
 import {
   booking,
   customer,
@@ -34,7 +34,7 @@ import {
   ticketType,
 } from "@/lib/db/schema";
 import type { BookingCoverage, BookingStatus, OccurrenceStatus, PurchaseStatus } from "@/lib/tickets-vocab";
-import { classifyTypes, customerAlerts } from "@/lib/wallet-rules";
+import { classifyTypes, customerAlerts, type TypeClass } from "@/lib/wallet-rules";
 
 /** Decision 30: the list shows at most this many clients. */
 export const CLIENT_LIST_LIMIT = 500;
@@ -82,12 +82,24 @@ type HeldRow = { customer_id: string; ticket_type_id: string; usable: number };
 type Snapshot = { row: ClientListRow; facts: ClientFacts; matchesQ: boolean };
 
 /**
- * Every LISTED client of the pro (isListedClient), in list order (lower(name),
- * id), with its facts and whether it matches `q`. Four queries in parallel:
- * per-customer counts, usable holdings, the types, the type facts.
+ * The list order: French alphabetical, accents and case ignored (« Élodie » sorts with the E's, « eric » and
+ * « Éric » tie), then the id. Done here, not by SQL: the database collation (C.UTF-8 on the test branch) puts every
+ * accented initial after « Z ».
+ */
+const NAME_COLLATOR = new Intl.Collator("fr", { sensitivity: "base" });
+const byListOrder = (a: Snapshot, b: Snapshot): number =>
+  NAME_COLLATOR.compare(a.row.name, b.row.name) || (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0);
+
+/**
+ * Every LISTED client of the pro (isListedClient), in list order (byListOrder),
+ * with its facts and whether it matches `q`. Four queries in parallel:
+ * per-customer counts, usable holdings, the types, the type facts. The ticket,
+ * booking and holdings reads are restricted to the pro's customers so that the
+ * customer_id indexes apply (ticket and booking have no professional_id index).
  */
 async function loadSnapshots(db: Db, professionalId: string, now: Date, q: string): Promise<Snapshot[]> {
   const p = professionalId;
+  const mine = sql`(select id from customer where professional_id = ${p})`;
   const matches =
     q === ""
       ? sql`true`
@@ -95,14 +107,15 @@ async function loadSnapshots(db: Db, professionalId: string, now: Date, q: strin
   const [factsRes, heldRes, types, typeFacts] = await Promise.all([
     db.execute<FactsRow>(sql`
       with tk as (
-        select customer_id, count(*)::int as n from ticket where professional_id = ${p} group by customer_id
+        select customer_id, count(*)::int as n from ticket
+        where professional_id = ${p} and customer_id in ${mine} group by customer_id
       ), bk as (
         select b.customer_id,
           count(*)::int as any_n,
           count(*) filter (where b.status = 'confirmed')::int as confirmed_n,
           count(*) filter (where b.status = 'confirmed' and o.status = 'scheduled' and o.starts_at > ${ts(now)})::int as upcoming_n
         from booking b join occurrence o on o.id = b.occurrence_id and o.professional_id = b.professional_id
-        where b.professional_id = ${p}
+        where b.professional_id = ${p} and b.customer_id in ${mine}
         group by b.customer_id
       ), pu as (
         select customer_id, count(*)::int as n from ticket_purchase where professional_id = ${p} group by customer_id
@@ -115,12 +128,12 @@ async function loadSnapshots(db: Db, professionalId: string, now: Date, q: strin
       left join tk on tk.customer_id = c.id
       left join bk on bk.customer_id = c.id
       left join pu on pu.customer_id = c.id
-      where c.professional_id = ${p}
-      order by lower(c.name), c.id`),
+      where c.professional_id = ${p}`),
     db.execute<HeldRow>(sql`
       select customer_id, ticket_type_id, count(*)::int as usable
       from ticket
-      where professional_id = ${p} and status = 'available' and (expires_at is null or expires_at > ${ts(now)})
+      where professional_id = ${p} and customer_id in ${mine}
+        and status = 'available' and (expires_at is null or expires_at > ${ts(now)})
       group by customer_id, ticket_type_id`),
     db
       .select({ id: ticketType.id, name: ticketType.name, color: ticketType.color, archivedAt: ticketType.archivedAt })
@@ -179,13 +192,13 @@ async function loadSnapshots(db: Db, professionalId: string, now: Date, q: strin
       },
     });
   }
-  return out;
+  return out.sort(byListOrder);
 }
 
 /**
  * Listed clients (isListedClient) matching the filter and `q` (ILIKE on name or
- * e-mail, escaped), by lower(name), id, at most CLIENT_LIST_LIMIT; the counts
- * are per filter over every listed client (the search is ignored).
+ * e-mail, escaped), in French name order then id, at most CLIENT_LIST_LIMIT; the
+ * counts are per filter over every listed client (the search is ignored).
  */
 export async function listClients(
   db: Db,
@@ -203,14 +216,29 @@ export async function listClients(
   return { rows, counts };
 }
 
-/** Listed clients with a red / orange alert (the overview card). */
+/**
+ * Clients with a red / orange alert (the overview card): the customers holding a usable ticket of an archived
+ * (red) or orphan (orange) type, counted once each. One scalar read over the tickets of those types only (the
+ * type index applies); the same figures as the flags of the listed rows, since anyone holding a ticket is listed.
+ */
 export async function customerAlertCounts(
   db: Db,
   professionalId: string,
   now: Date,
 ): Promise<{ red: number; orange: number }> {
-  const all = await loadSnapshots(db, professionalId, now, "");
-  return { red: all.filter((s) => s.facts.red).length, orange: all.filter((s) => s.facts.orange).length };
+  const classes = classifyTypes(await loadTypeFacts(db, professionalId, now));
+  const idsOf = (cls: TypeClass) => [...classes].filter(([, c]) => c === cls).map(([id]) => id);
+  const red = idsOf("archived");
+  const orange = idsOf("orphan");
+  if (red.length + orange.length === 0) return { red: 0, orange: 0 };
+  const res = await db.execute<{ red: number; orange: number }>(sql`
+    select
+      (count(distinct customer_id) filter (where ticket_type_id = any(${textArray(red)})))::int as red,
+      (count(distinct customer_id) filter (where ticket_type_id = any(${textArray(orange)})))::int as orange
+    from ticket
+    where professional_id = ${professionalId} and ticket_type_id = any(${textArray([...red, ...orange])})
+      and status = 'available' and (expires_at is null or expires_at > ${ts(now)})`);
+  return { red: Number(res.rows[0]?.red ?? 0), orange: Number(res.rows[0]?.orange ?? 0) };
 }
 
 export type ClientBookingRow = {
@@ -242,6 +270,7 @@ export type ClientPurchaseRow = {
   quantity: number;
   amountCents: number;
   currency: string;
+  /** A pending purchase whose Checkout has ended, with no delayed payment under way, reads « expired » (see purchaseStatusAt). */
   status: PurchaseStatus;
   livemode: boolean;
   createdAt: Date;
@@ -316,10 +345,26 @@ function bookingRow(r: BookingQueryRow, now: Date, tz: string): ClientBookingRow
 }
 
 /**
+ * What the purchase is right now: a pending one whose Checkout session has ended (`checkout_expires_at <= now`) and
+ * that awaits no delayed payment (`processing_at` null, the nightly sweep's own exemption) is abandoned; the sweep
+ * marks it expired only after a grace period, but « En attente » would mislead the pro until then. A payment that
+ * still arrives is fulfilled from `expired` (E10).
+ */
+function purchaseStatusAt(
+  p: { status: PurchaseStatus; checkoutExpiresAt: Date; processingAt: Date | null },
+  now: Date,
+): PurchaseStatus {
+  const ended = p.status === "pending" && p.processingAt === null && p.checkoutExpiresAt.getTime() <= now.getTime();
+  return ended ? "expired" : p.status;
+}
+
+/**
  * The newest movements of a customer (`rows`, seq desc, read with ONE extra row beyond `max`) cut on an action
  * boundary. When the extra row is there the ledger goes further back, and an action with movements on both sides of
  * the cut would read as a smaller one (« Acheté 3 » for a pack of 10): every such action is dropped whole. Found
- * with one more read, only in that case (an action's movements are not assumed to be contiguous in seq).
+ * with one more read, only in that case: of the actions kept (every one of their movements in the slice is newer
+ * than the cut), those that also have a movement at or before the cut. An action's movements are not assumed to be
+ * contiguous in seq.
  */
 async function wholeActions<T extends { seq: number; actionId: string }>(
   db: Db,
@@ -329,17 +374,15 @@ async function wholeActions<T extends { seq: number; actionId: string }>(
   max: number,
 ): Promise<T[]> {
   if (rows.length <= max) return [...rows];
+  const slice = rows.slice(0, max);
   const cut = rows[max].seq; // the newest movement left out
   const res = await db.execute<{ action_id: string }>(sql`
-    select distinct older.action_id
-    from ticket_movement older
-    where older.professional_id = ${professionalId} and older.customer_id = ${customerId} and older.seq <= ${cut}
-      and exists (
-        select 1 from ticket_movement newer
-        where newer.professional_id = ${professionalId} and newer.customer_id = ${customerId}
-          and newer.action_id = older.action_id and newer.seq > ${cut})`);
+    select distinct action_id
+    from ticket_movement
+    where professional_id = ${professionalId} and customer_id = ${customerId} and seq <= ${cut}
+      and action_id = any(${textArray([...new Set(slice.map((r) => r.actionId))])})`);
   const straddling = new Set(res.rows.map((r) => r.action_id));
-  return rows.slice(0, max).filter((r) => !straddling.has(r.actionId));
+  return slice.filter((r) => !straddling.has(r.actionId));
 }
 
 /**
@@ -437,6 +480,8 @@ export async function getClientRecord(
         livemode: ticketPurchase.livemode,
         createdAt: ticketPurchase.createdAt,
         paidAt: ticketPurchase.paidAt,
+        checkoutExpiresAt: ticketPurchase.checkoutExpiresAt,
+        processingAt: ticketPurchase.processingAt,
       })
       .from(ticketPurchase)
       .where(and(eq(ticketPurchase.professionalId, p), eq(ticketPurchase.customerId, customerId)))
@@ -522,7 +567,10 @@ export async function getClientRecord(
     wallet,
     typeOptions,
     bookings: { upcoming, past: past.slice(0, PAST_BOOKINGS_MAX) },
-    purchases,
+    purchases: purchases.map(({ checkoutExpiresAt, processingAt, ...row }) => ({
+      ...row,
+      status: purchaseStatusAt({ status: row.status, checkoutExpiresAt, processingAt }, now),
+    })),
     history,
   };
 }

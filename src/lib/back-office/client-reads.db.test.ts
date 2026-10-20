@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import { sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
@@ -9,7 +8,6 @@ import {
   PAST_BOOKINGS_MAX,
   customerAlertCounts,
   getClientRecord,
-  likePattern,
   listClients,
 } from "@/lib/back-office/client-reads";
 import { formatDayMonthOf, formatWhen, planningHref } from "@/lib/back-office/format";
@@ -82,14 +80,6 @@ function walletDay(instant: Date, now: Date, tz: string): string {
 
 /** The text of a history line without its « JJ/MM HH:mm · acteur · » head. */
 const tail = (text: string) => text.split(" · ").slice(2).join(" · ");
-
-test("likePattern escapes !, % and _ and wraps the text in %", () => {
-  assert.equal(likePattern("alice"), "%alice%");
-  assert.equal(likePattern("100%"), "%100!%%");
-  assert.equal(likePattern("a_b"), "%a!_b%");
-  assert.equal(likePattern("hi!"), "%hi!!%");
-  assert.equal(likePattern("!%_"), "%!!!%!_%");
-});
 
 dbTest("listClients: a pending purchase or a cancelled booking alone does not list a customer", async (h) => {
   const typeId = await makeType(h.db, h.pro, { name: "Cours collectif" });
@@ -202,6 +192,11 @@ dbTest("listClients: filters, counts, holdings and the red / orange alerts", asy
   const alerts = await listClients(db, pro.proId, now, { q: "", filter: "alertes" });
   assert.deepEqual(names(alerts.rows), ["Carla Rouge", "Denis Orange", "Emma Gratuit"]);
   assert.deepEqual(await customerAlertCounts(db, pro.proId, now), { red: 1, orange: 2 });
+  // the overview counts are the flags of the listed rows
+  assert.deepEqual(await customerAlertCounts(db, pro.proId, now), {
+    red: all.rows.filter((r) => r.red).length,
+    orange: all.rows.filter((r) => r.orange).length,
+  });
 
   // The search matches the name or the e-mail, ignores case, leaves the counts alone and combines with a filter.
   const byName = await listClients(db, pro.proId, now, { q: "ali", filter: "tous" });
@@ -318,15 +313,20 @@ dbTest(
         }),
       );
     });
+    // two tickets of the archived type and one of the orphan type: ONE red and ONE orange client, not three
+    await add("15 Rouge et orange", { ticketsAny: 3, usableTickets: 3, red: true, orange: true }, async (id) => {
+      await giveTickets(db, pro, id, typeArchived, 2);
+      await giveTickets(db, pro, id, typeOrphan, 1);
+    });
     must(await setTicketTypeArchived(db, { professionalId: p, ticketTypeId: typeArchived, archived: true }));
 
-    // The listed clients and the counts follow from the facts alone (hand-checked: 11 listed, 5 with usable tickets, 2, 2).
+    // The listed clients and the counts follow from the facts alone (hand-checked: 12 listed, 6 with usable tickets, 2 upcoming, 3 alerts).
     const listed = [...expected].filter(([, e]) => isListedClient(e.facts));
-    assert.equal(listed.length, 11);
+    assert.equal(listed.length, 12);
     const want = (filter: (typeof CLIENT_FILTERS)[number]) => listed.filter(([, e]) => matchesClientFilter(e.facts, filter));
     assert.deepEqual(
       Object.fromEntries(CLIENT_FILTERS.map((f) => [f, want(f).length])),
-      { tous: 11, tickets: 5, "a-venir": 2, alertes: 2 },
+      { tous: 12, tickets: 6, "a-venir": 2, alertes: 3 },
     );
 
     for (const filter of CLIENT_FILTERS) {
@@ -338,7 +338,7 @@ dbTest(
           .sort(),
         `filter ${filter}`,
       );
-      assert.deepEqual(got.counts, { tous: 11, tickets: 5, "a-venir": 2, alertes: 2 }, `counts with filter ${filter}`);
+      assert.deepEqual(got.counts, { tous: 12, tickets: 6, "a-venir": 2, alertes: 3 }, `counts with filter ${filter}`);
       for (const row of got.rows) {
         const e = expected.get(row.id);
         assert.ok(e, row.name);
@@ -349,7 +349,13 @@ dbTest(
         );
       }
     }
-    assert.deepEqual(await customerAlertCounts(db, p, now), { red: 1, orange: 1 });
+    // the overview counts equal the red / orange flags of the listed rows (the facts, by hand: 09 and 15 red, 10 and 15 orange)
+    assert.deepEqual(await customerAlertCounts(db, p, now), { red: 2, orange: 2 });
+    const everyone = await listClients(db, p, now, { q: "", filter: "tous" });
+    assert.deepEqual(await customerAlertCounts(db, p, now), {
+      red: everyone.rows.filter((r) => r.red).length,
+      orange: everyone.rows.filter((r) => r.orange).length,
+    });
 
     // An archived type still shows in the wallet of its holder (red), and is not offered for new tickets.
     const record = await getClientRecord(db, p, rouge, now);
@@ -389,21 +395,41 @@ dbTest("listClients: the search treats %, _ and ! literally and is trimmed", asy
 dbTest("listClients: the list stops at CLIENT_LIST_LIMIT rows, the search and the counts see every client", async (h) => {
   const { db, pro } = h;
   const tag = nanoid(8);
-  const total = CLIENT_LIST_LIMIT + 1;
+  const caps = CLIENT_LIST_LIMIT + 1;
+  const total = caps + 1;
   await db.execute(sql`
     insert into customer (id, professional_id, email, name)
     select ${tag}::text || '-' || i::text, ${pro.proId}, 'cap' || i::text || '@skedul.test', 'Cap ' || lpad(i::text, 4, '0')
-    from generate_series(1, ${total}::int) as i`);
+    from generate_series(1, ${caps}::int) as i`);
+  // An accented initial sorts with its letter (French order): « Ágata » is the FIRST client, so the cap never cuts it.
+  await makeCustomer(db, pro, { name: "Ágata Souza" });
   const now = new Date();
   const all = await listClients(db, pro.proId, now, { q: "", filter: "tous" });
   assert.equal(all.rows.length, CLIENT_LIST_LIMIT);
-  assert.equal(all.rows[0].name, "Cap 0001");
-  assert.equal(all.rows[CLIENT_LIST_LIMIT - 1].name, `Cap ${String(CLIENT_LIST_LIMIT).padStart(4, "0")}`);
+  assert.equal(all.rows[0].name, "Ágata Souza");
+  assert.equal(all.rows[1].name, "Cap 0001");
+  assert.equal(all.rows[CLIENT_LIST_LIMIT - 1].name, `Cap ${String(CLIENT_LIST_LIMIT - 1).padStart(4, "0")}`);
   assert.deepEqual(all.counts, { tous: total, tickets: 0, "a-venir": 0, alertes: 0 });
-  // the last client is past the cap in the plain list, and found by its name
-  const last = await listClients(db, pro.proId, now, { q: `Cap ${String(total).padStart(4, "0")}`, filter: "tous" });
-  assert.deepEqual(names(last.rows), [`Cap ${String(total).padStart(4, "0")}`]);
+  // the last clients are past the cap in the plain list, and found by their names
+  const last = await listClients(db, pro.proId, now, { q: `Cap ${String(caps).padStart(4, "0")}`, filter: "tous" });
+  assert.deepEqual(names(last.rows), [`Cap ${String(caps).padStart(4, "0")}`]);
   assert.equal(last.counts.tous, total);
+});
+
+dbTest("listClients: names sort in French order, accents and case ignored, ties by id", async (h) => {
+  const { db, pro } = h;
+  const zoe = await makeCustomer(db, pro, { name: "Zoé", email: "zoe@skedul.test" });
+  const elodie = await makeCustomer(db, pro, { name: "Élodie", email: "elodie@skedul.test" });
+  const ericLower = await makeCustomer(db, pro, { name: "eric", email: "eric.lower@skedul.test" });
+  const ericAccent = await makeCustomer(db, pro, { name: "Éric", email: "eric.accent@skedul.test" });
+  const aaron = await makeCustomer(db, pro, { name: "Aaron", email: "aaron@skedul.test" });
+  const rows = (await listClients(db, pro.proId, new Date(), { q: "", filter: "tous" })).rows;
+  // « eric » and « Éric » are the same name for the collation: the id decides between them
+  const erics = [ericLower, ericAccent].sort();
+  assert.deepEqual(
+    rows.map((r) => r.id),
+    [aaron, elodie, ...erics, zoe],
+  );
 });
 
 dbTest("client reads never cross the tenant boundary", async (h) => {
@@ -718,6 +744,36 @@ dbTest("getClientRecord: RDV, live and lapsed holds, cancelled and past bookings
   assert.deepEqual(
     list.rows.map((r) => [r.name, r.upcomingConfirmed]),
     [["Léa Martin", 1]],
+  );
+});
+
+dbTest("getClientRecord: a pending purchase whose checkout has ended reads expired, unless a payment is processing", async (h) => {
+  const { db, pro } = h;
+  const now = new Date();
+  const typeId = await rowType(db, pro, { name: "Cours collectif" });
+  const offerId = await rowOffer(db, pro, typeId);
+  const lea = await makeCustomer(db, pro, { name: "Léa Martin" });
+  const purchase = (minutesAgo: number) =>
+    rowPurchase(db, pro, { customerId: lea, offerId, ticketTypeId: typeId }, addMinutes(now, -minutesAgo));
+  // rowPurchase opens a Checkout session for 31 minutes from its own clock
+  const live = await purchase(0);
+  const ended = await purchase(60);
+  const processing = await purchase(90);
+  const storedExpired = await purchase(120);
+  await db.execute(sql`update ticket_purchase set processing_at = ${ts(addMinutes(now, -100))} where id = ${processing}`);
+  await db.execute(sql`update ticket_purchase set status = 'expired' where id = ${storedExpired}`);
+
+  const record = await getClientRecord(db, pro.proId, lea, now);
+  assert.ok(record);
+  // newest first; a delayed payment (processing_at) is still awaited, the stored « expired » stays
+  assert.deepEqual(
+    record.purchases.map((x) => [x.id, x.status]),
+    [
+      [live, "pending"],
+      [ended, "expired"],
+      [processing, "pending"],
+      [storedExpired, "expired"],
+    ],
   );
 });
 
