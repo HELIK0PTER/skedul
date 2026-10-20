@@ -87,7 +87,11 @@ export function AuthForm({
       : await signIn.email({ email, password });
 
     if (result.error) {
-      setError(result.error.message ?? "Une erreur est survenue.");
+      setError(
+        result.error.status === 429
+          ? "Trop de demandes. Réessayez dans quelques minutes."
+          : (result.error.message ?? "Une erreur est survenue."),
+      );
       setLoading(false);
       return;
     }

@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 
 import { ImpersonationBanner } from "@/components/dashboard/impersonation-banner";
 import { DashboardSidebar } from "@/components/dashboard/sidebar";
+import { VerifyEmailBanner } from "@/components/dashboard/verify-email-banner";
 import { brandThemeVars } from "@/lib/color";
 import { getCurrentProfessional, getSession } from "@/lib/session";
 import { hasUnreadSupport } from "@/server/support-queries";
@@ -41,7 +42,13 @@ export default async function DashboardLayout({
         {/* The window scrolls, not <main>: overflow-x-clip (unlike auto) keeps
             sticky children (settings preview) working. */}
         <main className="min-w-0 flex-1 overflow-x-clip bg-background">
-          <div className="mx-auto max-w-5xl px-5 py-8">{children}</div>
+          <div className="mx-auto max-w-5xl px-5 py-8">
+            {/* Hidden while an admin impersonates: an admin must not verify the pro's address. */}
+            {!session.user.emailVerified && !session.session.impersonatedBy && (
+              <VerifyEmailBanner email={session.user.email} />
+            )}
+            {children}
+          </div>
         </main>
       </div>
     </>
