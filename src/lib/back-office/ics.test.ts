@@ -61,6 +61,41 @@ test("buildBookingIcs: line breaks and a forged VEVENT in the texts inject no li
   assert.ok(!body.replace(/\r\n/g, "").includes("\n"));
 });
 
+/* Every character some parser reads as a line break, then every other control character: written as
+   \u escapes on purpose. None may add a physical line or reach the file raw, in any pro-controlled
+   text (title, location, business name) or in the id. */
+const BREAKS = ["\r", "\n", "\r\n", "\u000B", "\u000C", "\u001C", "\u001D", "\u001E", "\u0085", "\u2028", "\u2029"];
+const OTHER_CONTROLS = ["\u0000", "\u0001", "\u0008", "\u001F", "\u007F", "\u0080", "\u009F"];
+const FORGED = "ATTENDEE:mailto:evil@example.test";
+const physicalLines = (s: string): string[] => s.split(/\r\n|[\n\v\f\r\u001C-\u001E\u0085\u2028\u2029]/);
+const hasRawControl = (s: string): boolean => /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u2028\u2029]/.test(s.replace(/\r\n/g, ""));
+
+test("buildBookingIcs: no line-break class nor control character in a title, a location or a business name adds a line", () => {
+  for (const ch of [...BREAKS, ...OTHER_CONTROLS]) {
+    const hostile = `x${ch}${FORGED}`;
+    for (const facts of [
+      { ...FACTS, title: hostile },
+      { ...FACTS, location: hostile },
+      { ...FACTS, businessName: hostile },
+      { ...FACTS, bookingId: `bk${ch}${FORGED}` },
+    ]) {
+      const body = buildBookingIcs(facts);
+      const label = JSON.stringify(ch);
+      assert.equal(physicalLines(body).length, 14, label);
+      assert.deepEqual(physicalLines(body), body.split("\r\n"), label);
+      assert.equal(body.split("\r\n").filter((line) => line === "BEGIN:VEVENT").length, 1, label);
+      assert.ok(!body.split("\r\n").some((line) => line.startsWith("ATTENDEE")), label);
+      assert.ok(!hasRawControl(body), label);
+    }
+  }
+});
+
+test("buildBookingIcs: a long title is folded to 75 octets and unfolds to the exact text", () => {
+  const body = buildBookingIcs({ ...FACTS, title: "é".repeat(120), location: "Salle, 1\n".repeat(30) });
+  assert.ok(body.split("\r\n").every((line) => Buffer.byteLength(line, "utf8") <= 75));
+  assert.ok(body.replace(/\r\n /g, "").split("\r\n").includes(`SUMMARY:${"é".repeat(120)}`));
+});
+
 /** A Db that fails on any use: proves a malformed id never reaches a query. */
 const untouchableDb = new Proxy(
   {},
@@ -86,7 +121,7 @@ test("loadIcsFacts: a malformed or oversized id is null without any query", asyn
     "a;b",
     "id'--",
     "idé",
-    "id ",
+    "id\u2028",
   ];
   for (const id of malformed) {
     assert.equal(await loadIcsFacts(untouchableDb, id), null, JSON.stringify(id.slice(0, 20)));

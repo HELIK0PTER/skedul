@@ -136,7 +136,7 @@ dbTest("buildBookingIcs: a hostile title and location read from the database inj
   await db
     .update(schema.event)
     .set({
-      title: "Cours\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nATTENDEE:mailto:evil@example.test",
+      title: "Cours\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nATTENDEE:mailto:evil@example.test\u2028X-EVIL:1\u0085X-EVIL2:2\u000BX-EVIL3:3",
       location: "Salle 1\nBEGIN:VEVENT\rORGANIZER:mailto:evil@example.test, bis; ter\\",
     })
     .where(eq(schema.event.id, eventId));
@@ -149,16 +149,23 @@ dbTest("buildBookingIcs: a hostile title and location read from the database inj
   const facts = await loadIcsFacts(db, bookingId);
   assert.ok(facts);
   const body = buildBookingIcs(facts);
-  const lines = body.split("\r\n");
+  // The long lines are folded (75 octets, CRLF + space); unfold them to read the properties.
+  assert.ok(body.split("\r\n").every((line) => Buffer.byteLength(line, "utf8") <= 75));
+  const lines = body.replace(/\r\n /g, "").split("\r\n");
 
   // 13 lines of the file + the empty string after the last terminator: nothing was added.
   assert.equal(lines.length, 14);
   assert.equal(lines.filter((line) => line === "BEGIN:VEVENT").length, 1);
   assert.equal(lines.filter((line) => line === "END:VEVENT").length, 1);
   assert.ok(!lines.some((line) => line.startsWith("ATTENDEE") || line.startsWith("ORGANIZER")));
-  assert.ok(lines.includes("SUMMARY:Cours\\nEND:VEVENT\\nBEGIN:VEVENT\\nATTENDEE:mailto:evil@example.test"));
+  // U+2028 and U+0085 become the \n escape, the vertical tab is dropped.
+  assert.ok(
+    lines.includes("SUMMARY:Cours\\nEND:VEVENT\\nBEGIN:VEVENT\\nATTENDEE:mailto:evil@example.test\\nX-EVIL:1\\nX-EVIL2:2X-EVIL3:3"),
+  );
   assert.ok(lines.includes("LOCATION:Salle 1\\nBEGIN:VEVENT\\nORGANIZER:mailto:evil@example.test\\, bis\\; ter\\\\"));
   // The only CR and LF of the file are the CRLF line terminators.
   assert.ok(!body.replace(/\r\n/g, "").includes("\r"));
   assert.ok(!body.replace(/\r\n/g, "").includes("\n"));
+  // Nor any other character a lenient parser reads as a line break.
+  assert.equal(body.split(/\r\n|[\n\v\f\r\u001C-\u001E\u0085\u2028\u2029]/).length, body.split("\r\n").length);
 });
