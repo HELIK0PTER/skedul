@@ -8,6 +8,7 @@ import { isTimezoneLocked } from "@/lib/back-office/settings-actions";
 import { userNotSuspended } from "@/lib/suspension";
 import { getPayments, type PaymentsPeriod } from "@/lib/back-office/payments-reads";
 import { revenueLive } from "@/server/revenue";
+import { getDashboardData } from "@/lib/back-office/dashboard-reads";
 import type { BookingSettings } from "@/lib/tickets";
 
 /*
@@ -17,6 +18,11 @@ import type { BookingSettings } from "@/lib/tickets";
  */
 
 export type AvailabilityRow = { dayOfWeek: number; startMinute: number; endMinute: number };
+
+/** /dashboard: KPIs, alerts, first steps and the next bookings (revenue counts live payments only with a live Stripe key). */
+export async function getDashboardPage(pro: { id: string; timezone: string; currency: string }) {
+  return getDashboardData(db, pro, new Date(), revenueLive());
+}
 
 /** /dashboard/payments: the pro's paid purchases and the « Encaissé » totals (a live Stripe key counts live payments only). */
 export async function getPaymentsPage(pro: { id: string }, period: PaymentsPeriod) {

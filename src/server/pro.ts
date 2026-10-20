@@ -31,14 +31,6 @@ import type { AvailabilityRuleInput, BookingSettings } from "@/lib/tickets";
 import { checkSlug } from "@/lib/slug";
 import { slugify } from "@/lib/utils";
 
-type Res = { ok: true } | { ok: false; error: string };
-
-// Answer of the planning actions until P3 rebuilds them on the tickets engine.
-const COMING_SOON: Res = {
-  ok: false,
-  error: "Bientôt disponible : cette action revient avec les tickets et événements.",
-};
-
 async function requirePro() {
   const pro = await getCurrentProfessional();
   if (!pro) redirect("/onboarding");
@@ -219,14 +211,6 @@ export async function saveAvailabilityAction(rules: AvailabilityRuleInput[]): Pr
     (ctx, now) => saveAvailabilityCore(db, ctx, { rules }, now),
     { publicPage: true },
   );
-}
-
-/* ──────────── Séances et planning (the P3 actions live in pro-planning.ts; only this stub is left, until Task 37) ──────────── */
-
-export async function cancelBooking(bookingId: string): Promise<Res> {
-  await requirePro();
-  void bookingId;
-  return COMING_SOON;
 }
 
 /* ─────────────────────── Google Calendar ───────────────────────── */

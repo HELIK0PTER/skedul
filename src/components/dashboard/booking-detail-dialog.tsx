@@ -1,180 +1,181 @@
 "use client";
 
-import { useState, useTransition } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useId, useState } from "react";
 
-import { Dialog } from "@/components/ui/dialog";
+import { BookingStatusBadge } from "@/components/dashboard/booking-status-badge";
+import { ConfirmDialog } from "@/components/dashboard/confirm-dialog";
+import { CoverageBadge } from "@/components/dashboard/coverage-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { formatSlot } from "@/lib/datetime";
-import { formatMoney } from "@/lib/utils";
-import { cancelBooking } from "@/server/pro";
+import { Dialog } from "@/components/ui/dialog";
+import { unenrollCopy } from "@/lib/back-office/confirm-copy";
+import type { BookingDetailVM } from "@/lib/back-office/dashboard-reads";
+import { unenrolledMessage } from "@/lib/back-office/planning-view";
+import { REQUEST_FAILED } from "@/lib/pro-messages";
+import type { PurchaseStatus } from "@/lib/tickets-vocab";
+import { unenrollAction } from "@/server/pro-planning";
 
-export type BookingDetailVM = {
-  id: string;
-  startAt: string;
-  endAt: string;
-  status: string;
-  paymentType: string;
-  amountPaidCents: number | null;
-  packName: string | null;
-  eventTitle: string;
-  eventColor: string;
-  customerName: string;
-  customerEmail: string;
-  customerPhone: string | null;
-  notes: string | null;
-  answers: { label: string; value: string }[];
-  /** Planning page on the booking's week. */
-  planningHref: string;
+const PAYMENT_TEXT: Record<Exclude<PurchaseStatus, "paid">, string> = {
+  pending: "Paiement en attente",
+  expired: "Paiement expiré",
 };
 
-/** How the booking is paid, as a short badge. */
-export function paymentBadge(b: Pick<BookingDetailVM, "paymentType" | "status">) {
-  if (b.paymentType === "credit") return { label: "Crédit", variant: "default" as const };
-  if (b.paymentType === "free") return { label: "Offert", variant: "neutral" as const };
-  if (b.status === "pending")
-    return { label: "Paiement en attente", variant: "warning" as const };
-  return { label: "Payé", variant: "neutral" as const };
+function PaymentLine({ purchase }: { purchase: NonNullable<BookingDetailVM["purchase"]> }) {
+  if (purchase.status !== "paid") return <p className="text-sm">{PAYMENT_TEXT[purchase.status]}</p>;
+  return (
+    <p className="flex flex-wrap items-center gap-2 text-sm">
+      <span>{`Payé ${purchase.amountLabel}`}</span>
+      {!purchase.livemode && <Badge variant="outline">Test</Badge>}
+    </p>
+  );
 }
 
+/**
+ * The details of one upcoming booking, with « Voir dans le planning » and « Désinscrire ». « Désinscrire » is only
+ * offered on a live booking (confirmed, or pending), and goes through the engine behind a ConfirmDialog; a failure
+ * stays in that confirmation. The details dialog stays open under the confirmation, so « Retour » hands the focus
+ * back to the button that opened it, and Escape or the backdrop close the confirmation first, never both.
+ * `onClose(notice)` closes the dialog; after a success the notice is the status line for the page (the booking
+ * leaves the list on the next refresh, so this dialog cannot show it itself).
+ */
 export function BookingDetailDialog({
-  booking: b,
-  tz,
-  currency,
+  booking,
   onClose,
 }: {
   booking: BookingDetailVM;
-  tz: string;
-  currency: string;
-  onClose: () => void;
+  onClose: (notice?: string) => void;
 }) {
-  const router = useRouter();
-  const [pending, startTransition] = useTransition();
+  const summaryId = useId();
   const [confirming, setConfirming] = useState(false);
+  const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const live = booking.status === "confirmed" || booking.status === "pending";
 
-  const badge = paymentBadge(b);
-  const amount =
-    b.paymentType === "direct" && b.amountPaidCents
-      ? formatMoney(b.amountPaidCents, currency)
-      : null;
-  const paymentDetail =
-    b.paymentType === "credit" && b.packName
-      ? `Crédit du pack ${b.packName}`
-      : amount
-        ? `${badge.label} · ${amount}`
-        : badge.label;
+  // `Dialog` calls its onClose with the click event (backdrop, close button): never pass `onClose` itself, it reads a notice.
+  function closeSelf() {
+    if (confirming || pending) return;
+    onClose();
+  }
 
-  const consequences = [
-    "Le créneau sera libéré.",
-    b.paymentType === "credit" && "Le crédit sera rendu au client.",
-    b.paymentType === "direct" &&
-      b.status !== "pending" &&
-      "Le paiement n'est pas remboursé automatiquement.",
-    "Skedul n'envoie pas d'e-mail au client.",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  function cancel() {
+  function closeConfirm() {
+    if (pending) return;
+    setConfirming(false);
     setError(null);
-    startTransition(async () => {
-      const res = await cancelBooking(b.id);
+  }
+
+  async function unenroll() {
+    if (pending) return;
+    setPending(true);
+    setError(null);
+    try {
+      const res = await unenrollAction({
+        occurrenceId: booking.occurrenceId,
+        bookingIds: [booking.bookingId],
+        reason: null,
+      });
       if (!res.ok) {
-        setError(res.error ?? "Action impossible.");
-      } else {
-        router.refresh();
-        onClose();
+        setError(res.error);
+        return;
       }
-    });
+      setConfirming(false);
+      onClose(unenrolledMessage([booking.customerName], res.cancelled, res.ticketsReturned));
+    } catch {
+      setError(REQUEST_FAILED);
+    } finally {
+      setPending(false);
+    }
   }
 
   return (
-    <Dialog open onClose={onClose} title={b.eventTitle}>
-      <p className="text-sm text-muted-foreground">
-        {formatSlot(new Date(b.startAt), new Date(b.endAt), tz)}
-      </p>
-      <div className="mt-3">
-        <Badge variant={badge.variant}>{paymentDetail}</Badge>
-      </div>
-
-      <div className="mt-4 rounded-xl bg-muted/50 p-3 text-sm">
-        <p className="text-xs text-muted-foreground">Client</p>
-        <p className="mt-1 font-medium">{b.customerName || "Sans nom"}</p>
-        <a
-          href={`mailto:${b.customerEmail}`}
-          className="block truncate text-muted-foreground hover:text-foreground hover:underline"
-        >
-          {b.customerEmail}
-        </a>
-        {b.customerPhone && (
-          <a
-            href={`tel:${b.customerPhone}`}
-            className="block text-muted-foreground hover:text-foreground hover:underline"
-          >
-            {b.customerPhone}
-          </a>
-        )}
-      </div>
-
-      {(b.answers.length > 0 || b.notes) && (
-        <dl className="mt-4 space-y-3 text-sm">
-          {b.answers.map((a, i) => (
-            <div key={i}>
-              <dt className="text-xs text-muted-foreground">{a.label}</dt>
-              <dd className="mt-0.5 whitespace-pre-line">{a.value}</dd>
-            </div>
-          ))}
-          {b.notes && (
-            <div>
-              <dt className="text-xs text-muted-foreground">Message du client</dt>
-              <dd className="mt-0.5 whitespace-pre-line">{b.notes}</dd>
+    <>
+      <Dialog open onClose={closeSelf} title={booking.title} describedBy={summaryId}>
+        <div id={summaryId}>
+          <p className="text-sm text-zinc-600">{booking.whenLabel}</p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <CoverageBadge coverage={booking.coverage} />
+            {booking.ticketTypeName && <span className="text-sm text-zinc-600 wrap-anywhere">{booking.ticketTypeName}</span>}
+            {booking.status !== "confirmed" && <BookingStatusBadge status={booking.status} />}
+          </div>
+          {booking.purchase && (
+            <div className="mt-2">
+              <PaymentLine purchase={booking.purchase} />
             </div>
           )}
-        </dl>
-      )}
+        </div>
 
-      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+        <div className="mt-4 rounded-xl bg-muted/50 p-3 text-sm">
+          <p className="text-xs text-zinc-600">Client</p>
+          <Link
+            href={`/dashboard/clients/${booking.customerId}`}
+            className="mt-1 block rounded font-medium wrap-anywhere hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {booking.customerName}
+          </Link>
+          <a
+            href={`mailto:${booking.customerEmail}`}
+            className="block rounded text-zinc-600 wrap-anywhere hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {booking.customerEmail}
+          </a>
+          {booking.customerPhone && (
+            <a
+              href={`tel:${booking.customerPhone}`}
+              className="block rounded text-zinc-600 wrap-anywhere hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {booking.customerPhone}
+            </a>
+          )}
+        </div>
 
-      <div className="mt-5 border-t border-border pt-4">
-        {confirming ? (
-          <div className="space-y-3">
-            <p className="text-sm">
-              <span className="font-medium">Annuler cette réservation ?</span>{" "}
-              <span className="text-muted-foreground">{consequences}</span>
-            </p>
-            <div className="flex justify-end gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={pending}
-                onClick={() => setConfirming(false)}
-              >
-                Retour
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={pending}
-                onClick={cancel}
-              >
-                {pending ? "Annulation…" : "Confirmer l'annulation"}
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <Button asChild variant="secondary" size="sm">
-              <Link href={b.planningHref}>Voir dans le planning</Link>
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setConfirming(true)}>
-              Annuler la réservation
-            </Button>
-          </div>
+        {(booking.answers.length > 0 || booking.notes) && (
+          <dl className="mt-4 space-y-3 text-sm">
+            {booking.answers.map((a, i) => (
+              <div key={i}>
+                <dt className="text-xs text-zinc-600 wrap-anywhere">{a.label}</dt>
+                <dd className="mt-0.5 whitespace-pre-line wrap-anywhere">{a.value}</dd>
+              </div>
+            ))}
+            {booking.notes && (
+              <div>
+                <dt className="text-xs text-zinc-600">Message du client</dt>
+                <dd className="mt-0.5 whitespace-pre-line wrap-anywhere">{booking.notes}</dd>
+              </div>
+            )}
+          </dl>
         )}
-      </div>
-    </Dialog>
+
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-4">
+          <Button asChild variant="secondary" size="sm">
+            <Link href={booking.planningHref}>Voir dans le planning</Link>
+          </Button>
+          {live && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setError(null);
+                setConfirming(true);
+              }}
+            >
+              Désinscrire
+            </Button>
+          )}
+        </div>
+      </Dialog>
+      <ConfirmDialog
+        open={confirming}
+        copy={unenrollCopy({
+          names: [booking.customerName],
+          ticketCount: booking.coverage === "ticket" ? 1 : 0,
+          pendingCount: booking.status === "pending" ? 1 : 0,
+        })}
+        pending={pending}
+        error={error}
+        onConfirm={unenroll}
+        onClose={closeConfirm}
+      />
+    </>
   );
 }

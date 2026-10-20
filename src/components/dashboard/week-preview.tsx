@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
@@ -14,6 +14,17 @@ import { cn } from "@/lib/utils";
 
 const HOUR_PX = 36;
 const MINUTE_PX = HOUR_PX / 60;
+const WIDE_QUERY = "(min-width: 640px)";
+
+function subscribeWide(onChange: () => void): () => void {
+  const mq = window.matchMedia(WIDE_QUERY);
+  mq.addEventListener("change", onChange);
+  return () => mq.removeEventListener("change", onChange);
+}
+
+function readWide(): boolean {
+  return window.matchMedia(WIDE_QUERY).matches;
+}
 
 /**
  * Compact day / week grid of the dashboard overview, on the same view model as
@@ -46,7 +57,10 @@ export function WeekPreview({
   const hours = Array.from({ length: endHour - startHour }, (_, i) => startHour + i);
   const colHeight = hours.length * HOUR_PX;
 
-  const [view, setView] = useState<"day" | "week">("week");
+  // Below 640 px the preview opens on one day; once the pro clicks the toggle, their choice wins.
+  const wide = useSyncExternalStore(subscribeWide, readWide, () => true);
+  const [picked, setView] = useState<"day" | "week" | null>(null);
+  const view = picked ?? (wide ? "week" : "day");
   const todayIndex = days.indexOf(todayKey);
   const [dayIndex, setDayIndex] = useState(todayIndex >= 0 ? todayIndex : 0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
