@@ -20,15 +20,36 @@ import { account, pageView, professional, session, user } from "@/lib/db/schema"
 import { env } from "@/lib/env";
 import { ADMIN_TZ } from "@/lib/analytics";
 import { stripeMode, type MoneyTotal } from "@/lib/admin-metrics";
-import { USERS_PAGE_SIZE, type UserFilter } from "@/lib/admin-params";
+import {
+  ACTIVITY_LIMIT,
+  activityCounts30d,
+  listRecentBookings as readRecentBookings,
+  listRecentPurchases as readRecentPurchases,
+  platformRevenue,
+  recentBookingEvents,
+  recentPurchaseEvents,
+  type ActivityEvent,
+} from "@/lib/admin-reads";
+import {
+  USERS_PAGE_SIZE,
+  type BookingStatus,
+  type PurchaseStatus,
+  type UserFilter,
+} from "@/lib/admin-params";
 import { userIsSuspended } from "@/lib/suspension";
+import { revenueLive } from "@/server/revenue";
 
 /*
- * Tickets & événements, P2: the booking and pack tables are gone. Revenue,
- * booking counts, pending payments and the activity lists are stubbed with
- * their exported shapes unchanged; P3 rebuilds them on ticket_purchase
- * (src/lib/booking/revenue.ts) and booking.
+ * Server-only wrappers of src/lib/admin-reads.ts: they bind the process db and
+ * the Stripe mode, the queries themselves live there so the DB tests can run
+ * them. Nothing here checks the caller: every export must only be called from
+ * an admin page or action, behind requireAdmin() (src/lib/admin.ts). App
+ * health, a pro's stats and the deletion impact are still stubbed below with
+ * their exported shapes unchanged.
  */
+
+export { ACTIVITY_LIMIT };
+export type { ActivityEvent };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -46,10 +67,11 @@ export async function getOverviewStats(now: Date = new Date()) {
   const since7 = new Date(now.getTime() - 7 * DAY_MS);
   const since30 = new Date(now.getTime() - 30 * DAY_MS);
 
-  const [users, newUsers, pros, revenue30d] = await Promise.all([
+  const [users, newUsers, pros, activity, revenue30d] = await Promise.all([
     db.select({ value: count() }).from(user),
     db.select({ value: count() }).from(user).where(gte(user.createdAt, since7)),
     db.select({ value: count() }).from(professional),
+    activityCounts30d(db, now),
     getRevenue({ since: since30 }),
   ]);
 
@@ -57,18 +79,21 @@ export async function getOverviewStats(now: Date = new Date()) {
     users: users[0]?.value ?? 0,
     newUsers7d: newUsers[0]?.value ?? 0,
     pros: pros[0]?.value ?? 0,
-    activePros30d: 0,
-    bookings30d: 0,
+    activePros30d: activity.activePros30d,
+    bookings30d: activity.bookings30d,
     revenue30d,
   };
 }
 
-/** Paid purchases summed per currency. Stubbed until P3 (ticket_purchase). */
+/**
+ * « Encaissé » per currency: the paid purchases of the mode in use (only
+ * livemode ones with a live Stripe key, spec § 9), optionally one pro and a
+ * period.
+ */
 export async function getRevenue(
   opts: { since?: Date; professionalId?: string } = {},
 ): Promise<MoneyTotal[]> {
-  void opts;
-  return [];
+  return platformRevenue(db, { live: revenueLive(), ...opts });
 }
 
 export function getDailySignups(since: Date) {
@@ -93,19 +118,9 @@ export function getDailyTraffic(since: Date) {
     .groupBy(day);
 }
 
-export type ActivityEvent = {
-  id: string;
-  kind: "signup" | "pro" | "booking" | "purchase";
-  at: Date;
-  /** The account the event belongs to (links to /admin/users/[id]). */
-  userId: string;
-  title: string;
-  detail: string;
-};
-
-/** The latest sign-ups and pro pages, merged by date (bookings and purchases return in P3). */
+/** The latest sign-ups, pro pages, confirmed bookings and paid purchases, merged by date. */
 export async function getRecentActivity(limit = 10): Promise<ActivityEvent[]> {
-  const [signups, pros] = await Promise.all([
+  const [signups, pros, bookings, purchases] = await Promise.all([
     db
       .select({ id: user.id, at: user.createdAt, name: user.name, email: user.email })
       .from(user)
@@ -122,6 +137,8 @@ export async function getRecentActivity(limit = 10): Promise<ActivityEvent[]> {
       .from(professional)
       .orderBy(desc(professional.createdAt))
       .limit(limit),
+    recentBookingEvents(db, limit),
+    recentPurchaseEvents(db, limit),
   ]);
 
   const events: ActivityEvent[] = [
@@ -141,6 +158,8 @@ export async function getRecentActivity(limit = 10): Promise<ActivityEvent[]> {
       title: `Page pro créée · ${r.businessName}`,
       detail: `/${r.slug}`,
     })),
+    ...bookings,
+    ...purchases,
   ];
   return events.sort((a, b) => b.at.getTime() - a.at.getTime()).slice(0, limit);
 }
@@ -303,6 +322,18 @@ async function getDeletionImpact(userId: string, professionalId: string | null) 
     creditsOutstanding: 0,
     clientRecordsElsewhere: 0,
   };
+}
+
+/* ───────────────────────────── Activity lists ───────────────────────────── */
+
+/** /admin/activity « Inscriptions »: the latest bookings, optionally one status. */
+export function listRecentBookings(status: BookingStatus | null) {
+  return readRecentBookings(db, status);
+}
+
+/** /admin/activity « Achats »: the latest purchases, optionally one status. */
+export function listRecentPurchases(status: PurchaseStatus | null) {
+  return readRecentPurchases(db, status);
 }
 
 /* ───────────────────────────── Traffic ───────────────────────────── */
