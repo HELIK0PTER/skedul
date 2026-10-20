@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { startTransition, useEffect, useRef, useState, useTransition } from "react";
+import { createContext, startTransition, useContext, useEffect, useRef, useState, useTransition } from "react";
 import { CheckCircle2, Gift, Loader2 } from "lucide-react";
 
 import { ConfirmDialog } from "@/components/dashboard/confirm-dialog";
@@ -15,7 +15,7 @@ import type { TypeOption } from "@/lib/back-office/catalog-reads";
 import { closeTicketsCopy, retireTicketsCopy } from "@/lib/back-office/confirm-copy";
 import { withoutErrorsUnder } from "@/lib/back-office/form-errors";
 import { formatCount, plural } from "@/lib/back-office/format";
-import { checkClose, checkOffer, parseCount, type CloseChoice } from "@/lib/back-office/wallet-form";
+import { checkClose, checkOffer, countCap, parseCount, type CloseChoice } from "@/lib/back-office/wallet-form";
 import type { WalletGroup } from "@/lib/back-office/wallet-view";
 import type { DateKey } from "@/lib/civil-date";
 import { REQUEST_FAILED } from "@/lib/pro-messages";
@@ -34,8 +34,9 @@ const noop = () => {};
 const NO_ACTIVE_TYPE = "Aucun type actif : créez-en un dans";
 const NO_OTHER_TYPE = "Aucun autre type actif : créez-en un dans";
 const NOTHING_LEFT = "Plus aucun ticket pour cette action : rafraîchissez la page.";
+/** An inline link in a note on bg-muted: accent-foreground reads 6.4:1 there (text-primary is about 4.2:1). */
 const LINK_CLASS =
-  "rounded font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  "rounded font-medium text-accent-foreground underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 type CallResult = { ok: true; count: number } | { ok: false; error: string };
 
@@ -175,32 +176,68 @@ function QuantityField({
 
 /* ───────────────────────────── Offrir des tickets ───────────────────────────── */
 
-export function OfferTicketsButton({
+type OfferScope = {
+  open: () => void;
+  notice: string | null;
+  /** Set by a success: the trigger that is on screen then takes the focus if it fell on the page. */
+  armedRef: React.MutableRefObject<boolean>;
+};
+
+const OfferContext = createContext<OfferScope | null>(null);
+
+function useOfferScope(): OfferScope {
+  const scope = useContext(OfferContext);
+  if (scope === null) throw new Error("OfferTicketsButton and OfferNotice belong inside OfferTicketsProvider.");
+  return scope;
+}
+
+/**
+ * The offer of the wallet card, owned once: the open state, the success line and the ONE dialog live here, whichever
+ * trigger opened it. The card header shows the trigger when the wallet holds tickets, the empty state shows it when it
+ * does not; the two never exist together, and the line (an always-mounted status region, `OfferNotice`) stays in the
+ * header, so that the first offer of an empty wallet is announced even though the empty state is gone by then.
+ */
+export function OfferTicketsProvider({
   customerId,
   typeOptions,
   todayKey,
+  children,
 }: {
   customerId: string;
   typeOptions: TypeOption[];
   todayKey: DateKey;
+  children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const armedRef = useRef(false);
+
+  // The focus rescue is for the moment right after a success only: the next click or key press of the user ends it,
+  // so a later render never takes the focus away from where the user put it.
+  useEffect(() => {
+    const disarm = () => {
+      armedRef.current = false;
+    };
+    document.addEventListener("pointerdown", disarm, true);
+    document.addEventListener("keydown", disarm, true);
+    return () => {
+      document.removeEventListener("pointerdown", disarm, true);
+      document.removeEventListener("keydown", disarm, true);
+    };
+  }, []);
+
+  const scope: OfferScope = {
+    open: () => {
+      setNotice(null);
+      setOpen(true);
+    },
+    notice,
+    armedRef,
+  };
 
   return (
-    <div className="flex flex-col items-start sm:items-end">
-      <Button
-        type="button"
-        size="sm"
-        onClick={() => {
-          setNotice(null);
-          setOpen(true);
-        }}
-      >
-        <Gift aria-hidden />
-        Offrir des tickets
-      </Button>
-      <NoticeRegion message={notice} />
+    <OfferContext.Provider value={scope}>
+      {children}
       {open && (
         <OfferDialog
           customerId={customerId}
@@ -208,12 +245,43 @@ export function OfferTicketsButton({
           todayKey={todayKey}
           onClose={() => setOpen(false)}
           onDone={(message) => {
+            armedRef.current = true;
             setOpen(false);
             setNotice(message);
           }}
         />
       )}
-    </div>
+    </OfferContext.Provider>
+  );
+}
+
+/** The success line of the offer: its status region is always mounted, in the card header. */
+export function OfferNotice() {
+  return <NoticeRegion message={useOfferScope().notice} />;
+}
+
+/**
+ * Opens the offer dialog of the enclosing OfferTicketsProvider. Only one is on screen at a time. The dialog hands the
+ * focus back to the button that opened it; when that button is gone after a success (the empty state is replaced by
+ * the header trigger as the first group appears) and the focus fell on the page, the trigger that is on screen takes it.
+ */
+export function OfferTicketsButton() {
+  const { open, armedRef } = useOfferScope();
+  const button = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!armedRef.current) return;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    armedRef.current = false;
+    button.current?.focus();
+  });
+
+  return (
+    <Button ref={button} type="button" size="sm" onClick={open}>
+      <Gift aria-hidden />
+      Offrir des tickets
+    </Button>
   );
 }
 
@@ -423,6 +491,8 @@ export function WalletGroupActions({
   const [notice, setNotice] = useState<string | null>(null);
   /** Bumped when an action succeeded: the effect below keeps the keyboard focus in the block if its button is gone. */
   const [doneCount, setDoneCount] = useState(0);
+  /** Armed by a success, consumed once when the rescue below runs: a later change of the buttons never moves the focus again. */
+  const rescueArmed = useRef(false);
   const block = useRef<HTMLDivElement>(null);
   const { ids } = group;
 
@@ -438,12 +508,13 @@ export function WalletGroupActions({
 
   // The dialog hands the focus back to the button that opened it. When that button is gone (the last pointed ticket
   // was just un-pointed, so « Annuler le pointage » left), the focus fell on the page: it goes to the first button
-  // left in the block, or to the block itself. The check runs again when the buttons change, as the new page may
-  // arrive after the dialog closed.
+  // left in the block, or to the block itself, once. The check runs again when the buttons change while armed, as the
+  // new page may arrive after the dialog closed; opening a dialog again disarms it.
   useEffect(() => {
-    if (doneCount === 0) return;
+    if (!rescueArmed.current) return;
     const active = document.activeElement;
     if (active !== null && active !== document.body) return;
+    rescueArmed.current = false;
     const el = block.current;
     (el?.querySelector<HTMLElement>("button") ?? el)?.focus();
   }, [doneCount, visibleKinds]);
@@ -457,6 +528,7 @@ export function WalletGroupActions({
     groupName: group.name,
     onClose: () => setOpen(null),
     onDone: (message: string) => {
+      rescueArmed.current = true;
       setOpen(null);
       setNotice(message);
       setDoneCount((n) => n + 1);
@@ -473,7 +545,9 @@ export function WalletGroupActions({
               type="button"
               size="sm"
               variant="secondary"
+              aria-label={`${b.label} ${group.name}`}
               onClick={() => {
+                rescueArmed.current = false;
                 setNotice(null);
                 setOpen(b.kind);
               }}
@@ -500,11 +574,12 @@ function PointDialog({ customerId, groupName, ids, onClose, onDone }: GroupDialo
   const [note, setNote] = useState("");
   const [quantityError, setQuantityError] = useState<string | undefined>(undefined);
   const { pending, error, setError, formRef, errorBox, run, focusInvalid } = useWalletAction();
+  const max = countCap(ids.length);
 
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (pending) return;
-    const count = parseCount(quantity, ids.length);
+    const count = parseCount(quantity, max);
     if (!count.ok) {
       setQuantityError(count.error);
       focusInvalid();
@@ -523,7 +598,7 @@ function PointDialog({ customerId, groupName, ids, onClose, onDone }: GroupDialo
         <QuantityField
           id="point-quantity"
           value={quantity}
-          max={ids.length}
+          max={max}
           error={quantityError}
           autoFocus
           onChange={(value) => {
@@ -554,11 +629,12 @@ function UnpointDialog({ customerId, groupName, ids, onClose, onDone }: GroupDia
   const [quantity, setQuantity] = useState("1");
   const [quantityError, setQuantityError] = useState<string | undefined>(undefined);
   const { pending, error, setError, formRef, errorBox, run, focusInvalid } = useWalletAction();
+  const max = countCap(ids.length);
 
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (pending) return;
-    const count = parseCount(quantity, ids.length);
+    const count = parseCount(quantity, max);
     if (!count.ok) {
       setQuantityError(count.error);
       focusInvalid();
@@ -579,7 +655,7 @@ function UnpointDialog({ customerId, groupName, ids, onClose, onDone }: GroupDia
         <QuantityField
           id="unpoint-quantity"
           value={quantity}
-          max={ids.length}
+          max={max}
           error={quantityError}
           autoFocus
           onChange={(value) => {
@@ -612,11 +688,12 @@ function ConvertDialog({
   const { pending, error, setError, formRef, errorBox, run, focusInvalid } = useWalletAction();
 
   const target = targets.find((t) => t.id === targetId) ?? targets[0] ?? null;
+  const max = countCap(ids.length);
 
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (pending || target === null) return;
-    const count = parseCount(quantity, ids.length);
+    const count = parseCount(quantity, max);
     if (!count.ok) {
       setQuantityError(count.error);
       focusInvalid();
@@ -662,7 +739,7 @@ function ConvertDialog({
         <QuantityField
           id="convert-quantity"
           value={quantity}
-          max={ids.length}
+          max={max}
           error={quantityError}
           onChange={(value) => {
             setQuantity(value);
@@ -686,21 +763,22 @@ function ConvertDialog({
  * « Clore » and « Retirer » ask twice: the form, then the confirmation with the consequences. The confirmation opens
  * ON TOP of the form, which stays mounted: « Retour » in the confirmation hands the focus back to the button that
  * opened it, the form keeps what was typed, and the form's own Escape / backdrop / X are muted meanwhile, so one Escape
- * closes only the confirmation.
+ * closes only the confirmation. What the confirmation says is what it sends: the ticket ids, the reason and the note
+ * are frozen when it opens, so a new page behind it can neither change the count it shows nor make « Clore » do nothing.
  */
+type CloseConfirm = { ids: string[]; reason: CloseChoice; note: string | null };
 function CloseDialog({ customerId, groupName, ids, onClose, onDone }: GroupDialogProps & { ids: WalletGroup["ids"] }) {
   const hasPaid = ids.closePaid.length > 0;
   const [reason, setReason] = useState<CloseChoice>(hasPaid ? "rembourse" : "autre");
   const [quantity, setQuantity] = useState("1");
   const [note, setNote] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, setConfirming] = useState<CloseConfirm | null>(null);
   const { pending, error, setError, formRef, run, focusInvalid } = useWalletAction();
 
   // « Remboursé » and « Compensé » concern paid tickets only; « Autre » any usable ticket.
   const pool = reason === "autre" ? ids.closeAny : ids.closePaid;
-  const typed = parseCount(quantity, pool.length);
-  const count = typed.ok ? typed.count : 0;
+  const max = countCap(pool.length);
 
   function chooseReason(next: CloseChoice) {
     setReason(next);
@@ -710,27 +788,33 @@ function CloseDialog({ customerId, groupName, ids, onClose, onDone }: GroupDialo
 
   function onReview(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const checked = checkClose({ quantity, reason, note }, pool.length);
+    const checked = checkClose({ quantity, reason, note }, max);
     if (!checked.ok) {
       setErrors(checked.errors);
       focusInvalid();
       return;
     }
     setErrors({});
-    setConfirming(true);
+    setConfirming({ ids: pool.slice(0, checked.count), reason, note: cleanNote(note) });
   }
 
   function onConfirm() {
-    if (count < 1) return;
+    if (confirming === null) return;
     run(
-      () => closeTicketsAction({ customerId, ticketIds: pool.slice(0, count), reason, note: cleanNote(note) }),
+      () =>
+        closeTicketsAction({
+          customerId,
+          ticketIds: confirming.ids,
+          reason: confirming.reason,
+          note: confirming.note,
+        }),
       (done) => onDone(`${plural(done, "ticket clos", "tickets clos")}.`),
     );
   }
 
   return (
     <>
-      <Dialog open onClose={confirming ? noop : onClose} title={`Clore des tickets « ${groupName} »`}>
+      <Dialog open onClose={confirming !== null ? noop : onClose} title={`Clore des tickets « ${groupName} »`}>
         <form ref={formRef} onSubmit={onReview} noValidate className="space-y-4">
           <fieldset className="space-y-2">
             <legend className="text-sm font-medium">Motif</legend>
@@ -772,7 +856,7 @@ function CloseDialog({ customerId, groupName, ids, onClose, onDone }: GroupDialo
           <QuantityField
             id="close-quantity"
             value={quantity}
-            max={pool.length}
+            max={max}
             error={errors.quantity}
             onChange={(value) => {
               setQuantity(value);
@@ -800,58 +884,62 @@ function CloseDialog({ customerId, groupName, ids, onClose, onDone }: GroupDialo
         </form>
       </Dialog>
       <ConfirmDialog
-        open={confirming}
-        copy={closeTicketsCopy({ count, reasonLabel: CLOSE_REASON_LABELS[reason] })}
+        open={confirming !== null}
+        copy={closeTicketsCopy({
+          count: confirming?.ids.length ?? 0,
+          reasonLabel: CLOSE_REASON_LABELS[confirming?.reason ?? reason],
+        })}
         pending={pending}
         error={error}
         onConfirm={onConfirm}
         onClose={() => {
           setError(null);
-          setConfirming(false);
+          setConfirming(null);
         }}
       />
     </>
   );
 }
 
+type RetireConfirm = { ids: string[]; note: string | null };
+
 function RetireDialog({ customerId, groupName, ids, onClose, onDone }: GroupDialogProps & { ids: string[] }) {
   const [quantity, setQuantity] = useState("1");
   const [note, setNote] = useState("");
   const [quantityError, setQuantityError] = useState<string | undefined>(undefined);
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, setConfirming] = useState<RetireConfirm | null>(null);
   const { pending, error, setError, formRef, run, focusInvalid } = useWalletAction();
-
-  const typed = parseCount(quantity, ids.length);
-  const count = typed.ok ? typed.count : 0;
+  const max = countCap(ids.length);
 
   function onReview(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const checked = parseCount(quantity, ids.length);
+    const checked = parseCount(quantity, max);
     if (!checked.ok) {
       setQuantityError(checked.error);
       focusInvalid();
       return;
     }
     setQuantityError(undefined);
-    setConfirming(true);
+    setConfirming({ ids: ids.slice(0, checked.count), note: cleanNote(note) });
   }
 
   function onConfirm() {
-    if (count < 1) return;
+    if (confirming === null) return;
     run(
-      () => retireTicketsAction({ customerId, ticketIds: ids.slice(0, count), note: cleanNote(note) }),
+      () => retireTicketsAction({ customerId, ticketIds: confirming.ids, note: confirming.note }),
       (done) => onDone(`${plural(done, "ticket retiré", "tickets retirés")}.`),
     );
   }
 
   return (
     <>
-      <Dialog open onClose={confirming ? noop : onClose} title={`Retirer des tickets « ${groupName} »`}>
+      <Dialog open onClose={confirming !== null ? noop : onClose} title={`Retirer des tickets « ${groupName} »`}>
         <form ref={formRef} onSubmit={onReview} noValidate className="space-y-4">
+          <p className="text-sm text-zinc-600">Seuls les tickets offerts peuvent être retirés.</p>
           <QuantityField
             id="retire-quantity"
             value={quantity}
-            max={ids.length}
+            max={max}
             error={quantityError}
             autoFocus
             onChange={(value) => {
@@ -866,14 +954,14 @@ function RetireDialog({ customerId, groupName, ids, onClose, onDone }: GroupDial
         </form>
       </Dialog>
       <ConfirmDialog
-        open={confirming}
-        copy={retireTicketsCopy({ count })}
+        open={confirming !== null}
+        copy={retireTicketsCopy({ count: confirming?.ids.length ?? 0 })}
         pending={pending}
         error={error}
         onConfirm={onConfirm}
         onClose={() => {
           setError(null);
-          setConfirming(false);
+          setConfirming(null);
         }}
       />
     </>

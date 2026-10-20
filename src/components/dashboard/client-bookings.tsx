@@ -54,12 +54,24 @@ function BookingList({
               <Link href={row.planningHref}>Voir dans le planning</Link>
             </Button>
             {row.canMove && (
-              <Button type="button" size="sm" variant="secondary" onClick={() => onMove(row.bookingId)}>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                aria-label={`Déplacer ${row.title}, ${row.whenLabel}`}
+                onClick={() => onMove(row.bookingId)}
+              >
                 Déplacer
               </Button>
             )}
             {row.canUnenroll && (
-              <Button type="button" size="sm" variant="secondary" onClick={() => onUnenroll(row.bookingId)}>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                aria-label={`Désinscrire ${row.title}, ${row.whenLabel}`}
+                onClick={() => onUnenroll(row.bookingId)}
+              >
                 Désinscrire
               </Button>
             )}
@@ -89,6 +101,8 @@ export function ClientBookings({
   const [error, setError] = useState<string | null>(null);
   /** Bumped when an action succeeded: the effect below keeps the keyboard focus on the page if the button is gone. */
   const [doneCount, setDoneCount] = useState(0);
+  /** Armed by a success, consumed once when the rescue below runs: a later change of the rows never moves the focus again. */
+  const rescueArmed = useRef(false);
   const noticeBox = useRef<HTMLDivElement>(null);
 
   const all = [...upcoming, ...past];
@@ -98,20 +112,25 @@ export function ClientBookings({
 
   // The dialog hands the focus back to the button that opened it. After a success that button may be gone (a cancelled
   // registration moves to « Passées », which has neither action): the focus fell on the page, it goes to the line that
-  // says what happened. The check runs again when the rows change, as the new page may arrive after the dialog closed.
+  // says what happened, once. The check runs again when the rows change while armed, as the new page may arrive after
+  // the dialog closed; opening a dialog again disarms it.
   useEffect(() => {
-    if (doneCount === 0) return;
+    if (!rescueArmed.current) return;
     const active = document.activeElement;
-    if (active === null || active === document.body) noticeBox.current?.focus();
+    if (active !== null && active !== document.body) return;
+    rescueArmed.current = false;
+    noticeBox.current?.focus();
   }, [doneCount, rowsKey]);
 
   function openMove(bookingId: string) {
+    rescueArmed.current = false;
     setNotice(null);
     setUnenrollId(null);
     setMoveId(bookingId);
   }
 
   function openUnenroll(bookingId: string) {
+    rescueArmed.current = false;
     setNotice(null);
     setError(null);
     setMoveId(null);
@@ -140,6 +159,7 @@ export function ClientBookings({
           setError(res.error);
           return;
         }
+        rescueArmed.current = true;
         setUnenrollId(null);
         setNotice(unenrolledMessage([customerName], res.cancelled, res.ticketsReturned));
         setDoneCount((n) => n + 1);
@@ -193,6 +213,7 @@ export function ClientBookings({
           customerName={customerName}
           onClose={() => setMoveId(null)}
           onDone={(message) => {
+            rescueArmed.current = true;
             setMoveId(null);
             setNotice(message);
             setDoneCount((n) => n + 1);

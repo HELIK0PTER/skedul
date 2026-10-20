@@ -3,7 +3,12 @@ import { Ticket } from "lucide-react";
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { StatusMark } from "@/components/dashboard/status-mark";
 import { TypeChip } from "@/components/dashboard/type-chip";
-import { OfferTicketsButton, WalletGroupActions } from "@/components/dashboard/wallet-actions";
+import {
+  OfferNotice,
+  OfferTicketsButton,
+  OfferTicketsProvider,
+  WalletGroupActions,
+} from "@/components/dashboard/wallet-actions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { TypeOption } from "@/lib/back-office/catalog-reads";
 import { formatCount, plural } from "@/lib/back-office/format";
@@ -115,36 +120,45 @@ function WalletGroupSection({
   );
 }
 
-/** « Portefeuille »: one section per ticket type the client holds tickets of, with the pro's wallet actions. */
+/**
+ * « Portefeuille »: one section per ticket type the client holds tickets of, with the pro's wallet actions. The offer
+ * is owned once by OfferTicketsProvider: its trigger sits in the header while the wallet holds tickets and in the empty
+ * state while it does not (never both), and its success line, an always-mounted status region, stays in the header.
+ */
 export function ClientWallet({ customerId, groups, typeOptions, todayKey }: ClientWalletProps) {
   return (
-    <Card>
-      <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
-        <CardTitle>Portefeuille</CardTitle>
-        <OfferTicketsButton customerId={customerId} typeOptions={typeOptions} todayKey={todayKey} />
-      </CardHeader>
-      <CardContent>
-        {groups.length === 0 ? (
-          <EmptyState
-            bare
-            icon={Ticket}
-            title="Aucun ticket"
-            description="Les tickets achetés ou offerts à ce client apparaîtront ici."
-            action={<OfferTicketsButton customerId={customerId} typeOptions={typeOptions} todayKey={todayKey} />}
-          />
-        ) : (
-          <div className="divide-y divide-border">
-            {groups.map((group) => (
-              <WalletGroupSection
-                key={group.ticketTypeId}
-                customerId={customerId}
-                group={group}
-                typeOptions={typeOptions}
-              />
-            ))}
+    <OfferTicketsProvider customerId={customerId} typeOptions={typeOptions} todayKey={todayKey}>
+      <Card>
+        <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
+          <CardTitle>Portefeuille</CardTitle>
+          <div className="flex flex-col items-start sm:items-end">
+            {groups.length > 0 && <OfferTicketsButton />}
+            <OfferNotice />
           </div>
-        )}
-      </CardContent>
-    </Card>
+        </CardHeader>
+        <CardContent>
+          {groups.length === 0 ? (
+            <EmptyState
+              bare
+              icon={Ticket}
+              title="Aucun ticket"
+              description="Les tickets achetés ou offerts à ce client apparaîtront ici."
+              action={<OfferTicketsButton />}
+            />
+          ) : (
+            <div className="divide-y divide-border">
+              {groups.map((group) => (
+                <WalletGroupSection
+                  key={group.ticketTypeId}
+                  customerId={customerId}
+                  group={group}
+                  typeOptions={typeOptions}
+                />
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </OfferTicketsProvider>
   );
 }
