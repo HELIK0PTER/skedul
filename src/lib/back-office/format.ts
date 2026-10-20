@@ -1,7 +1,7 @@
 /**
  * Formatting helpers of the back-office and of the client e-mails. Pure: every
  * function takes the time zone explicitly (never the host zone), and no output
- * contains an em or en dash (UI rule), unlike datetime.formatSlot.
+ * contains an em or en dash (UI rule).
  */
 import { formatDayMonth, formatDayMonthYear, mondayOf, parseKey, todayKey } from "@/lib/civil-date";
 import { frenchFirst } from "@/lib/datetime";
@@ -32,7 +32,7 @@ export function formatTimeRange(start: Date, end: Date, tz: string): string {
   return `${time.format(start)} à ${time.format(end)}`;
 }
 
-/** « lun. 12 octobre 2026 · 19:00 à 20:00 » in tz (the dash-free twin of datetime.formatSlot); « dim. 1er novembre 2026 » on a first. */
+/** « lun. 12 octobre 2026 · 19:00 à 20:00 » in tz; « dim. 1er novembre 2026 » on a first. */
 export function formatWhen(start: Date, end: Date, tz: string): string {
   return `${frenchFirst(formatter(tz, "dateLong").format(start))} · ${formatTimeRange(start, end, tz)}`;
 }

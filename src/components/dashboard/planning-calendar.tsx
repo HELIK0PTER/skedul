@@ -54,7 +54,7 @@ export function PlanningNotice({ notice }: { notice: string | null }) {
       tabIndex={-1}
       className={cn(
         notice &&
-          "mb-3 flex items-start gap-2 rounded-xl bg-success-muted px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          "mb-3 flex items-start gap-2 rounded-xl bg-success-muted px-3 py-2 text-sm text-foreground wrap-anywhere focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
       )}
     >
       {notice && (

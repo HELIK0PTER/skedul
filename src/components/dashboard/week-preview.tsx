@@ -59,7 +59,7 @@ export function WeekPreview({
 
   // Below 640 px the preview opens on one day; once the pro clicks the toggle, their choice wins.
   const wide = useSyncExternalStore(subscribeWide, readWide, () => true);
-  const [picked, setView] = useState<"day" | "week" | null>(null);
+  const [picked, setPicked] = useState<"day" | "week" | null>(null);
   const view = picked ?? (wide ? "week" : "day");
   const todayIndex = days.indexOf(todayKey);
   const [dayIndex, setDayIndex] = useState(todayIndex >= 0 ? todayIndex : 0);
@@ -164,7 +164,7 @@ export function WeekPreview({
               <button
                 key={v}
                 type="button"
-                onClick={() => setView(v)}
+                onClick={() => setPicked(v)}
                 aria-pressed={view === v}
                 className={cn(
                   "rounded-md px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",

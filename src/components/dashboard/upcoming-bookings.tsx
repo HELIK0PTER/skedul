@@ -1,28 +1,24 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { ChevronRight, CircleCheck } from "lucide-react";
+import { useState } from "react";
+import { ChevronRight } from "lucide-react";
 
 import { BookingDetailDialog } from "@/components/dashboard/booking-detail-dialog";
 import { CoverageBadge } from "@/components/dashboard/coverage-badge";
+import { PlanningNotice } from "@/components/dashboard/planning-calendar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { BookingDetailVM } from "@/lib/back-office/dashboard-reads";
 
 /**
  * Dashboard « Prochaines inscriptions »: each row opens the booking's details. The dialog is held by id, so an
- * unenrolled booking closes it once the list refreshes. The success line of an unenrollment lives here, in a status
- * region that is always mounted (a region added together with its text is not reliably announced): the dialog and
- * the row it came from are gone by then, so the line takes the focus.
+ * unenrolled booking closes it once the list refreshes. The success line of an unenrollment is the shared
+ * PlanningNotice (an always-mounted status region that takes the focus with a new line): the dialog and the row it
+ * came from are gone by then.
  */
 export function UpcomingBookings({ bookings }: { bookings: BookingDetailVM[] }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const statusLine = useRef<HTMLParagraphElement>(null);
   const selected = bookings.find((b) => b.bookingId === selectedId) ?? null;
-
-  useEffect(() => {
-    if (notice) statusLine.current?.focus();
-  }, [notice]);
 
   return (
     <Card className="mt-6">
@@ -30,19 +26,7 @@ export function UpcomingBookings({ bookings }: { bookings: BookingDetailVM[] }) 
         <CardTitle>Prochaines inscriptions</CardTitle>
       </CardHeader>
       <CardContent>
-        <p
-          ref={statusLine}
-          role="status"
-          tabIndex={-1}
-          className={
-            notice
-              ? "mb-3 flex items-start gap-2 rounded-xl bg-success-muted px-3 py-2 text-sm text-foreground wrap-anywhere focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              : "sr-only"
-          }
-        >
-          {notice && <CircleCheck className="mt-0.5 size-4 shrink-0 text-green-700" aria-hidden />}
-          {notice}
-        </p>
+        <PlanningNotice notice={notice} />
         {bookings.length === 0 ? (
           <p className="py-6 text-center text-sm text-zinc-600">Aucune inscription à venir pour le moment.</p>
         ) : (

@@ -134,26 +134,6 @@ export function instantFromWallClock(
   return new Date(naive - before);
 }
 
-/** Format a slot range, e.g. "lun. 23 juin 2026 · 14:00 – 15:00". */
-export function formatSlot(start: Date, end: Date, tz: string): string {
-  const date = frenchFirst(
-    new Intl.DateTimeFormat("fr-FR", {
-      weekday: "short",
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-      timeZone: tz,
-    }).format(start),
-  );
-  const t = (d: Date) =>
-    new Intl.DateTimeFormat("fr-FR", {
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZone: tz,
-    }).format(d);
-  return `${date} · ${t(start)} – ${t(end)}`;
-}
-
 export function formatTime(d: Date, tz: string): string {
   return new Intl.DateTimeFormat("fr-FR", {
     hour: "2-digit",

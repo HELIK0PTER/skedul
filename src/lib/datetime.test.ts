@@ -8,7 +8,6 @@ import {
   formatDateLong,
   formatDateShort,
   formatDateTimeShort,
-  formatSlot,
   frenchFirst,
   instantFromWallClock,
   startOfDayKey,
@@ -156,11 +155,9 @@ test("frenchFirst leaves every other number alone", () => {
 
 test("the long date labels of datetime.ts write « 1er » on the first of the month, host zone ignored", () => {
   const first = new Date("2026-11-01T10:00:00Z");
-  const end = new Date("2026-11-01T11:00:00Z");
   assert.equal(formatDateLong(first, TZ), "dimanche 1er novembre");
   assert.equal(formatDateShort(first, TZ), "1er nov. 2026");
   assert.equal(formatDateTimeShort(first, TZ), "1er nov. 2026, 11:00");
-  assert.ok(formatSlot(first, end, TZ).startsWith("dim. 1er novembre 2026 · 11:00"));
   // Other days keep their number.
   const eleventh = new Date("2026-11-11T10:00:00Z");
   assert.equal(formatDateLong(eleventh, TZ), "mercredi 11 novembre");

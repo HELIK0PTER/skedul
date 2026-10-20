@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { after } from "next/server";
 
 import { AlertsCard } from "@/components/dashboard/alerts-card";
 import { CopyLinkButton } from "@/components/dashboard/copy-link-button";
@@ -11,6 +12,8 @@ import { WeekPreview } from "@/components/dashboard/week-preview";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { dashboardAlerts, gettingStartedSteps, kpiTiles } from "@/lib/back-office/dashboard-view";
+import { ensureHorizon } from "@/lib/booking/occurrences";
+import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { getPlanningPage } from "@/server/planning-queries";
 import { requireProfessional } from "@/server/pro-context";
@@ -21,6 +24,16 @@ export const metadata: Metadata = { title: "Vue d'ensemble" };
 export default async function DashboardPage() {
   const pro = await requireProfessional();
   const [data, planning] = await Promise.all([getDashboardPage(pro), getPlanningPage(pro, undefined)]);
+  // Rendering never writes: when a series is generated less than a few weeks ahead, ensureHorizon runs after the response.
+  if (planning.needsHorizon) {
+    after(async () => {
+      try {
+        await ensureHorizon(db, pro.id);
+      } catch (err) {
+        console.error("[dashboard] ensureHorizon failed", err);
+      }
+    });
+  }
   const publicUrl = `${env.APP_URL}/${pro.slug}`;
   const steps = gettingStartedSteps(data.gettingStarted);
 
