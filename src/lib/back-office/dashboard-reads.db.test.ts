@@ -44,7 +44,7 @@ async function seanceAt(
   return { eventId, seanceId };
 }
 
-dbTest("getDashboardData counts the séances of the next 7 days and their confirmed registrants", async ({ db, pro }) => {
+dbTest("getDashboardData counts the séances of the next 7 days and their registrants, confirmed bookings and live holds", async ({ db, pro }) => {
   const now = new Date();
   const alice = await rowCustomer(db, pro);
   const bruno = await rowCustomer(db, pro);
@@ -68,7 +68,7 @@ dbTest("getDashboardData counts the séances of the next 7 days and their confir
   await seanceAt(db, pro, addMinutes(now, 72 * HOUR), { status: "cancelled" });
   await seanceAt(db, pro, addMinutes(now, 7 * DAY));
   await seanceAt(db, pro, addMinutes(now, -HOUR));
-  // Counted: the last minute of the window, one confirmed and one pending registrant.
+  // Counted: the last minute of the window, one confirmed and one pending registrant (a live hold, as on the planning).
   const last = await seanceAt(db, pro, addMinutes(now, 7 * DAY - 1), { seatsTaken: 2 });
   await rowBooking(db, pro, { occurrenceId: last.seanceId, customerId: alice });
   const pendingPurchase = await rowPurchase(db, pro, { customerId: bruno, offerId, ticketTypeId: typeId });
@@ -87,7 +87,7 @@ dbTest("getDashboardData counts the séances of the next 7 days and their confir
 
   const { kpis } = await getDashboardData(db, proInfo(pro), now, false);
   assert.equal(kpis.upcomingSeances7d, 4);
-  assert.equal(kpis.upcomingRegistrants7d, 3);
+  assert.equal(kpis.upcomingRegistrants7d, 4);
 });
 
 // R1: « empty » is measured on the live seats: seats_taken also counts a hold that lapsed and was not released yet.
@@ -113,7 +113,7 @@ dbTest("getDashboardData: a séance kept only by a lapsed hold is empty under a 
 
   const { kpis } = await getDashboardData(db, proInfo(pro), now, false);
   assert.equal(kpis.upcomingSeances7d, 1, "the lapsed hold's séance is hidden by the time off, the live hold's is not");
-  assert.equal(kpis.upcomingRegistrants7d, 0, "a pending booking is no registrant");
+  assert.equal(kpis.upcomingRegistrants7d, 1, "the live hold is a registrant, the lapsed one is not");
 });
 
 dbTest("getDashboardData counts the valid available tickets, archived types included", async ({ db, pro }) => {
@@ -328,7 +328,7 @@ dbTest("getDashboardData an RDV row takes the name and the colour of its type", 
   assert.equal(upcomingBookings[0].color, "#0f766e");
 });
 
-dbTest("getDashboardData a pending booking is never a registrant nor an upcoming booking, lapsed hold or not", async ({ db, pro }) => {
+dbTest("getDashboardData a live hold is a registrant like on the planning, a lapsed one is not, and no pending booking is an upcoming booking", async ({ db, pro }) => {
   const now = new Date();
   const typeId = await rowType(db, pro);
   const offerId = await rowOffer(db, pro, typeId);
@@ -366,7 +366,7 @@ dbTest("getDashboardData a pending booking is never a registrant nor an upcoming
 
   const { kpis, upcomingBookings } = await getDashboardData(db, proInfo(pro), now, false);
   assert.equal(kpis.upcomingSeances7d, 1);
-  assert.equal(kpis.upcomingRegistrants7d, 1);
+  assert.equal(kpis.upcomingRegistrants7d, 2, "Alice (confirmed) and the live hold; the lapsed hold and the phantom RDV are not");
   assert.deepEqual(
     upcomingBookings.map((b) => b.bookingId),
     [aliceBooking],

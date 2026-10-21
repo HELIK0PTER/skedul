@@ -63,9 +63,10 @@ const DAY_MS = 86_400_000;
 const UPCOMING_LIMIT = 8;
 
 /**
- * Séances of [now, now + 7 d) and their confirmed registrants (Q25). A pending booking is no registrant, its hold
- * lapsed or not; an RDV counts only with a confirmed booking (one that only a lapsed hold keeps is not an appointment).
- * A séance under a time off is « empty » on its live seats, as on the planning: a seat kept only by a lapsed hold is free.
+ * Séances of [now, now + 7 d) and their registrants (Q25), counted as the planning counts its « inscrits » (liveSeats):
+ * the confirmed bookings plus the holds still live (a pending booking whose hold has not ended); a lapsed hold is a
+ * free seat. An RDV counts only with a confirmed booking (one that only a lapsed hold keeps is not an appointment).
+ * A séance under a time off is « empty » on its live seats, as on the planning.
  */
 async function weekCounts(
   db: Db,
@@ -139,7 +140,7 @@ async function weekCounts(
     .where(
       and(
         eq(booking.professionalId, professionalId),
-        eq(booking.status, "confirmed"),
+        or(eq(booking.status, "confirmed"), and(eq(booking.status, "pending"), gte(booking.holdExpiresAt, now))),
         inArray(booking.occurrenceId, counted),
       ),
     );
