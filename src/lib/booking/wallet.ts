@@ -185,9 +185,21 @@ export async function offerTickets(
   return { ok: true, effects, ticketIds };
 }
 
+/** The balance predicate of spec § 9: the tickets of this customer that are available and not expired at `now`. */
+function usableTickets(input: { professionalId: string; customerId: string }, now: Date): SQL | undefined {
+  return and(
+    eq(ticket.professionalId, input.professionalId),
+    eq(ticket.customerId, input.customerId),
+    eq(ticket.status, "available"),
+    or(isNull(ticket.expiresAt), gt(ticket.expiresAt, now)),
+  );
+}
+
 /**
  * Usable tickets per type (the balance predicate of spec § 9: available and
  * not expired at `now`), with the soonest expiry; ordered by type id.
+ * `nextExpiry` skips the tickets without limit (SQL min ignores null): a type
+ * that mixes dated and undated tickets needs `walletBalanceByExpiry`.
  */
 export async function walletBalance(
   db: Db,
@@ -201,16 +213,30 @@ export async function walletBalance(
       nextExpiry: sql<Date | null>`min(${ticket.expiresAt})`.mapWith(ticket.expiresAt),
     })
     .from(ticket)
-    .where(
-      and(
-        eq(ticket.professionalId, input.professionalId),
-        eq(ticket.customerId, input.customerId),
-        eq(ticket.status, "available"),
-        or(isNull(ticket.expiresAt), gt(ticket.expiresAt, now)),
-      ),
-    )
+    .where(usableTickets(input, now))
     .groupBy(ticket.ticketTypeId)
     .orderBy(asc(ticket.ticketTypeId));
+}
+
+/**
+ * The same usable tickets, split by type AND expiry instant (null: no limit): what the client e-mails need to
+ * name every expiry date of a type. Ordered by type id, then soonest first, no limit last.
+ */
+export async function walletBalanceByExpiry(
+  db: Db,
+  input: { professionalId: string; customerId: string },
+  now: Date = new Date(),
+): Promise<{ ticketTypeId: string; expiresAt: Date | null; usable: number }[]> {
+  return db
+    .select({
+      ticketTypeId: ticket.ticketTypeId,
+      expiresAt: ticket.expiresAt,
+      usable: sql<number>`count(*)::int`,
+    })
+    .from(ticket)
+    .where(usableTickets(input, now))
+    .groupBy(ticket.ticketTypeId, ticket.expiresAt)
+    .orderBy(asc(ticket.ticketTypeId), sql`${ticket.expiresAt} asc nulls last`);
 }
 
 /* ───────────────────── Task 29: ticket actions + move (E8) ───────────────────── */

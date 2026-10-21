@@ -86,6 +86,58 @@ dbTest("booking_confirmed: one e-mail with the links, the ticket, the tickets le
   assert.ok(mail.html.includes(esc("Vous pouvez annuler en ligne jusqu'au ")), "cancel deadline sentence");
 });
 
+dbTest("booking_confirmed: the tickets left of one type are listed per expiry date, with the right plural", async ({ db, pro }) => {
+  const now = new Date();
+  const collectif = await makeType(db, pro, { name: "Cours collectif" });
+  const { occurrences: [occ] } = await makeEvent(db, pro, { title: "Altinha du soir", ticketTypeIds: [collectif] });
+  const customerId = await makeCustomer(db, pro, { name: "Beatriz Almeida", email: testEmail("left") });
+  const soon = addDaysMs(now, 20);
+  const later = addDaysMs(now, 90);
+  await giveTickets(db, pro, customerId, collectif, 1, { expiresAt: soon });
+  await giveTickets(db, pro, customerId, collectif, 2, { expiresAt: later });
+  await giveTickets(db, pro, customerId, collectif, 1);
+  // a guest place spends no ticket: the wallet the mail reads is the four tickets above
+  const reg = must(
+    await registerPro(
+      db,
+      { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: occ.id, customerId, asGuest: true },
+      now,
+    ),
+  );
+
+  const [mail] = emailsOf(await planEffect(db, { type: "email.booking_confirmed", bookingId: reg.bookingId }, depsAt(now)), pro.proId);
+  const dated = (expiresAt: Date, n: number) => `• ${n} ${expiryLabel(expiresAt, pro.tz, now, n)}`;
+  assert.ok(mail.html.includes("Vos tickets restants :"));
+  assert.ok(
+    mail.html.includes(
+      `<p>${esc("4 × Cours collectif")}<br>${esc(dated(soon, 1))}<br>${esc(dated(later, 2))}<br>${esc("• 1 sans limite de validité")}</p>`,
+    ),
+    "the type's total, then one sub-line per expiry date (soonest first), the tickets without limit last",
+  );
+  assert.ok(dated(soon, 1).includes(" valable jusqu'au ") && dated(later, 2).includes(" valables jusqu'au "), "the wording agrees with each count");
+  assert.equal(mail.html.split(" × ").length - 1, 1, "one line for the one type");
+});
+
+dbTest("booking_confirmed: a type whose tickets all share one expiry stays on one line", async ({ db, pro }) => {
+  const now = new Date();
+  const carnet = await makeType(db, pro, { name: "Carnet" });
+  const { occurrences: [occ] } = await makeEvent(db, pro, { title: "Altinha du soir", ticketTypeIds: [carnet] });
+  const customerId = await makeCustomer(db, pro, { name: "Beatriz Almeida", email: testEmail("one") });
+  const expires = addDaysMs(now, 30);
+  await giveTickets(db, pro, customerId, carnet, 3, { expiresAt: expires });
+  const reg = must(
+    await registerPro(
+      db,
+      { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: occ.id, customerId, asGuest: true },
+      now,
+    ),
+  );
+  const [mail] = emailsOf(await planEffect(db, { type: "email.booking_confirmed", bookingId: reg.bookingId }, depsAt(now)));
+  assert.ok(mail.html.includes(esc(`3 × Carnet, ${expiryLabel(expires, pro.tz, now, 3)}`)));
+  assert.ok(expiryLabel(expires, pro.tz, now, 3).startsWith("valables jusqu'au "));
+  assert.ok(!mail.html.includes("• "), "no sub-line for a single expiry");
+});
+
 dbTest("booking_confirmed carries the effective location of the séance", async ({ db, pro }) => {
   const now = new Date();
   const typeId = await makeType(db, pro);
@@ -462,9 +514,10 @@ dbTest("tickets_offered: the count and the type of that action; another pro's cu
   assert.equal(m3.to, email);
   assert.equal(m3.subject, `${business} vous offre 3 tickets`);
   assert.ok(
-    m3.html.includes(esc(`vous offre 3 tickets « Cours collectif », ${expiryLabel(expires, pro.tz, now)}.`)),
+    m3.html.includes(esc(`vous offre 3 tickets « Cours collectif », ${expiryLabel(expires, pro.tz, now, 3)}.`)),
     "three tickets with their expiry",
   );
+  assert.ok(expiryLabel(expires, pro.tz, now, 3).startsWith("valables jusqu'au "), "several tickets: valables");
   assert.ok(m3.html.includes(linkOf(customerId)));
 
   const oneEffect = effectOf(one.effects, "email.tickets_offered");

@@ -16,6 +16,11 @@ export function mailParagraph(text: string): string {
   return `<p>${escapeHtml(text)}</p>`;
 }
 
+/** One <p> of escaped lines separated by <br>: a heading line and its sub-lines stay together. */
+export function mailLines(lines: readonly string[]): string {
+  return `<p>${lines.map(escapeHtml).join("<br>")}</p>`;
+}
+
 /** Two-column table of escaped label / value rows. */
 export function mailDetails(rows: readonly { label: string; value: string }[]): string {
   const lines = rows

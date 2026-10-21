@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   currencySymbol,
+  expiryGroups,
   expiryLabel,
+  expirySummary,
   formatCount,
   formatDayMonthOf,
   formatDayMonthTime,
@@ -101,6 +103,60 @@ test("expiryLabel reads the last valid day and the year in the given zone", () =
   assert.equal(expiryLabel(expiry, PARIS, at("2026-12-01T03:00:00Z")), "valable jusqu'au 31/12 inclus");
   // Still 31 December in Los Angeles at 03:00Z on 1 January: same year.
   assert.equal(expiryLabel(at("2027-01-01T08:00:00Z"), LA, at("2027-01-01T03:00:00Z")), "valable jusqu'au 31/12 inclus");
+});
+
+test("expiryLabel agrees with the count it names: one ticket valable, several valables", () => {
+  const now = at("2026-10-14T10:00:00Z");
+  const expiry = at("2026-12-12T23:00:00Z");
+  assert.equal(expiryLabel(expiry, PARIS, now, 1), "valable jusqu'au 12/12 inclus");
+  assert.equal(expiryLabel(expiry, PARIS, now, 2), "valables jusqu'au 12/12 inclus");
+  assert.equal(expiryLabel(expiry, PARIS, now, 3), "valables jusqu'au 12/12 inclus");
+  assert.equal(expiryLabel(expiry, PARIS, now), "valable jusqu'au 12/12 inclus", "no count: a single ticket");
+  assert.equal(expiryLabel(null, PARIS, now, 3), "sans limite de validité", "no limit has no agreement");
+});
+
+test("expiryGroups: one group per last valid day, soonest first, no limit last; the year only when it is not this one", () => {
+  const now = at("2026-10-14T10:00:00Z");
+  const groups = expiryGroups(
+    [
+      { expiresAt: null, count: 1 },
+      { expiresAt: at("2027-04-15T22:00:00Z"), count: 10 },
+      // two instants of the same local last day (12/12 in Paris) make one group
+      { expiresAt: at("2026-12-12T23:00:00Z"), count: 1 },
+      { expiresAt: at("2026-12-12T22:30:00Z"), count: 1 },
+    ],
+    PARIS,
+    now,
+  );
+  assert.deepEqual(groups, [
+    { count: 2, text: "valables jusqu'au 12/12 inclus" },
+    { count: 10, text: "valables jusqu'au 15/04/2027 inclus" },
+    { count: 1, text: "sans limite de validité" },
+  ]);
+  assert.deepEqual(expiryGroups([{ expiresAt: at("2026-12-12T23:00:00Z"), count: 1 }], PARIS, now), [
+    { count: 1, text: "valable jusqu'au 12/12 inclus" },
+  ]);
+  assert.deepEqual(expiryGroups([], PARIS, now), []);
+});
+
+test("expirySummary: « N valables jusqu'au JJ/MM inclus » then « N sans limite de validité », fr-FR thousands", () => {
+  const now = at("2026-10-14T10:00:00Z");
+  assert.deepEqual(
+    expirySummary(
+      [
+        { expiresAt: at("2026-12-12T23:00:00Z"), count: 1 },
+        { expiresAt: at("2027-01-12T23:00:00Z"), count: 1500 },
+        { expiresAt: null, count: 2 },
+      ],
+      PARIS,
+      now,
+    ),
+    [
+      "1 valable jusqu'au 12/12 inclus",
+      `${(1500).toLocaleString("fr-FR")} valables jusqu'au 12/01/2027 inclus`,
+      "2 sans limite de validité",
+    ],
+  );
 });
 
 test("plural: 0 and 1 take the singular, fr-FR thousands", () => {

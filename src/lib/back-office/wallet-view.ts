@@ -5,10 +5,9 @@
  * Pure: `now` and `tz` are arguments, the host zone never matters. Tickets of a
  * type that is not in `types` are ignored (the foreign key makes it impossible).
  */
-import { expiryLabel, formatCount, plural } from "@/lib/back-office/format";
+import { expiryLabel, expirySummary } from "@/lib/back-office/format";
 import { ORIGIN_LABELS, type AlertTone } from "@/lib/back-office/labels";
 import {
-  compareKeys,
   formatDayMonth,
   formatDayMonthYear,
   parseKey,
@@ -140,24 +139,13 @@ function doneView(t: WalletTicketRow, tz: string, now: Date): WalletTicketView {
 const doneAt = (t: WalletTicketRow): number =>
   (t.status === "booked" ? (t.bookingStartsAt ?? t.statusChangedAt) : t.statusChangedAt).getTime();
 
-/** One line per last valid day (the year is named like `expiryLabel` does: only when that day is not in now's local year), then the tickets without limit. */
+/** One line per last valid day, then the tickets without limit (the shared `expirySummary` of format.ts, also used by the client e-mails). */
 function expirySummaryOf(usable: readonly WalletTicketRow[], tz: string, now: Date): string[] {
-  const perDay = new Map<DateKey, number>();
-  let unlimited = 0;
-  for (const t of usable) {
-    if (t.expiresAt === null) {
-      unlimited += 1;
-      continue;
-    }
-    const day = lastValidDay(t.expiresAt, tz);
-    perDay.set(day, (perDay.get(day) ?? 0) + 1);
-  }
-  const thisYear = yearOf(now, tz);
-  const summary = [...perDay.entries()]
-    .sort(([a], [b]) => compareKeys(a, b))
-    .map(([day, n]) => `${plural(n, "valable", "valables")} jusqu'au ${dayLabel(day, thisYear)} inclus`);
-  if (unlimited > 0) summary.push(`${formatCount(unlimited)} sans limite de validité`);
-  return summary;
+  return expirySummary(
+    usable.map((t) => ({ expiresAt: t.expiresAt, count: 1 })),
+    tz,
+    now,
+  );
 }
 
 function buildGroup(

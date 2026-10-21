@@ -31,8 +31,16 @@ const confirmed: BookingConfirmedArgs = {
   coverageLabel: "Ticket",
   ticketTypeName: "Cours collectif",
   ticketsLeft: [
-    { typeName: "Cours collectif", count: 3, expiryText: "valable jusqu'au 12/01 inclus" },
-    { typeName: "Cours d'essai", count: 1, expiryText: "sans limite de validité" },
+    {
+      typeName: "Cours collectif",
+      count: 3,
+      expiry: [
+        { count: 2, text: "valables jusqu'au 12/01 inclus" },
+        { count: 1, text: "sans limite de validité" },
+      ],
+    },
+    { typeName: "Cours d'essai", count: 1, expiry: [{ count: 1, text: "sans limite de validité" }] },
+    { typeName: "Carnet", count: 4, expiry: [{ count: 4, text: "valables jusqu'au 15/04/2027 inclus" }] },
   ],
   cancelText: "Vous pouvez annuler en ligne jusqu'à 24 h avant le début.",
   personalLinkUrl: LINK,
@@ -89,7 +97,7 @@ const offered: TicketsOfferedArgs = {
   businessName: "Altinha Paris",
   typeName: "Cours collectif",
   count: 3,
-  expiryText: "valable jusqu'au 12/01 inclus",
+  expiryText: "valables jusqu'au 12/01 inclus",
   personalLinkUrl: LINK,
 };
 
@@ -107,7 +115,16 @@ const TEMPLATES: { name: string; normal: Mail; evil: Mail; title: string }[] = [
       location: EVIL,
       coverageLabel: EVIL,
       ticketTypeName: EVIL,
-      ticketsLeft: [{ typeName: EVIL, count: 2, expiryText: EVIL }],
+      ticketsLeft: [
+        {
+          typeName: EVIL,
+          count: 2,
+          expiry: [
+            { count: 1, text: EVIL },
+            { count: 1, text: EVIL },
+          ],
+        },
+      ],
       cancelText: EVIL,
       personalLinkUrl: EVIL,
       calendar: { googleUrl: EVIL, outlookUrl: EVIL, icsUrl: EVIL },
@@ -253,9 +270,16 @@ test("booking-confirmed: details, tickets left, cancel sentence and the three ca
   assert.ok(mail.html.includes(">Lieu</td><td style=\"text-align:right\">Parc de la Villette</td>"));
   assert.ok(mail.html.includes(">Couverture</td><td style=\"text-align:right\">Ticket (Cours collectif)</td>"));
   assert.ok(mail.html.includes("Vos tickets restants :"));
-  assert.ok(mail.html.includes(h("3 × Cours collectif, valable jusqu'au 12/01 inclus")));
+  // a type with several expiry dates: its count, then one sub-line per date, « N valables » / « N sans limite »
+  assert.ok(
+    mail.html.includes(
+      `<p>${h("3 × Cours collectif")}<br>${h("• 2 valables jusqu'au 12/01 inclus")}<br>${h("• 1 sans limite de validité")}</p>`,
+    ),
+  );
+  // a type with one expiry class stays on one line, and its wording agrees with the count
   assert.ok(mail.html.includes(h("1 × Cours d'essai, sans limite de validité")));
-  assert.equal(mail.html.split(" × ").length - 1, 2, "one line per ticket type left");
+  assert.ok(mail.html.includes(h("4 × Carnet, valables jusqu'au 15/04/2027 inclus")));
+  assert.equal(mail.html.split(" × ").length - 1, 3, "one line per ticket type left");
   assert.ok(mail.html.includes(h("Vous pouvez annuler en ligne jusqu'à 24 h avant le début.")));
   assert.ok(mail.html.includes(`href="${confirmed.calendar.googleUrl.replace("&", "&amp;")}"`));
   assert.ok(mail.html.includes(">Ajouter à Google Agenda</a>"));
@@ -363,7 +387,7 @@ test("tickets-offered: singular and plural subject, wallet sentence", () => {
   assert.ok(many.html.includes(">Tickets offerts</h1>"));
   assert.ok(
     many.html.includes(
-      h("Bonjour Beatriz Almeida, Altinha Paris vous offre 3 tickets « Cours collectif », valable jusqu'au 12/01 inclus. Ils sont déjà dans votre portefeuille."),
+      h("Bonjour Beatriz Almeida, Altinha Paris vous offre 3 tickets « Cours collectif », valables jusqu'au 12/01 inclus. Ils sont déjà dans votre portefeuille."),
     ),
   );
   const one = ticketsOfferedEmail({ ...offered, count: 1, expiryText: "sans limite de validité" });

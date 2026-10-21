@@ -3,7 +3,7 @@
  * function takes the time zone explicitly (never the host zone), and no output
  * contains an em or en dash (UI rule).
  */
-import { formatDayMonth, formatDayMonthYear, mondayOf, parseKey, todayKey } from "@/lib/civil-date";
+import { compareKeys, formatDayMonth, formatDayMonthYear, mondayOf, parseKey, todayKey, type DateKey } from "@/lib/civil-date";
 import { frenchFirst } from "@/lib/datetime";
 import { lastValidDay } from "@/lib/ticket-expiry";
 
@@ -52,12 +52,52 @@ export function formatDayMonthTime(instant: Date, tz: string): string {
   return `${formatDayMonthOf(instant, tz)} ${formatter(tz, "time").format(instant)}`;
 }
 
-/** « valable jusqu'au 12/01 inclus » (« 12/01/2027 » when that last day is not in now's local year), or « sans limite de validité ». */
-export function expiryLabel(expiresAt: Date | null, tz: string, now: Date): string {
-  if (expiresAt === null) return "sans limite de validité";
-  const last = lastValidDay(expiresAt, tz);
+const NO_LIMIT = "sans limite de validité";
+
+/** « valable(s) jusqu'au 12/01 inclus » for `count` tickets whose last valid day is `last` (« 12/01/2027 » when that day is not in now's local year). */
+function lastDayLabel(last: DateKey, tz: string, now: Date, count: number): string {
   const sameYear = parseKey(last).y === parseKey(todayKey(now, tz)).y;
-  return `valable jusqu'au ${sameYear ? formatDayMonth(last) : formatDayMonthYear(last)} inclus`;
+  return `${pluralWord(count, "valable", "valables")} jusqu'au ${sameYear ? formatDayMonth(last) : formatDayMonthYear(last)} inclus`;
+}
+
+/**
+ * « valable jusqu'au 12/01 inclus » (« 12/01/2027 » when that last day is not in now's local year), or « sans limite de validité ».
+ * `count` is how many tickets the sentence speaks of (default 1): several take « valables ».
+ */
+export function expiryLabel(expiresAt: Date | null, tz: string, now: Date, count = 1): string {
+  return expiresAt === null ? NO_LIMIT : lastDayLabel(lastValidDay(expiresAt, tz), tz, now, count);
+}
+
+/** Tickets that share an expiry: `count` of them, valid until `expiresAt` (null: no limit). */
+export type ExpiryEntry = { expiresAt: Date | null; count: number };
+/** What a group of tickets says about its expiry, without its count: « valables jusqu'au 12/01 inclus » or « sans limite de validité ». */
+export type ExpiryGroup = { count: number; text: string };
+
+/**
+ * One group per last valid day (soonest first; two instants of the same local day make one group), then the tickets
+ * without limit. The wording follows each group's count (« valable » for 1, « valables » for more).
+ */
+export function expiryGroups(entries: readonly ExpiryEntry[], tz: string, now: Date): ExpiryGroup[] {
+  const perDay = new Map<DateKey, number>();
+  let unlimited = 0;
+  for (const entry of entries) {
+    if (entry.expiresAt === null) {
+      unlimited += entry.count;
+      continue;
+    }
+    const day = lastValidDay(entry.expiresAt, tz);
+    perDay.set(day, (perDay.get(day) ?? 0) + entry.count);
+  }
+  const groups = [...perDay.entries()]
+    .sort(([a], [b]) => compareKeys(a, b))
+    .map(([day, count]) => ({ count, text: lastDayLabel(day, tz, now, count) }));
+  if (unlimited > 0) groups.push({ count: unlimited, text: NO_LIMIT });
+  return groups;
+}
+
+/** « 2 valables jusqu'au 12/01 inclus », « 1 sans limite de validité »: one line per group of `expiryGroups`. */
+export function expirySummary(entries: readonly ExpiryEntry[], tz: string, now: Date): string[] {
+  return expiryGroups(entries, tz, now).map((group) => `${formatCount(group.count)} ${group.text}`);
 }
 
 /** The word alone: « jour » for 0 and 1, « jours » for the rest, an empty field (NaN) included. */

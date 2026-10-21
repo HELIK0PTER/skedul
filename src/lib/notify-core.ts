@@ -9,8 +9,8 @@
  */
 import { and, asc, eq, inArray, type SQL, sql } from "drizzle-orm";
 
-import { expiryLabel, formatWhen, formatWhenShort } from "@/lib/back-office/format";
-import { walletBalance } from "@/lib/booking/wallet";
+import { expiryGroups, expiryLabel, formatWhen, formatWhenShort, type ExpiryEntry } from "@/lib/back-office/format";
+import { walletBalanceByExpiry } from "@/lib/booking/wallet";
 import type { Effect } from "@/lib/booking/types";
 import { googleCalendarUrl, outlookCalendarUrl } from "@/lib/calendar-links";
 import { clientCancelDeadline } from "@/lib/cancellation";
@@ -18,7 +18,7 @@ import type { Db } from "@/lib/db/atomic";
 import { booking, customer, event, occurrence, professional, ticket, ticketMovement, ticketType } from "@/lib/db/schema";
 import { attendeeMovedEmail } from "@/lib/emails/attendee-moved";
 import { bookingCancelledEmail } from "@/lib/emails/booking-cancelled";
-import { bookingConfirmedEmail } from "@/lib/emails/booking-confirmed";
+import { bookingConfirmedEmail, type TicketsLeft } from "@/lib/emails/booking-confirmed";
 import { occurrenceCancelledEmail } from "@/lib/emails/occurrence-cancelled";
 import { occurrenceChangedEmail } from "@/lib/emails/occurrence-changed";
 import { ticketsOfferedEmail } from "@/lib/emails/tickets-offered";
@@ -163,20 +163,29 @@ async function bookedTicketTypeName(db: Db, b: BookingFacts): Promise<string | n
   return row?.name ?? null;
 }
 
-/** What the client still holds right now, one line per type, by type name. */
-async function ticketsLeftOf(db: Db, b: BookingFacts, now: Date) {
-  const balance = await walletBalance(db, { professionalId: b.professionalId, customerId: b.customerId }, now);
+/**
+ * What the client still holds right now, one entry per type (by type name), with one expiry group per last valid
+ * day: a type that mixes dated and undated tickets, or tickets of two carnets, names every date it has.
+ */
+async function ticketsLeftOf(db: Db, b: BookingFacts, now: Date): Promise<TicketsLeft[]> {
+  const balance = await walletBalanceByExpiry(db, { professionalId: b.professionalId, customerId: b.customerId }, now);
   if (balance.length === 0) return [];
   const types = await db
     .select({ id: ticketType.id, name: ticketType.name })
     .from(ticketType)
     .where(and(eq(ticketType.professionalId, b.professionalId), inArray(ticketType.id, balance.map((r) => r.ticketTypeId))));
   const names = new Map(types.map((t) => [t.id, t.name]));
-  return balance
-    .map((r) => ({
-      typeName: names.get(r.ticketTypeId) ?? "Ticket",
-      count: r.usable,
-      expiryText: expiryLabel(r.nextExpiry, b.tz, now),
+  const perType = new Map<string, ExpiryEntry[]>();
+  for (const r of balance) {
+    const entries = perType.get(r.ticketTypeId) ?? [];
+    entries.push({ expiresAt: r.expiresAt, count: r.usable });
+    perType.set(r.ticketTypeId, entries);
+  }
+  return [...perType.entries()]
+    .map(([typeId, entries]) => ({
+      typeName: names.get(typeId) ?? "Ticket",
+      count: entries.reduce((sum, e) => sum + e.count, 0),
+      expiry: expiryGroups(entries, b.tz, now),
     }))
     .sort((x, y) => x.typeName.localeCompare(y.typeName, "fr"));
 }
@@ -375,7 +384,7 @@ async function planTicketsOffered(db: Db, customerId: string, actionId: string, 
     businessName: c.businessName,
     typeName: offered[0].typeName,
     count: offered.length,
-    expiryText: expiryLabel(offered[0].expiresAt, c.tz, deps.now),
+    expiryText: expiryLabel(offered[0].expiresAt, c.tz, deps.now, offered.length),
     personalLinkUrl: personalLinkUrl(deps.appUrl, { id: c.id, linkVersion: c.linkVersion }, deps.guestKey),
   });
   return emails(c.professionalId, [{ to: c.email, ...mail }]);
