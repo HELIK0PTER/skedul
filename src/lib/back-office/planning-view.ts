@@ -51,7 +51,10 @@ export type PlanningItemVM = {
   lanes: number;
   status: OccurrenceStatus;
   capacity: number;
+  /** the raw seats_taken: also holds that lapsed and were not released yet; only the capacity floor reads it */
   seatsTaken: number;
+  /** the « inscrits »: confirmed bookings plus the holds still live (see PlanningItem.liveSeats) */
+  liveSeats: number;
   seatsShown: number;
   location: string | null;
   eventLocation: string | null;
@@ -92,12 +95,15 @@ const MONTHS_FR = [
   "décembre",
 ] as const;
 
-/** An empty scheduled event séance overlapping a time off is hidden (spec § 7); RDVs and booked or cancelled séances never. */
+/**
+ * An empty scheduled event séance overlapping a time off is hidden (spec § 7); RDVs and booked or cancelled séances
+ * never. Empty is measured on the live seats: a seat that only a lapsed hold keeps is already free.
+ */
 export function hiddenByTimeOff(
-  item: Pick<PlanningItem, "kind" | "status" | "seatsTaken" | "startsAt" | "endsAt">,
+  item: Pick<PlanningItem, "kind" | "status" | "liveSeats" | "startsAt" | "endsAt">,
   timeOff: readonly { startAt: Date; endAt: Date }[],
 ): boolean {
-  if (item.kind !== "seance" || item.status !== "scheduled" || item.seatsTaken > 0) return false;
+  if (item.kind !== "seance" || item.status !== "scheduled" || item.liveSeats > 0) return false;
   return timeOff.some(
     (t) => item.startsAt.getTime() < t.endAt.getTime() && item.endsAt.getTime() > t.startAt.getTime(),
   );
@@ -189,6 +195,7 @@ export function toPlanningVM(
       status: i.status,
       capacity: i.capacity,
       seatsTaken: i.seatsTaken,
+      liveSeats: i.liveSeats,
       seatsShown: i.seatsShown,
       location: i.location,
       eventLocation: i.eventLocation,
@@ -302,20 +309,48 @@ export function dayLongLabel(day: DateKey): string {
 }
 
 /**
+ * The registrants of a séance, said one way everywhere (the grid block, its accessible name, the mobile list, the
+ * dialog): « 2 inscrits sur 12 ». They are the confirmed bookings plus the holds still live (`liveSeats`); a hold
+ * that has lapsed is a free seat, even before the engine releases it.
+ */
+export function seatsText(item: Pick<PlanningItemVM, "liveSeats" | "capacity">): string {
+  return `${plural(item.liveSeats, "inscrit", "inscrits")} sur ${item.capacity}`;
+}
+
+/** « 2/12 »: the second line of a séance block and the title of the dashboard week preview. */
+export function seatsRatio(item: Pick<PlanningItemVM, "liveSeats" | "capacity">): string {
+  return `${item.liveSeats}/${item.capacity}`;
+}
+
+/** The line of the occurrence dialog: « 2 inscrits sur 12 · 10 places en ligne » (the two always add up to the capacity). */
+export function seatsSummary(item: Pick<PlanningItemVM, "liveSeats" | "capacity" | "seatsShown">): string {
+  return `${seatsText(item)} · ${plural(item.seatsShown, "place en ligne", "places en ligne")}`;
+}
+
+/**
+ * The capacity floor of a séance. It is the raw seats_taken: the engine keeps `greatest(capacity, seats_taken)` and
+ * does not release a lapsed hold first, so those seats count here although they are not registrants.
+ */
+export function minimumSeatsMessage(seatsTaken: number): string {
+  if (seatsTaken <= 0) return "Minimum 1 place.";
+  return `Minimum ${seatsTaken} : ${plural(seatsTaken, "place est déjà prise", "places sont déjà prises")}.`;
+}
+
+/**
  * The accessible name of a block of the week grid: title, when, then what the
  * block shows as its second line (the seats of a séance, the client of an RDV;
  * the seat count again when an RDV has no client to name), and « annulée ». A
  * button's name replaces its content, so the state must be part of it.
  */
 export function blockLabel(
-  item: Pick<PlanningItemVM, "title" | "kind" | "startsAt" | "endsAt" | "status" | "seatsTaken" | "capacity"> & {
+  item: Pick<PlanningItemVM, "title" | "kind" | "startsAt" | "endsAt" | "status" | "liveSeats" | "capacity"> & {
     attendees: readonly { name: string }[];
   },
   tz: string,
 ): string {
   const when = formatWhen(new Date(item.startsAt), new Date(item.endsAt), tz);
   const client = item.kind === "rdv" ? item.attendees[0]?.name : undefined;
-  const detail = client ?? `${plural(item.seatsTaken, "inscrit", "inscrits")} sur ${item.capacity}`;
+  const detail = client ?? seatsText(item);
   return `${item.title}, ${when}, ${detail}${item.status === "cancelled" ? ", annulée" : ""}`;
 }
 

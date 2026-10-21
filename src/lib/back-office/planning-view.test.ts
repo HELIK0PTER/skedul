@@ -11,8 +11,12 @@ import {
   gridHours,
   hhmm,
   hiddenByTimeOff,
+  minimumSeatsMessage,
   minuteFromOffset,
   previewTitle,
+  seatsRatio,
+  seatsSummary,
+  seatsText,
   timeOffSegments,
   tintOf,
   toPlanningVM,
@@ -47,6 +51,7 @@ function item(id: string, startsAt: Date, minutes: number, over: Partial<Plannin
     capacity: 12,
     seatsTaken: 0,
     elapsedHolds: 0,
+    liveSeats: 0,
     seatsShown: 12,
     location: null,
     eventLocation: null,
@@ -88,9 +93,20 @@ test("hiddenByTimeOff hides only an empty scheduled séance that overlaps a time
   const off = [{ startAt: at(MONDAY, 540), endAt: at(MONDAY, 720) }]; // 09:00 to 12:00
   const inside = item("a", at(MONDAY, 600), 60);
   assert.equal(hiddenByTimeOff(inside, off), true);
-  assert.equal(hiddenByTimeOff({ ...inside, seatsTaken: 1 }, off), false, "booked");
+  assert.equal(hiddenByTimeOff({ ...inside, liveSeats: 1 }, off), false, "booked");
   assert.equal(hiddenByTimeOff({ ...inside, status: "cancelled" }, off), false, "cancelled");
-  assert.equal(hiddenByTimeOff({ ...inside, kind: "rdv", seatsTaken: 0 }, off), false, "an RDV is never hidden");
+  assert.equal(hiddenByTimeOff({ ...inside, kind: "rdv" }, off), false, "an RDV is never hidden");
+  // R1: a seat kept only by a hold that has lapsed is a free seat, the séance is as empty as any other.
+  assert.equal(
+    hiddenByTimeOff(item("e", at(MONDAY, 600), 60, { seatsTaken: 1, elapsedHolds: 1, liveSeats: 0 }), off),
+    true,
+    "only a lapsed hold left",
+  );
+  assert.equal(
+    hiddenByTimeOff(item("f", at(MONDAY, 600), 60, { seatsTaken: 2, elapsedHolds: 1, liveSeats: 1 }), off),
+    false,
+    "a lapsed hold next to a live seat",
+  );
   assert.equal(hiddenByTimeOff(item("b", at(MONDAY, 480), 60), off), false, "ends when the time off starts");
   assert.equal(hiddenByTimeOff(item("c", at(MONDAY, 720), 60), off), false, "starts when the time off ends");
   assert.equal(hiddenByTimeOff(item("d", at(MONDAY, 510), 60), off), true, "overlaps the start");
@@ -154,9 +170,9 @@ test("toPlanningVM drops an empty séance under a time off and keeps booked, can
     { id: "t1", startAt: at(MONDAY, 0), endAt: at(addDays(MONDAY, 1), 0), allDay: true, reason: "Vacances" },
   ];
   const empty = item("empty", at(MONDAY, 600), 60);
-  const booked = item("booked", at(MONDAY, 700), 60, { seatsTaken: 1 });
+  const booked = item("booked", at(MONDAY, 700), 60, { seatsTaken: 1, liveSeats: 1 });
   const gone = item("gone", at(MONDAY, 800), 60, { status: "cancelled" });
-  const rdv = item("rdv", at(MONDAY, 900), 60, { kind: "rdv", eventId: null, eventVersion: null, seatsTaken: 1 });
+  const rdv = item("rdv", at(MONDAY, 900), 60, { kind: "rdv", eventId: null, eventVersion: null, seatsTaken: 1, liveSeats: 1 });
   const next = item("next", at(addDays(MONDAY, 1), 600), 60);
   assert.deepEqual(
     toPlanningVM([empty, booked, gone, rdv, next], off, PARIS, NOW).map((v) => v.id),
@@ -445,7 +461,7 @@ const blockOf = (over: Partial<Parameters<typeof blockLabel>[0]> = {}): Paramete
   startsAt: at("2026-10-12", 1140).toISOString(),
   endsAt: at("2026-10-12", 1200).toISOString(),
   status: "scheduled",
-  seatsTaken: 2,
+  liveSeats: 2,
   capacity: 12,
   attendees: [],
   ...over,
@@ -454,18 +470,18 @@ const blockOf = (over: Partial<Parameters<typeof blockLabel>[0]> = {}): Paramete
 test("blockLabel: the accessible name of a séance block is title, when and seats", () => {
   assert.equal(blockLabel(blockOf(), PARIS), "Altinha débutants, lun. 12 octobre 2026 · 19:00 à 20:00, 2 inscrits sur 12");
   assert.equal(
-    blockLabel(blockOf({ seatsTaken: 0 }), PARIS),
+    blockLabel(blockOf({ liveSeats: 0 }), PARIS),
     "Altinha débutants, lun. 12 octobre 2026 · 19:00 à 20:00, 0 inscrit sur 12",
   );
   assert.equal(
-    blockLabel(blockOf({ seatsTaken: 1 }), PARIS),
+    blockLabel(blockOf({ liveSeats: 1 }), PARIS),
     "Altinha débutants, lun. 12 octobre 2026 · 19:00 à 20:00, 1 inscrit sur 12",
   );
 });
 
 test("blockLabel: a cancelled block says so in its name, a first of the month is written « 1er »", () => {
   assert.equal(
-    blockLabel(blockOf({ status: "cancelled", seatsTaken: 0 }), PARIS),
+    blockLabel(blockOf({ status: "cancelled", liveSeats: 0 }), PARIS),
     "Altinha débutants, lun. 12 octobre 2026 · 19:00 à 20:00, 0 inscrit sur 12, annulée",
   );
   const first = blockOf({ startsAt: at("2026-11-01", 1140).toISOString(), endsAt: at("2026-11-01", 1200).toISOString() });
@@ -478,7 +494,7 @@ test("blockLabel: an RDV block names its client, as the block shows it, instead 
     title: "Cours particulier",
     kind: "rdv",
     capacity: 1,
-    seatsTaken: 1,
+    liveSeats: 1,
     attendees: [client],
     startsAt: at("2026-10-13", 660).toISOString(),
     endsAt: at("2026-10-13", 720).toISOString(),
@@ -502,4 +518,42 @@ test("previewTitle: the dashboard card names the week, today, or the day shown",
   assert.equal(previewTitle("day", "2026-10-14", "2026-10-14"), "Aujourd'hui");
   assert.equal(previewTitle("day", "2026-10-15", "2026-10-14"), "jeudi 15 octobre");
   assert.equal(previewTitle("day", "2026-11-01", "2026-10-14"), "dimanche 1er novembre");
+});
+
+// R1: « inscrits » is one number everywhere in the back-office: the confirmed bookings plus the holds that are still
+// live. seatsTaken also counts the holds that lapsed and that nobody has released yet, so it is not that number.
+const LAPSED = { capacity: 10, seatsTaken: 3, elapsedHolds: 1, liveSeats: 2, seatsShown: 8 } as const;
+
+test("toPlanningVM carries liveSeats next to the raw seatsTaken", () => {
+  const [vm] = toPlanningVM([item("s", at(MONDAY, 600), 60, LAPSED)], [], PARIS, NOW);
+  assert.deepEqual([vm.seatsTaken, vm.liveSeats, vm.seatsShown], [3, 2, 8]);
+});
+
+test("a lapsed hold is not a registrant: the block, its name, the list and the dialog line all say 2 of 10", () => {
+  // Capacity 10, two confirmed bookings and one abandoned checkout whose hold has lapsed and was not released yet.
+  const [vm] = toPlanningVM([item("s", at(MONDAY, 600), 60, LAPSED)], [], PARIS, NOW);
+  assert.equal(seatsText(vm), "2 inscrits sur 10");
+  assert.equal(seatsRatio(vm), "2/10");
+  assert.equal(seatsSummary(vm), "2 inscrits sur 10 \u00b7 8 places en ligne");
+  assert.match(blockLabel(vm, PARIS), /, 2 inscrits sur 10$/);
+  // The registrants and the places on offer add up to the capacity, which the raw seatsTaken never did (3 + 8).
+  assert.equal(vm.liveSeats + vm.seatsShown, vm.capacity);
+});
+
+test("seatsText, seatsRatio and seatsSummary: singular, zero and a full séance", () => {
+  const vm = (liveSeats: number, seatsShown: number, capacity = 12) => ({ liveSeats, seatsShown, capacity });
+  assert.equal(seatsText(vm(0, 12)), "0 inscrit sur 12");
+  assert.equal(seatsText(vm(1, 11)), "1 inscrit sur 12");
+  assert.equal(seatsRatio(vm(0, 12)), "0/12");
+  assert.equal(seatsSummary(vm(1, 11)), "1 inscrit sur 12 \u00b7 11 places en ligne");
+  assert.equal(seatsSummary(vm(11, 1)), "11 inscrits sur 12 \u00b7 1 place en ligne");
+  assert.equal(seatsSummary(vm(12, 0)), "12 inscrits sur 12 \u00b7 0 place en ligne");
+  for (const text of [seatsText(vm(2, 10)), seatsRatio(vm(2, 10)), seatsSummary(vm(2, 10))]) assert.doesNotMatch(text, NO_DASH);
+});
+
+test("minimumSeatsMessage: the capacity floor speaks of seats taken, not of registrants (a lapsed hold still holds one)", () => {
+  assert.equal(minimumSeatsMessage(0), "Minimum 1 place.");
+  assert.equal(minimumSeatsMessage(1), "Minimum 1 : 1 place est d\u00e9j\u00e0 prise.");
+  assert.equal(minimumSeatsMessage(3), "Minimum 3 : 3 places sont d\u00e9j\u00e0 prises.");
+  for (const n of [0, 1, 3]) assert.doesNotMatch(minimumSeatsMessage(n), NO_DASH);
 });

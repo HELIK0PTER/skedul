@@ -6,7 +6,7 @@ import { FormError } from "@/components/dashboard/form-error";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { plural } from "@/lib/back-office/format";
+import { minimumSeatsMessage } from "@/lib/back-office/planning-view";
 import { REQUEST_FAILED } from "@/lib/pro-messages";
 import { BOUNDS } from "@/lib/tickets-vocab";
 import { updateCapacityAction } from "@/server/pro-planning";
@@ -19,8 +19,8 @@ const SAVED_TEXT: Record<Scope, string> = {
 };
 
 /**
- * Number of seats of a séance. It cannot go under the people already
- * registered. On a recurring event the pro chooses between this séance
+ * Number of seats of a séance. It cannot go under the seats already taken
+ * (seats_taken, a lapsed hold included until it is released). On a recurring event the pro chooses between this séance
  * (which then keeps its own capacity) and every coming séance whose capacity
  * was not changed by hand. `seenStartsAt` and `seenVersion` are props of the
  * current page data: after a save the page is refreshed by the server action
@@ -71,9 +71,7 @@ export function SessionCapacityControl({
   const fieldError = !isInteger
     ? "Indiquez un nombre entier de places."
     : tooLow
-      ? seatsTaken === 0
-        ? "Minimum 1 place."
-        : `Minimum ${seatsTaken} : ${plural(seatsTaken, "personne est déjà inscrite", "personnes sont déjà inscrites")}.`
+      ? minimumSeatsMessage(seatsTaken)
       : tooHigh
         ? `Maximum ${max}.`
         : null;

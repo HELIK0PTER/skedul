@@ -15,6 +15,8 @@ import {
   dayShortLabel,
   hhmm,
   minuteFromOffset,
+  seatsRatio,
+  seatsText,
   tintOf,
   type PlanningItemVM,
   type TimeOffSegmentVM,
@@ -32,9 +34,6 @@ export const OFF_PATTERN =
 
 // The pure formatters live in planning-view.ts (tested there); week-preview.tsx imports them from this module.
 export { dayLongLabel, dayShortLabel, hhmm, tintOf };
-
-const seatsText = (item: PlanningItemVM): string =>
-  `${plural(item.seatsTaken, "inscrit", "inscrits")} sur ${item.capacity}`;
 
 /**
  * The status line the occurrence dialog hands over when its séance leaves the page data (an ended RDV, a séance
@@ -81,7 +80,7 @@ function ItemBlock({
   const cancelled = item.status === "cancelled";
   const top = (item.startMinute - startHour * 60) * MINUTE_PX;
   const height = Math.max(22, (item.endMinute - item.startMinute) * MINUTE_PX);
-  const second = item.kind === "seance" ? `${item.seatsTaken}/${item.capacity}` : (item.attendees[0]?.name ?? "");
+  const second = item.kind === "seance" ? seatsRatio(item) : (item.attendees[0]?.name ?? "");
   return (
     <button
       type="button"

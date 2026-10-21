@@ -70,8 +70,12 @@ export type PlanningItem = {
   endsAt: Date;
   status: OccurrenceStatus;
   capacity: number;
+  /** the raw seats_taken: pending holds count, lapsed ones too until the engine releases them */
   seatsTaken: number;
+  /** pending bookings whose hold has elapsed and that nobody has released yet */
   elapsedHolds: number;
+  /** the « inscrits »: confirmed bookings plus the holds still live (seatsTaken - elapsedHolds); one meaning for the whole back-office */
+  liveSeats: number;
   seatsShown: number;
   location: string | null;
   eventLocation: string | null;
@@ -134,7 +138,7 @@ type OccurrenceData = Awaited<ReturnType<typeof selectOccurrences>>[number];
  * expireElapsedHolds rule (status pending and hold_expires_at < now). A grouped query, not a correlated subquery:
  * in a one-table select drizzle renders an interpolated column unqualified, which would resolve to the inner table.
  */
-async function elapsedHoldsOf(db: Db, professionalId: string, occurrenceIds: readonly string[], now: Date): Promise<Map<string, number>> {
+export async function elapsedHoldsOf(db: Db, professionalId: string, occurrenceIds: readonly string[], now: Date): Promise<Map<string, number>> {
   if (occurrenceIds.length === 0) return new Map();
   const rows = await db
     .select({ occurrenceId: booking.occurrenceId, n: sql<number>`count(*)::int` })
@@ -288,6 +292,11 @@ async function loadQuestionsByOwner(
   return { byEvent, byType };
 }
 
+/** The seats that are really taken: confirmed bookings plus the holds still live, a lapsed hold being a free seat. */
+export function liveSeatsOfOccurrence(o: { seatsTaken: number; elapsedHolds: number }): number {
+  return Math.max(0, o.seatsTaken - o.elapsedHolds);
+}
+
 /**
  * A scheduled RDV that nobody holds any more (spec § 7: an RDV occupies a slot only with a confirmed booking or a
  * pending one whose hold has not ended). A client who abandons a buy-mode checkout leaves seats_taken at 1 and a
@@ -295,8 +304,8 @@ async function loadQuestionsByOwner(
  * A cancelled RDV is not concerned (it is cancelled, whatever its seats), and séances are never dropped: an empty
  * séance is still on offer.
  */
-function isPhantomRdv(i: Pick<PlanningItem, "kind" | "status" | "seatsTaken" | "elapsedHolds">): boolean {
-  return i.kind === "rdv" && i.status === "scheduled" && i.seatsTaken - i.elapsedHolds <= 0;
+function isPhantomRdv(i: Pick<PlanningItem, "kind" | "status" | "liveSeats">): boolean {
+  return i.kind === "rdv" && i.status === "scheduled" && i.liveSeats <= 0;
 }
 
 async function loadItems(db: Db, professionalId: string, rows: readonly OccurrenceData[], now: Date): Promise<PlanningItem[]> {
@@ -329,6 +338,7 @@ async function loadItems(db: Db, professionalId: string, rows: readonly Occurren
       capacity: r.capacity,
       seatsTaken: r.seatsTaken,
       elapsedHolds,
+      liveSeats: liveSeatsOfOccurrence({ seatsTaken: r.seatsTaken, elapsedHolds }),
       seatsShown: seatsShown({ capacity: r.capacity, seatsTaken: r.seatsTaken, elapsedHolds }),
       location: r.locationOverride ?? r.eventLocation ?? null,
       eventLocation: r.eventLocation ?? null,

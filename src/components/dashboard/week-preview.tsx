@@ -8,7 +8,7 @@ import { OccurrenceDialog } from "@/components/dashboard/occurrence-dialog";
 import { OFF_PATTERN, PlanningNotice, dayLongLabel, dayShortLabel, hhmm, tintOf } from "@/components/dashboard/planning-calendar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { previewTitle, type PlanningItemVM, type TimeOffSegmentVM } from "@/lib/back-office/planning-view";
+import { previewTitle, seatsRatio, type PlanningItemVM, type TimeOffSegmentVM } from "@/lib/back-office/planning-view";
 import type { DateKey } from "@/lib/civil-date";
 import { cn } from "@/lib/utils";
 
@@ -132,7 +132,7 @@ export function WeekPreview({
                     borderColor: `color-mix(in srgb, ${i.color} 35%, transparent)`,
                     borderLeftColor: i.color,
                   }}
-                  title={`${hhmm(i.startMinute)} ${i.title}${i.kind === "seance" ? ` (${i.seatsTaken}/${i.capacity})` : ""}`}
+                  title={`${hhmm(i.startMinute)} ${i.title}${i.kind === "seance" ? ` (${seatsRatio(i)})` : ""}`}
                 >
                   <span className="block truncate font-medium">{`${hhmm(i.startMinute)} ${i.title}`}</span>
                   {cancelled && <span className="sr-only">annulée</span>}

@@ -317,15 +317,17 @@ dbTest("elapsed holds are counted per séance, in the range read and in the move
 
   const { items } = await getPlanningRange(db, pro.proId, { start: now, end: startsIn(48) }, now);
   const byId = new Map(items.map((i) => [i.id, i]));
+  // liveSeats (the « inscrits »): confirmed bookings plus live holds, so seatsTaken minus the elapsed holds.
   assert.deepEqual(
-    ids.map((id) => [byId.get(id)?.seatsTaken, byId.get(id)?.elapsedHolds, byId.get(id)?.seatsShown]),
+    ids.map((id) => [byId.get(id)?.seatsTaken, byId.get(id)?.elapsedHolds, byId.get(id)?.liveSeats, byId.get(id)?.seatsShown]),
     [
-      [3, 2, 4],
-      [2, 0, 3],
-      [1, 1, 1],
-      [1, 0, 4],
+      [3, 2, 1, 4],
+      [2, 0, 2, 3],
+      [1, 1, 0, 1],
+      [1, 0, 1, 4],
     ],
   );
+  for (const id of ids) assert.equal((byId.get(id)?.liveSeats ?? 0) + (byId.get(id)?.seatsShown ?? 0), byId.get(id)?.capacity);
 
   // The same four séances as « Déplacer » targets of a guest booking (every target is accepted).
   const [sourceBooking] = (await planningItem(db, pro.proId, source, now))?.attendees ?? [];

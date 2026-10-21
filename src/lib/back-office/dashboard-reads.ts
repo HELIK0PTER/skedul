@@ -22,6 +22,7 @@ import { customerAlertCounts } from "./client-reads";
 import type { KpiInput } from "./dashboard-view";
 import { listEvents } from "./event-reads";
 import { formatWhen, planningHref } from "./format";
+import { elapsedHoldsOf, liveSeatsOfOccurrence } from "./planning-reads";
 import { hiddenByTimeOff } from "./planning-view";
 
 export type BookingDetailVM = {
@@ -63,6 +64,7 @@ const UPCOMING_LIMIT = 8;
 /**
  * Séances of [now, now + 7 d) and their confirmed registrants (Q25). A pending booking is no registrant, its hold
  * lapsed or not; an RDV counts only with a confirmed booking (one that only a lapsed hold keeps is not an appointment).
+ * A séance under a time off is « empty » on its live seats, as on the planning: a seat kept only by a lapsed hold is free.
  */
 async function weekCounts(
   db: Db,
@@ -93,7 +95,8 @@ async function weekCounts(
   // A time off that starts after the window can still overlap the last séance.
   const lastEnd = new Date(rows.reduce((max, r) => Math.max(max, r.endsAt.getTime()), 0));
   const rdvIds = rows.filter((r) => r.eventId === null).map((r) => r.id);
-  const [offs, rdvBookings] = await Promise.all([
+  const seanceIds = rows.filter((r) => r.eventId !== null).map((r) => r.id);
+  const [offs, rdvBookings, elapsed] = await Promise.all([
     db
       .select({ startAt: timeOff.startAt, endAt: timeOff.endAt })
       .from(timeOff)
@@ -110,14 +113,16 @@ async function weekCounts(
               inArray(booking.occurrenceId, rdvIds),
             ),
           ),
+    elapsedHoldsOf(db, professionalId, seanceIds, now),
   ]);
   const bookedRdv = new Set(rdvBookings.map((b) => b.occurrenceId));
 
   const counted: string[] = [];
   for (const r of rows) {
     if (r.eventId !== null) {
+      const liveSeats = liveSeatsOfOccurrence({ seatsTaken: r.seatsTaken, elapsedHolds: elapsed.get(r.id) ?? 0 });
       const hidden = hiddenByTimeOff(
-        { kind: "seance", status: r.status, seatsTaken: r.seatsTaken, startsAt: r.startsAt, endsAt: r.endsAt },
+        { kind: "seance", status: r.status, liveSeats, startsAt: r.startsAt, endsAt: r.endsAt },
         offs,
       );
       if (!hidden) counted.push(r.id);

@@ -20,7 +20,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cancelOccurrenceCopy, restoreOccurrenceCopy, unenrollCopy, unenrollReasonHelp } from "@/lib/back-office/confirm-copy";
 import { formatWhen, plural } from "@/lib/back-office/format";
 import { MODE_SHORT_LABELS } from "@/lib/back-office/labels";
-import { unenrolledMessage, type PlanningAttendeeVM, type PlanningItemVM } from "@/lib/back-office/planning-view";
+import { seatsSummary, unenrolledMessage, type PlanningAttendeeVM, type PlanningItemVM } from "@/lib/back-office/planning-view";
 import { REQUEST_FAILED } from "@/lib/pro-messages";
 import { BOUNDS } from "@/lib/tickets-vocab";
 import { cancelOccurrenceAction, restoreOccurrenceAction, unenrollAction } from "@/server/pro-planning";
@@ -407,7 +407,7 @@ function OccurrenceDialogBody({
           </div>
           {isSeance && (
             <p className="text-sm font-medium tabular-nums">
-              {`${plural(item.seatsTaken, "inscrit", "inscrits")} sur ${item.capacity} · ${plural(item.seatsShown, "place en ligne", "places en ligne")}`}
+              {seatsSummary(item)}
             </p>
           )}
         </div>

@@ -90,6 +90,32 @@ dbTest("getDashboardData counts the séances of the next 7 days and their confir
   assert.equal(kpis.upcomingRegistrants7d, 3);
 });
 
+// R1: « empty » is measured on the live seats: seats_taken also counts a hold that lapsed and was not released yet.
+dbTest("getDashboardData: a séance kept only by a lapsed hold is empty under a time off, a live hold keeps it", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await rowType(db, pro);
+  const offerId = await rowOffer(db, pro, typeId);
+  await db.insert(timeOff).values({
+    professionalId: pro.proId,
+    startAt: addMinutes(now, 36 * HOUR),
+    endAt: addMinutes(now, 60 * HOUR),
+    allDay: true,
+  });
+  const hold = async (occurrenceId: string, holdExpiresAt: Date) => {
+    const customerId = await rowCustomer(db, pro);
+    const purchaseId = await rowPurchase(db, pro, { customerId, offerId, ticketTypeId: typeId });
+    await rowBooking(db, pro, { occurrenceId, customerId, status: "pending", coverage: "ticket", purchaseId, holdExpiresAt });
+  };
+  const lapsed = await seanceAt(db, pro, addMinutes(now, 48 * HOUR), { seatsTaken: 1 });
+  await hold(lapsed.seanceId, addMinutes(now, -10));
+  const live = await seanceAt(db, pro, addMinutes(now, 49 * HOUR), { seatsTaken: 1 });
+  await hold(live.seanceId, addMinutes(now, 30));
+
+  const { kpis } = await getDashboardData(db, proInfo(pro), now, false);
+  assert.equal(kpis.upcomingSeances7d, 1, "the lapsed hold's séance is hidden by the time off, the live hold's is not");
+  assert.equal(kpis.upcomingRegistrants7d, 0, "a pending booking is no registrant");
+});
+
 dbTest("getDashboardData counts the valid available tickets, archived types included", async ({ db, pro }) => {
   const now = new Date();
   const active = await rowType(db, pro);
