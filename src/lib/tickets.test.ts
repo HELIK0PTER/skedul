@@ -117,6 +117,28 @@ test("horizon and hold constants keep their margins", () => {
   assert.deepEqual(Object.keys(THROTTLE_LIMITS).sort(), [...THROTTLE_ACTIONS].sort());
 });
 
+test("THROTTLE_ACTIONS and THROTTLE_LIMITS: the seven actions and the exact limits (SEC-I1, SEC-I2, SEC-I6)", () => {
+  assert.deepEqual([...THROTTLE_ACTIONS], ["free", "buybook", "rdv", "shop", "held", "cancel", "release"]);
+  assert.deepEqual(THROTTLE_LIMITS, {
+    free: { ip: 20, ip48: 60, email: 6, emailGlobal: 20, perOccurrenceIp: 2, perProIp: 6 },
+    buybook: { ip: 20, ip48: 60, email: 6, emailGlobal: 20, perOccurrenceIp: 2, perProIp: null },
+    rdv: { ip: 20, ip48: 60, email: 6, emailGlobal: 20, perOccurrenceIp: null, perProIp: null },
+    shop: { ip: 20, ip48: 60, email: 6, emailGlobal: 20, perOccurrenceIp: null, perProIp: null },
+    held: { ip: 20, ip48: 60, email: 10, emailGlobal: 20, perOccurrenceIp: null, perProIp: null },
+    cancel: { ip: 20, ip48: 60, email: 10, emailGlobal: 20, perOccurrenceIp: null, perProIp: null },
+    release: { ip: 30, ip48: 90, email: 30, emailGlobal: 30, perOccurrenceIp: null, perProIp: null },
+  });
+  // a /48 holds many /64s: its bound is three times the IP bound
+  for (const action of THROTTLE_ACTIONS) assert.equal(THROTTLE_LIMITS[action].ip48, THROTTLE_LIMITS[action].ip * 3, action);
+});
+
+test("no throttle action is named like another key family of the throttle table", () => {
+  // `t:mail:p:<pro>` is the mail budget, `t:horizon:p:<pro>` the horizon key, `otp` and `reset` the auth mail caps
+  for (const family of ["mail", "horizon", "otp", "reset"]) {
+    assert.equal((THROTTLE_ACTIONS as readonly string[]).includes(family), false, family);
+  }
+});
+
 test("the vocabulary and the schemas contain no em or en dash", () => {
   for (const file of ["tickets.ts", "tickets-vocab.ts"]) {
     const source = readFileSync(join(__dirname, file), "utf8");

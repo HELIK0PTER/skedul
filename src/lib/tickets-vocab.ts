@@ -178,13 +178,31 @@ export const STALE_PURCHASE_GRACE_MINUTES = 60;
 export const MAX_PENDING_HOLDS = 2;
 
 export const THROTTLE_WINDOW_SEC = 3600;
-export const THROTTLE_ACTIONS = ["free", "buybook", "rdv", "shop"] as const;
+/** Public actions that consume throttle keys (src/lib/throttle.ts `actionThrottleKeys`). « mail », « horizon », « otp » and « reset » name other key families of the same table and are never actions. */
+export const THROTTLE_ACTIONS = ["free", "buybook", "rdv", "shop", "held", "cancel", "release"] as const;
 export type ThrottleAction = (typeof THROTTLE_ACTIONS)[number];
-export const THROTTLE_LIMITS: Record<ThrottleAction, { ip: number; email: number }> = {
-  free: { ip: 20, email: 6 },
-  buybook: { ip: 20, email: 6 },
-  rdv: { ip: 20, email: 6 },
-  shop: { ip: 20, email: 6 },
+/**
+ * Limits per THROTTLE_WINDOW_SEC. `ip`: per IPv4 address or IPv6 /64; `ip48`: per IPv6 /48; `email`: per
+ * (pro, typed address) AND per verified user; `emailGlobal`: per typed address across pros (the mailbox
+ * bound); `perOccurrenceIp`: per séance and IP on the seat-taking actions; `perProIp`: per pro and IP on
+ * free registrations. A null limit means the key does not exist for that action.
+ */
+export type ThrottleLimits = {
+  ip: number;
+  ip48: number;
+  email: number;
+  emailGlobal: number;
+  perOccurrenceIp: number | null;
+  perProIp: number | null;
+};
+export const THROTTLE_LIMITS: Record<ThrottleAction, ThrottleLimits> = {
+  free: { ip: 20, ip48: 60, email: 6, emailGlobal: 20, perOccurrenceIp: 2, perProIp: 6 },
+  buybook: { ip: 20, ip48: 60, email: 6, emailGlobal: 20, perOccurrenceIp: 2, perProIp: null },
+  rdv: { ip: 20, ip48: 60, email: 6, emailGlobal: 20, perOccurrenceIp: null, perProIp: null },
+  shop: { ip: 20, ip48: 60, email: 6, emailGlobal: 20, perOccurrenceIp: null, perProIp: null },
+  held: { ip: 20, ip48: 60, email: 10, emailGlobal: 20, perOccurrenceIp: null, perProIp: null },
+  cancel: { ip: 20, ip48: 60, email: 10, emailGlobal: 20, perOccurrenceIp: null, perProIp: null },
+  release: { ip: 30, ip48: 90, email: 30, emailGlobal: 30, perOccurrenceIp: null, perProIp: null },
 };
 /** Sign-in / verification codes sent to one address per hour (auth hook). */
 export const OTP_EMAIL_LIMIT = { limit: 5, windowSec: 3600 } as const;

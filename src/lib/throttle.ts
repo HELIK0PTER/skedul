@@ -30,11 +30,15 @@ export function nextWindow(prev: ThrottleState | null, now: Date, windowSec: num
   return { windowStart: prev.windowStart, hits: prev.hits + 1 };
 }
 
+/** The first 32 hex characters of sha256(normalizeEmail(email)): an address never reaches a key in clear, and the digest survives the daily IP salt rotation. */
+function emailDigest(email: string): string {
+  return createHash("sha256").update(normalizeEmail(email)).digest("hex").slice(0, 32);
+}
+
 /** `t:<action>:ip:<ipHash>` / `t:<action>:e:<sha256(normalizedEmail) first 32 hex>`; actions "otp" and "reset" are the auth mail caps. */
 export function throttleKey(action: ThrottleAction | "otp" | "reset", kind: "ip" | "email", value: string): string {
   if (kind === "ip") return `t:${action}:ip:${value}`;
-  const digest = createHash("sha256").update(normalizeEmail(value)).digest("hex").slice(0, 32);
-  return `t:${action}:e:${digest}`;
+  return `t:${action}:e:${emailDigest(value)}`;
 }
 
 export function otpThrottleKey(email: string): string {
@@ -73,18 +77,60 @@ export async function consumeThrottle(db: ThrottleDb, key: string, limit: Thrott
   return (await hitThrottle(db, key, 1, limit.windowSec, now)) <= limit.limit;
 }
 
-/** P4 actions: consumes the IP key and the e-mail key (THROTTLE_LIMITS, THROTTLE_WINDOW_SEC); false if either is over. */
-export async function checkActionThrottle(
-  db: ThrottleDb,
-  args: { action: ThrottleAction; ipHash: string; email: string },
-  now: Date,
-): Promise<boolean> {
-  const limits = THROTTLE_LIMITS[args.action];
-  const [ipOk, emailOk] = await Promise.all([
-    consumeThrottle(db, throttleKey(args.action, "ip", args.ipHash), { limit: limits.ip, windowSec: THROTTLE_WINDOW_SEC }, now),
-    consumeThrottle(db, throttleKey(args.action, "email", args.email), { limit: limits.email, windowSec: THROTTLE_WINDOW_SEC }, now),
-  ]);
-  return ipOk && emailOk;
+/** What `ipHash()` of src/lib/visitor-hash.ts returns: 32 lower-case hex characters. Anything else (a raw address, a bucket text) is refused before a key is built. */
+export const IP_HASH_RE = /^[0-9a-f]{32}$/;
+
+/** A typed address (per-pro and global e-mail keys) or a verified identity (its user key only: strangers typing the address cannot lock it out). */
+export type ThrottleSubject = { kind: "email"; email: string } | { kind: "user"; userId: string };
+
+export type ActionThrottleArgs = {
+  action: ThrottleAction;
+  professionalId: string;
+  /** ipHash(daily salt, ipBuckets(ip).narrow), never an address */
+  ipHash: string;
+  /** ipHash(daily salt, ipBuckets(ip).wide), null for IPv4 */
+  wideIpHash: string | null;
+  subject: ThrottleSubject;
+  /** set by the seat-taking actions (buybook, free): adds the per-séance IP key */
+  occurrenceId?: string;
+};
+
+/**
+ * Pure: every key and limit the action consumes, in this order: the IP key, the /48 key (when there is
+ * one), then for a typed address the global e-mail key and the per-pro e-mail key, or for a verified
+ * identity its user key, then the per-séance IP key (seat-taking actions with an occurrence id) and the
+ * per-pro IP key (free registrations).
+ */
+export function actionThrottleKeys(args: ActionThrottleArgs): { key: string; limit: number }[] {
+  const { action, professionalId } = args;
+  const limits = THROTTLE_LIMITS[action];
+  const keys: { key: string; limit: number }[] = [{ key: throttleKey(action, "ip", args.ipHash), limit: limits.ip }];
+  if (args.wideIpHash !== null) keys.push({ key: `t:${action}:ip48:${args.wideIpHash}`, limit: limits.ip48 });
+  if (args.subject.kind === "email") {
+    const digest = emailDigest(args.subject.email);
+    keys.push({ key: `t:${action}:e:${digest}`, limit: limits.emailGlobal });
+    keys.push({ key: `t:${action}:e:${professionalId}:${digest}`, limit: limits.email });
+  } else {
+    keys.push({ key: `t:${action}:u:${args.subject.userId}`, limit: limits.email });
+  }
+  if (args.occurrenceId !== undefined && limits.perOccurrenceIp !== null) {
+    keys.push({ key: `t:${action}:o:${args.occurrenceId}:ip:${args.ipHash}`, limit: limits.perOccurrenceIp });
+  }
+  if (limits.perProIp !== null) {
+    keys.push({ key: `t:${action}:p:${professionalId}:ip:${args.ipHash}`, limit: limits.perProIp });
+  }
+  return keys;
+}
+
+/** Throws (nothing consumed) when ipHash or a non-null wideIpHash fails IP_HASH_RE; else consumes every actionThrottleKeys entry in ONE Promise.all (THROTTLE_WINDOW_SEC); false if any is over. */
+export async function checkActionThrottle(db: ThrottleDb, args: ActionThrottleArgs, now: Date): Promise<boolean> {
+  if (!IP_HASH_RE.test(args.ipHash) || (args.wideIpHash !== null && !IP_HASH_RE.test(args.wideIpHash))) {
+    throw new Error("checkActionThrottle: ipHash must be the 32 hex characters of ipHash()");
+  }
+  const results = await Promise.all(
+    actionThrottleKeys(args).map(({ key, limit }) => consumeThrottle(db, key, { limit, windowSec: THROTTLE_WINDOW_SEC }, now)),
+  );
+  return results.every(Boolean);
 }
 
 /* ───────────────────────── Health counters ───────────────────────── */
