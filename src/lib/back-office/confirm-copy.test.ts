@@ -160,6 +160,11 @@ test("unenrollCopy: the title follows the names, the body follows tickets and pe
     "the payment sentence only with a pending payment",
   );
   assert.ok(!unenrollCopy({ names: ["Léa Martin"], ticketCount: 1, pendingCount: 0 }).body.includes("paiement"));
+  // several pending payments: the sentence agrees with them (final review UI-8)
+  assert.equal(
+    unenrollCopy({ names: ["Léa Martin", "Rafael Souza"], ticketCount: 0, pendingCount: 2 }).body,
+    "Les clients sont prévenus par email. Les paiements en cours sont annulés.",
+  );
 });
 
 test("unenrollReasonHelp: the optional reason is told to go to the client (final review F11)", () => {
@@ -175,12 +180,18 @@ test("closeTicketsCopy and retireTicketsCopy count with plural", () => {
     confirm: "Clore",
   });
   assert.equal(closeTicketsCopy({ count: 1, reasonLabel: "Abandonné" }).title, "Clore 1 ticket ?");
+  // one ticket: the verbs and adjectives agree with it (final review UI-8)
+  assert.equal(
+    closeTicketsCopy({ count: 1, reasonLabel: "Abandonné" }).body,
+    "Motif : Abandonné. Le ticket reste visible, barré, dans son portefeuille. Rien n'est remboursé automatiquement.",
+  );
   assert.deepEqual(retireTicketsCopy({ count: 2 }), {
     title: "Retirer 2 tickets offerts ?",
     body: "Ils restent visibles, barrés, dans son portefeuille.",
     confirm: "Retirer",
   });
   assert.equal(retireTicketsCopy({ count: 1 }).title, "Retirer 1 ticket offert ?");
+  assert.equal(retireTicketsCopy({ count: 1 }).body, "Il reste visible, barré, dans son portefeuille.");
 });
 
 test("deleteTypeCopy: a used type is archived, an unused one lists the events that lose it", () => {
@@ -285,7 +296,7 @@ test("timeOffConflictCopy: séances only, plural and singular", () => {
     rdvNote: RDV_NOTE,
   });
   assert.deepEqual(timeOffConflictCopy({ seances: 1, rdvs: 0, tickets: 3 }), {
-    title: "Des séances ont des inscrits",
+    title: "Une séance a des inscrits",
     intro: "Cette indisponibilité chevauche 1 séance avec des inscrits :",
     cancelLabel: "Annuler cette séance (tickets rendus, clients prévenus)",
     keepLabel: "La garder",

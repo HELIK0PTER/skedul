@@ -30,7 +30,7 @@ test("pageContentNote: the page, its slug and the counts, each with its own plur
 });
 
 test("upcomingNote and ticketsNote: singular and plural agree with the count", () => {
-  assert.equal(upcomingNote(1), "1 inscription à venir disparaîtra sans que les clients soient prévenus.");
+  assert.equal(upcomingNote(1), "1 inscription à venir disparaîtra sans que le client soit prévenu.");
   assert.equal(upcomingNote(3), "3 inscriptions à venir disparaîtront sans que les clients soient prévenus.");
   assert.equal(ticketsNote(1), "1 ticket en circulation sera perdu pour ses clients, sans remboursement automatique.");
   assert.equal(ticketsNote(13), "13 tickets en circulation seront perdus pour ses clients, sans remboursement automatique.");

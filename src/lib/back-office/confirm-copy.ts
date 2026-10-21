@@ -70,9 +70,10 @@ export function unenrollCopy(a: { names: readonly string[]; ticketCount: number;
       : one
         ? "Le client est prévenu par email."
         : "Les clients sont prévenus par email.";
+  const payments = a.pendingCount === 1 ? "Le paiement en cours est annulé." : "Les paiements en cours sont annulés.";
   return {
     title,
-    body: a.pendingCount > 0 ? `${lead} Le paiement en cours est annulé.` : lead,
+    body: a.pendingCount > 0 ? `${lead} ${payments}` : lead,
     confirm: "Désinscrire",
   };
 }
@@ -84,18 +85,21 @@ export function unenrollReasonHelp(a: { count: number }): string {
     : "Ce motif apparaît tel quel dans l'email envoyé à chaque client.";
 }
 
+/** The verb and adjectives follow the number of tickets: one ticket « reste visible, barré », several « restent visibles, barrés ». */
 export function closeTicketsCopy(a: { count: number; reasonLabel: string }): ConfirmCopy {
+  const stay = a.count === 1 ? "Le ticket reste visible, barré," : "Les tickets restent visibles, barrés,";
   return {
     title: `Clore ${plural(a.count, "ticket", "tickets")} ?`,
-    body: `Motif : ${a.reasonLabel}. Les tickets restent visibles, barrés, dans son portefeuille. Rien n'est remboursé automatiquement.`,
+    body: `Motif : ${a.reasonLabel}. ${stay} dans son portefeuille. Rien n'est remboursé automatiquement.`,
     confirm: "Clore",
   };
 }
 
 export function retireTicketsCopy(a: { count: number }): ConfirmCopy {
+  const stay = a.count === 1 ? "Il reste visible, barré," : "Ils restent visibles, barrés,";
   return {
     title: `Retirer ${plural(a.count, "ticket offert", "tickets offerts")} ?`,
-    body: "Ils restent visibles, barrés, dans son portefeuille.",
+    body: `${stay} dans son portefeuille.`,
     confirm: "Retirer",
   };
 }
@@ -260,7 +264,7 @@ export function timeOffConflictCopy(a: { seances: number; rdvs: number; tickets:
   }
   const single = a.seances === 1;
   return {
-    title: "Des séances ont des inscrits",
+    title: single ? "Une séance a des inscrits" : "Des séances ont des inscrits",
     intro: `Cette indisponibilité chevauche ${plural(a.seances, "séance", "séances")} avec des inscrits :`,
     cancelLabel: single
       ? `Annuler cette séance ${prevented}`

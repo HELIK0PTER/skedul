@@ -15,7 +15,8 @@ export function pageContentNote(slug: string, stats: ProStats): string {
 }
 
 export function upcomingNote(count: number): string {
-  return `${plural(count, "inscription à venir disparaîtra", "inscriptions à venir disparaîtront")} sans que les clients soient prévenus.`;
+  const told = count === 1 ? "sans que le client soit prévenu" : "sans que les clients soient prévenus";
+  return `${plural(count, "inscription à venir disparaîtra", "inscriptions à venir disparaîtront")} ${told}.`;
 }
 
 export function ticketsNote(count: number): string {
