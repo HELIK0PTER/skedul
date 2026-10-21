@@ -209,14 +209,14 @@ test("historyLines: dates around the DST changes, and no dash anywhere", () => {
 // R6: « 12/10 » says nothing about the year. A line, and the séance it names, write the year when it is not now's.
 test("historyLines: the date of a line and of its séance name the year when it is not the current one", () => {
   const lastYear = new Date("2025-10-12T12:03:00Z");
-  const seance = { title: "Altinha d\u00e9butants", startsAt: new Date("2025-11-03T18:00:00Z") };
+  const seance = { title: "Altinha débutants", startsAt: new Date("2025-11-03T18:00:00Z") };
   const rows = [
     mv(1, "old", { kind: "spend", createdAt: lastYear, occurrence: seance }),
     mv(2, "new", { kind: "offer", createdAt: AT }),
   ];
   assert.deepEqual(texts(rows), [
-    "12/10 14:03 \u00b7 Vous \u00b7 Offert 1 Cours collectif",
-    "12/10/2025 14:03 \u00b7 Vous \u00b7 Utilis\u00e9 pour une inscription 1 Cours collectif \u00b7 Altinha d\u00e9butants du 03/11/2025",
+    "12/10 14:03 · Vous · Offert 1 Cours collectif",
+    "12/10/2025 14:03 · Vous · Utilisé pour une inscription 1 Cours collectif · Altinha débutants du 03/11/2025",
   ]);
   // A séance of this year booked by an action of last year: only the action date names its year.
   const mixed = mv(3, "mixed", {
@@ -224,14 +224,14 @@ test("historyLines: the date of a line and of its séance name the year when it 
     createdAt: lastYear,
     occurrence: { title: "Roda libre", startsAt: new Date("2026-03-01T18:00:00Z") },
   });
-  assert.deepEqual(texts([mixed]), ["12/10/2025 14:03 \u00b7 Vous \u00b7 Utilis\u00e9 pour une inscription 1 Cours collectif \u00b7 Roda libre du 01/03"]);
+  assert.deepEqual(texts([mixed]), ["12/10/2025 14:03 · Vous · Utilisé pour une inscription 1 Cours collectif · Roda libre du 01/03"]);
 });
 
 test("historyLines: the current year is the local one of the given zone", () => {
   const lateDecember = new Date("2025-12-31T12:00:00Z"); // 13:00 in Paris, 04:00 in Los Angeles
   const justAfterNewYear = new Date("2026-01-01T00:10:00Z"); // 2026 in Paris, still 31 December 2025 in Los Angeles
   const rows = [mv(1, "a", { createdAt: lateDecember })];
-  assert.deepEqual(texts(rows, PARIS, justAfterNewYear), ["31/12/2025 13:00 \u00b7 Vous \u00b7 Offert 1 Cours collectif"]);
-  assert.deepEqual(texts(rows, LA, justAfterNewYear), ["31/12 04:00 \u00b7 Vous \u00b7 Offert 1 Cours collectif"]);
+  assert.deepEqual(texts(rows, PARIS, justAfterNewYear), ["31/12/2025 13:00 · Vous · Offert 1 Cours collectif"]);
+  assert.deepEqual(texts(rows, LA, justAfterNewYear), ["31/12 04:00 · Vous · Offert 1 Cours collectif"]);
   for (const text of [...texts(rows, PARIS, justAfterNewYear), ...texts(rows, LA, justAfterNewYear)]) assert.doesNotMatch(text, DASHES);
 });

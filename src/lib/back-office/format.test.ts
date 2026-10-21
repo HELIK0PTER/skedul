@@ -279,9 +279,9 @@ test("formatDayMonthOf, formatDayMonthTime and formatWhenShort name the year onl
   assert.equal(formatDayMonthOf(lastYear, PARIS), "12/10", "without now the year is never named (the previous behaviour)");
   assert.equal(formatDayMonthTime(sameYear, PARIS, now), "12/10 19:00");
   assert.equal(formatDayMonthTime(lastYear, PARIS, now), "12/10/2025 19:00");
-  assert.equal(formatWhenShort(sameYear, PARIS, now), "lun. 12/10 \u00b7 19:00");
-  assert.equal(formatWhenShort(nextYear, PARIS, now), "mar. 12/01/2027 \u00b7 18:00");
-  assert.equal(formatWhenShort(nextYear, PARIS), "mar. 12/01 \u00b7 18:00");
+  assert.equal(formatWhenShort(sameYear, PARIS, now), "lun. 12/10 · 19:00");
+  assert.equal(formatWhenShort(nextYear, PARIS, now), "mar. 12/01/2027 · 18:00");
+  assert.equal(formatWhenShort(nextYear, PARIS), "mar. 12/01 · 18:00");
 });
 
 test("the year rule reads both instants in the given zone", () => {
