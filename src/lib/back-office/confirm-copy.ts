@@ -110,14 +110,25 @@ export function deleteTypeCopy(a: { name: string; used: boolean; acceptedBy: rea
   };
 }
 
-export function deleteOfferCopy(a: { label: string; sold: boolean }): ConfirmCopy {
-  return {
-    title: `Supprimer l'offre « ${a.label} » ?`,
-    body: a.sold
-      ? "Elle a déjà été achetée : elle sera archivée, pas supprimée. Les tickets achetés ne changent pas."
-      : "Elle disparaît de votre page.",
-    confirm: "Supprimer",
-  };
+/**
+ * `sold`: a paid purchase exists. `checkedOut`: any purchase exists, paid or not (a checkout started, abandoned or
+ * failed keeps the row, and the offer cannot be deleted either: it is archived).
+ */
+export function deleteOfferCopy(a: { label: string; sold: boolean; checkedOut: boolean }): ConfirmCopy {
+  const body = a.sold
+    ? "Elle a déjà été achetée : elle sera archivée, pas supprimée. Les tickets achetés ne changent pas."
+    : a.checkedOut
+      ? "Un paiement a déjà été commencé avec cette offre : elle sera archivée, pas supprimée."
+      : "Elle disparaît de votre page.";
+  return { title: `Supprimer l'offre « ${a.label} » ?`, body, confirm: "Supprimer" };
+}
+
+/** The line shown once the delete went through (null: the offer is simply gone). The reason follows what the engine found. */
+export function deleteOfferDoneNotice(a: { outcome: "deleted" | "archived"; sold: boolean }): string | null {
+  if (a.outcome === "deleted") return null;
+  return a.sold
+    ? "Offre archivée : elle avait déjà été achetée."
+    : "Offre archivée : un paiement avait déjà été commencé avec cette offre.";
 }
 
 export function deleteEventCopy(a: {

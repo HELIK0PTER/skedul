@@ -35,6 +35,8 @@ export type OfferView = {
   archived: boolean;
   /** paid purchases of this offer */
   sold: number;
+  /** every purchase of this offer, paid or not: a checkout only started or abandoned keeps the offer from being deleted */
+  purchases: number;
 };
 
 export type AcceptedBy = { eventId: string; title: string; isPrivate: boolean };
@@ -108,6 +110,8 @@ async function readOffers(
       // single-table select: an interpolated column renders unqualified, so the outer id is written out
       sold: sql<number>`(select count(*)::int from ticket_purchase p
         where p.offer_id = ticket_offer.id and p.professional_id = ticket_offer.professional_id and p.status = 'paid')`,
+      purchases: sql<number>`(select count(*)::int from ticket_purchase p
+        where p.offer_id = ticket_offer.id and p.professional_id = ticket_offer.professional_id)`,
     })
     .from(ticketOffer)
     .where(
@@ -131,6 +135,7 @@ async function readOffers(
     isActive: r.isActive,
     archived: r.archivedAt !== null,
     sold: Number(r.sold),
+    purchases: Number(r.purchases),
   }));
 }
 

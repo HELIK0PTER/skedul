@@ -12,7 +12,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import type { OfferView } from "@/lib/back-office/catalog-reads";
-import { deleteOfferCopy } from "@/lib/back-office/confirm-copy";
+import { deleteOfferCopy, deleteOfferDoneNotice } from "@/lib/back-office/confirm-copy";
 import { currencySymbol, plural } from "@/lib/back-office/format";
 import {
   EMPTY_OFFER_FORM,
@@ -86,7 +86,7 @@ export function OfferList({
         return;
       }
       setDeleteId(null);
-      setNotice(res.outcome === "archived" ? "Offre archivée : elle avait déjà été achetée." : null);
+      setNotice(deleteOfferDoneNotice({ outcome: res.outcome, sold: (offers.find((o) => o.id === offerId)?.sold ?? 0) > 0 }));
     });
   }
 
@@ -212,7 +212,7 @@ export function OfferList({
       {toDelete && (
         <ConfirmDialog
           open
-          copy={deleteOfferCopy({ label: toDelete.label, sold: toDelete.sold > 0 })}
+          copy={deleteOfferCopy({ label: toDelete.label, sold: toDelete.sold > 0, checkedOut: toDelete.purchases > 0 })}
           pending={deleting}
           error={deleteError}
           onConfirm={() => onConfirmDelete(toDelete.id)}

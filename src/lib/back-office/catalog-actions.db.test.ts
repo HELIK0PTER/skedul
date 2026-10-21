@@ -411,6 +411,26 @@ dbTest("offers: update keeps the type, « En vente » only flips is_active, dele
   refused(await deleteOfferCore(db, ctx, { offerId }, now), NOT_FOUND, "deleting it again");
 });
 
+dbTest("an offer only checked out (never paid) is archived too, and its read says so", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const typeId = await makeType(db, pro);
+  const offerId = await makeOffer(db, pro, typeId);
+  const started = await startPurchase(db, { professionalId: pro.proId, offerId, customerId: await makeCustomer(db, pro) });
+  if (!started.ok) assert.fail(`startPurchase: ${JSON.stringify(started)}`);
+
+  // The delete preview needs to know a checkout exists even though nothing was ever paid.
+  const [offer] = (await detailOf(db, pro, typeId, now)).offers;
+  assert.deepEqual([offer.sold, offer.purchases], [0, 1], "never paid, but one checkout started");
+
+  const res = await deleteOfferCore(db, ctx, { offerId }, now);
+  must(res, "delete a checked-out offer");
+  assert.equal(res.outcome, "archived", "the purchase row keeps the offer");
+  const after = await detailOf(db, pro, typeId, now);
+  assert.deepEqual(after.offers, []);
+  assert.deepEqual(after.archivedOffers.map((o) => [o.id, o.sold, o.purchases]), [[offerId, 0, 1]]);
+});
+
 dbTest("setTypeHoursCore sets, validates and clears the hours of a type", async ({ db, pro }) => {
   const ctx = proCtx(pro);
   const now = new Date();

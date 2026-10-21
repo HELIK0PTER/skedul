@@ -7,6 +7,7 @@ import {
   closeTicketsCopy,
   deleteEventCopy,
   deleteOfferCopy,
+  deleteOfferDoneNotice,
   deleteTimeOffCopy,
   deleteTypeCopy,
   restoreOccurrenceCopy,
@@ -141,15 +142,30 @@ test("deleteTypeCopy: a used type is archived, an unused one lists the events th
   );
 });
 
-test("deleteOfferCopy: a sold offer is archived", () => {
-  assert.deepEqual(deleteOfferCopy({ label: "Carnet de 10", sold: false }), {
+test("deleteOfferCopy: a sold offer, or one only checked out, is archived and the copy says why", () => {
+  assert.deepEqual(deleteOfferCopy({ label: "Carnet de 10", sold: false, checkedOut: false }), {
     title: "Supprimer l'offre « Carnet de 10 » ?",
     body: "Elle disparaît de votre page.",
     confirm: "Supprimer",
   });
   assert.equal(
-    deleteOfferCopy({ label: "Carnet de 10", sold: true }).body,
+    deleteOfferCopy({ label: "Carnet de 10", sold: true, checkedOut: true }).body,
     "Elle a déjà été achetée : elle sera archivée, pas supprimée. Les tickets achetés ne changent pas.",
+  );
+  assert.equal(
+    deleteOfferCopy({ label: "Carnet de 10", sold: false, checkedOut: true }).body,
+    "Un paiement a déjà été commencé avec cette offre : elle sera archivée, pas supprimée.",
+    "a checkout never paid is not « déjà achetée »",
+  );
+});
+
+test("deleteOfferDoneNotice: nothing after a delete, the right reason after an archive", () => {
+  assert.equal(deleteOfferDoneNotice({ outcome: "deleted", sold: false }), null);
+  assert.equal(deleteOfferDoneNotice({ outcome: "archived", sold: true }), "Offre archivée : elle avait déjà été achetée.");
+  assert.equal(
+    deleteOfferDoneNotice({ outcome: "archived", sold: false }),
+    "Offre archivée : un paiement avait déjà été commencé avec cette offre.",
+    "archived without a paid purchase: a checkout was only started",
   );
 });
 
@@ -265,7 +281,7 @@ test("every text is non-empty for 0, 1 and 2 and carries no dash", () => {
       closeTicketsCopy({ count: n, reasonLabel: "Abandonné" }),
       retireTicketsCopy({ count: n }),
       deleteTypeCopy({ name: "Type", used: n === 1, acceptedBy: names }),
-      deleteOfferCopy({ label: "Offre", sold: n === 1 }),
+      deleteOfferCopy({ label: "Offre", sold: n === 1, checkedOut: n >= 1 }),
       event({ fromLabel: n === 0 ? null : "lun. 12/10", deletedSeances: n, cancelledSeances: n, registrants: n, ticketsReturned: n }),
     );
     for (const [seances, rdvs] of [[n, 0], [0, n], [n, n]] as const) {
