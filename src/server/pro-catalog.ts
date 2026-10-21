@@ -23,7 +23,7 @@ import {
   previewScheduleCore,
   type SchedulePreview,
 } from "@/lib/back-office/event-actions";
-import type { DeletePreview } from "@/lib/back-office/event-reads";
+import type { DeletePreview, LaterSegment } from "@/lib/back-office/event-reads";
 import type { ActionResult } from "@/lib/back-office/result";
 import type { DateKey } from "@/lib/civil-date";
 import { db } from "@/lib/db";
@@ -97,7 +97,9 @@ export async function editEventInfoAction(input: {
   eventId: string;
   seenVersion: number;
   info: EventInfoInput;
-}): Promise<ActionResult<{ version: number }>> {
+  /** The later segments of the series the page showed, each with its version (the guard of the segments the form does not own). */
+  later?: LaterSegment[];
+}): Promise<ActionResult<{ version: number; incomplete: string | null }>> {
   return runProAction("editEventInfo", (ctx, now) => editEventInfoCore(db, ctx, input, now), { publicPage: true });
 }
 
@@ -132,7 +134,11 @@ export async function deleteEventFromAction(input: {
   eventId: string;
   seenVersion: number;
   fromDate: DateKey;
-}): Promise<ActionResult<{ deletedEvent: boolean; cancelledOccurrences: number; deletedOccurrences: number }>> {
+  /** The later segments the preview listed, each with its version. */
+  later?: LaterSegment[];
+}): Promise<
+  ActionResult<{ deletedEvent: boolean; cancelledOccurrences: number; deletedOccurrences: number; incomplete: string | null }>
+> {
   return runProAction("deleteEventFrom", (ctx, now) => deleteEventFromCore(db, ctx, input, now), { publicPage: true });
 }
 

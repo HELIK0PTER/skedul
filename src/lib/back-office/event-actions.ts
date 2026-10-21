@@ -12,9 +12,10 @@
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 
+import { loadQuestions } from "@/lib/booking/answers";
 import { createEvent, horizonEnd } from "@/lib/booking/occurrences";
 import { deleteSeriesFrom, editEventInPlace, editSeriesFrom, previewSeriesEdit } from "@/lib/booking/series";
-import { fail } from "@/lib/booking/types";
+import { fail, type Effect } from "@/lib/booking/types";
 import { effectiveWindow } from "@/lib/booking-window";
 import { addDays, maxKey, minKey, todayKey, type DateKey } from "@/lib/civil-date";
 import { textArray, ts, type Db } from "@/lib/db/atomic";
@@ -37,9 +38,10 @@ import {
 import { parseFr } from "@/lib/zod-fr";
 
 import { readProWindow } from "./catalog-reads";
-import { countRdvConflicts, deleteFromPreview, type DeletePreview } from "./event-reads";
+import { countRdvConflicts, deleteFromPreview, loadLaterSegments, type DeletePreview, type LaterSegment } from "./event-reads";
 import { NOTICE_TOO_LONG, noticeExceedsHorizon } from "./notice";
 import { actionFail, fromEngine, type ActionResult, type CoreResult, type ProCtx } from "./result";
+import { questionsForSegment } from "./series-questions";
 
 export type SchedulePreview = {
   summary: SeriesEditSummary;
@@ -57,6 +59,15 @@ export type SchedulePreview = {
 export const EVENT_START_PAST = "La date de début ne peut pas être passée.";
 export const EVENT_START_TOO_FAR = "La date de début doit être dans les deux prochaines années.";
 export const EVENT_TYPE_UNAVAILABLE = "Un type de ticket choisi est archivé ou introuvable.";
+
+/**
+ * A delete or an information edit reaches the segment AND every later segment of its series, one engine batch each
+ * (each with its own version guard). When a later one fails after another went through, the action answers "ok" with
+ * what was done (its effects must still run) and one of these sentences, which the form shows instead of its success.
+ */
+export const SERIES_DELETE_INCOMPLETE = "Une partie seulement a été supprimée. Rechargez la page, puis supprimez de nouveau pour finir.";
+export const SERIES_INFO_INCOMPLETE =
+  "Les informations sont enregistrées ici, mais pas sur la suite de la série. Rechargez la page et recommencez.";
 
 /** The engine's own text for a cut before local today (src/lib/booking/series.ts), so both layers say the same. */
 const PAST_FROM_DATE = "La modification doit partir d'aujourd'hui ou d'une date future.";
@@ -83,9 +94,11 @@ const applySchema = scheduleSchema.extend({
   seenVersion: versionSchema,
   orphans: z.enum(["keep", "cancel"]),
 });
-const editInfoSchema = z.object({ eventId: idSchema, seenVersion: versionSchema, info: eventInfoSchema });
+/** The later segments the page showed, each with the version it had: the guard of the segments the form does not own. */
+const laterSchema = z.array(z.object({ eventId: idSchema, version: versionSchema })).max(200).default([]);
+const editInfoSchema = z.object({ eventId: idSchema, seenVersion: versionSchema, info: eventInfoSchema, later: laterSchema });
 const deletePreviewSchema = z.object({ eventId: idSchema, fromDate: dateKeySchema });
-const deleteFromSchema = deletePreviewSchema.extend({ seenVersion: versionSchema });
+const deleteFromSchema = deletePreviewSchema.extend({ seenVersion: versionSchema, later: laterSchema });
 const newEventSchema = z.object({ rule: recurrenceRuleSchema, durationMin: durationSchema });
 
 /* ───────────────────────────── Shared checks ───────────────────────────── */
@@ -172,6 +185,17 @@ async function deleteRefusal(db: Db, professionalId: string, eventId: string, fr
   return null;
 }
 
+/** True when the later segments the page saw are exactly the ones there are now, each at the version it was seen at. */
+function sameSegments(current: readonly LaterSegment[], seen: readonly LaterSegment[]): boolean {
+  return (
+    current.length === seen.length &&
+    current.every((c) => seen.some((t) => t.eventId === c.eventId && t.version === c.version))
+  );
+}
+
+/** Test-only hook of the cores that walk a series: runs after each segment's batch went through. */
+type StepHook = { afterStep?: (eventId: string) => Promise<void> };
+
 /* ───────────────────────────── Create ───────────────────────────── */
 
 /**
@@ -210,51 +234,79 @@ export async function createEventCore(
 /* ───────────────────────────── Informations (in place) ───────────────────────────── */
 
 /**
- * « Informations » (in place on one segment, Q7): parseFr(eventInfoSchema);
- * the types deduped (none unless the mode is « Sur tickets »: any other mode drops the links), each active and non-rdv_free OR already linked to this
- * event; the notice within its horizon; editEventInPlace with the full info
- * patch. Context "event".
+ * « Informations » (in place, Q7): parseFr(eventInfoSchema); the later segments of the series must be the ones the page
+ * saw, at the versions it saw (else stale: nothing is written); the types deduped (none unless the mode is « Sur
+ * tickets »: any other mode drops the links), each active and non-rdv_free OR already linked to that segment; the
+ * notice within its horizon; then editEventInPlace on the segment and on each later segment, earliest first, each with
+ * its own version guard and with the questions followed onto its own copies (questionsForSegment). A later segment that
+ * fails once the first is saved answers "ok" with `incomplete` (SERIES_INFO_INCOMPLETE). `version` is the segment's.
+ * Context "event".
  */
 export async function editEventInfoCore(
   db: Db,
   ctx: ProCtx,
-  input: { eventId: string; seenVersion: number; info: EventInfoInput },
+  input: { eventId: string; seenVersion: number; info: EventInfoInput; later?: readonly LaterSegment[] },
   now: Date,
-): Promise<CoreResult<{ version: number }>> {
+  opts: StepHook = {},
+): Promise<CoreResult<{ version: number; incomplete: string | null }>> {
   const parsed = parseFr(editInfoSchema, input);
   if (!parsed.ok) return actionFail(parsed.error);
-  const { eventId, seenVersion, info } = parsed.data;
+  const { eventId, seenVersion, info, later: seenLater } = parsed.data;
+
+  const later = await loadLaterSegments(db, ctx.professionalId, eventId);
+  if (later === null) return fromEngine(fail("not_found"), "event");
+  if (!sameSegments(later, seenLater)) return fromEngine(fail("stale"), "event");
 
   // Only « Sur tickets » accepts tickets: any other mode drops every link (the browser rule is not enough).
   const typeIds = info.bookingMode === "tickets" ? [...new Set(info.ticketTypeIds)] : [];
-  if (!(await typesUsable(db, ctx.professionalId, typeIds, eventId))) return actionFail(EVENT_TYPE_UNAVAILABLE);
+  for (const id of [eventId, ...later.map((s) => s.eventId)]) {
+    if (!(await typesUsable(db, ctx.professionalId, typeIds, id))) return actionFail(EVENT_TYPE_UNAVAILABLE);
+  }
   const tooLong = await noticeProblem(db, ctx.professionalId, info.overrides);
   if (tooLong !== null) return actionFail(tooLong);
 
-  const res = await editEventInPlace(
+  // Read before the first write: the edit rewrites the questions of the segment the pro opened.
+  const sourceQuestions = later.length === 0 ? [] : await loadQuestions(db, { eventId });
+  const patchFor = (questions: typeof info.questions) => ({
+    title: info.title,
+    description: info.description,
+    location: info.location,
+    color: info.color,
+    isPrivate: info.isPrivate,
+    bookingMode: info.bookingMode,
+    ticketTypeIds: typeIds,
+    questions,
+    overrides: info.overrides,
+    capacity: info.capacity,
+  });
+
+  const first = await editEventInPlace(
     db,
-    {
-      professionalId: ctx.professionalId,
-      actorUserId: ctx.actorUserId,
-      eventId,
-      seenVersion,
-      patch: {
-        title: info.title,
-        description: info.description,
-        location: info.location,
-        color: info.color,
-        isPrivate: info.isPrivate,
-        bookingMode: info.bookingMode,
-        ticketTypeIds: typeIds,
-        questions: info.questions,
-        overrides: info.overrides,
-        capacity: info.capacity,
-      },
-    },
+    { professionalId: ctx.professionalId, actorUserId: ctx.actorUserId, eventId, seenVersion, patch: patchFor(info.questions) },
     now,
   );
-  if (!res.ok) return fromEngine(res, "event");
-  return { ok: true, effects: res.effects, version: res.version };
+  if (!first.ok) return fromEngine(first, "event");
+  const effects: Effect[] = [...first.effects];
+  await opts.afterStep?.(eventId);
+
+  for (const segment of later) {
+    const targetQuestions = await loadQuestions(db, { eventId: segment.eventId });
+    const res = await editEventInPlace(
+      db,
+      {
+        professionalId: ctx.professionalId,
+        actorUserId: ctx.actorUserId,
+        eventId: segment.eventId,
+        seenVersion: segment.version,
+        patch: patchFor(questionsForSegment(info.questions, sourceQuestions, targetQuestions)),
+      },
+      now,
+    );
+    if (!res.ok) return { ok: true, effects, version: first.version, incomplete: SERIES_INFO_INCOMPLETE };
+    effects.push(...res.effects);
+    await opts.afterStep?.(segment.eventId);
+  }
+  return { ok: true, effects, version: first.version, incomplete: null };
 }
 
 /* ───────────────────────────── Horaire et récurrence (cut) ───────────────────────────── */
@@ -332,7 +384,8 @@ export async function applyScheduleCore(
  * deleteFromPreview behind validation (unknown, other pro's or finished event → « Événement introuvable ou terminé. »).
  * The preview computes consequences but not the engine's refusals, so the ones deleteEventFromCore would
  * answer are answered here first, with the engine's own texts: the confirm dialog never lists
- * consequences of a delete that is then refused.
+ * consequences of a delete that is then refused. The delete reaches the later segments of the series too, so they
+ * are refused (a started séance, a leftover) and counted like the segment itself.
  */
 export async function deleteEventPreviewCore(
   db: Db,
@@ -344,38 +397,69 @@ export async function deleteEventPreviewCore(
   if (!parsed.ok) return actionFail(parsed.error);
   const { eventId, fromDate } = parsed.data;
   if (fromDate < todayKey(now, ctx.timezone)) return actionFail(PAST_FROM_DATE);
-  const refusal = await deleteRefusal(db, ctx.professionalId, eventId, fromDate, now);
-  if (refusal !== null) return actionFail(refusal);
+  const later = await loadLaterSegments(db, ctx.professionalId, eventId);
+  for (const id of [eventId, ...(later ?? []).map((s) => s.eventId)]) {
+    const refusal = await deleteRefusal(db, ctx.professionalId, id, fromDate, now);
+    if (refusal !== null) return actionFail(refusal);
+  }
 
   const preview = await deleteFromPreview(db, ctx.professionalId, eventId, fromDate, now);
   if (!preview) return fromEngine(fail("not_found"), "series");
   return { ok: true, preview };
 }
 
-/** deleteSeriesFrom (Q32: « Supprimer l'événement » is a cut from the first séance to come). Context "series". */
+/**
+ * deleteSeriesFrom (Q32: « Supprimer l'événement » is a cut from the first séance to come) on the segment AND on each
+ * later non-archived segment of its series, from the same date: the page's view of the later segments must still be
+ * true (else stale, nothing is written), the refusals are answered before the first write, then one engine batch per
+ * segment, the LATEST first (so the earlier one finds nothing rooted on it when the later ones are physically gone),
+ * each with its own version guard. A segment that fails once another went through answers "ok" with what was done
+ * (its effects must still run) and `incomplete` (SERIES_DELETE_INCOMPLETE). Context "series".
+ */
 export async function deleteEventFromCore(
   db: Db,
   ctx: ProCtx,
-  input: { eventId: string; seenVersion: number; fromDate: DateKey },
+  input: { eventId: string; seenVersion: number; fromDate: DateKey; later?: readonly LaterSegment[] },
   now: Date,
-): Promise<CoreResult<{ deletedEvent: boolean; cancelledOccurrences: number; deletedOccurrences: number }>> {
+  opts: StepHook = {},
+): Promise<CoreResult<{ deletedEvent: boolean; cancelledOccurrences: number; deletedOccurrences: number; incomplete: string | null }>> {
   const parsed = parseFr(deleteFromSchema, input);
   if (!parsed.ok) return actionFail(parsed.error);
-  const { eventId, seenVersion, fromDate } = parsed.data;
+  const { eventId, seenVersion, fromDate, later: seenLater } = parsed.data;
 
-  const res = await deleteSeriesFrom(
-    db,
-    { professionalId: ctx.professionalId, actorUserId: ctx.actorUserId, eventId, seenVersion, fromDate },
-    now,
-  );
-  if (!res.ok) return fromEngine(res, "series");
-  return {
-    ok: true,
-    effects: res.effects,
-    deletedEvent: res.deletedEvent,
-    cancelledOccurrences: res.cancelledOccurrences,
-    deletedOccurrences: res.deletedOccurrences,
-  };
+  const later = await loadLaterSegments(db, ctx.professionalId, eventId);
+  if (later === null) return fromEngine(fail("not_found"), "series");
+  if (!sameSegments(later, seenLater)) return fromEngine(fail("stale"), "series");
+  if (fromDate < todayKey(now, ctx.timezone)) return actionFail(PAST_FROM_DATE);
+  for (const id of [eventId, ...later.map((s) => s.eventId)]) {
+    const refusal = await deleteRefusal(db, ctx.professionalId, id, fromDate, now);
+    if (refusal !== null) return actionFail(refusal);
+  }
+
+  const steps = [...later].reverse().map((s) => ({ eventId: s.eventId, seenVersion: s.version }));
+  steps.push({ eventId, seenVersion });
+
+  const effects: Effect[] = [];
+  let cancelledOccurrences = 0;
+  let deletedOccurrences = 0;
+  let deletedEvent = false;
+  for (const [index, step] of steps.entries()) {
+    const res = await deleteSeriesFrom(
+      db,
+      { professionalId: ctx.professionalId, actorUserId: ctx.actorUserId, eventId: step.eventId, seenVersion: step.seenVersion, fromDate },
+      now,
+    );
+    if (!res.ok) {
+      if (index === 0) return fromEngine(res, "series");
+      return { ok: true, effects, deletedEvent: false, cancelledOccurrences, deletedOccurrences, incomplete: SERIES_DELETE_INCOMPLETE };
+    }
+    effects.push(...res.effects);
+    cancelledOccurrences += res.cancelledOccurrences;
+    deletedOccurrences += res.deletedOccurrences;
+    if (step.eventId === eventId) deletedEvent = res.deletedEvent;
+    await opts.afterStep?.(step.eventId);
+  }
+  return { ok: true, effects, deletedEvent, cancelledOccurrences, deletedOccurrences, incomplete: null };
 }
 
 /* ───────────────────────────── Create-form preview ───────────────────────────── */

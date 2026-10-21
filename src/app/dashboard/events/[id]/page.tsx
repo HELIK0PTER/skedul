@@ -11,6 +11,7 @@ import { StatusMark } from "@/components/dashboard/status-mark";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import type { EventSegmentView } from "@/lib/back-office/event-reads";
 import { formatWhen, planningHref } from "@/lib/back-office/format";
 import { MODE_SHORT_LABELS } from "@/lib/back-office/labels";
 import { draftsFromRows } from "@/lib/back-office/question-drafts";
@@ -23,6 +24,46 @@ import { requireProfessional } from "@/server/pro-context";
 
 export const metadata: Metadata = { title: "Événement" };
 
+const SEGMENT_ROW =
+  "flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-xl border border-border px-3 py-2 text-sm";
+
+/** The other segments of the series: one with séances to come opens on its own page, so it is a link. */
+function SegmentList({ segments }: { segments: EventSegmentView[] }) {
+  return (
+    <ul className="space-y-2">
+      {segments.map((segment) => {
+        const content = (
+          <>
+            <span>{segment.recurrenceLabel}</span>
+            <span className="flex items-center gap-2 text-xs text-zinc-600">
+              {segment.live && <Badge variant="neutral">À venir</Badge>}
+              <span>
+                {segment.lastDate === null
+                  ? `À partir du ${formatDayMonthYear(segment.firstDate)}`
+                  : `Du ${formatDayMonthYear(segment.firstDate)} au ${formatDayMonthYear(segment.lastDate)}`}
+              </span>
+            </span>
+          </>
+        );
+        return (
+          <li key={segment.eventId}>
+            {segment.live ? (
+              <Link
+                href={`/dashboard/events/${segment.eventId}`}
+                className={`${SEGMENT_ROW} hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
+              >
+                {content}
+              </Link>
+            ) : (
+              <div className={SEGMENT_ROW}>{content}</div>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 export default async function EventPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const pro = await requireProfessional();
@@ -34,6 +75,9 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
   const { event } = data;
   const tz = pro.timezone;
   const now = new Date();
+
+  const previousSegments = data.otherSegments.filter((segment) => segment.firstDate < event.rule.startDate);
+  const nextSegments = data.otherSegments.filter((segment) => segment.firstDate > event.rule.startDate);
 
   const noActiveType =
     event.bookingMode === "tickets" &&
@@ -113,6 +157,7 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
               linkedArchivedTypes={data.linkedArchivedTypes}
               proWindow={data.proWindow}
               futureRegistrants={data.futureRegistrants}
+              laterSegments={data.laterSegments}
               readOnly={data.readOnly}
             />
           </CardContent>
@@ -168,7 +213,7 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
           </CardContent>
         </Card>
 
-        {data.otherSegments.length > 0 && (
+        {previousSegments.length > 0 && (
           <Card>
             <CardHeader>
               <CardTitle>Segments précédents</CardTitle>
@@ -177,24 +222,23 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <ul className="space-y-2">
-                {data.otherSegments.map((segment) => (
-                  <li
-                    key={segment.eventId}
-                    className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-xl border border-border px-3 py-2 text-sm"
-                  >
-                    <span>{segment.recurrenceLabel}</span>
-                    <span className="flex items-center gap-2 text-xs text-zinc-600">
-                      {segment.firstDate > event.rule.startDate && <Badge variant="neutral">À venir</Badge>}
-                      <span>
-                        {segment.lastDate === null
-                          ? `À partir du ${formatDayMonthYear(segment.firstDate)}`
-                          : `Du ${formatDayMonthYear(segment.firstDate)} au ${formatDayMonthYear(segment.lastDate)}`}
-                      </span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              <SegmentList segments={previousSegments} />
+            </CardContent>
+          </Card>
+        )}
+
+        {nextSegments.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Segments suivants</CardTitle>
+              <CardDescription>
+                {
+                  "La suite de la série est dans un segment à part, qui a ses propres séances. Les informations et la suppression de cet événement s'y appliquent aussi."
+                }
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <SegmentList segments={nextSegments} />
             </CardContent>
           </Card>
         )}

@@ -250,6 +250,7 @@ dbTest("getEventEditor: the current segment with its cut date, remaining count, 
     cancelledSeances: 0,
     registrants: 0,
     ticketsReturned: 0,
+    laterSegments: [],
   });
   assert.deepEqual(data.proWindow, { bookingHorizonDays: 60, minNoticeMinutes: 60, cancelDeadlineHours: 24 });
 });
@@ -292,6 +293,134 @@ dbTest("getEventEditor: the old segment id redirects to the new one, which lists
   assert.equal(previous.firstDate, dayIn(pro, -14, now));
   assert.equal(previous.lastDate, addDays(d, -1));
   assert.match(previous.recurrenceLabel, /^Toutes les semaines le lundi, le mercredi et le vendredi, jusqu'au \d{2}\/\d{2}(\/\d{4})?$/);
+});
+
+/**
+ * A Mon / Wed / Fri series of 8 séances starting the day after tomorrow, cut (« cette séance et les suivantes ») at its
+ * 4th séance: A keeps the 3 séances before the cut, B (a later segment, same series) owns the 5 others. Both are live.
+ */
+async function twoLiveSegments({ db, pro }: DbHarness, now: Date) {
+  const typeId = await makeType(db, pro);
+  const first = await makeEvent(
+    db,
+    pro,
+    { title: "Roda", ticketTypeIds: [typeId], rule: weekly(dayIn(pro, 2, now), [1, 3, 5], { endMode: "count", occurrenceCount: 8 }) },
+    now,
+  );
+  const cutDate = first.occurrences[3].seriesDate ?? "";
+  const cut = await editSeriesFrom(
+    db,
+    {
+      professionalId: pro.proId,
+      actorUserId: pro.userId,
+      eventId: first.eventId,
+      seenVersion: 1,
+      fromDate: cutDate,
+      rule: weekly(cutDate, [1, 3, 5], { endMode: "count", occurrenceCount: 5 }),
+      durationMin: 60,
+      orphans: "keep",
+    },
+    now,
+  );
+  must(cut, "split");
+  return {
+    typeId,
+    a: first.eventId,
+    b: cut.eventId,
+    cutDate,
+    aRows: await occurrencesOf(db, first.eventId),
+    bRows: await occurrencesOf(db, cut.eventId),
+  };
+}
+
+dbTest("getEventEditor: a later segment that still has séances to come opens on its own and is listed with a link", async (h) => {
+  const { db, pro } = h;
+  const now = new Date();
+  const { a, b, cutDate, aRows, bRows } = await twoLiveSegments(h, now);
+  assert.deepEqual([aRows.length, bRows.length], [3, 5], "the planning split leaves séances to come on both segments");
+
+  const onA = editorOf(await getEventEditor(db, pro.proId, a, now));
+  assert.equal(onA.event.id, a);
+  assert.deepEqual(onA.laterSegments, [{ eventId: b, version: 1 }]);
+  assert.deepEqual(
+    onA.otherSegments.map((s) => [s.eventId, s.live, s.archived, s.firstDate]),
+    [[b, true, false, cutDate]],
+  );
+
+  const onB = editorOf(await getEventEditor(db, pro.proId, b, now));
+  assert.equal(onB.event.id, b, "no redirect back to the earlier segment");
+  assert.equal(onB.fromDate, bRows[0].seriesDate);
+  assert.deepEqual(onB.laterSegments, []);
+  assert.deepEqual(
+    onB.otherSegments.map((s) => [s.eventId, s.live]),
+    [[a, true]],
+  );
+
+  const { live } = await listEvents(db, pro.proId, now);
+  assert.deepEqual(
+    live.map((r) => r.eventId),
+    [a],
+    "the list still has one row per series, on the segment that owns the next séance",
+  );
+});
+
+dbTest("deleteFromPreview: the later segments are counted and listed with their version; the editor warns their registrants too", async (h) => {
+  const { db, pro } = h;
+  const now = new Date();
+  const { typeId, a, b, cutDate, aRows, bRows } = await twoLiveSegments(h, now);
+  const from = aRows[0].seriesDate ?? "";
+
+  assert.deepEqual(await deleteFromPreview(db, pro.proId, a, from, now), {
+    fromDate: from,
+    deleteWhole: true,
+    deletedSeances: 8,
+    cancelledSeances: 0,
+    registrants: 0,
+    ticketsReturned: 0,
+    laterSegments: [{ eventId: b, version: 1 }],
+  });
+  // From the later segment alone: only its own séances.
+  assert.deepEqual(await deleteFromPreview(db, pro.proId, b, cutDate, now), {
+    fromDate: cutDate,
+    deleteWhole: true,
+    deletedSeances: 5,
+    cancelledSeances: 0,
+    registrants: 0,
+    ticketsReturned: 0,
+    laterSegments: [],
+  });
+  // A date after the earlier segment's last séance still reaches the later one (it was a no-op before).
+  const late = bRows[2].seriesDate ?? "";
+  assert.deepEqual(await deleteFromPreview(db, pro.proId, a, late, now), {
+    fromDate: late,
+    deleteWhole: false,
+    deletedSeances: 3,
+    cancelledSeances: 0,
+    registrants: 0,
+    ticketsReturned: 0,
+    laterSegments: [{ eventId: b, version: 1 }],
+  });
+
+  // Registrants of a later séance: counted in the delete and warned by a change of place.
+  const customerId = await makeCustomer(db, pro);
+  await giveTickets(db, pro, customerId, typeId, 1);
+  must(
+    await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: bRows[1].id, customerId, asGuest: false }),
+    "a ticket booking on the later segment",
+  );
+  assert.deepEqual(await deleteFromPreview(db, pro.proId, a, from, now), {
+    fromDate: from,
+    deleteWhole: false,
+    deletedSeances: 7,
+    cancelledSeances: 1,
+    registrants: 1,
+    ticketsReturned: 1,
+    laterSegments: [{ eventId: b, version: 1 }],
+  });
+  const data = editorOf(await getEventEditor(db, pro.proId, a, now));
+  assert.equal(data.futureRegistrants, 1, "the registrant of the later segment is warned by a change of place too");
+  assert.equal(data.deletePreview?.cancelledSeances, 1);
+  assert.equal(editorOf(await getEventEditor(db, pro.proId, b, now)).futureRegistrants, 1);
 });
 
 dbTest("getEventEditor: an archived series opens read-only and is listed as ended", async ({ db, pro }) => {
@@ -403,7 +532,15 @@ dbTest("deleteFromPreview: a never-booked event is deleted whole, as deleteSerie
   const fromDate = occurrences[0].seriesDate ?? "";
 
   const preview = await deleteFromPreview(db, pro.proId, eventId, fromDate, now);
-  assert.deepEqual(preview, { fromDate, deleteWhole: true, deletedSeances: 6, cancelledSeances: 0, registrants: 0, ticketsReturned: 0 });
+  assert.deepEqual(preview, {
+    fromDate,
+    deleteWhole: true,
+    deletedSeances: 6,
+    cancelledSeances: 0,
+    registrants: 0,
+    ticketsReturned: 0,
+    laterSegments: [],
+  });
 
   const res = await deleteSeriesFrom(
     db,
@@ -431,7 +568,15 @@ dbTest("deleteFromPreview and the editor: a booked series, cancelled séances, r
   must(await book(future[0].id, guest, true), "guest booking");
   must(await book(future[1].id, guest, true), "second guest booking");
 
-  const expected = { fromDate: d, deleteWhole: false, deletedSeances: future.length - 2, cancelledSeances: 2, registrants: 3, ticketsReturned: 1 };
+  const expected = {
+    fromDate: d,
+    deleteWhole: false,
+    deletedSeances: future.length - 2,
+    cancelledSeances: 2,
+    registrants: 3,
+    ticketsReturned: 1,
+    laterSegments: [],
+  };
   assert.deepEqual(await deleteFromPreview(db, pro.proId, eventId, d, now), expected);
 
   const data = editorOf(await getEventEditor(db, pro.proId, eventId, now));
@@ -482,6 +627,7 @@ dbTest("deleteFromPreview: a pending hold that has lapsed is not a registrant", 
     cancelledSeances: 2,
     registrants: 1,
     ticketsReturned: 0,
+    laterSegments: [],
   });
 });
 

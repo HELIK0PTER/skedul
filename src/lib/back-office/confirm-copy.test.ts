@@ -6,6 +6,7 @@ import {
   cancelOccurrenceCopy,
   closeTicketsCopy,
   deleteEventCopy,
+  deleteEventDoneNotice,
   deleteOfferCopy,
   deleteOfferDoneNotice,
   deleteTimeOffCopy,
@@ -190,6 +191,28 @@ test("deleteEventCopy: the whole event, a series from a date, nothing concerned"
   );
   assert.equal(event({ fromLabel: "lun. 12/10" }).body, "Aucune séance à venir n'est concernée.");
   assert.equal(event().title, "Supprimer « Roda libre » ?", "no date, not whole: the plain title");
+});
+
+test("deleteEventCopy: the later segments of the series are named, the counts already include them", () => {
+  const SUITE = "La suite de la série (1 segment suivant) est comprise.";
+  assert.equal(
+    event({ deleteWhole: true, laterSegments: 1 }).body,
+    `L'événement n'a jamais eu d'inscription : il est supprimé définitivement. ${SUITE}`,
+  );
+  assert.equal(
+    event({ fromLabel: "lun. 12/10", deletedSeances: 5, cancelledSeances: 1, registrants: 2, ticketsReturned: 1, laterSegments: 1 }).body,
+    `5 séances sans inscrit seront supprimées. 1 séance avec inscrits sera annulée : 2 inscrits prévenus par email, 1 ticket rendu. ${SUITE}`,
+  );
+  assert.equal(
+    event({ fromLabel: "lun. 12/10", deletedSeances: 1, laterSegments: 3 }).body,
+    "1 séance sans inscrit sera supprimée. La suite de la série (3 segments suivants) est comprise.",
+  );
+  assert.equal(event({ fromLabel: "lun. 12/10", laterSegments: 0 }).body, "Aucune séance à venir n'est concernée.", "none: nothing to add");
+});
+
+test("deleteEventDoneNotice: from the first séance to come, or from a later date", () => {
+  assert.equal(deleteEventDoneNotice({ fromLabel: null }), "Les séances à venir sont supprimées.");
+  assert.equal(deleteEventDoneNotice({ fromLabel: "mar. 25/11" }), "Les séances à partir du mar. 25/11 sont supprimées.");
 });
 
 const RDV_NOTE = "Un rendez-vous compte avec ses marges avant et après.";

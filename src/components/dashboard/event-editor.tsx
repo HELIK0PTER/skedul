@@ -30,6 +30,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { TypeOption } from "@/lib/back-office/catalog-reads";
+import type { LaterSegment } from "@/lib/back-office/event-reads";
 import { EVENT_DEFAULTS } from "@/lib/back-office/event-defaults";
 import { plural } from "@/lib/back-office/format";
 import { changedKeys, RECURRENCE_ERROR_KEYS, withoutErrorsUnder } from "@/lib/back-office/form-errors";
@@ -606,6 +607,7 @@ export function EventInfoForm({
   linkedArchivedTypes,
   proWindow,
   futureRegistrants,
+  laterSegments,
   readOnly,
 }: {
   eventId: string;
@@ -615,6 +617,8 @@ export function EventInfoForm({
   linkedArchivedTypes: { id: string; name: string }[];
   proWindow: BookingWindow;
   futureRegistrants: number;
+  /** The later segments of the series: the information reaches them too, each guarded by the version the page saw. */
+  laterSegments: LaterSegment[];
   readOnly: boolean;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
@@ -664,9 +668,15 @@ export function EventInfoForm({
     startTransition(async () => {
       try {
         // seenVersion is this render's prop: after a save the page re-renders with the new version.
-        const res = await editEventInfoAction({ eventId, seenVersion, info });
+        const res = await editEventInfoAction({ eventId, seenVersion, info, later: laterSegments });
         if (!res.ok) {
           setFormError(res.error);
+          setErrorFocus((n) => n + 1);
+          return;
+        }
+        // Saved here but not on the whole series: say so instead of the success line.
+        if (res.incomplete !== null) {
+          setFormError(res.incomplete);
           setErrorFocus((n) => n + 1);
           return;
         }
@@ -697,6 +707,14 @@ export function EventInfoForm({
           <Info className="mt-0.5 size-4 shrink-0 text-zinc-600" aria-hidden="true" />
           <span>
             {`${plural(futureRegistrants, "inscrit des séances à venir sera prévenu", "inscrits des séances à venir seront prévenus")} du changement de lieu.`}
+          </span>
+        </p>
+      )}
+      {laterSegments.length > 0 && !readOnly && (
+        <p className="flex items-start gap-2 rounded-xl bg-muted px-3 py-2 text-sm">
+          <Info className="mt-0.5 size-4 shrink-0 text-zinc-600" aria-hidden="true" />
+          <span>
+            {`Ces informations s'appliquent aussi à ${plural(laterSegments.length, "segment suivant", "segments suivants")} de la série.`}
           </span>
         </p>
       )}

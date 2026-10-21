@@ -9,7 +9,7 @@ import { FormError } from "@/components/dashboard/form-error";
 import { FormField } from "@/components/dashboard/form-field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { deleteEventCopy, type ConfirmCopy } from "@/lib/back-office/confirm-copy";
+import { deleteEventCopy, deleteEventDoneNotice, type ConfirmCopy } from "@/lib/back-office/confirm-copy";
 import type { DeletePreview } from "@/lib/back-office/event-reads";
 import { formatDayMonth, formatDayMonthYear, maxKey, type DateKey } from "@/lib/civil-date";
 import { REQUEST_FAILED } from "@/lib/pro-messages";
@@ -18,7 +18,6 @@ import { deleteEventFromAction, deleteEventPreviewAction } from "@/server/pro-ca
 const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const CLOSED_COPY: ConfirmCopy = { title: "", body: "", confirm: "" };
 const NO_FUTURE = "Plus aucune séance à venir.";
-const DONE = "Les séances à venir sont supprimées.";
 
 type Target = { fromDate: DateKey; preview: DeletePreview };
 
@@ -47,7 +46,8 @@ export function EventDeleteCard({
   const [error, setError] = useState<string | null>(null);
   /** Bumped when reading the consequences fails (the dialog is not open then): the effect below puts the focus on the error box. */
   const [errorFocus, setErrorFocus] = useState(0);
-  const [done, setDone] = useState(false);
+  /** The line of a delete that went through (null: none yet), worded after the date it started from. */
+  const [done, setDone] = useState<string | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
   const minCustom = fromDate === null ? todayKey : maxKey(todayKey, fromDate);
   const [customDate, setCustomDate] = useState<string>(minCustom);
@@ -69,6 +69,7 @@ export function EventDeleteCard({
         title,
         fromLabel: target.preview.deleteWhole ? null : formatDayMonth(target.fromDate),
         ...target.preview,
+        laterSegments: target.preview.laterSegments.length,
       })
     : CLOSED_COPY;
 
@@ -88,7 +89,7 @@ export function EventDeleteCard({
   function openWhole() {
     if (busy) return;
     setError(null);
-    setDone(false);
+    setDone(null);
     // The page data can be minutes old: the dialog opens at once on it, with both buttons disabled until the fresh answer replaces it.
     if (initialPreview !== null) setTarget({ fromDate: from, preview: initialPreview });
     startWhole(async () => {
@@ -106,7 +107,7 @@ export function EventDeleteCard({
     }
     setCustomError(null);
     setError(null);
-    setDone(false);
+    setDone(null);
     const date: DateKey = customDate;
     startCustom(async () => {
       const preview = await load(date);
@@ -123,10 +124,11 @@ export function EventDeleteCard({
   function confirm() {
     if (target === null || dialogPending) return;
     const date = target.fromDate;
+    const later = target.preview.laterSegments;
     startDeleting(async () => {
       try {
         // seenVersion is this render's prop, read at submit time.
-        const res = await deleteEventFromAction({ eventId, seenVersion, fromDate: date });
+        const res = await deleteEventFromAction({ eventId, seenVersion, fromDate: date, later });
         if (!res.ok) {
           setError(res.error);
           return;
@@ -138,7 +140,13 @@ export function EventDeleteCard({
         }
         setTarget(null);
         setCustomOpen(false);
-        setDone(true);
+        // Part of the series went and part did not: the line says so instead of "done".
+        if (res.incomplete !== null) {
+          setError(res.incomplete);
+          setErrorFocus((n) => n + 1);
+          return;
+        }
+        setDone(deleteEventDoneNotice({ fromLabel: date === from ? null : formatDayMonth(date) }));
       } catch {
         setError(REQUEST_FAILED);
       }
@@ -195,7 +203,7 @@ export function EventDeleteCard({
       <FormError message={target === null ? error : null} ref={errorBox} tabIndex={-1} />
       {/* Always mounted, so a screen reader announces the confirmation when it appears. */}
       <p role="status" className={done ? "text-sm" : "sr-only"}>
-        {done && DONE}
+        {done}
       </p>
 
       {/* Keyed on the waiting state: « Retour » is disabled while the fresh answer (or the delete) is awaited, so its autoFocus is ignored at mount; the dialog remounts when the wait ends and « Retour » takes the focus (also after a failed delete). */}

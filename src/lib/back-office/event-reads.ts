@@ -40,15 +40,24 @@ export type EventSegmentView = {
   firstDate: DateKey;
   lastDate: DateKey | null;
   archived: boolean;
+  /** Not archived and owning a séance to come: its own editor opens (no redirect), so the card can link to it. */
+  live: boolean;
 };
+
+/** A later non-archived segment of the same series (start_date after the segment's) and the version the page saw. */
+export type LaterSegment = { eventId: string; version: number };
 
 export type DeletePreview = {
   fromDate: DateKey;
+  /** The whole series would disappear for good: nothing was ever booked, nothing precedes the cut, no leftover segment. */
   deleteWhole: boolean;
+  /** Counted over the segment AND every later segment of the series (the delete acts on all of them from the date). */
   deletedSeances: number;
   cancelledSeances: number;
   registrants: number;
   ticketsReturned: number;
+  /** The later non-archived segments the delete reaches too, by start date, with the version each one had when read. */
+  laterSegments: LaterSegment[];
 };
 
 export type EventEditorData = {
@@ -93,10 +102,12 @@ export type EventEditorData = {
   }[];
   /** Same root, other segments, by firstDate. */
   otherSegments: EventSegmentView[];
+  /** The later non-archived segments of the series: an information edit reaches them too (each with its own version). */
+  laterSegments: LaterSegment[];
   /** Active and not rdv_free. */
   typeOptions: TypeOption[];
   linkedArchivedTypes: { id: string; name: string }[];
-  /** Live bookings that a change of place would warn: future scheduled séances without their own place. */
+  /** Live bookings that a change of place would warn: future scheduled séances without their own place, this segment and the later ones. */
   futureRegistrants: number;
   /** deleteFromPreview(fromDate) when fromDate is set and the event is not read-only. */
   deletePreview: DeletePreview | null;
@@ -152,6 +163,31 @@ async function loadNextSeances(
     }
   }
   return next;
+}
+
+/**
+ * The non-archived segments of the series that start after this one (the engine's own `laterSegments` rule, series.ts),
+ * by start date, with their current version. Null for an unknown, another pro's or archived segment.
+ */
+export async function loadLaterSegments(db: Db, professionalId: string, eventId: string): Promise<LaterSegment[] | null> {
+  const [ev] = await db
+    .select({ id: event.id, seriesRootId: event.seriesRootId, startDate: event.startDate })
+    .from(event)
+    .where(and(eq(event.id, eventId), eq(event.professionalId, professionalId), isNull(event.archivedAt)));
+  if (!ev) return null;
+  const rows = await db
+    .select({ id: event.id, version: event.version })
+    .from(event)
+    .where(
+      and(
+        eq(event.professionalId, professionalId),
+        isNull(event.archivedAt),
+        sql`coalesce(${event.seriesRootId}, ${event.id}) = ${ev.seriesRootId ?? ev.id}`,
+        gt(event.startDate, ev.startDate),
+      ),
+    )
+    .orderBy(asc(event.startDate), asc(event.id));
+  return rows.map((r) => ({ eventId: r.id, version: r.version }));
 }
 
 /**
@@ -320,10 +356,15 @@ export async function getEventEditor(
     segments.filter((s) => s.archivedAt === null).map((s) => s.id),
     now,
   );
-  const current = pickCurrentSegment(segments, next);
+  // A segment that owns a séance to come opens on its own, even when an earlier one still has séances too (a series
+  // split by « cette séance et les suivantes » has two live segments); any other id goes to the current segment.
+  const asked = segments.find((s) => s.id === requested.id);
+  const current = asked && asked.archivedAt === null && next.has(asked.id) ? asked : pickCurrentSegment(segments, next);
   if (current.id !== requested.id) return { kind: "redirect", eventId: current.id };
 
   const readOnly = current.archivedAt !== null;
+  const laterSegments = readOnly ? [] : ((await loadLaterSegments(db, professionalId, current.id)) ?? []);
+  const registrantEvents = [current.id, ...laterSegments.map((s) => s.eventId)];
   const fromDate = readOnly ? null : (next.get(current.id)?.seriesDate ?? null);
   const rule = ruleOf(current);
 
@@ -359,7 +400,7 @@ export async function getEventEditor(
       .where(
         and(
           eq(occurrence.professionalId, professionalId),
-          eq(occurrence.eventId, current.id),
+          inArray(occurrence.eventId, registrantEvents),
           eq(occurrence.status, "scheduled"),
           gt(occurrence.startsAt, now),
           isNull(occurrence.locationOverride),
@@ -380,6 +421,7 @@ export async function getEventEditor(
       firstDate: s.startDate,
       lastDate: lastSeriesDate(ruleOf(s)),
       archived: s.archivedAt !== null,
+      live: s.archivedAt === null && next.has(s.id),
     }))
     .sort((a, b) => a.firstDate.localeCompare(b.firstDate) || a.eventId.localeCompare(b.eventId));
 
@@ -414,6 +456,7 @@ export async function getEventEditor(
       remainingCount: fromDate === null ? null : remainingCount(rule, fromDate),
       upcoming,
       otherSegments,
+      laterSegments,
       typeOptions: typeOptions.filter((t) => !t.rdvFree),
       linkedArchivedTypes: links.filter((l) => l.archivedAt !== null).map((l) => ({ id: l.id, name: l.name })),
       futureRegistrants: futureRegistrants[0]?.n ?? 0,
@@ -448,28 +491,27 @@ export async function countRdvConflicts(
 
 /* ───────────────────────────── Delete preview ───────────────────────────── */
 
-/**
- * What deleteSeriesFrom(fromDate) would do on this segment (same rules as the
- * engine, src/lib/booking/series.ts): the rows of the segment from fromDate,
- * the never-booked ones deleted, the scheduled ones with a booking history
- * cancelled; `deleteWhole` = never booked, no row before fromDate and no other
- * segment rooted on it. `registrants` leaves out the pending holds that have
- * lapsed at `now` (nobody is warned about them). Null for an unknown, other
- * pro's or archived segment (the engine refuses these too).
- */
-export async function deleteFromPreview(
+type SegmentPreview = {
+  deleted: number;
+  cancelled: number;
+  registrants: number;
+  tickets: number;
+  /** a booking, whatever its status, exists on one of the segment's séances */
+  booked: boolean;
+  /** séances of the segment before the cut */
+  rowsBefore: number;
+  /** the other segments rooted on this one (a root is never physically deleted while they exist) */
+  rooted: string[];
+};
+
+/** What deleteSeriesFrom(fromDate) would do on ONE segment (the engine's own rules, src/lib/booking/series.ts). */
+async function segmentPreview(
   db: Db,
   professionalId: string,
   eventId: string,
   fromDate: DateKey,
   now: Date,
-): Promise<DeletePreview | null> {
-  const [ev] = await db
-    .select({ id: event.id })
-    .from(event)
-    .where(and(eq(event.id, eventId), eq(event.professionalId, professionalId), isNull(event.archivedAt)));
-  if (!ev) return null;
-
+): Promise<SegmentPreview> {
   const [rows, flags] = await Promise.all([
     db
       .select({
@@ -484,23 +526,62 @@ export async function deleteFromPreview(
       .where(
         and(
           eq(occurrence.professionalId, professionalId),
-          eq(occurrence.eventId, ev.id),
+          eq(occurrence.eventId, eventId),
           gte(occurrence.seriesDate, fromDate),
         ),
       ),
-    db.execute<{ booked: boolean; root_in_use: boolean; rows_before: number }>(sql`select
-      exists (select 1 from booking b join occurrence o on o.id = b.occurrence_id where o.event_id = ${ev.id}) as booked,
-      exists (select 1 from event e where e.series_root_id = ${ev.id} and e.id <> ${ev.id}) as root_in_use,
-      (select count(*)::int from occurrence where event_id = ${ev.id} and series_date < ${fromDate}::date) as rows_before`),
+    db.execute<{ booked: boolean; rooted: string | null; rows_before: number }>(sql`select
+      exists (select 1 from booking b join occurrence o on o.id = b.occurrence_id where o.event_id = ${eventId}) as booked,
+      (select string_agg(e.id, ',') from event e where e.series_root_id = ${eventId} and e.id <> ${eventId}) as rooted,
+      (select count(*)::int from occurrence where event_id = ${eventId} and series_date < ${fromDate}::date) as rows_before`),
   ]);
   const f = flags.rows[0];
   const toCancel = rows.filter((r) => r.hasHistory === true && r.status === "scheduled");
   return {
-    fromDate,
-    deleteWhole: f?.booked !== true && Number(f?.rows_before ?? 0) === 0 && f?.root_in_use !== true,
-    deletedSeances: rows.filter((r) => r.hasHistory !== true).length,
-    cancelledSeances: toCancel.length,
+    deleted: rows.filter((r) => r.hasHistory !== true).length,
+    cancelled: toCancel.length,
     registrants: toCancel.reduce((sum, r) => sum + r.registrants, 0),
-    ticketsReturned: toCancel.reduce((sum, r) => sum + r.tickets, 0),
+    tickets: toCancel.reduce((sum, r) => sum + r.tickets, 0),
+    booked: f?.booked === true,
+    rowsBefore: Number(f?.rows_before ?? 0),
+    rooted: f?.rooted ? f.rooted.split(",") : [],
+  };
+}
+
+/**
+ * What the delete from `fromDate` would do on this segment AND on every later non-archived segment of its series
+ * (the delete reaches them all, latest first, src/lib/back-office/event-actions.ts): the rows from fromDate, the
+ * never-booked ones deleted, the scheduled ones with a booking history cancelled, summed over the segments.
+ * `deleteWhole` = this segment and the later ones all disappear for good: never booked, no row before fromDate, and
+ * nothing else rooted on this segment once the later ones are gone. `registrants` leaves out the pending holds that
+ * have lapsed at `now` (nobody is warned about them). `laterSegments` carries each later segment's version for the
+ * delete's own guard. Null for an unknown, other pro's or archived segment (the engine refuses these too).
+ */
+export async function deleteFromPreview(
+  db: Db,
+  professionalId: string,
+  eventId: string,
+  fromDate: DateKey,
+  now: Date,
+): Promise<DeletePreview | null> {
+  const later = await loadLaterSegments(db, professionalId, eventId);
+  if (later === null) return null;
+
+  const [own, ...others] = await Promise.all(
+    [eventId, ...later.map((s) => s.eventId)].map((id) => segmentPreview(db, professionalId, id, fromDate, now)),
+  );
+  // Latest first, like the delete: a later segment is physically deleted when never booked with nothing before the cut
+  // (nothing is rooted on it), and the earlier one then no longer has it rooted on itself.
+  const laterGone = new Set(later.filter((_, i) => !others[i].booked && others[i].rowsBefore === 0 && others[i].rooted.length === 0).map((s) => s.eventId));
+  const ownGone = !own.booked && own.rowsBefore === 0 && own.rooted.every((id) => laterGone.has(id));
+  const all = [own, ...others];
+  return {
+    fromDate,
+    deleteWhole: ownGone && laterGone.size === later.length,
+    deletedSeances: all.reduce((sum, p) => sum + p.deleted, 0),
+    cancelledSeances: all.reduce((sum, p) => sum + p.cancelled, 0),
+    registrants: all.reduce((sum, p) => sum + p.registrants, 0),
+    ticketsReturned: all.reduce((sum, p) => sum + p.tickets, 0),
+    laterSegments: later,
   };
 }

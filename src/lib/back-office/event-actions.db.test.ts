@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 
 import { addDaysMs, createTestPro, dbTest, deleteTestUser, type DbHarness, type TestPro } from "../../test/db";
 import {
@@ -15,7 +15,9 @@ import {
 import { proCtx } from "../../test/pro-ctx";
 import { rowBooking, rowCustomer, rowRdv, rowRdvType } from "../../test/rows";
 import { setTicketTypeArchived } from "../booking/catalog";
+import { loadQuestions } from "../booking/answers";
 import { registerPro } from "../booking/claims";
+import { editSeriesFrom } from "../booking/series";
 import { addDays, dayOfWeek, formatDayMonthYear } from "../civil-date";
 import type { Db } from "../db/atomic";
 import { event, eventTicketType, occurrence } from "../db/schema";
@@ -25,6 +27,8 @@ import {
   EVENT_START_PAST,
   EVENT_START_TOO_FAR,
   EVENT_TYPE_UNAVAILABLE,
+  SERIES_DELETE_INCOMPLETE,
+  SERIES_INFO_INCOMPLETE,
   applyScheduleCore,
   createEventCore,
   deleteEventFromCore,
@@ -655,7 +659,7 @@ dbTest("deleteEventPreviewCore and deleteEventFromCore: a never-booked event goe
 
   const preview = await deleteEventPreviewCore(db, ctx, { eventId, fromDate }, now);
   must(preview, "preview");
-  assert.deepEqual(preview.preview, { fromDate, deleteWhole: true, deletedSeances: 1, cancelledSeances: 0, registrants: 0, ticketsReturned: 0 });
+  assert.deepEqual(preview.preview, { fromDate, deleteWhole: true, deletedSeances: 1, cancelledSeances: 0, registrants: 0, ticketsReturned: 0, laterSegments: [] });
   const past = await deleteEventPreviewCore(db, ctx, { eventId, fromDate: dayIn(pro, -1, now) }, now);
   assert.equal(outcome(past), "La modification doit partir d'aujourd'hui ou d'une date future.");
 
@@ -697,7 +701,7 @@ dbTest("deleteEventFromCore: a booked event is archived, its client told, and th
 
   const preview = await deleteEventPreviewCore(db, ctx, { eventId, fromDate }, now);
   must(preview, "preview");
-  assert.deepEqual(preview.preview, { fromDate, deleteWhole: false, deletedSeances: 0, cancelledSeances: 1, registrants: 1, ticketsReturned: 1 });
+  assert.deepEqual(preview.preview, { fromDate, deleteWhole: false, deletedSeances: 0, cancelledSeances: 1, registrants: 1, ticketsReturned: 1, laterSegments: [] });
 
   const del = await deleteEventFromCore(db, ctx, { eventId, seenVersion: 1, fromDate }, now);
   must(del, "delete");
@@ -782,7 +786,7 @@ dbTest("deleteEventPreviewCore: a booked séance left before the start refuses t
 
   const fromD1 = await deleteEventPreviewCore(db, ctx, { eventId, fromDate: d1 }, now);
   must(fromD1, "from d1 nothing is left before the cut");
-  assert.deepEqual(fromD1.preview, { fromDate: d1, deleteWhole: false, deletedSeances: 1, cancelledSeances: 1, registrants: 1, ticketsReturned: 0 });
+  assert.deepEqual(fromD1.preview, { fromDate: d1, deleteWhole: false, deletedSeances: 1, cancelledSeances: 1, registrants: 1, ticketsReturned: 0, laterSegments: [] });
 });
 
 /* ───────────────────────────── previewNewEventCore ───────────────────────────── */
@@ -844,3 +848,301 @@ dbTest("previewNewEventCore: refuses the start dates createEventCore refuses, wi
   assert.equal(limit.occurrenceCount, 0, "beyond the 400-day horizon nothing is materialised yet");
   assert.equal((await db.select().from(event).where(eq(event.professionalId, pro.proId))).length, 0, "nothing was created");
 });
+
+/* ───────────────────── A series with two live segments (F1) ───────────────────── */
+
+/**
+ * A Mon / Wed / Fri series of 8 séances from the day after tomorrow (one question), cut by « cette séance et les
+ * suivantes » at its 4th séance: A keeps the 3 séances before the cut, B (a later segment of the same series) owns the
+ * 5 others. Both segments are live, as after a split made from the planning.
+ */
+async function twoLiveSegments({ db, pro }: DbHarness, now: Date) {
+  const ctx = proCtx(pro);
+  const typeId = await makeType(db, pro);
+  const created = await createEventCore(
+    db,
+    ctx,
+    eventInput(pro, now, {
+      title: "Roda",
+      ticketTypeIds: [typeId],
+      questions: [{ label: "Niveau", type: "text", required: false }],
+      rule: weekly(dayIn(pro, 2, now), [1, 3, 5], { endMode: "count", occurrenceCount: 8 }),
+    }),
+    now,
+  );
+  must(created, "create the series");
+  const a = created.eventId;
+  const cutDate = (await occurrencesOf(db, a))[3].seriesDate ?? "";
+  const cut = await editSeriesFrom(
+    db,
+    {
+      professionalId: pro.proId,
+      actorUserId: pro.userId,
+      eventId: a,
+      seenVersion: 1,
+      fromDate: cutDate,
+      rule: weekly(cutDate, [1, 3, 5], { endMode: "count", occurrenceCount: 5 }),
+      durationMin: 60,
+      orphans: "keep",
+    },
+    now,
+  );
+  must(cut, "split");
+  return {
+    ctx,
+    typeId,
+    a,
+    b: cut.eventId,
+    cutDate,
+    aRows: await occurrencesOf(db, a),
+    bRows: await occurrencesOf(db, cut.eventId),
+  };
+}
+
+const scheduledCount = async (db: Db, eventId: string) =>
+  (await occurrencesOf(db, eventId)).filter((o) => o.status === "scheduled").length;
+
+dbTest("deleteEventFromCore: « Supprimer l'événement » reaches the later segment too (never booked: the whole series goes)", async (h) => {
+  const { db, pro } = h;
+  const now = new Date();
+  const { ctx, a, b, aRows } = await twoLiveSegments(h, now);
+  const fromDate = aRows[0].seriesDate ?? "";
+
+  const preview = await deleteEventPreviewCore(db, ctx, { eventId: a, fromDate }, now);
+  must(preview, "preview");
+  assert.deepEqual(preview.preview.laterSegments, [{ eventId: b, version: 1 }]);
+  assert.equal(preview.preview.deletedSeances, 8, "the 3 séances of A and the 5 of B");
+  assert.equal(preview.preview.deleteWhole, true);
+
+  const res = await deleteEventFromCore(db, ctx, { eventId: a, seenVersion: 2, fromDate, later: preview.preview.laterSegments }, now);
+  must(res, "delete");
+  assert.equal(res.deletedEvent, true);
+  assert.equal(res.deletedOccurrences, 8);
+  assert.equal(res.incomplete, null);
+  assert.deepEqual(await db.select({ id: event.id }).from(event).where(eq(event.professionalId, pro.proId)), [], "no segment is left");
+});
+
+dbTest("deleteEventFromCore: a booked séance of the later segment is cancelled with its client told and its ticket back", async (h) => {
+  const { db, pro } = h;
+  const now = new Date();
+  const { ctx, typeId, a, b, aRows, bRows } = await twoLiveSegments(h, now);
+  const fromDate = aRows[0].seriesDate ?? "";
+  const withTicket = await makeCustomer(db, pro);
+  await giveTickets(db, pro, withTicket, typeId, 1);
+  const guest = await makeCustomer(db, pro);
+  const book = (occurrenceId: string, customerId: string, asGuest: boolean) =>
+    registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId, customerId, asGuest });
+  must(await book(bRows[1].id, withTicket, false), "ticket booking on the later segment");
+  must(await book(aRows[0].id, guest, true), "guest booking on the earlier segment");
+
+  const preview = await deleteEventPreviewCore(db, ctx, { eventId: a, fromDate }, now);
+  must(preview, "preview");
+  assert.deepEqual(
+    [preview.preview.deleteWhole, preview.preview.cancelledSeances, preview.preview.deletedSeances, preview.preview.registrants, preview.preview.ticketsReturned],
+    [false, 2, 6, 2, 1],
+  );
+
+  const res = await deleteEventFromCore(db, ctx, { eventId: a, seenVersion: 2, fromDate, later: preview.preview.laterSegments }, now);
+  must(res, "delete");
+  assert.deepEqual([res.deletedEvent, res.cancelledOccurrences, res.deletedOccurrences, res.incomplete], [false, 2, 6, null]);
+  const cancelledIds = res.effects.flatMap((e) => (e.type === "email.occurrence_cancelled" ? [e.occurrenceId] : []));
+  assert.deepEqual([...cancelledIds].sort(), [aRows[0].id, bRows[1].id].sort(), "both clients are told");
+  assert.equal((await ticketsOf(db, withTicket))[0].status, "available", "the ticket of the later séance is back");
+  assert.equal(await scheduledCount(db, a), 0);
+  assert.equal(await scheduledCount(db, b), 0, "nothing stays bookable on the later segment");
+  assert.ok((await getEvent(db, a)).archivedAt !== null && (await getEvent(db, b)).archivedAt !== null, "both segments are over");
+});
+
+dbTest("deleteEventFromCore: « Supprimer à partir du » a date after the earlier segment's end acts on the later one, never a silent no-op", async (h) => {
+  const { db } = h;
+  const now = new Date();
+  const { ctx, a, b, aRows, bRows } = await twoLiveSegments(h, now);
+  const fromDate = bRows[2].seriesDate ?? "";
+
+  const preview = await deleteEventPreviewCore(db, ctx, { eventId: a, fromDate }, now);
+  must(preview, "preview");
+  assert.equal(preview.preview.deletedSeances, 3, "the 3 séances of the later segment from that date");
+
+  const res = await deleteEventFromCore(db, ctx, { eventId: a, seenVersion: 2, fromDate, later: preview.preview.laterSegments }, now);
+  must(res, "delete from a date");
+  assert.deepEqual([res.deletedEvent, res.deletedOccurrences, res.cancelledOccurrences, res.incomplete], [false, 3, 0, null]);
+  assert.equal(await scheduledCount(db, a), aRows.length, "the earlier segment keeps its séances");
+  assert.equal(await scheduledCount(db, b), 2, "the later segment keeps the séances before the date");
+  assert.equal((await occurrencesOf(db, b)).length, 2);
+  assert.ok(bRows[2].id !== undefined);
+});
+
+dbTest("deleteEventFromCore: later segments that changed since the page was read are stale, nothing is written", async (h) => {
+  const { db } = h;
+  const now = new Date();
+  const { ctx, a, b, aRows, bRows } = await twoLiveSegments(h, now);
+  const fromDate = aRows[0].seriesDate ?? "";
+  const stale = { ok: false, error: STALE, code: "stale" };
+
+  assert.deepEqual(await deleteEventFromCore(db, ctx, { eventId: a, seenVersion: 2, fromDate }, now), stale, "a later segment the page did not know");
+  assert.deepEqual(await deleteEventFromCore(db, ctx, { eventId: a, seenVersion: 2, fromDate, later: [{ eventId: b, version: 7 }] }, now), stale, "its version moved");
+  assert.deepEqual(
+    await deleteEventFromCore(db, ctx, { eventId: a, seenVersion: 2, fromDate, later: [{ eventId: b, version: 1 }, { eventId: "gone", version: 1 }] }, now),
+    stale,
+    "a segment that no longer exists",
+  );
+  assert.equal(await scheduledCount(db, a), aRows.length);
+  assert.equal(await scheduledCount(db, b), bRows.length);
+  assert.deepEqual([(await getEvent(db, a)).version, (await getEvent(db, b)).version], [2, 1], "A's version is the split's, nothing else moved");
+});
+
+dbTest("deleteEventFromCore: a failure after the later segment went is a clear partial result, with the effects of what was done", async (h) => {
+  const { db, pro } = h;
+  const now = new Date();
+  const { ctx, typeId, a, b, aRows, bRows } = await twoLiveSegments(h, now);
+  const fromDate = aRows[0].seriesDate ?? "";
+  const customerId = await makeCustomer(db, pro);
+  await giveTickets(db, pro, customerId, typeId, 1);
+  must(
+    await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: bRows[0].id, customerId, asGuest: false }),
+    "booking on the later segment",
+  );
+  const preview = await deleteEventPreviewCore(db, ctx, { eventId: a, fromDate }, now);
+  must(preview, "preview");
+
+  // Another tab edits A between the later segment's delete and A's own: A's version guard refuses.
+  const res = await deleteEventFromCore(
+    db,
+    ctx,
+    { eventId: a, seenVersion: 2, fromDate, later: preview.preview.laterSegments },
+    now,
+    {
+      afterStep: async (eventId) => {
+        if (eventId === b) await db.update(event).set({ version: 9 }).where(eq(event.id, a));
+      },
+    },
+  );
+  must(res, "ok, with what was done");
+  assert.equal(res.incomplete, SERIES_DELETE_INCOMPLETE);
+  assert.ok(res.incomplete && res.incomplete.endsWith("."), "a French sentence for the pro");
+  assert.deepEqual([res.deletedEvent, res.cancelledOccurrences, res.deletedOccurrences], [false, 1, 4]);
+  assert.ok(
+    res.effects.some((e) => e.type === "email.occurrence_cancelled" && e.occurrenceId === bRows[0].id),
+    "the client of the later séance is told",
+  );
+  assert.equal((await ticketsOf(db, customerId))[0].status, "available");
+  assert.equal(await scheduledCount(db, b), 0, "the later segment is gone");
+  assert.equal(await scheduledCount(db, a), aRows.length, "the earlier segment is untouched");
+
+  // Run again from what the page now shows: the earlier segment alone is left.
+  const again = await deleteEventFromCore(db, ctx, { eventId: a, seenVersion: 9, fromDate, later: [] }, now);
+  must(again, "the second try finishes the job");
+  assert.deepEqual([again.incomplete, again.deletedEvent], [null, false]);
+  assert.equal(await scheduledCount(db, a), 0);
+});
+
+dbTest("deleteEventPreviewCore: a started séance of the later segment refuses, like the delete does", async (h) => {
+  const { db } = h;
+  const now = new Date();
+  const { ctx, a, b, aRows } = await twoLiveSegments(h, now);
+  const fromDate = aRows[0].seriesDate ?? "";
+  // A séance of the later segment that has already begun (its local date is still ahead of the cut).
+  await db
+    .update(occurrence)
+    .set({ startsAt: addDaysMs(now, -1), endsAt: addDaysMs(now, -1 + 1 / 24), blockStart: addDaysMs(now, -1), blockEnd: addDaysMs(now, -1 + 1 / 24) })
+    .where(and(eq(occurrence.eventId, b), eq(occurrence.status, "scheduled")));
+  assert.equal(outcome(await deleteEventPreviewCore(db, ctx, { eventId: a, fromDate }, now)), SEANCE_STARTED);
+  assert.equal(
+    outcome(await deleteEventFromCore(db, ctx, { eventId: a, seenVersion: 2, fromDate, later: [{ eventId: b, version: 1 }] }, now)),
+    SEANCE_STARTED,
+  );
+  assert.equal((await getEvent(db, a)).version, 2, "nothing was written");
+});
+
+dbTest("editEventInfoCore: the information reaches the later segments, each with its own version, and warns their registrants", async (h) => {
+  const { db, pro } = h;
+  const now = new Date();
+  const { ctx, typeId, a, b, bRows } = await twoLiveSegments(h, now);
+  const guest = await makeCustomer(db, pro);
+  must(
+    await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: bRows[1].id, customerId: guest, asGuest: true }),
+    "a registrant of the later segment",
+  );
+  const [aQuestion] = await loadQuestions(db, { eventId: a });
+  const [bQuestion] = await loadQuestions(db, { eventId: b });
+  assert.ok(aQuestion && bQuestion && aQuestion.id !== bQuestion.id, "the split copied the question under a new id");
+
+  const info = infoOf({
+    title: "Roda du soir",
+    description: "Pour tous",
+    location: "Salle B",
+    color: "#16a34a",
+    capacity: 20,
+    isPrivate: true,
+    ticketTypeIds: [typeId],
+    questions: [
+      { id: aQuestion.id, label: "Niveau de pratique", type: "text", required: true },
+      { label: "Allergies", type: "text", required: false },
+    ],
+  });
+  const res = await editEventInfoCore(db, ctx, { eventId: a, seenVersion: 2, info, later: [{ eventId: b, version: 1 }] }, now);
+  must(res, "edit");
+  assert.equal(res.version, 3, "the version of the segment the form is about");
+  assert.equal(res.incomplete, null);
+
+  for (const id of [a, b]) {
+    const ev = await getEvent(db, id);
+    assert.deepEqual(
+      [ev.title, ev.description, ev.location, ev.color, ev.capacity, ev.isPrivate],
+      ["Roda du soir", "Pour tous", "Salle B", "#16a34a", 20, true],
+      id === a ? "the segment itself" : "the later segment",
+    );
+  }
+  assert.deepEqual([(await getEvent(db, a)).version, (await getEvent(db, b)).version], [3, 2]);
+  const bAfter = await loadQuestions(db, { eventId: b });
+  assert.deepEqual(
+    bAfter.map((q) => [q.label, q.required]),
+    [["Niveau de pratique", true], ["Allergies", false]],
+  );
+  assert.equal(bAfter[0].id, bQuestion.id, "the later segment's own question is kept (answers stay attached), not replaced");
+  assert.deepEqual(
+    (await occurrencesOf(db, b)).filter((o) => o.startsAt.getTime() > now.getTime()).map((o) => o.capacity),
+    [20, 20, 20, 20, 20],
+    "the capacity reaches the later séances",
+  );
+  assert.ok(
+    res.effects.some((e) => e.type === "email.occurrence_changed" && e.occurrenceId === bRows[1].id),
+    "the registrant of the later segment is warned of the new place",
+  );
+});
+
+dbTest("editEventInfoCore: later segments the page did not see are stale, nothing is written", async (h) => {
+  const { db } = h;
+  const now = new Date();
+  const { ctx, a, b } = await twoLiveSegments(h, now);
+  const stale = { ok: false, error: STALE, code: "stale" };
+
+  assert.deepEqual(await editEventInfoCore(db, ctx, { eventId: a, seenVersion: 2, info: infoOf({ title: "Autre" }) }, now), stale, "no later segment given");
+  assert.deepEqual(
+    await editEventInfoCore(db, ctx, { eventId: a, seenVersion: 2, info: infoOf({ title: "Autre" }), later: [{ eventId: b, version: 5 }] }, now),
+    stale,
+    "its version moved",
+  );
+  assert.deepEqual([(await getEvent(db, a)).title, (await getEvent(db, b)).title, (await getEvent(db, a)).version, (await getEvent(db, b)).version], ["Roda", "Roda", 2, 1]);
+});
+
+dbTest("editEventInfoCore: a later segment that fails after the first is saved is a clear partial result", async (h) => {
+  const { db } = h;
+  const now = new Date();
+  const { ctx, a, b } = await twoLiveSegments(h, now);
+
+  const res = await editEventInfoCore(
+    db,
+    ctx,
+    { eventId: a, seenVersion: 2, info: infoOf({ title: "Roda du soir" }), later: [{ eventId: b, version: 1 }] },
+    now,
+    { afterStep: async (eventId) => void (eventId === a && (await db.update(event).set({ version: 9 }).where(eq(event.id, b)))) },
+  );
+  must(res, "ok, with what was done");
+  assert.equal(res.incomplete, SERIES_INFO_INCOMPLETE);
+  assert.ok(res.incomplete && res.incomplete.endsWith("."), "a French sentence for the pro");
+  assert.equal(res.version, 3);
+  assert.equal((await getEvent(db, a)).title, "Roda du soir", "the segment itself is saved");
+  assert.equal((await getEvent(db, b)).title, "Roda", "the later segment is not");
+});
+

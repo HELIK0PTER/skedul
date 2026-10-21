@@ -139,15 +139,19 @@ export function deleteEventCopy(a: {
   cancelledSeances: number;
   registrants: number;
   ticketsReturned: number;
+  /** later segments of the series the delete reaches too (their séances are in the counts above); default 0 */
+  laterSegments?: number;
 }): ConfirmCopy {
   const title =
     a.deleteWhole || a.fromLabel === null
       ? `Supprimer « ${a.title} » ?`
       : `Supprimer « ${a.title} » à partir du ${a.fromLabel} ?`;
+  const later = a.laterSegments ?? 0;
+  const laterNote = later > 0 ? ` La suite de la série (${plural(later, "segment suivant", "segments suivants")}) est comprise.` : "";
   if (a.deleteWhole) {
     return {
       title,
-      body: "L'événement n'a jamais eu d'inscription : il est supprimé définitivement.",
+      body: `L'événement n'a jamais eu d'inscription : il est supprimé définitivement.${laterNote}`,
       confirm: "Supprimer",
     };
   }
@@ -164,8 +168,13 @@ export function deleteEventCopy(a: {
         `${plural(a.ticketsReturned, "ticket rendu", "tickets rendus")}.`,
     );
   }
-  if (parts.length === 0) parts.push("Aucune séance à venir n'est concernée.");
-  return { title, body: parts.join(" "), confirm: "Supprimer" };
+  if (parts.length === 0) return { title, body: "Aucune séance à venir n'est concernée.", confirm: "Supprimer" };
+  return { title, body: `${parts.join(" ")}${laterNote}`, confirm: "Supprimer" };
+}
+
+/** The line shown once the delete went through: from the first séance to come (`fromLabel` null) or from a later date. */
+export function deleteEventDoneNotice(a: { fromLabel: string | null }): string {
+  return a.fromLabel === null ? "Les séances à venir sont supprimées." : `Les séances à partir du ${a.fromLabel} sont supprimées.`;
 }
 
 export function deleteTimeOffCopy(): ConfirmCopy {
