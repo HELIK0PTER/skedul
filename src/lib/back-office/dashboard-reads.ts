@@ -24,6 +24,7 @@ import { listEvents } from "./event-reads";
 import { formatWhen, planningHref } from "./format";
 import { elapsedHoldsOf, liveSeatsOfOccurrence } from "./planning-reads";
 import { hiddenByTimeOff } from "./planning-view";
+import { inProCustomers } from "./pro-scope";
 
 export type BookingDetailVM = {
   bookingId: string;
@@ -145,7 +146,12 @@ async function weekCounts(
   return { seances: counted.length, registrants: n };
 }
 
-/** `available` and valid at now, archived types included (the wallet balance predicate). */
+/**
+ * `available` and valid at now, archived types included (the wallet balance predicate). Read through the pro's
+ * customers (inProCustomers): ticket has no index that starts with professional_id, so the pro filter alone would scan
+ * every pro's tickets on each dashboard load; customer_id leads ticket_customer_status_type_idx, which also narrows
+ * on the status.
+ */
 async function ticketsInCirculation(db: Db, professionalId: string, now: Date): Promise<number> {
   const [{ n }] = await db
     .select({ n: count() })
@@ -153,6 +159,7 @@ async function ticketsInCirculation(db: Db, professionalId: string, now: Date): 
     .where(
       and(
         eq(ticket.professionalId, professionalId),
+        inProCustomers(ticket.customerId, professionalId),
         eq(ticket.status, "available"),
         or(isNull(ticket.expiresAt), gt(ticket.expiresAt, now)),
       ),

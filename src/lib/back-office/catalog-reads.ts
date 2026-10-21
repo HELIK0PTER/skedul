@@ -8,16 +8,18 @@
  * ticket_type_id only: getTicketTypeDetail calls it after loadSummaries has
  * found the type among this pro's own, so the id is already known to be theirs.
  */
-import { and, asc, eq, gt, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 
 import { loadQuestions, type QuestionRow } from "@/lib/booking/answers";
 import { loadTypeFacts } from "@/lib/booking/wallet";
 import type { BookingWindow } from "@/lib/booking-window";
 import { ts, type Db } from "@/lib/db/atomic";
-import { availabilityRule, professional, ticket, ticketOffer, ticketType } from "@/lib/db/schema";
+import { availabilityRule, professional, ticket, ticketOffer, ticketPurchase, ticketType } from "@/lib/db/schema";
 import type { AvailabilityRuleInput, WindowOverrides } from "@/lib/tickets";
 import { offerLabel, validityLabel, type ValidityUnit } from "@/lib/tickets-vocab";
 import { classifyTypes } from "@/lib/wallet-rules";
+
+import { inProCustomers } from "./pro-scope";
 
 export type OfferView = {
   id: string;
@@ -107,11 +109,6 @@ async function readOffers(
       validityUnit: ticketOffer.validityUnit,
       isActive: ticketOffer.isActive,
       archivedAt: ticketOffer.archivedAt,
-      // single-table select: an interpolated column renders unqualified, so the outer id is written out
-      sold: sql<number>`(select count(*)::int from ticket_purchase p
-        where p.offer_id = ticket_offer.id and p.professional_id = ticket_offer.professional_id and p.status = 'paid')`,
-      purchases: sql<number>`(select count(*)::int from ticket_purchase p
-        where p.offer_id = ticket_offer.id and p.professional_id = ticket_offer.professional_id)`,
     })
     .from(ticketOffer)
     .where(
@@ -122,6 +119,29 @@ async function readOffers(
       ),
     )
     .orderBy(asc(ticketOffer.position), asc(ticketOffer.createdAt), asc(ticketOffer.id));
+  // One grouped read of the pro's purchases of these offers (professional_id leads an index), not two correlated
+  // subqueries per offer on ticket_purchase.offer_id, which no index starts with.
+  const sales = new Map<string, { sold: number; purchases: number }>();
+  if (rows.length > 0) {
+    const counts = await db
+      .select({
+        offerId: ticketPurchase.offerId,
+        purchases: sql<number>`count(*)::int`,
+        sold: sql<number>`(count(*) filter (where ${ticketPurchase.status} = 'paid'))::int`,
+      })
+      .from(ticketPurchase)
+      .where(
+        and(
+          eq(ticketPurchase.professionalId, professionalId),
+          inArray(
+            ticketPurchase.offerId,
+            rows.map((r) => r.id),
+          ),
+        ),
+      )
+      .groupBy(ticketPurchase.offerId);
+    for (const n of counts) sales.set(n.offerId, { sold: Number(n.sold), purchases: Number(n.purchases) });
+  }
   return rows.map((r) => ({
     id: r.id,
     ticketTypeId: r.ticketTypeId,
@@ -134,8 +154,8 @@ async function readOffers(
     validityText: validityLabel(r.validityCount, r.validityUnit),
     isActive: r.isActive,
     archived: r.archivedAt !== null,
-    sold: Number(r.sold),
-    purchases: Number(r.purchases),
+    sold: sales.get(r.id)?.sold ?? 0,
+    purchases: sales.get(r.id)?.purchases ?? 0,
   }));
 }
 
@@ -174,6 +194,12 @@ async function readAcceptedBy(db: Db, professionalId: string, ticketTypeId?: str
 
 /* ───────────────────────────── Usable tickets, usage ───────────────────────────── */
 
+/**
+ * Available and unexpired tickets per type. Without a type, the read goes through the pro's customers (inProCustomers):
+ * ticket has no index that starts with professional_id, so `professional_id = p` alone would read every pro's tickets
+ * (the list page runs it on every load). `customer_id` leads ticket_customer_status_type_idx, which also narrows on
+ * the status.
+ */
 async function readUsableCounts(db: Db, professionalId: string, now: Date, ticketTypeId?: string): Promise<Map<string, number>> {
   const rows = await db
     .select({ ticketTypeId: ticket.ticketTypeId, n: sql<number>`count(*)::int` })
@@ -181,7 +207,9 @@ async function readUsableCounts(db: Db, professionalId: string, now: Date, ticke
     .where(
       and(
         eq(ticket.professionalId, professionalId),
-        ticketTypeId === undefined ? undefined : eq(ticket.ticketTypeId, ticketTypeId),
+        ticketTypeId === undefined
+          ? inProCustomers(ticket.customerId, professionalId)
+          : eq(ticket.ticketTypeId, ticketTypeId),
         eq(ticket.status, "available"),
         or(isNull(ticket.expiresAt), gt(ticket.expiresAt, now)),
       ),

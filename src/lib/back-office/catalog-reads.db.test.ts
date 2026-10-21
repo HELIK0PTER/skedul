@@ -111,6 +111,15 @@ dbTest("catalog reads: offers carry label, validity text and paid sales; archive
     ],
   );
   assert.ok(type.offers.every((o) => o.ticketTypeId === typeId));
+  // R8: every purchase counts in `purchases` (the pending one too), only the paid ones in `sold`, offer by offer.
+  assert.deepEqual(
+    type.offers.map((o) => [o.id, o.sold, o.purchases]),
+    [
+      [unit, 0, 1],
+      [book, 2, 2],
+      [custom, 0, 0],
+    ],
+  );
 
   const detail = found(await getTicketTypeDetail(db, pro.proId, typeId, new Date()), "detail");
   assert.deepEqual(detail.offers.map((o) => o.id), [unit, book, custom]);
