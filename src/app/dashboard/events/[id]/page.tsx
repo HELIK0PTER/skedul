@@ -14,6 +14,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import type { EventSegmentView } from "@/lib/back-office/event-reads";
 import { formatWhen, planningHref } from "@/lib/back-office/format";
 import { MODE_SHORT_LABELS } from "@/lib/back-office/labels";
+import { seatsText } from "@/lib/back-office/planning-view";
 import { draftsFromRows } from "@/lib/back-office/question-drafts";
 import { formFromRule } from "@/lib/back-office/recurrence-form";
 import { seatsShown } from "@/lib/booking/holds";
@@ -203,7 +204,7 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
                           <Badge variant="neutral">{OCCURRENCE_STATUS_LABELS.cancelled}</Badge>
                         )}
                         {/* seatsTaken still counts the pending holds that have lapsed and are not released yet: leave them out, as a visitor's count does. */}
-                        <span>{`${occurrence.capacity - seatsShown(occurrence)} / ${occurrence.capacity} places`}</span>
+                        <span>{seatsText({ liveSeats: occurrence.capacity - seatsShown(occurrence), capacity: occurrence.capacity })}</span>
                       </span>
                     </Link>
                   </li>

@@ -8,7 +8,7 @@ import { OccurrenceDialog } from "@/components/dashboard/occurrence-dialog";
 import { OFF_PATTERN, PlanningNotice, dayLongLabel, dayShortLabel, hhmm, tintOf } from "@/components/dashboard/planning-calendar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { previewTitle, seatsRatio, type PlanningItemVM, type TimeOffSegmentVM } from "@/lib/back-office/planning-view";
+import { blockLabel, previewTitle, seatsRatio, type PlanningItemVM, type TimeOffSegmentVM } from "@/lib/back-office/planning-view";
 import type { DateKey } from "@/lib/civil-date";
 import { cn } from "@/lib/utils";
 
@@ -119,6 +119,7 @@ export function WeekPreview({
                   key={i.id}
                   type="button"
                   onClick={() => openItem(i.id)}
+                  aria-label={blockLabel(i, tz)}
                   className={cn(
                     "absolute overflow-hidden rounded-md border border-l-[3px] px-1 py-0.5 text-left text-[10px] leading-tight text-foreground shadow-sm transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     cancelled && "opacity-75 line-through",
@@ -135,7 +136,6 @@ export function WeekPreview({
                   title={`${hhmm(i.startMinute)} ${i.title}${i.kind === "seance" ? ` (${seatsRatio(i)})` : ""}`}
                 >
                   <span className="block truncate font-medium">{`${hhmm(i.startMinute)} ${i.title}`}</span>
-                  {cancelled && <span className="sr-only">annulée</span>}
                 </button>
               );
             })}

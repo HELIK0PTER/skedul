@@ -6,6 +6,7 @@ import { addDays, instantAt, type DateKey } from "@/lib/civil-date";
 import type { PlanningAttendee, PlanningItem, PlanningTimeOff } from "./planning-reads";
 import {
   blockLabel,
+  dayCountText,
   dayLongLabel,
   dayShortLabel,
   gridHours,
@@ -399,8 +400,10 @@ test("dayShortLabel and dayLongLabel read a civil day, whatever the host zone", 
   // The 25 hour day of Paris and the 25 hour day of Los Angeles keep their own weekday.
   assert.equal(dayShortLabel("2026-10-25"), "dim. 25");
   assert.equal(dayLongLabel("2026-11-01"), "dimanche 1er novembre");
-  // Only the 1st takes the ordinal; the short label keeps the bare number.
-  assert.equal(dayShortLabel("2026-11-01"), "dim. 1");
+  // The 1st takes the ordinal everywhere a day of the month is written, the short label included (final review R5).
+  assert.equal(dayShortLabel("2026-11-01"), "dim. 1er");
+  assert.equal(dayShortLabel("2026-10-11"), "dim. 11");
+  assert.equal(dayShortLabel("2026-10-21"), "mer. 21");
   assert.equal(dayLongLabel("2026-10-11"), "dimanche 11 octobre");
   assert.equal(dayLongLabel("2026-10-21"), "mercredi 21 octobre");
   assert.equal(dayLongLabel("2026-10-31"), "samedi 31 octobre");
@@ -545,6 +548,8 @@ test("seatsText, seatsRatio and seatsSummary: singular, zero and a full séance"
   const vm = (liveSeats: number, seatsShown: number, capacity = 12) => ({ liveSeats, seatsShown, capacity });
   assert.equal(seatsText(vm(0, 12)), "0 inscrit sur 12");
   assert.equal(seatsText(vm(1, 11)), "1 inscrit sur 12");
+  // a one-seat séance: « 1 inscrit sur 1 », never « 1 / 1 places » (final review UI-10)
+  assert.equal(seatsText({ liveSeats: 1, capacity: 1 }), "1 inscrit sur 1");
   assert.equal(seatsRatio(vm(0, 12)), "0/12");
   assert.equal(seatsSummary(vm(1, 11)), "1 inscrit sur 12 · 11 places en ligne");
   assert.equal(seatsSummary(vm(11, 1)), "11 inscrits sur 12 · 1 place en ligne");
@@ -571,4 +576,17 @@ test("horizonNotice: a week that reaches past the last generated date says until
   assert.equal(horizonNotice(far, "2027-11-20"), "Les séances récurrentes sont affichées jusqu'au 20/11/2027.", "the whole week is past it");
   assert.equal(horizonNotice([], "2026-10-14"), null);
   assert.doesNotMatch(horizonNotice(far, "2027-11-20") ?? "", NO_DASH);
+});
+
+test("dayCountText: a day chip counts séances and rendez-vous with their own words (final review UI-12)", () => {
+  const seance = { kind: "seance" } as const;
+  const rdv = { kind: "rdv" } as const;
+  assert.equal(dayCountText([]), "aucune séance ni rendez-vous");
+  assert.equal(dayCountText([seance]), "1 séance");
+  assert.equal(dayCountText([seance, seance]), "2 séances");
+  assert.equal(dayCountText([rdv]), "1 rendez-vous");
+  assert.equal(dayCountText([rdv, rdv, rdv]), "3 rendez-vous");
+  assert.equal(dayCountText([seance, rdv]), "1 séance, 1 rendez-vous");
+  assert.equal(dayCountText([seance, seance, rdv, rdv]), "2 séances, 2 rendez-vous");
+  assert.doesNotMatch(dayCountText([seance, rdv]), NO_DASH);
 });

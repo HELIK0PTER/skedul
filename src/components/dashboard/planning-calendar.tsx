@@ -8,9 +8,9 @@ import { CalendarDays, ChevronLeft, ChevronRight, CircleCheck, Plus, UserRound }
 import { OccurrenceDialog } from "@/components/dashboard/occurrence-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { plural } from "@/lib/back-office/format";
 import {
   blockLabel,
+  dayCountText,
   dayLongLabel,
   dayShortLabel,
   hhmm,
@@ -414,7 +414,7 @@ export function PlanningCalendar({
                 onClick={() => setPickedDay(day)}
                 aria-pressed={active}
                 aria-current={day === todayKey ? "date" : undefined}
-                aria-label={`${dayShortLabel(day)}, ${plural(count, "séance", "séances")}`}
+                aria-label={`${dayShortLabel(day)}, ${dayCountText(itemsOf(day))}`}
                 className={cn(
                   "flex flex-col items-center gap-0.5 rounded-xl border px-0 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.97]",
                   active ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-foreground hover:bg-muted",

@@ -294,9 +294,24 @@ export function tintOf(color: string): string {
 // A civil day is formatted at UTC noon in UTC: its weekday never depends on the host or pro zone.
 const civilNoon = (day: DateKey): Date => new Date(`${day}T12:00:00Z`);
 
-/** « lun. 12 » */
+/** « lun. 12 », « dim. 1er »: the first of a month takes the ordinal, as in every other written day of the month. */
 export function dayShortLabel(day: DateKey): string {
-  return new Intl.DateTimeFormat("fr-FR", { weekday: "short", day: "numeric", timeZone: "UTC" }).format(civilNoon(day));
+  const weekday = new Intl.DateTimeFormat("fr-FR", { weekday: "short", timeZone: "UTC" }).format(civilNoon(day));
+  return `${weekday} ${dayOrdinal(parseKey(day).d)}`;
+}
+
+/**
+ * What a day holds, for the accessible name of its chip: séances and rendez-vous are counted apart, each with its own
+ * word (« 2 séances », « 1 séance, 1 rendez-vous »), and an empty day says it holds neither.
+ */
+export function dayCountText(items: readonly Pick<PlanningItemVM, "kind">[]): string {
+  const rdvs = items.filter((i) => i.kind === "rdv").length;
+  const seances = items.length - rdvs;
+  if (seances === 0 && rdvs === 0) return "aucune séance ni rendez-vous";
+  const parts: string[] = [];
+  if (seances > 0) parts.push(plural(seances, "séance", "séances"));
+  if (rdvs > 0) parts.push(plural(rdvs, "rendez-vous", "rendez-vous"));
+  return parts.join(", ");
 }
 
 /** « lundi 12 octobre », « dimanche 1er novembre » */

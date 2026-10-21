@@ -57,6 +57,9 @@ test("fillDailySeries fills missing days with 0 and coerces strings", () => {
 
 test("dayLabel formats a day key in French", () => {
   assert.equal(plain(dayLabel("2026-10-06")), "mar. 6 oct.");
+  // the first of a month is « 1er », as everywhere else (final review R5)
+  assert.equal(plain(dayLabel("2026-11-01")), "dim. 1er nov.");
+  assert.equal(plain(dayLabel("2026-10-11")), "dim. 11 oct.");
 });
 
 test("niceCeil rounds up to 1, 2 or 5 × 10^n", () => {

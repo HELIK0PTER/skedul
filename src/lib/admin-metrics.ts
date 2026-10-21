@@ -1,6 +1,6 @@
 import { ADMIN_TZ } from "@/lib/analytics";
 import { plural } from "@/lib/back-office/format";
-import { dayKeyInTz, formatDateShort, instantFromWallClock } from "@/lib/datetime";
+import { dayKeyInTz, formatDateShort, frenchFirst, instantFromWallClock } from "@/lib/datetime";
 
 export type DailyPoint = { day: string; value: number };
 export type MoneyTotal = { currency: string; cents: number };
@@ -33,15 +33,17 @@ export function fillDailySeries(
   return keys.map((day) => ({ day, value: byDay.get(day) ?? 0 }));
 }
 
-/** "mar. 6 oct." for a YYYY-MM-DD key. */
+/** "mar. 6 oct." for a YYYY-MM-DD key; the first of a month is "dim. 1er nov.". */
 export function dayLabel(key: string): string {
   const [y, m, d] = key.split("-").map(Number);
-  return new Intl.DateTimeFormat("fr-FR", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    timeZone: "UTC",
-  }).format(new Date(Date.UTC(y, m - 1, d)));
+  return frenchFirst(
+    new Intl.DateTimeFormat("fr-FR", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      timeZone: "UTC",
+    }).format(new Date(Date.UTC(y, m - 1, d))),
+  );
 }
 
 /** Rounds up to 1, 2 or 5 × 10ⁿ: a clean top for a chart's y-axis. */
