@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { CustomerSpace } from "@/lib/back-office/customer-space";
+import { boutiqueHref } from "@/lib/public-anchors";
 
 /**
  * Read-only espace of one customer (P3: nothing to click; P4 adds cancel and
@@ -66,7 +67,7 @@ export function CustomerSpaceView({
             <div className="space-y-3">
               <p className="text-sm text-zinc-600">Aucun ticket</p>
               <Button asChild variant="secondary" size="sm">
-                <Link href={`/${slug}`}>{`Voir la page de ${businessName}`}</Link>
+                <Link href={boutiqueHref(slug)}>Voir la boutique</Link>
               </Button>
             </div>
           ) : (

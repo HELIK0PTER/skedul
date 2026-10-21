@@ -29,12 +29,16 @@ export type CustomerSpace = {
   wallet: { ticketTypeId: string; name: string; color: string; archived: boolean; usable: number; expiries: string[] }[];
 };
 
-/** The online cancellation hint of one booking; null when the client can no longer cancel online (P4 turns it into a button). */
-function cancelTextOf(
+/**
+ * The online cancellation hint of one booking; null when the client can no longer cancel online (P4 turns it into a
+ * button). A rendez-vous is called a rendez-vous, a séance a séance.
+ */
+export function cancelTextOf(
   b: { startsAt: Date; bookingCreatedAt: Date; changedAt: Date | null; movedAt: Date | null },
   deadlineHours: number,
   now: Date,
   tz: string,
+  kind: "seance" | "rdv",
 ): string | null {
   const check = clientCanCancel({
     startsAt: b.startsAt,
@@ -48,7 +52,7 @@ function cancelTextOf(
   if (check.reason === "before_deadline") {
     return `Annulation en ligne possible jusqu'au ${formatWhenShort(clientCancelDeadline(b.startsAt, deadlineHours), tz)}.`;
   }
-  return "Annulation en ligne possible jusqu'au début de la séance.";
+  return `Annulation en ligne possible jusqu'au début ${kind === "rdv" ? "du rendez-vous" : "de la séance"}.`;
 }
 
 /**
@@ -87,6 +91,7 @@ export async function getCustomerSpace(
         startsAt: occurrence.startsAt,
         endsAt: occurrence.endsAt,
         changedAt: occurrence.changedAt,
+        eventId: occurrence.eventId,
         title: sql<string>`coalesce(${event.title}, ${ticketType.name})`,
         location: sql<string | null>`coalesce(${occurrence.locationOverride}, ${event.location})`,
         cancelHours: sql<number | null>`coalesce(${event.cancelDeadlineHours}, ${ticketType.rdvCancelDeadlineHours})`,
@@ -155,7 +160,7 @@ export async function getCustomerSpace(
       whenLabel: formatWhen(b.startsAt, b.endsAt, owner.tz),
       location: b.location && b.location.trim() !== "" ? b.location : null,
       coverageLabel: COVERAGE_LABELS[b.coverage],
-      cancelText: cancelTextOf(b, b.cancelHours ?? owner.cancelHours, now, owner.tz),
+      cancelText: cancelTextOf(b, b.cancelHours ?? owner.cancelHours, now, owner.tz, b.eventId === null ? "rdv" : "seance"),
     })),
     wallet: groupWallet(walletRows, types, new Map(), now, owner.tz).map((g) => ({
       ticketTypeId: g.ticketTypeId,
