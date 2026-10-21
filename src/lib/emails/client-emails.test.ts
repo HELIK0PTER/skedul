@@ -73,6 +73,7 @@ const changed: OccurrenceChangedArgs = {
 };
 
 const seanceCancelled: OccurrenceCancelledArgs = {
+  kind: "seance",
   customerName: "Beatriz Almeida",
   businessName: "Altinha Paris",
   title: "Altinha débutants",
@@ -164,6 +165,7 @@ const TEMPLATES: { name: string; normal: Mail; evil: Mail; title: string }[] = [
     title: seanceCancelled.title,
     normal: occurrenceCancelledEmail(seanceCancelled),
     evil: occurrenceCancelledEmail({
+      kind: "seance",
       customerName: EVIL,
       businessName: EVIL,
       title: EVIL,
@@ -335,7 +337,7 @@ test("occurrence-changed: details, and the cancel sentence only when the client 
   assert.ok(mail.html.includes(">Séance modifiée</h1>"));
   assert.ok(
     mail.html.includes(
-      "Bonjour Beatriz Almeida, Altinha Paris a modifié une séance où vous êtes inscrit. Voici les informations à jour :",
+      "Bonjour Beatriz Almeida, Altinha Paris a modifié une séance où vous êtes inscrit(e). Voici les informations à jour :",
     ),
   );
   assert.ok(mail.html.includes(">Date</td><td style=\"text-align:right\">mar. 13 octobre 2026 · 19:30 à 20:30</td>"));
@@ -361,6 +363,29 @@ test("occurrence-cancelled: the ticket line toggles", () => {
   assert.ok(mail.html.includes("Votre ticket a été rendu à votre portefeuille."));
   const free = occurrenceCancelledEmail({ ...seanceCancelled, ticketReturned: false });
   assert.equal(free.html.includes("Votre ticket a été rendu"), false);
+});
+
+test("occurrence-cancelled: a rendez-vous is announced as a rendez-vous, never as a séance", () => {
+  const rdv = occurrenceCancelledEmail({ ...seanceCancelled, kind: "rdv", title: "Appel découverte" });
+  assert.equal(rdv.subject, "Rendez-vous annulé : Appel découverte");
+  assert.ok(rdv.html.includes(">Rendez-vous annulé</h1>"));
+  assert.ok(
+    rdv.html.includes(
+      "Bonjour Beatriz Almeida, Altinha Paris a annulé votre rendez-vous « Appel découverte » du lun. 12 octobre 2026 · 19:00 à 20:00.",
+    ),
+  );
+  assert.ok(rdv.html.includes("Votre ticket a été rendu à votre portefeuille."));
+  assert.equal(rdv.html.includes("Séance annulée"), false);
+  assert.equal(rdv.html.includes("séance"), false);
+  assert.equal(rdv.html.includes("Votre inscription est annulée"), false);
+  const free = occurrenceCancelledEmail({ ...seanceCancelled, kind: "rdv", ticketReturned: false });
+  assert.equal(free.html.includes("Votre ticket a été rendu"), false);
+  assert.equal(DASH.test(rdv.subject + rdv.html), false);
+});
+
+test("occurrence-changed: the sentence agrees for a woman or a man (inscrit(e))", () => {
+  const mail = occurrenceChangedEmail(changed);
+  assert.ok(mail.html.includes("a modifié une séance où vous êtes inscrit(e). Voici les informations à jour :"));
 });
 
 test("attendee-moved: before, now and place", () => {

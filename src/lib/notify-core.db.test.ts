@@ -6,12 +6,14 @@ import { dayIn, giveTickets, makeCustomer, makeEvent, makeOffer, makeType } from
 import { rowBooking } from "../test/rows";
 import { expiryLabel } from "./back-office/format";
 import { cancelBookingsByPro, cancelOccurrence } from "./booking/cancel";
-import { attachCheckoutSession, registerPro, startBuyAndBook } from "./booking/claims";
+import { setAvailabilityRules } from "./booking/catalog";
+import { attachCheckoutSession, bookRdv, registerPro, startBuyAndBook } from "./booking/claims";
 import { updateOccurrence } from "./booking/series";
 import type { Effect } from "./booking/types";
 import { moveAttendee, offerTickets } from "./booking/wallet";
 import { booking, professional } from "./db/schema";
 import { escapeHtml } from "./email-layout";
+import { instantAt } from "./civil-date";
 import { guestLinkKey, personalLinkUrl } from "./guest-link";
 import { planEffect, type EffectPlan, type NotifyDeps, type OutgoingEmail } from "./notify-core";
 
@@ -349,6 +351,58 @@ dbTest("occurrence_cancelled mails the confirmed client only: a lapsed hold hear
     purchaseId: hold.purchaseId,
     checkoutSessionId: sessionId,
   });
+});
+
+dbTest("occurrence_cancelled: a cancelled rendez-vous is announced as « Rendez-vous annulé », a séance still as « Séance annulée »", async ({ db, pro }) => {
+  const now = new Date();
+  const business = await businessNameOf(db, pro.proId);
+  const typeId = await makeType(db, pro, { name: "Appel découverte", rdvEnabled: true, rdvFree: true, rdvDurationMin: 60 });
+  const allWeek = [0, 1, 2, 3, 4, 5, 6].map((dayOfWeek) => ({ dayOfWeek, startMinute: 0, endMinute: 1440 }));
+  must(await setAvailabilityRules(db, { professionalId: pro.proId, ticketTypeId: null, rules: allWeek }));
+  const email = testEmail("rdv");
+  const customerId = await makeCustomer(db, pro, { name: "Beatriz Almeida", email });
+  const rdv = must(
+    await bookRdv(
+      db,
+      {
+        professionalId: pro.proId,
+        ticketTypeId: typeId,
+        startsAt: instantAt(dayIn(pro, 3), 600, pro.tz),
+        customerId,
+        actorUserId: null,
+        mode: "free",
+      },
+      now,
+    ),
+  );
+  const res = must(
+    await cancelOccurrence(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: rdv.occurrenceId }, now),
+  );
+  const [mail] = emailsOf(await planEffect(db, effectOf(res.effects, "email.occurrence_cancelled"), depsAt(now)), pro.proId);
+  assert.equal(mail.to, email);
+  assert.equal(mail.subject, "Rendez-vous annulé : Appel découverte");
+  assert.ok(mail.html.includes(">Rendez-vous annulé</h1>"));
+  assert.ok(mail.html.includes(esc(`Bonjour Beatriz Almeida, ${business} a annulé votre rendez-vous « Appel découverte » du `)));
+  assert.ok(!mail.html.includes("Séance annulée"), "a rendez-vous is not a séance");
+  assert.ok(mail.html.includes(linkOf(customerId)));
+
+  // the same plan for a séance keeps its wording
+  const seanceType = await makeType(db, pro, { name: "Cours collectif" });
+  const { occurrences: [occ] } = await makeEvent(db, pro, { title: "Altinha du soir", ticketTypeIds: [seanceType] });
+  const guest = await makeCustomer(db, pro, { name: "Rafael Souza", email: testEmail("seance") });
+  must(
+    await registerPro(
+      db,
+      { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: occ.id, customerId: guest, asGuest: true },
+      now,
+    ),
+  );
+  const cancelled = must(
+    await cancelOccurrence(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: occ.id }, now),
+  );
+  const [seance] = emailsOf(await planEffect(db, effectOf(cancelled.effects, "email.occurrence_cancelled"), depsAt(now)));
+  assert.equal(seance.subject, "Séance annulée : Altinha du soir");
+  assert.ok(!seance.html.includes("Rendez-vous annulé"));
 });
 
 dbTest("occurrence_cancelled: a hold still live when the séance is cancelled hears about it (Decision 11 boundary)", async ({ db, pro }) => {

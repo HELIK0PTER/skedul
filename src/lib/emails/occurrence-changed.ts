@@ -29,7 +29,7 @@ export function occurrenceChangedEmail(a: OccurrenceChangedArgs): { subject: str
     escapeHtml("Séance modifiée"),
     `
     ${mailParagraph(
-      `Bonjour ${a.customerName}, ${a.businessName} a modifié une séance où vous êtes inscrit. Voici les informations à jour :`,
+      `Bonjour ${a.customerName}, ${a.businessName} a modifié une séance où vous êtes inscrit(e). Voici les informations à jour :`,
     )}
     ${mailDetails(rows)}
     ${cancel}

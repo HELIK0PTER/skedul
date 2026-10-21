@@ -74,6 +74,8 @@ const bookingFacts = {
   bookingId: booking.id,
   professionalId: booking.professionalId,
   occurrenceId: booking.occurrenceId,
+  /** null for a rendez-vous (an occurrence with no event) */
+  eventId: occurrence.eventId,
   status: booking.status,
   coverage: booking.coverage,
   createdAt: booking.createdAt,
@@ -289,6 +291,7 @@ async function planOccurrenceCancelled(
     heard[0].professionalId,
     heard.map((b) => {
       const mail = occurrenceCancelledEmail({
+        kind: b.eventId === null ? "rdv" : "seance",
         customerName: b.customerName,
         businessName: b.businessName,
         title: b.title,
