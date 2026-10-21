@@ -298,6 +298,8 @@ const inPlaceSchema = z.object({
  * last_action_id = aid WHERE id AND version = seen; G(last_action_id = aid,
  * 'stale'); links, questions and capacity propagation (future scheduled
  * séances without capacity_override: GREATEST(cap, seats_taken)) in the same batch.
+ * The capacity is propagated, and the Google events re-synced for it, only when it
+ * differs from the stored one: « Informations » sends it on every save.
  */
 export async function editEventInPlace(
   db: Db,
@@ -309,14 +311,23 @@ export async function editEventInPlace(
   const p = parsed.data;
   const typeIds = p.ticketTypeIds === undefined ? undefined : [...new Set(p.ticketTypeIds)];
 
-  const outcome = { locationChanged: false, describedChanged: false };
+  const outcome = { locationChanged: false, describedChanged: false, capacityChanged: false };
   const res = await tryAtomic(db, async () => {
     const [ev] = await db
-      .select({ id: event.id, location: event.location, title: event.title, description: event.description, archivedAt: event.archivedAt })
+      .select({
+        id: event.id,
+        location: event.location,
+        title: event.title,
+        description: event.description,
+        capacity: event.capacity,
+        archivedAt: event.archivedAt,
+      })
       .from(event)
       .where(and(eq(event.id, input.eventId), eq(event.professionalId, input.professionalId)));
     if (!ev || ev.archivedAt) throw new PlanError("not_found");
     outcome.locationChanged = p.location !== undefined && p.location !== ev.location;
+    // « Informations » always sends the capacity: only a value that differs from the stored one is a capacity edit.
+    outcome.capacityChanged = p.capacity !== undefined && p.capacity !== ev.capacity;
     outcome.describedChanged =
       outcome.locationChanged ||
       (p.title !== undefined && p.title !== ev.title) ||
@@ -410,7 +421,7 @@ export async function editEventInPlace(
           G(db, sql`(select count(*)::int from question where event_id = ${ev.id}) = ${questions.length}::int`, "stale"),
         );
       }
-      if (p.capacity !== undefined) {
+      if (p.capacity !== undefined && outcome.capacityChanged) {
         const propagated = sql`event_id = ${ev.id} and professional_id = ${input.professionalId} and status = 'scheduled'
           and starts_at > ${ts(now)} and not capacity_override`;
         queries.push(
@@ -429,7 +440,7 @@ export async function editEventInPlace(
 
   const effects: Effect[] = [];
   // The Google event of a séance shows its title, its place and its capacity: a capacity edit re-syncs too.
-  if (outcome.describedChanged || p.capacity !== undefined) {
+  if (outcome.describedChanged || outcome.capacityChanged) {
     const future = await db
       .select({
         id: occurrence.id,

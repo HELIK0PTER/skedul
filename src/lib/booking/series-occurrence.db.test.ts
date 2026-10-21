@@ -331,6 +331,60 @@ dbTest("E7 éditeur: a capacity edit re-syncs the Google events of the booked s�
   assert.deepEqual(quiet.effects, []);
 });
 
+dbTest("E7 éditeur: an info save that keeps the capacity re-syncs nothing for it, a changed capacity re-syncs the booked séances", async ({ db, pro }) => {
+  const typeId = await makeType(db, pro);
+  const { eventId, occurrences } = await makeEvent(db, pro, {
+    ticketTypeIds: [typeId],
+    capacity: 12,
+    rule: {
+      startDate: dayIn(pro, 2),
+      startMinute: 600,
+      freq: "daily",
+      interval: 1,
+      weekdays: null,
+      monthlyBy: null,
+      monthWeek: null,
+      endMode: "count",
+      untilDate: null,
+      occurrenceCount: 2,
+    },
+  });
+  const [first, second] = occurrences;
+  const customerId = await makeCustomer(db, pro);
+  must(
+    await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: first.id, customerId, asGuest: true }),
+    "register",
+  );
+  const [{ title }] = await db.select({ title: event.title }).from(event).where(eq(event.id, eventId));
+  const sync = (occurrenceId: string): Effect => ({ type: "google.sync_occurrence", occurrenceId });
+  const save = async (seenVersion: number, patch: Parameters<typeof editEventInPlace>[1]["patch"]) =>
+    editEventInPlace(db, { professionalId: pro.proId, actorUserId: pro.userId, eventId, seenVersion, patch });
+
+  // « Informations » always sends the capacity: the same value as stored is not a capacity edit
+  const same = await save(1, { capacity: 12, title });
+  must(same, "same capacity");
+  assert.deepEqual(same.effects, [], "nothing changed that the Google event shows");
+  assert.equal((await getOccurrence(db, first.id)).capacity, 12);
+  assert.equal((await getOccurrence(db, second.id)).capacity, 12);
+
+  // a title edit still re-syncs the booked séance, capacity or not
+  const retitled = await save(2, { capacity: 12, title: "Cours du soir" });
+  must(retitled, "title and same capacity");
+  assert.deepEqual(retitled.effects, [sync(first.id)]);
+
+  // a changed capacity re-syncs the booked séance only (the empty one has no Google event)
+  const changed = await save(3, { capacity: 15, title: "Cours du soir" });
+  must(changed, "changed capacity");
+  assert.deepEqual(changed.effects, [sync(first.id)]);
+  assert.equal((await getOccurrence(db, first.id)).capacity, 15);
+  assert.equal((await getOccurrence(db, second.id)).capacity, 15);
+
+  // and back to the same value again: quiet
+  const quiet = await save(4, { capacity: 15, title: "Cours du soir" });
+  must(quiet, "same capacity again");
+  assert.deepEqual(quiet.effects, []);
+});
+
 dbTest("E7 éditeur: links, questions and location are replaced in place; the location change is e-mailed", async (h) => {
   const { db, pro } = h;
   const s = await seanceWithBookings(h, 1);
