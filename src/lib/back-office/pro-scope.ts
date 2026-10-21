@@ -5,7 +5,8 @@
 import { sql, type AnyColumn, type SQL } from "drizzle-orm";
 
 /**
- * `<column> = any(array(select … this pro's customers))` for a customer_id column of ticket or booking.
+ * `<column> = any(array(select … this pro's customers))` for a customer_id column of ticket or booking (a drizzle column,
+ * or a literal `sql.raw("customer_id")` inside raw SQL).
  *
  * Neither table has an index that starts with professional_id, so `professional_id = p` alone reads every pro's rows
  * (it stays in the callers as the tenancy guard). The customers of one pro are few and come from an index
@@ -15,6 +16,6 @@ import { sql, type AnyColumn, type SQL } from "drizzle-orm";
  * The inner table is aliased, so the fragment is safe inside a single-table select (drizzle renders interpolated
  * columns unqualified there).
  */
-export function inProCustomers(column: AnyColumn, professionalId: string): SQL {
+export function inProCustomers(column: AnyColumn | SQL, professionalId: string): SQL {
   return sql`${column} = any(array(select c.id from customer c where c.professional_id = ${professionalId}))`;
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
 import {
@@ -18,7 +18,7 @@ import {
 import { fulfillPurchase, startPurchase, type PaymentFacts } from "@/lib/booking/fulfillment";
 import { checkInvariants } from "@/lib/booking/invariants";
 import { addDays, dayOfWeek, todayKey } from "@/lib/civil-date";
-import type { Db } from "@/lib/db/atomic";
+import { ts, type Db } from "@/lib/db/atomic";
 import * as schema from "@/lib/db/schema";
 import { HEALTH_KEYS, readHealth, setHealth } from "@/lib/throttle";
 import { BOOKING_STATUS_LABELS } from "@/lib/tickets";
@@ -270,6 +270,50 @@ dbTest("listRecentBookings: status filter, newest first, title from the event or
   assert.ok(onlyPending.every((r) => r.status === "pending"));
   assert.ok(onlyPending.some((r) => r.id === pending));
   assert.equal(onlyPending.some((r) => r.id === cancelled), false);
+});
+
+// R11: the lists pick the newest bookings from the booking table alone and join only those. The status filter and the
+// order have to be part of that pick, or a long history would push the asked rows out of the limit.
+dbTest("booking feeds: the limit applies after the status filter, to the newest bookings, whatever the history", async ({ db, pro }) => {
+  const now = new Date();
+  const tag = nanoid(8).toLowerCase().replace(/[^a-z0-9]/g, "x");
+  // Created in the future: the platform-wide lists stay mine even when another run writes bookings on the same branch.
+  const soon = ts(new Date(now.getTime() + 2 * 86_400_000));
+  const later = ts(new Date(now.getTime() + 86_400_000));
+  const confirmedCount = ACTIVITY_LIMIT + 5;
+  const cancelledCount = 3;
+  const seance = await rowSeance(db, pro, await titledEvent(db, pro, "Roda libre"), { capacity: 100, seatsTaken: confirmedCount });
+  await db.execute(sql`
+    insert into customer (id, professional_id, email, name, created_at, updated_at)
+    select ${tag} || '-c' || i, ${pro.proId}, ${tag} || '-' || i || '@skedul.test', 'Client ' || i, now(), now()
+    from generate_series(1, ${confirmedCount + cancelledCount}::int) as i`);
+  // i = 1 is the newest: created i minutes ago
+  await db.execute(sql`
+    insert into booking (id, professional_id, occurrence_id, customer_id, status, coverage, created_by, confirmed_at, created_at, updated_at)
+    select ${tag} || '-b' || i, ${pro.proId}, ${seance}, ${tag} || '-c' || i, 'confirmed', 'guest', 'pro', ${ts(now)},
+      ${soon} - make_interval(mins => i), ${ts(now)}
+    from generate_series(1, ${confirmedCount}::int) as i`);
+  // older than every confirmed one (but still ahead of anything another run writes)
+  await db.execute(sql`
+    insert into booking (id, professional_id, occurrence_id, customer_id, status, coverage, created_by, ended_at, ended_by, created_at, updated_at)
+    select ${tag} || '-b' || i, ${pro.proId}, ${seance}, ${tag} || '-c' || i, 'cancelled', 'guest', 'pro', ${ts(now)}, 'system',
+      ${later} - make_interval(mins => i * 10), ${ts(now)}
+    from generate_series(${confirmedCount + 1}::int, ${confirmedCount + cancelledCount}::int) as i`);
+
+  const newest = Array.from({ length: ACTIVITY_LIMIT }, (_, k) => `${tag}-b${k + 1}`);
+  const all = await listRecentBookings(db, null);
+  assert.deepEqual(all.map((r) => r.id), newest, "the ACTIVITY_LIMIT newest, newest first");
+  assert.ok(all.every((r) => r.title === "Roda libre" && r.customerName.startsWith("Client ")), "the joins ran for those rows");
+
+  const cancelled = await listRecentBookings(db, "cancelled");
+  assert.deepEqual(
+    cancelled.map((r) => r.id),
+    Array.from({ length: cancelledCount }, (_, k) => `${tag}-b${confirmedCount + 1 + k}`),
+    "the cancelled ones are older than 50 confirmed bookings and still listed",
+  );
+
+  const feed = await recentBookingEvents(db, 10);
+  assert.deepEqual(feed.map((e) => e.id), newest.slice(0, 10).map((id) => `booking-${id}`));
 });
 
 dbTest("listRecentPurchases: label, quantity, amount, mode and status filter", async ({ db, pro }) => {

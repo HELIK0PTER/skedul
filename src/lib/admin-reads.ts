@@ -8,7 +8,7 @@
  * Every function here is an unguarded read: the only callers are the admin
  * pages, behind requireAdmin() / getAdminUser() (src/lib/admin.ts).
  */
-import { and, desc, eq, isNull, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 
 import { mergeMoney, type MoneyTotal } from "@/lib/admin-metrics";
 import { deletionImpact } from "@/lib/booking/account";
@@ -16,6 +16,7 @@ import { ruleOf } from "@/lib/booking/occurrences";
 import { revenueByCurrency } from "@/lib/booking/revenue";
 import { compareKeys } from "@/lib/civil-date";
 import { ts, type Db } from "@/lib/db/atomic";
+import { inProCustomers } from "@/lib/back-office/pro-scope";
 import { booking, customer, event, occurrence, professional, ticketPurchase, ticketType } from "@/lib/db/schema";
 import { lastSeriesDate } from "@/lib/recurrence";
 import { HEALTH_KEYS, readHealth } from "@/lib/throttle";
@@ -49,18 +50,23 @@ export const ACTIVITY_LIMIT = 50;
 /**
  * Pros with a confirmed booking created, or a paid purchase (whatever its
  * livemode: this measures activity, not revenue), in the last 30 days; and the
- * confirmed bookings created in those 30 days.
+ * confirmed bookings created in those 30 days. The recent bookings are read
+ * once (booking has no created_at index, so every read of it is a scan) and
+ * serve both figures.
  */
 export async function activityCounts30d(db: Db, now: Date): Promise<{ activePros30d: number; bookings30d: number }> {
   const since = new Date(now.getTime() - 30 * DAY_MS);
   const res = await db.execute<{ pros: number; bookings: number }>(sql`
+    with recent as (
+      select professional_id from booking where status = 'confirmed' and created_at >= ${ts(since)}
+    )
     select
       (select count(*)::int from (
-        select professional_id from booking where status = 'confirmed' and created_at >= ${ts(since)}
+        select professional_id from recent
         union
         select professional_id from ticket_purchase where status = 'paid' and paid_at >= ${ts(since)}
       ) active) as pros,
-      (select count(*)::int from booking where status = 'confirmed' and created_at >= ${ts(since)}) as bookings`);
+      (select count(*)::int from recent) as bookings`);
   const row = res.rows[0];
   return { activePros30d: Number(row?.pros ?? 0), bookings30d: Number(row?.bookings ?? 0) };
 }
@@ -81,7 +87,20 @@ export async function platformRevenue(
 
 /* ───────────────────────────── Bookings and purchases ───────────────────────────── */
 
-/** Every booking column the feed and the list need; callers add where / order / limit. */
+/**
+ * The ids of the `limit` newest bookings (optionally one status), picked from the booking table alone: the rows of the
+ * feed and of the list then join only those ids (a join-then-sort plan joins every booking before it can sort).
+ */
+function newestBookingIds(db: Db, status: BookingStatus | null, limit: number) {
+  return db
+    .select({ id: booking.id })
+    .from(booking)
+    .where(status ? eq(booking.status, status) : undefined)
+    .orderBy(desc(booking.createdAt), desc(booking.id))
+    .limit(limit);
+}
+
+/** Every booking column the feed and the list need; callers add where / order (the rows are already limited by newestBookingIds). */
 function bookingRows(db: Db) {
   return db
     .select({
@@ -133,9 +152,8 @@ function purchaseRows(db: Db) {
 /** The latest confirmed bookings as feed events: « Réservation · {businessName} ». */
 export async function recentBookingEvents(db: Db, limit: number): Promise<ActivityEvent[]> {
   const rows = await bookingRows(db)
-    .where(eq(booking.status, "confirmed"))
-    .orderBy(desc(booking.createdAt), desc(booking.id))
-    .limit(limit);
+    .where(inArray(booking.id, newestBookingIds(db, "confirmed", limit)))
+    .orderBy(desc(booking.createdAt), desc(booking.id));
   return rows.map((r) => ({
     id: `booking-${r.id}`,
     kind: "booking" as const,
@@ -180,9 +198,8 @@ export type AdminBookingRow = {
 /** /admin/activity « Inscriptions »: newest first (created_at), ACTIVITY_LIMIT rows, optionally one status. */
 export async function listRecentBookings(db: Db, status: BookingStatus | null): Promise<AdminBookingRow[]> {
   return bookingRows(db)
-    .where(status ? eq(booking.status, status) : undefined)
-    .orderBy(desc(booking.createdAt), desc(booking.id))
-    .limit(ACTIVITY_LIMIT);
+    .where(inArray(booking.id, newestBookingIds(db, status, ACTIVITY_LIMIT)))
+    .orderBy(desc(booking.createdAt), desc(booking.id));
 }
 
 export type AdminPurchaseRow = {
@@ -296,7 +313,9 @@ export type ProStats = {
 };
 
 /**
- * One pro's footprint for /admin/users/[id]. events = live series (distinct
+ * One pro's footprint for /admin/users/[id]. booking has no index that starts with professional_id, so its counts go
+ * through the pro's customers (booking_customer_idx) and the pro's coming occurrences (booking_occurrence_status_idx).
+ * events = live series (distinct
  * series root among the non-archived segments: a split series is ONE event);
  * ticketTypes = non-archived; upcoming = pending + confirmed bookings on
  * future occurrences; clients = spec § 9 (a confirmed booking ever, or a
@@ -317,10 +336,12 @@ export async function proStats(db: Db, professionalId: string, now: Date): Promi
       (select count(*)::int from ticket_type
         where professional_id = ${professionalId} and archived_at is null) as ticket_types,
       (select count(*)::int from booking
-        where professional_id = ${professionalId} and status = 'confirmed') as confirmed,
-      (select count(*)::int from booking b join occurrence o on o.id = b.occurrence_id
+        where professional_id = ${professionalId} and status = 'confirmed'
+          and ${inProCustomers(sql.raw("customer_id"), professionalId)}) as confirmed,
+      (select count(*)::int from booking b
         where b.professional_id = ${professionalId} and b.status in ('pending', 'confirmed')
-          and o.starts_at > ${ts(now)}) as upcoming,
+          and b.occurrence_id = any(array(
+            select o.id from occurrence o where o.professional_id = ${professionalId} and o.starts_at > ${ts(now)}))) as upcoming,
       (select count(*)::int from customer c
         where c.professional_id = ${professionalId}
           and (exists (select 1 from booking b where b.customer_id = c.id and b.status = 'confirmed')
