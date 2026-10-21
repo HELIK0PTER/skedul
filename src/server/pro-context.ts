@@ -90,7 +90,7 @@ export async function runProAction<T extends object>(
   if (impersonation) console.info(impersonation);
   for (const target of revalidationTargets(opts.publicPage === true)) revalidatePath(target.path, target.type);
   const effects = res.effects;
-  if (effects.length > 0) after(() => runEffects(effects));
+  if (effects.length > 0) after(() => runEffects(effects, "pro"));
   return withoutEffects(res);
 }
 

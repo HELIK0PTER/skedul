@@ -51,3 +51,25 @@ export async function applyMailBudget(
   const allowed = Math.max(0, Math.min(count, limit - (hits - count)));
   return { send: plan.emails.slice(0, allowed), dropped: count - allowed };
 }
+
+/**
+ * Whose budget an effect run spends. Only the actions a pro takes in the
+ * back-office ("pro", passed by runProAction) are counted: the mails of a
+ * public purchase or booking (receipt, confirmation, notice to the pro, run
+ * from the Stripe webhook or the mock checkout) are the pro's customers
+ * getting what they paid for and are never dropped, however many came. There
+ * is no default: every caller of runEffects says which one it is.
+ */
+export type EffectBudget = "pro" | "none";
+
+/** The mails of an e-mails plan that may leave: the budget decides for "pro", every mail leaves (and nothing is counted) for "none". */
+export async function mailsToSend(
+  db: Db,
+  plan: Extract<EffectPlan, { kind: "emails" }>,
+  budget: EffectBudget,
+  now: Date,
+  limits: MailBudget = PRO_MAIL_BUDGET,
+): Promise<{ send: OutgoingEmail[]; dropped: number }> {
+  if (budget === "none") return { send: plan.emails, dropped: 0 };
+  return applyMailBudget(db, plan, now, limits);
+}

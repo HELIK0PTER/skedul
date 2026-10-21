@@ -5,7 +5,7 @@ import { syncOccurrence } from "@/lib/calendar-sync";
 import { db } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
 import { env } from "@/lib/env";
-import { applyMailBudget, mailBudgetLogLine } from "@/lib/mail-budget";
+import { mailBudgetLogLine, mailsToSend, type EffectBudget } from "@/lib/mail-budget";
 import { dedupeEffects, logSafeMessage, planEffect, type EffectPlan, type OutgoingEmail } from "@/lib/notify-core";
 import { expireCheckoutSession } from "@/lib/stripe";
 import { guestKey } from "@/server/guest-key";
@@ -27,11 +27,11 @@ async function sendPaced(mail: OutgoingEmail): Promise<void> {
   await sendEmail(mail);
 }
 
-async function execute(plan: EffectPlan): Promise<void> {
+async function execute(plan: EffectPlan, budget: EffectBudget): Promise<void> {
   switch (plan.kind) {
     case "emails": {
-      // Final review SEC-1: the mails of a pro's action spend the pro's budget; past it they are dropped, with one line and no address.
-      const { send, dropped } = await applyMailBudget(db, plan, new Date());
+      // Final review SEC-1: the mails of a pro's action spend the pro's budget; past it they are dropped, with one line and no address. The fulfilment of a public purchase is not a pro action and is not counted.
+      const { send, dropped } = await mailsToSend(db, plan, budget, new Date());
       if (dropped > 0 && plan.professionalId !== null) {
         console.warn(logSafeMessage({ message: mailBudgetLogLine(plan.professionalId, dropped) }));
       }
@@ -62,14 +62,16 @@ async function execute(plan: EffectPlan): Promise<void> {
  * address, token or session id) and the next one still runs. E-mails leave
  * one by one, paced under Resend's 2 requests per second (sendPaced), so a
  * séance of 100 registrants takes about a minute. Scheduled with after() by
- * runProAction, so it never delays the response.
+ * runProAction, so it never delays the response. `budget` has no default:
+ * "pro" (runProAction) spends the pro's e-mail budget, "none" (the
+ * fulfilment of a public purchase or booking, P4) never drops a mail.
  */
-export async function runEffects(effects: readonly Effect[]): Promise<void> {
+export async function runEffects(effects: readonly Effect[], budget: EffectBudget): Promise<void> {
   try {
     for (const effect of dedupeEffects(effects)) {
       try {
         const plan = await planEffect(db, effect, { appUrl: env.APP_URL, guestKey: guestKey(), now: new Date() });
-        await execute(plan);
+        await execute(plan, budget);
       } catch (err) {
         console.error(`[notify] ${effect.type} failed: ${logSafeMessage(err)}`);
       }

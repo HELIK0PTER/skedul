@@ -3,7 +3,7 @@ import { eq, sql } from "drizzle-orm";
 
 import { createTestPro, dbTest, deleteTestUser, testEmail } from "../test/db";
 import { user } from "./db/schema";
-import { applyMailBudget, PRO_MAIL_BUDGET } from "./mail-budget";
+import { applyMailBudget, mailsToSend, PRO_MAIL_BUDGET } from "./mail-budget";
 import type { EffectPlan, OutgoingEmail } from "./notify-core";
 import { proMailThrottleKey } from "./throttle";
 
@@ -95,4 +95,32 @@ dbTest("mail budget: an empty plan spends nothing; a plan with no pro sends noth
   } finally {
     await db.execute(sql`delete from throttle where key = ${proMailThrottleKey(pro.proId)}`);
   }
+});
+
+dbTest("mail budget: only a pro's own action spends it, the mails of a purchase or a webhook are all sent and not counted", async ({ db, pro }) => {
+  try {
+    await db.update(user).set({ emailVerified: false }).where(eq(user.id, pro.userId));
+    // Past the budget, without the flag (fulfilment of a public purchase): everything leaves, nothing is counted.
+    const system = await mailsToSend(db, planFor(pro.proId, SMALL.unverified + 2), "none", T0, SMALL);
+    assert.equal(system.send.length, SMALL.unverified + 2);
+    assert.equal(system.dropped, 0);
+    // The budget is untouched: the pro's own action still has all of it, then the N+1th is dropped.
+    const own = await mailsToSend(db, planFor(pro.proId, SMALL.unverified + 1), "pro", after(1), SMALL);
+    assert.equal(own.send.length, SMALL.unverified, "fulfilment mails left the full budget to the pro's actions");
+    assert.equal(own.dropped, 1);
+    // And a pro past the budget does not stop the fulfilment mails.
+    const again = await mailsToSend(db, planFor(pro.proId, 4), "none", after(2), SMALL);
+    assert.equal(again.send.length, 4);
+    assert.equal(again.dropped, 0);
+    const blocked = await mailsToSend(db, planFor(pro.proId, 1), "pro", after(3), SMALL);
+    assert.equal(blocked.send.length, 0);
+  } finally {
+    await db.execute(sql`delete from throttle where key = ${proMailThrottleKey(pro.proId)}`);
+  }
+});
+
+dbTest("mail budget: with no flag a plan names no pro and still sends; with the flag it sends nothing", async ({ db }) => {
+  const plan: EmailsPlan = { kind: "emails", professionalId: null, emails: mails(2) };
+  assert.deepEqual(await mailsToSend(db, plan, "pro", T0, SMALL), { send: [], dropped: 2 });
+  assert.deepEqual(await mailsToSend(db, plan, "none", T0, SMALL), { send: plan.emails, dropped: 0 });
 });
