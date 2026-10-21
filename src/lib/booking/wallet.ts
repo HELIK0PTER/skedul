@@ -120,6 +120,9 @@ export async function revokeLinks(
  * expiry) for a customer of the pro, of an active type of the pro, and their
  * `offer` movements, in ONE statement; then G(N movements for this action,
  * 'stale'). Effects: email.tickets_offered when `notify`.
+ * `expiresAt` is the first instant the tickets stop being valid: for a last
+ * valid day chosen by the pro, build it with expiryFromLastDay(lastDay, tz)
+ * (src/lib/ticket-expiry.ts), never from a browser date.
  * Errors: invalid (quantity, expiry not in the future, note too long), not_found, stale.
  */
 export async function offerTickets(

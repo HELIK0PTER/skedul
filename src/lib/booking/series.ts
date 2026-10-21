@@ -461,6 +461,7 @@ function changedEffects(byOcc: Map<string, string[]>): Effect[] {
   return [...effects, ...syncEffects([...byOcc.keys()])];
 }
 
+/** The engine's input of previewSeriesEdit / editSeriesFrom (the pure planner's own input is SeriesPlanInput in src/lib/series-plan.ts). */
 export type SeriesEditInput = {
   professionalId: string;
   actorUserId: string;

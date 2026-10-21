@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { addDays, instantAt } from "./civil-date";
 import type { RecurrenceRule } from "./recurrence";
-import { describeSeriesEdit, planSeriesEdit, type SeriesEditInput, type SeriesRow } from "./series-plan";
+import { describeSeriesEdit, planSeriesEdit, type SeriesPlanInput, type SeriesRow } from "./series-plan";
 import { MATERIALIZE_MAX_ROWS } from "./tickets";
 
 const TZ = "Europe/Paris";
@@ -51,7 +51,7 @@ const ROWS: SeriesRow[] = [
   row("r7", "2026-11-04"),
 ];
 
-const INPUT: SeriesEditInput = {
+const INPUT: SeriesPlanInput = {
   tz: TZ,
   fromDate: "2026-10-19",
   horizonEnd: "2026-11-04",

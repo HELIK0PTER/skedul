@@ -24,7 +24,8 @@ export type SeriesRow = {
   hasHistory: boolean;
 };
 
-export type SeriesEditInput = {
+/** Input of the pure planner; the engine's own input is SeriesEditInput in src/lib/booking/series.ts. */
+export type SeriesPlanInput = {
   tz: string;
   /** d */
   fromDate: DateKey;
@@ -70,7 +71,7 @@ export type SeriesEditPlan = {
   summary: SeriesEditSummary;
 };
 
-export function planSeriesEdit(input: SeriesEditInput): SeriesEditPlan {
+export function planSeriesEdit(input: SeriesPlanInput): SeriesEditPlan {
   const { tz, fromDate, horizonEnd, oldRule, newRule, rows } = input;
   const newDates = expandDates(newRule, maxKey(fromDate, newRule.startDate), horizonEnd);
   const produced = new Set(newDates);

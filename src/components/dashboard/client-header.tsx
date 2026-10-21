@@ -27,7 +27,7 @@ type HeaderCustomer = { id: string; name: string; email: string; phone: string |
 /**
  * « Fiche »: name, e-mail, phone and linked account of the client, with « Modifier » (name and phone) and
  * « Déconnecter ses liens ». The form is filled from the CURRENT props each time it opens, the actions read
- * `customer.id` when they run, and nothing calls `router.refresh()`: the actions revalidate the dashboard layout and
+ * `customer.id` when they run, and the page is never refreshed by hand: the actions revalidate the dashboard layout and
  * Next brings the new props. A refused check names the field under its input (and clears with the next edit of that
  * field); a failed call lands in the error box, which takes the focus.
  */
