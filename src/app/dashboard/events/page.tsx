@@ -41,7 +41,7 @@ export default async function EventsPage() {
           action={newEvent}
         />
       ) : (
-        <EventList live={live} ended={ended} tz={pro.timezone} />
+        <EventList live={live} ended={ended} tz={pro.timezone} now={new Date()} />
       )}
     </>
   );

@@ -575,7 +575,7 @@ export async function getClientRecord(
         ? { title: m.eventTitle ?? m.rdvTypeName ?? "Séance", startsAt: m.seanceStartsAt }
         : null,
   }));
-  const history = historyLines(ledger, new Map(types.map((t) => [t.id, t.name])), tz);
+  const history = historyLines(ledger, new Map(types.map((t) => [t.id, t.name])), tz, now);
 
   return {
     customer: {

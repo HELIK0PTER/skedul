@@ -6,6 +6,7 @@ import { historyLines, type LedgerMovementRow } from "./history";
 const PARIS = "Europe/Paris";
 const LA = "America/Los_Angeles";
 const AT = new Date("2026-10-12T12:03:00Z"); // Paris 14:03 (CEST), Los Angeles 05:03 (PDT)
+const NOW = new Date("2026-10-20T10:00:00Z"); // the same local year as AT in both zones
 const DASHES = /[\u2013\u2014]/;
 
 const NAMES = new Map([
@@ -30,13 +31,13 @@ function mv(seq: number, actionId: string, over: Partial<LedgerMovementRow> = {}
   };
 }
 
-const texts = (rows: readonly LedgerMovementRow[], tz = PARIS) => historyLines(rows, NAMES, tz).map((l) => l.text);
+const texts = (rows: readonly LedgerMovementRow[], tz = PARIS, now = NOW) => historyLines(rows, NAMES, tz, now).map((l) => l.text);
 
 test("historyLines: three convert movements of one action make one line (Paris and Los Angeles)", () => {
   const rows = [1, 2, 3].map((seq) => mv(seq, "a1", { kind: "convert", ticketTypeId: "deb", fromTicketTypeId: "coll" }));
   assert.deepEqual(texts(rows), ["12/10 14:03 · Vous · Converti 3 Cours collectif → Cours débutants"]);
   assert.deepEqual(texts(rows, LA), ["12/10 05:03 · Vous · Converti 3 Cours collectif → Cours débutants"]);
-  assert.deepEqual(historyLines(rows, NAMES, PARIS).map((l) => l.key), ["a1:0"]);
+  assert.deepEqual(historyLines(rows, NAMES, PARIS, NOW).map((l) => l.key), ["a1:0"]);
 });
 
 test("historyLines: a close line carries the motif and the note", () => {
@@ -90,7 +91,7 @@ test("historyLines: movements are grouped by action, kind, type, motif and séan
     mv(3, "g1", { reason: "autre cadeau" }),
     mv(1, "g1", { reason: "cadeau" }),
   ];
-  const lines = historyLines(rows, NAMES, PARIS);
+  const lines = historyLines(rows, NAMES, PARIS, NOW);
   assert.deepEqual(
     lines.map((l) => l.text),
     [
@@ -203,4 +204,34 @@ test("historyLines: dates around the DST changes, and no dash anywhere", () => {
     mv(4, "x4", { kind: "spend", occurrence: { title: "Roda libre", startsAt: AT } }),
   ];
   for (const tz of [PARIS, LA]) for (const text of texts(everything, tz)) assert.ok(!DASHES.test(text), text);
+});
+
+// R6: « 12/10 » says nothing about the year. A line, and the séance it names, write the year when it is not now's.
+test("historyLines: the date of a line and of its séance name the year when it is not the current one", () => {
+  const lastYear = new Date("2025-10-12T12:03:00Z");
+  const seance = { title: "Altinha d\u00e9butants", startsAt: new Date("2025-11-03T18:00:00Z") };
+  const rows = [
+    mv(1, "old", { kind: "spend", createdAt: lastYear, occurrence: seance }),
+    mv(2, "new", { kind: "offer", createdAt: AT }),
+  ];
+  assert.deepEqual(texts(rows), [
+    "12/10 14:03 \u00b7 Vous \u00b7 Offert 1 Cours collectif",
+    "12/10/2025 14:03 \u00b7 Vous \u00b7 Utilis\u00e9 pour une inscription 1 Cours collectif \u00b7 Altinha d\u00e9butants du 03/11/2025",
+  ]);
+  // A séance of this year booked by an action of last year: only the action date names its year.
+  const mixed = mv(3, "mixed", {
+    kind: "spend",
+    createdAt: lastYear,
+    occurrence: { title: "Roda libre", startsAt: new Date("2026-03-01T18:00:00Z") },
+  });
+  assert.deepEqual(texts([mixed]), ["12/10/2025 14:03 \u00b7 Vous \u00b7 Utilis\u00e9 pour une inscription 1 Cours collectif \u00b7 Roda libre du 01/03"]);
+});
+
+test("historyLines: the current year is the local one of the given zone", () => {
+  const lateDecember = new Date("2025-12-31T12:00:00Z"); // 13:00 in Paris, 04:00 in Los Angeles
+  const justAfterNewYear = new Date("2026-01-01T00:10:00Z"); // 2026 in Paris, still 31 December 2025 in Los Angeles
+  const rows = [mv(1, "a", { createdAt: lateDecember })];
+  assert.deepEqual(texts(rows, PARIS, justAfterNewYear), ["31/12/2025 13:00 \u00b7 Vous \u00b7 Offert 1 Cours collectif"]);
+  assert.deepEqual(texts(rows, LA, justAfterNewYear), ["31/12 04:00 \u00b7 Vous \u00b7 Offert 1 Cours collectif"]);
+  for (const text of [...texts(rows, PARIS, justAfterNewYear), ...texts(rows, LA, justAfterNewYear)]) assert.doesNotMatch(text, DASHES);
 });

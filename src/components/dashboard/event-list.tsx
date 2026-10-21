@@ -62,15 +62,15 @@ function AcceptedTypes({ row }: { row: EventListRow }) {
   );
 }
 
-function NextOccurrence({ row, tz }: { row: EventListRow; tz: string }) {
+function NextOccurrence({ row, tz, now }: { row: EventListRow; tz: string; now: Date }) {
   if (!row.nextOccurrence) {
     return <span className="text-sm text-muted-foreground">Aucune séance à venir</span>;
   }
-  return <span className="text-sm">{formatWhenShort(row.nextOccurrence.startsAt, tz)}</span>;
+  return <span className="text-sm">{formatWhenShort(row.nextOccurrence.startsAt, tz, now)}</span>;
 }
 
 /** From 640 px: one table; below: one card per event with the same facts. */
-function EventRows({ rows, tz, label }: { rows: EventListRow[]; tz: string; label: string }) {
+function EventRows({ rows, tz, now, label }: { rows: EventListRow[]; tz: string; now: Date; label: string }) {
   return (
     <>
       {/* overflow-x-auto (not hidden): between 640 and ~800 px the table is wider than the card and scrolls inside it. */}
@@ -104,7 +104,7 @@ function EventRows({ rows, tz, label }: { rows: EventListRow[]; tz: string; labe
                   <AcceptedTypes row={row} />
                 </td>
                 <td className="px-5 py-4">
-                  <NextOccurrence row={row} tz={tz} />
+                  <NextOccurrence row={row} tz={tz} now={now} />
                 </td>
               </tr>
             ))}
@@ -133,7 +133,7 @@ function EventRows({ rows, tz, label }: { rows: EventListRow[]; tz: string; labe
                 <div className="flex items-baseline justify-between gap-3">
                   <dt className="text-muted-foreground">Prochaine séance</dt>
                   <dd className="text-right">
-                    <NextOccurrence row={row} tz={tz} />
+                    <NextOccurrence row={row} tz={tz} now={now} />
                   </dd>
                 </div>
               </dl>
@@ -150,11 +150,21 @@ function EventRows({ rows, tz, label }: { rows: EventListRow[]; tz: string; labe
  * Server component, no state. `ended` (every segment archived) sits in a
  * closed « Terminés » disclosure.
  */
-export function EventList({ live, ended, tz }: { live: EventListRow[]; ended: EventListRow[]; tz: string }) {
+export function EventList({
+  live,
+  ended,
+  tz,
+  now,
+}: {
+  live: EventListRow[];
+  ended: EventListRow[];
+  tz: string;
+  now: Date;
+}) {
   return (
     <div className="space-y-8">
       {live.length > 0 ? (
-        <EventRows rows={live} tz={tz} label="Événements en cours" />
+        <EventRows rows={live} tz={tz} now={now} label="Événements en cours" />
       ) : (
         <p className="text-sm text-muted-foreground">Aucun événement en cours.</p>
       )}
@@ -165,7 +175,7 @@ export function EventList({ live, ended, tz }: { live: EventListRow[]; ended: Ev
             Terminés ({ended.length})
           </summary>
           <div className="mt-4">
-            <EventRows rows={ended} tz={tz} label="Événements terminés" />
+            <EventRows rows={ended} tz={tz} now={now} label="Événements terminés" />
           </div>
         </details>
       )}

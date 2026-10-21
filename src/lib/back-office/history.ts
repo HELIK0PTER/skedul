@@ -3,7 +3,8 @@
  * readable lines. Format:
  * « JJ/MM HH:mm · {acteur} · {libellé} {n} {type}[ → {type B}][ ({motif ou note})][ · {séance}] ».
  * Newest action first (by the highest seq of its movements); the lines of an
- * action follow seq. Pure: `tz` is an argument.
+ * action follow seq. A date names its year when it is not the local year of
+ * `now` (« 12/10/2025 »). Pure: `tz` and `now` are arguments.
  */
 import { formatCount, formatDayMonthOf, formatDayMonthTime } from "@/lib/back-office/format";
 import {
@@ -81,15 +82,21 @@ function nameOf(typeNames: ReadonlyMap<string, string>, id: string): string {
   return typeNames.get(id) ?? UNKNOWN_TYPE;
 }
 
-function lineText(first: LedgerMovementRow, group: Group, typeNames: ReadonlyMap<string, string>, tz: string): string {
+function lineText(
+  first: LedgerMovementRow,
+  group: Group,
+  typeNames: ReadonlyMap<string, string>,
+  tz: string,
+  now: Date,
+): string {
   const type =
     group.kind === "convert" && group.fromTicketTypeId !== null
       ? `${nameOf(typeNames, group.fromTicketTypeId)} → ${nameOf(typeNames, group.ticketTypeId)}`
       : nameOf(typeNames, group.ticketTypeId);
   const what = `${group.label} ${formatCount(group.count)} ${type}${group.motif ? ` (${group.motif})` : ""}`;
-  const fields = [formatDayMonthTime(first.createdAt, tz), group.actor, what];
+  const fields = [formatDayMonthTime(first.createdAt, tz, now), group.actor, what];
   if (group.occurrence) {
-    fields.push(`${group.occurrence.title} du ${formatDayMonthOf(group.occurrence.startsAt, tz)}`);
+    fields.push(`${group.occurrence.title} du ${formatDayMonthOf(group.occurrence.startsAt, tz, now)}`);
   }
   return fields.join(" · ");
 }
@@ -98,6 +105,7 @@ export function historyLines(
   rows: readonly LedgerMovementRow[],
   typeNames: ReadonlyMap<string, string>,
   tz: string,
+  now: Date,
 ): HistoryLine[] {
   const actions = new Map<string, Action>();
   for (const row of [...rows].sort((a, b) => a.seq - b.seq)) {
@@ -136,7 +144,7 @@ export function historyLines(
   for (const action of [...actions.values()].sort((a, b) => b.lastSeq - a.lastSeq)) {
     let index = 0;
     for (const group of action.groups.values()) {
-      lines.push({ key: `${action.actionId}:${index}`, text: lineText(action.first, group, typeNames, tz) });
+      lines.push({ key: `${action.actionId}:${index}`, text: lineText(action.first, group, typeNames, tz, now) });
       index += 1;
     }
   }

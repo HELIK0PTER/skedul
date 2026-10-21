@@ -519,7 +519,7 @@ dbTest(
     const pastSeance = await rowSeance(db, pro, pastEvent, { startsAt: pastStart });
 
     const retiredAt = addMinutes(now, 2); // after the pointage: « Retiré » sorts before « Pointé » in the done list
-    const dd = (d: Date) => formatDayMonthOf(d, tz);
+    const dd = (d: Date) => formatDayMonthOf(d, tz, now); // the year shows when the day is not in now's year (R6)
     const wd = (d: Date) => walletDay(d, now, tz);
 
     const beatriz = await makeCustomer(db, pro, { name: "Beatriz Almeida", email: "beatriz@skedul.test" });

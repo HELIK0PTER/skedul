@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   currencySymbol,
+  dayLabel,
   expiryGroups,
   expiryLabel,
   expirySummary,
@@ -19,6 +20,7 @@ import {
   planningHref,
   plural,
   pluralWord,
+  yearOf,
 } from "./format";
 
 const PARIS = "Europe/Paris";
@@ -256,6 +258,45 @@ test("pastCutNote says the list was cut, only when it was", () => {
   assert.doesNotMatch(pastCutNote(50, 63) ?? "", DASH);
 });
 
+test("yearOf and dayLabel: the year is the local one, and only a day outside it names its year", () => {
+  assert.equal(yearOf(at("2026-12-31T23:30:00Z"), PARIS), 2027, "Paris is already in 2027");
+  assert.equal(yearOf(at("2026-12-31T23:30:00Z"), LA), 2026);
+  assert.equal(dayLabel("2026-10-12", 2026), "12/10");
+  assert.equal(dayLabel("2025-10-12", 2026), "12/10/2025");
+  assert.equal(dayLabel("2027-01-03", 2026), "03/01/2027");
+});
+
+// R6: the history lines, the payments row's séance and the next séance used to drop the year: « 12/10 » could be
+// last October. The year rule is the one of expiryLabel and of the wallet: written when the day is not in now's year.
+test("formatDayMonthOf, formatDayMonthTime and formatWhenShort name the year only when now is given and the year differs", () => {
+  const now = at("2026-10-20T10:00:00Z");
+  const sameYear = at("2026-10-12T17:00:00Z");
+  const lastYear = at("2025-10-12T17:00:00Z");
+  const nextYear = at("2027-01-12T17:00:00Z");
+  assert.equal(formatDayMonthOf(sameYear, PARIS, now), "12/10");
+  assert.equal(formatDayMonthOf(lastYear, PARIS, now), "12/10/2025");
+  assert.equal(formatDayMonthOf(nextYear, PARIS, now), "12/01/2027");
+  assert.equal(formatDayMonthOf(lastYear, PARIS), "12/10", "without now the year is never named (the previous behaviour)");
+  assert.equal(formatDayMonthTime(sameYear, PARIS, now), "12/10 19:00");
+  assert.equal(formatDayMonthTime(lastYear, PARIS, now), "12/10/2025 19:00");
+  assert.equal(formatWhenShort(sameYear, PARIS, now), "lun. 12/10 \u00b7 19:00");
+  assert.equal(formatWhenShort(nextYear, PARIS, now), "mar. 12/01/2027 \u00b7 18:00");
+  assert.equal(formatWhenShort(nextYear, PARIS), "mar. 12/01 \u00b7 18:00");
+});
+
+test("the year rule reads both instants in the given zone", () => {
+  // 31 December 23:30 UTC is already 2027 in Paris and still 2026 in Los Angeles.
+  const lateDecember = at("2026-12-31T23:30:00Z");
+  const now = at("2026-12-31T12:00:00Z");
+  assert.equal(formatDayMonthOf(lateDecember, PARIS, now), "01/01/2027");
+  assert.equal(formatDayMonthOf(lateDecember, LA, now), "31/12");
+  // now itself is judged in the zone: 1 January 00:10 in Paris is still 31 December in Los Angeles
+  const newYear = at("2026-12-31T23:10:00Z");
+  const before = at("2026-12-31T12:00:00Z");
+  assert.equal(formatDayMonthOf(before, PARIS, newYear), "31/12/2026");
+  assert.equal(formatDayMonthOf(before, LA, newYear), "31/12");
+});
+
 test("no output contains an em or en dash", () => {
   const start = at("2026-10-12T17:00:00Z");
   const end = at("2026-10-12T18:00:00Z");
@@ -267,6 +308,8 @@ test("no output contains an em or en dash", () => {
       formatWhenShort(start, tz),
       formatDayMonthOf(start, tz),
       formatDayMonthTime(start, tz),
+      formatDayMonthOf(at("2025-10-12T17:00:00Z"), tz, start),
+      formatWhenShort(at("2027-01-12T17:00:00Z"), tz, start),
       expiryLabel(null, tz, start),
       expiryLabel(at("2027-01-13T08:00:00Z"), tz, start),
       planningHref({ occurrenceId: "occ1", startsAt: start, tz }),

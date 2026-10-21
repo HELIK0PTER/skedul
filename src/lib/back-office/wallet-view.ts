@@ -5,15 +5,9 @@
  * Pure: `now` and `tz` are arguments, the host zone never matters. Tickets of a
  * type that is not in `types` are ignored (the foreign key makes it impossible).
  */
-import { expiryLabel, expirySummary } from "@/lib/back-office/format";
+import { dayLabel, expiryLabel, expirySummary, yearOf } from "@/lib/back-office/format";
 import { ORIGIN_LABELS, type AlertTone } from "@/lib/back-office/labels";
-import {
-  formatDayMonth,
-  formatDayMonthYear,
-  parseKey,
-  todayKey,
-  type DateKey,
-} from "@/lib/civil-date";
+import { todayKey } from "@/lib/civil-date";
 import { lastValidDay } from "@/lib/ticket-expiry";
 import { CLOSE_REASON_LABELS, type TicketCloseReason, type TicketStatus } from "@/lib/tickets-vocab";
 import { consumptionOrder, isUsable, type TypeClass } from "@/lib/wallet-rules";
@@ -68,15 +62,7 @@ type Bucket = "usable" | "booked" | "expired" | "done";
 
 const compareId = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
-/** The local year of an instant in tz. */
-const yearOf = (instant: Date, tz: string): number => parseKey(todayKey(instant, tz)).y;
-
-/** « 12/10 », or « 12/10/2025 » when that day is not in `thisYear` (the local year of now): the rule of `expiryLabel`. */
-function dayLabel(day: DateKey, thisYear: number): string {
-  return parseKey(day).y === thisYear ? formatDayMonth(day) : formatDayMonthYear(day);
-}
-
-/** The local day of an instant in tz, named like `dayLabel`. */
+/** The local day of an instant in tz, named by the year rule of `dayLabel` (format.ts). */
 function dayOf(instant: Date, tz: string, now: Date): string {
   return dayLabel(todayKey(instant, tz), yearOf(now, tz));
 }

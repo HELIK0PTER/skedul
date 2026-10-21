@@ -27,7 +27,7 @@ function ClosedNotes({ notes }: { notes: PaymentRow["closedNotes"] }) {
   );
 }
 
-function LinkedBooking({ booking, tz }: { booking: PaymentRow["booking"]; tz: string }) {
+function LinkedBooking({ booking, tz, now }: { booking: PaymentRow["booking"]; tz: string; now: Date }) {
   if (!booking) return <span className="text-zinc-600">Aucune</span>;
   return (
     <div className="min-w-0 space-y-1">
@@ -37,7 +37,7 @@ function LinkedBooking({ booking, tz }: { booking: PaymentRow["booking"]; tz: st
       >
         {booking.title}
       </Link>
-      <p className="text-xs text-zinc-600">{formatWhenShort(booking.startsAt, tz)}</p>
+      <p className="text-xs text-zinc-600">{formatWhenShort(booking.startsAt, tz, now)}</p>
       {booking.status !== "confirmed" && <BookingStatusBadge status={booking.status} />}
     </div>
   );
@@ -63,8 +63,8 @@ function ClientCell({ row }: { row: PaymentRow }) {
   );
 }
 
-/** The paid purchases of the pro: a table from 640 px, cards below. */
-export function PaymentsTable({ rows, tz }: { rows: PaymentRow[]; tz: string }) {
+/** The paid purchases of the pro: a table from 640 px, cards below. The séance of a purchase names its year when it is not `now`'s. */
+export function PaymentsTable({ rows, tz, now }: { rows: PaymentRow[]; tz: string; now: Date }) {
   return (
     <>
       <Card className="hidden overflow-hidden sm:block">
@@ -100,7 +100,7 @@ export function PaymentsTable({ rows, tz }: { rows: PaymentRow[]; tz: string }) 
                     </td>
                     <td className="px-2 py-3 lg:px-3 wrap-anywhere">{row.label}</td>
                     <td className="px-2 py-3 lg:px-3">
-                      <LinkedBooking booking={row.booking} tz={tz} />
+                      <LinkedBooking booking={row.booking} tz={tz} now={now} />
                     </td>
                     <td className="px-2 py-3 lg:px-3 text-right">
                       <Amount row={row} />
@@ -131,7 +131,7 @@ export function PaymentsTable({ rows, tz }: { rows: PaymentRow[]; tz: string }) 
             <p className="text-xs text-zinc-600">{formatDateShort(row.paidAt, tz)}</p>
             <div className="mt-2 text-sm">
               <p className="text-xs text-zinc-600">Inscription liée</p>
-              <LinkedBooking booking={row.booking} tz={tz} />
+              <LinkedBooking booking={row.booking} tz={tz} now={now} />
             </div>
             {row.closedNotes.length > 0 && (
               <div className="mt-2">

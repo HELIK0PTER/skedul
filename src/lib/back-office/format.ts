@@ -37,27 +37,40 @@ export function formatWhen(start: Date, end: Date, tz: string): string {
   return `${frenchFirst(formatter(tz, "dateLong").format(start))} · ${formatTimeRange(start, end, tz)}`;
 }
 
-/** « lun. 12/10 · 19:00 » in tz. */
-export function formatWhenShort(start: Date, tz: string): string {
-  return `${formatter(tz, "weekday").format(start)} ${formatDayMonthOf(start, tz)} · ${formatter(tz, "time").format(start)}`;
+/** The local year of an instant in tz. */
+export function yearOf(instant: Date, tz: string): number {
+  return parseKey(todayKey(instant, tz)).y;
 }
 
-/** « 12/10 » (local day of an instant in tz). */
-export function formatDayMonthOf(instant: Date, tz: string): string {
-  return formatDayMonth(todayKey(instant, tz));
+/**
+ * The year rule of the back-office: « 12/10 », or « 12/10/2025 » when that day is not in `thisYear` (the local year of
+ * now). A day alone cannot say whether it is this October or last one.
+ */
+export function dayLabel(day: DateKey, thisYear: number): string {
+  return parseKey(day).y === thisYear ? formatDayMonth(day) : formatDayMonthYear(day);
 }
 
-/** « 12/10 14:03 » in tz (history lines). */
-export function formatDayMonthTime(instant: Date, tz: string): string {
-  return `${formatDayMonthOf(instant, tz)} ${formatter(tz, "time").format(instant)}`;
+/** « lun. 12/10 · 19:00 » in tz; with `now`, « lun. 12/10/2027 · 19:00 » when that day is not in now's local year. */
+export function formatWhenShort(start: Date, tz: string, now?: Date): string {
+  return `${formatter(tz, "weekday").format(start)} ${formatDayMonthOf(start, tz, now)} · ${formatter(tz, "time").format(start)}`;
+}
+
+/** « 12/10 » (local day of an instant in tz); with `now`, « 12/10/2025 » when that day is not in now's local year. */
+export function formatDayMonthOf(instant: Date, tz: string, now?: Date): string {
+  const day = todayKey(instant, tz);
+  return now === undefined ? formatDayMonth(day) : dayLabel(day, yearOf(now, tz));
+}
+
+/** « 12/10 14:03 » in tz (history lines); with `now`, the day names its year when it is not now's. */
+export function formatDayMonthTime(instant: Date, tz: string, now?: Date): string {
+  return `${formatDayMonthOf(instant, tz, now)} ${formatter(tz, "time").format(instant)}`;
 }
 
 const NO_LIMIT = "sans limite de validité";
 
 /** « valable(s) jusqu'au 12/01 inclus » for `count` tickets whose last valid day is `last` (« 12/01/2027 » when that day is not in now's local year). */
 function lastDayLabel(last: DateKey, tz: string, now: Date, count: number): string {
-  const sameYear = parseKey(last).y === parseKey(todayKey(now, tz)).y;
-  return `${pluralWord(count, "valable", "valables")} jusqu'au ${sameYear ? formatDayMonth(last) : formatDayMonthYear(last)} inclus`;
+  return `${pluralWord(count, "valable", "valables")} jusqu'au ${dayLabel(last, yearOf(now, tz))} inclus`;
 }
 
 /**

@@ -96,7 +96,7 @@ export default async function PaymentsPage({
         )
       ) : (
         <>
-          <PaymentsTable rows={rows} tz={pro.timezone} />
+          <PaymentsTable rows={rows} tz={pro.timezone} now={new Date()} />
           {capped && (
             <p className="mt-3 text-sm text-zinc-600">
               {`Les ${formatCount(PAYMENTS_LIMIT)} paiements les plus récents sont affichés. L'encaissé compte tous les paiements de la période.`}
