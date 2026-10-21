@@ -14,7 +14,8 @@ import {
   type ProCtx,
 } from "@/lib/back-office/result";
 import { logSafeMessage } from "@/lib/log-safe";
-import { getCurrentProfessional, getSession } from "@/lib/session";
+import { getCurrentProfessional, getFreshSession, getSession } from "@/lib/session";
+import { actingSession } from "@/lib/suspension";
 import { runEffects } from "@/server/notify";
 
 /**
@@ -37,9 +38,14 @@ export async function requireProfessional(): Promise<NonNullable<Awaited<ReturnT
  * to /sign-in, no professional profile to /onboarding. While an admin
  * impersonates, the session is the pro's own: actions stay allowed and
  * `actorUserId` is the impersonated user (decision 10).
+ * Final review SEC-2: every action and query reads the session WITHOUT the
+ * 5-minute cookie cache (one session read more per call), and a suspended user
+ * is answered like no session: a ban stops a pro's writes at once, not five
+ * minutes later. The dashboard pages keep the cached read of requireProfessional
+ * (a page only shows data; its actions check again).
  */
 export async function requireProContext(): Promise<ProCtx> {
-  const session = await getSession();
+  const session = actingSession(await getFreshSession());
   if (!session) redirect("/sign-in");
   const pro = await getCurrentProfessional();
   if (!pro) redirect("/onboarding");
