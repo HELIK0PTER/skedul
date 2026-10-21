@@ -7,6 +7,7 @@ import {
   defaultRecurrenceForm,
   dstNoteTexts,
   formFromRule,
+  intervalWords,
   minuteToTime,
   monthlyChoices,
   normalizeMonthlyChoice,
@@ -340,4 +341,20 @@ test("recurrenceSummary is null while the form is not a valid rule", () => {
   assert.equal(recurrenceSummary(form({ startDate: "" })), null);
   assert.equal(recurrenceSummary(form({ freq: "daily", endMode: "until", untilDate: "" })), null);
   assert.equal(recurrenceSummary(form({ freq: "daily", interval: 40 })), null);
+});
+
+test("intervalWords: the lead and the unit around the interval number agree with the frequency and the count (final review UI-9)", () => {
+  assert.deepEqual(intervalWords("daily", 2), { lead: "Tous les", unit: "jours" });
+  assert.deepEqual(intervalWords("daily", 1), { lead: "Tous les", unit: "jour" });
+  assert.deepEqual(intervalWords("weekly", 2), { lead: "Toutes les", unit: "semaines" });
+  assert.deepEqual(intervalWords("weekly", 1), { lead: "Toutes les", unit: "semaine" });
+  assert.deepEqual(intervalWords("monthly", 3), { lead: "Tous les", unit: "mois" });
+  assert.deepEqual(intervalWords("monthly", 1), { lead: "Tous les", unit: "mois" });
+  // a cleared field (0) reads as a count to come: the plural
+  assert.deepEqual(intervalWords("weekly", 0), { lead: "Toutes les", unit: "semaines" });
+  assert.deepEqual(intervalWords("daily", 0), { lead: "Tous les", unit: "jours" });
+  for (const freq of ["daily", "weekly", "monthly"] as const) {
+    const w = intervalWords(freq, 2);
+    assert.equal(DASHES.test(`${w.lead}${w.unit}`), false);
+  }
 });

@@ -10,6 +10,7 @@ import { formatWhenShort, plural } from "@/lib/back-office/format";
 import { WEEKDAY_LETTERS, WEEKDAY_NAMES, WEEK_ORDER } from "@/lib/back-office/labels";
 import {
   dstNoteTexts,
+  intervalWords,
   monthlyChoices,
   previewDates,
   recurrenceSummary,
@@ -35,8 +36,6 @@ const FREQ_OPTIONS: readonly { value: RecurrenceFreq; label: string }[] = [
   { value: "weekly", label: "Toutes les semaines" },
   { value: "monthly", label: "Tous les mois" },
 ];
-
-const INTERVAL_UNITS = { daily: "jours", weekly: "semaines", monthly: "mois" } as const;
 
 /** Shown when the start time is cleared or malformed: ruleFromForm returns null, so no schema can name the field. */
 export const START_TIME_ERROR = "Heure de début : indiquez une heure.";
@@ -283,7 +282,7 @@ export function RecurrenceEditor({
         <FormField label="Intervalle" htmlFor={intervalId} error={intervalError}>
           <>
             <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span>Tous les</span>
+              <span>{intervalWords(freq, value.interval).lead}</span>
               <Input
                 id={intervalId}
                 type="number"
@@ -298,7 +297,7 @@ export function RecurrenceEditor({
                 className="w-20"
                 onChange={(e) => set({ interval: wholeNumber(e.target) })}
               />
-              <span>{INTERVAL_UNITS[freq]}</span>
+              <span>{intervalWords(freq, value.interval).unit}</span>
             </div>
           </>
         </FormField>

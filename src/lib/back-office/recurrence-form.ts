@@ -17,6 +17,7 @@ import {
   type DateKey,
 } from "@/lib/civil-date";
 import { wallClockMinutes } from "@/lib/datetime";
+import { pluralWord } from "@/lib/back-office/format";
 import { describeRecurrence, dstNotes, expand, monthlyDayWarning, type RecurrenceRule } from "@/lib/recurrence";
 import { recurrenceRuleSchema, type RecurrenceRuleInput } from "@/lib/tickets";
 import type { RecurrenceEnd, RecurrenceFreq } from "@/lib/tickets-vocab";
@@ -248,4 +249,17 @@ export function recurrenceSummary(v: RecurrenceFormValue): { label: string; warn
   if (!built || !recurrenceRuleSchema.safeParse(built.rule).success) return null;
   const full: RecurrenceRule = { ...built.rule, durationMin: built.durationMin };
   return { label: describeRecurrence(full), warning: monthlyDayWarning(full) };
+}
+
+/**
+ * The words around the « Intervalle » number: « Tous les [2] jours », « Toutes les [2] semaines », « Tous les [1] mois ».
+ * « semaine » is feminine and « mois » never takes an s; the unit follows the count (a cleared field, 0, reads as a count to
+ * come and keeps the plural).
+ */
+export function intervalWords(freq: Exclude<RecurrenceFreq, "once">, interval: number): { lead: string; unit: string } {
+  const many = interval < 1;
+  const unit = (one: string, plural: string) => (many ? plural : pluralWord(interval, one, plural));
+  if (freq === "weekly") return { lead: "Toutes les", unit: unit("semaine", "semaines") };
+  if (freq === "monthly") return { lead: "Tous les", unit: "mois" };
+  return { lead: "Tous les", unit: unit("jour", "jours") };
 }
