@@ -28,6 +28,7 @@ import { WindowOverrideFields } from "@/components/dashboard/window-override-fie
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { INLINE_LINK_CLASS } from "@/components/ui/link-class";
 import { Textarea } from "@/components/ui/textarea";
 import type { TypeOption } from "@/lib/back-office/catalog-reads";
 import type { LaterSegment } from "@/lib/back-office/event-reads";
@@ -313,7 +314,7 @@ export function EventInfoFields({
               <p className="text-sm text-muted-foreground">Aucun type de ticket actif.</p>
               <Link
                 href="/dashboard/tickets"
-                className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+                className={`text-sm ${INLINE_LINK_CLASS}`}
               >
                 Créer un type de ticket
               </Link>

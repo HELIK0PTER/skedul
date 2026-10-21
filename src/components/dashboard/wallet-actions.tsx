@@ -10,6 +10,7 @@ import { FormField } from "@/components/dashboard/form-field";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { INLINE_LINK_CLASS } from "@/components/ui/link-class";
 import { Select } from "@/components/ui/select";
 import type { TypeOption } from "@/lib/back-office/catalog-reads";
 import { closeTicketsCopy, retireTicketsCopy } from "@/lib/back-office/confirm-copy";
@@ -34,9 +35,6 @@ const noop = () => {};
 const NO_ACTIVE_TYPE = "Aucun type actif : créez-en un dans";
 const NO_OTHER_TYPE = "Aucun autre type actif : créez-en un dans";
 const NOTHING_LEFT = "Plus aucun ticket pour cette action : rafraîchissez la page.";
-/** An inline link in a note on bg-muted: accent-foreground reads 6.4:1 there (text-primary is about 4.2:1). */
-const LINK_CLASS =
-  "rounded font-medium text-accent-foreground underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 type CallResult = { ok: true; count: number } | { ok: false; error: string };
 
@@ -348,7 +346,7 @@ function OfferDialog({
         {options.length === 0 ? (
           <p className="rounded-lg bg-muted px-3 py-2 text-sm text-zinc-600">
             {NO_ACTIVE_TYPE}{" "}
-            <Link href="/dashboard/tickets" className={LINK_CLASS}>
+            <Link href="/dashboard/tickets" className={INLINE_LINK_CLASS}>
               Tickets
             </Link>
             .
@@ -711,7 +709,7 @@ function ConvertDialog({
         {target === null ? (
           <p className="rounded-lg bg-muted px-3 py-2 text-sm text-zinc-600">
             {NO_OTHER_TYPE}{" "}
-            <Link href="/dashboard/tickets" className={LINK_CLASS}>
+            <Link href="/dashboard/tickets" className={INLINE_LINK_CLASS}>
               Tickets
             </Link>
             .

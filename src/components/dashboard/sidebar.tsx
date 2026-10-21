@@ -93,7 +93,7 @@ export function DashboardSidebar({
         {isAdmin && (
           <Link
             href="/admin"
-            className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-primary hover:bg-accent"
+            className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-accent-foreground hover:bg-accent"
           >
             <ShieldCheck className="size-4" />
             Dashboard Admin
@@ -102,7 +102,7 @@ export function DashboardSidebar({
         <Link
           href={`/${slug}`}
           target="_blank"
-          className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-primary hover:bg-accent"
+          className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-accent-foreground hover:bg-accent"
         >
           <ExternalLink className="size-4" />
           Voir ma page publique

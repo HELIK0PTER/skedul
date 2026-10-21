@@ -10,6 +10,7 @@ import { StatusMark } from "@/components/dashboard/status-mark";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { INLINE_LINK_CLASS } from "@/components/ui/link-class";
 import { Select } from "@/components/ui/select";
 import { changedKeys, withoutErrorsUnder } from "@/lib/back-office/form-errors";
 import { plural } from "@/lib/back-office/format";
@@ -398,7 +399,7 @@ export function RegisterAttendeeDialog({
                   {"Ce client n'a aucun ticket utilisable ici. "}
                   <Link
                     href={`/dashboard/clients/${existing.id}`}
-                    className="rounded font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className={INLINE_LINK_CLASS}
                   >
                     Ouvrir sa fiche
                   </Link>
