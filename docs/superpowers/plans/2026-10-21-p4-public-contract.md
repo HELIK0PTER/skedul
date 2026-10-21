@@ -1,0 +1,1781 @@
+# P4 « Public, paiements, identité » : Architecture contract
+
+Status: binding for the P4 plan writers (G1 to G4). Copy names, types, paths, French copy and task
+numbers verbatim. Where this contract and the spec disagree, § 6 says why (every such decision is
+listed with « Change to spec »); anything § 6 does not settle, the spec wins.
+
+Revision 2 (2026-10-21): every Critical and Important finding of the security critique
+(`critique-security.md`, ids `SEC-*`) and of the coverage critique (`critique-coverage.md`, ids
+`COV-*`) is applied; each Minor is applied or listed in § 10; § 11 maps every finding id to the
+change. Where the two critiques disagreed, the stricter security rule was kept (§ 11 says where).
+
+Revision 3.1 (2026-10-22, plan review): the two pages that hold a plain HTML form whose POST is checked by `sameOrigin` (the simulated checkout page, § 3.13, and the personal-link confirmation page, § 3.19) send `Referrer-Policy: strict-origin`, not `no-referrer`: a `no-referrer` document makes the browser send `Origin: null` on its own form POST (Fetch spec, « append a request Origin header », mode navigate), which `sameOrigin` refuses. Server Actions use `fetch()` (mode cors), so the `referrer: "no-referrer"` metadata of the pages that carry `p` (Decision 49) stays. Task 16 also guards `logResetLink` with `process.env.NODE_ENV !== "production"` in `src/lib/auth.ts` (no reset token in a preview deployment's logs); `booking (purchase_id)` leaves the P6 index list (`booking_purchase_uq` already indexes it); Task 1 checks that this contract is committed at `docs/superpowers/plans/2026-10-21-p4-public-contract.md` instead of copying it. § 11 « Revision 3.1 » lists these and the plan additions the reviews accepted.
+
+Revision 3 (2026-10-21): the contract is re-read against the code at `1954782`, the P3 end commit. Every
+interface it quotes from a file that changed after `983fa65` (27 files) is corrected to the code as it
+stands, and every carry the P3 final review and the P3 outcome address to P4 is placed in a task or listed
+in § 10 with its reason. One task is added (Task 20a), four decisions (72 to 75). § 11 « Revision 3 » lists
+every change with its file, its section and its reason.
+
+- Spec (binding): `docs/superpowers/specs/2026-10-12-tickets-evenements-design.md` (§§ 2, 4, 6, 7, 9, 10, 11 E1 to E5, E9 to E12, 12, 13.2 to 13.9, 14, 15.1, 15.5, 16, 17). Cited as `L<n>` = spec line.
+- P2 outcome (SECURITY carries, rulings): `docs/superpowers/plans/2026-10-12-p2-domaine-outcome.md`, cited `OUT:<n>`.
+- P3 contract and plan (format model, conventions, Task 41 interfaces): `docs/superpowers/plans/2026-10-14-p3-back-office-contract.md` (`CON:<n>`), `docs/superpowers/plans/2026-10-14-p3-back-office.md`.
+- P3 ledger: `docs/superpowers/plans/2026-10-14-p3-back-office-ledger.md`, the verbatim archive of `.superpowers/sdd/2026-10-14-p3-back-office/progress.md` (same line numbers), cited `LED:<n>`; P3 rulings: the controller rulings of 2026-10-14 (appendix of the P3 contract) and the ledger's « Ruling: » lines.
+- P3 final review: `docs/superpowers/plans/2026-10-14-p3-back-office-final-review-findings.md` and `docs/superpowers/plans/2026-10-14-p3-back-office-final-fix-report.md` (archived from the P3 workspace), condensed in the P3 outcome `docs/superpowers/plans/2026-10-14-p3-back-office-outcome.md` (its « Carry notes » tagged « [P4] » are the carries this contract places). A final-review finding is cited `FR:<id>` (`FR:SEC-5`, `FR:UI-13`, `FR:R11`, `FR:F9`, …) so it never reads as an id of this contract's own critiques (`SEC-I1`, `COV-C1`, …).
+- Engine and P3 API: the code at `1954782` (signatures quoted below are the real ones, re-read for revision 3). P3 is complete and P4 starts on it: Task 41 (personal link route and read-only espace, `2311421`; fix round `1b743cc`: a stale link no longer touches the cookie, `src/app/[slug]/espace/layout.tsx` answers a real 404 for an unknown pro), Task 42 (ICS, `a28d7d6`; fix round `4d039a5`: `src/lib/calendar-links.ts` escapes every line-break lookalike and control character and folds lines at 75 octets), Task 43 (final sweep `4d039a5..56cedf2`, that is `538e93d`, `444f102`, `09c5453` (the dialog focus trap), `77840a2`, `56cedf2`), the final-review fix pass `56cedf2..0aa0919` (41 commits) and its four follow-ups `a958375` (`runEffects` takes a required budget), `9752367`, `5507b44`, `1954782`. Task 1 checks that end state.
+
+Notation: C = create, M = modify, D = delete. « … » = exact French UI copy. `DateKey` = "YYYY-MM-DD"
+(`src/lib/civil-date.ts`). "pro tz" = `professional.timezone`. "Visitor" = whoever opens a public page
+(signed out, signed in, page owner, admin impersonating). "Owner" = `WalletOwner` (§ 3.5): a verified,
+non-impersonated fresh session that owns a `customer` row of the page's pro. "Verified identity" = a
+verified, non-impersonated fresh session whose e-mail is the address of the action (`upsertUserIdFor`
+gives its user id): an Owner, or a verified user booking at this pro for the first time.
+
+---
+
+## 1. Global Constraints
+
+Put these lines verbatim at the top of every P4 plan file.
+
+- **Spec (binding):** `docs/superpowers/specs/2026-10-12-tickets-evenements-design.md`, §§ 2, 4, 6, 7, 9, 10, 11 (E1, E2, E3, E5, E9, E10, E11, E12), 12, 13.2 to 13.9, 14, 15.1, 15.5, 16, 17. **Rulings:** this contract (§ 6 lists every change to the spec), the P2 outcome SECURITY carries (OUT:64, 69, 74, 75), the P3 rulings, the ledger carries and the P3 outcome « [P4] » carries (placed in this contract or listed in § 10).
+- **Owner priorities:** SECURITY FIRST in every trade-off (tenancy, identity only from verified sessions, signed personal links or e-mail codes, no account or address enumeration, no open redirects, webhook signature verification and idempotency, rate limits, no personal data in caches, logs or URLs); French UI with vouvoiement; zero em dash and zero en dash anywhere; WCAG AA; mobile below 640 px; the existing visual system; no new dependency.
+- **Owner decisions (do not reopen):** most clients never create an account (e-mail and a confirmation each time); an e-mail code is needed only to spend tickets already held; a signed-in client is detected automatically; buy + book in one step with a seat hold; self-cancellation until the deadline gives the ticket back; no money refund ever; Stripe test keys first, mock checkout off in production, Resend mock when Resend is off.
+- **Worktree:** `C:/Users/Matheus/Documents/Codage/skedul/.claude/worktrees/tickets`, branch `feat/tickets-events`. `node_modules` is a junction to the main checkout. Every Bash command starts with `cd /c/Users/Matheus/Documents/Codage/skedul/.claude/worktrees/tickets && ` (a multi-line block starts with `cd /c/Users/Matheus/Documents/Codage/skedul/.claude/worktrees/tickets || exit 1`). Read, Edit and Write use absolute worktree paths `C:/Users/Matheus/Documents/Codage/skedul/.claude/worktrees/tickets/<path>`, never the main checkout. Every command has an explicit timeout.
+- **Never** run `pnpm install`, `pnpm <script>`, `db:migrate` or `db:push` inside the worktree. Call `./node_modules/.bin/{tsx,tsc,eslint,next,drizzle-kit}` directly.
+- **Typecheck:** `./node_modules/.bin/tsc --noEmit`
+- **Lint (touched files only):** `./node_modules/.bin/eslint <every file created or modified by the task>` → no error, no warning.
+- **Pure tests:** `./node_modules/.bin/tsx --test "src/**/!(*.db).test.ts"`
+- **DB tests, one file per process:** `./node_modules/.bin/tsx --env-file-if-exists=.env.test --test --test-concurrency=1 --test-isolation=none --test-timeout=280000 <path>.db.test.ts`
+- **DB tests, all (Tasks 4, 8, 15, 22, 31):** run the DB files in foreground chunks, each chunk ONE process (`--test-concurrency=1 --test-isolation=none --test-timeout=300000`, the file list from `git ls-files 'src/**/*.db.test.ts'` split so a chunk stays under 600 s, LED G5 run 3 ruling), until every DB file ran once; the expected tail of every chunk is `ℹ fail 0`.
+- **Build:** `./node_modules/.bin/next build` (uses the worktree `.env.local` → tickets-dev). The route list must show every P4 page and route as `ƒ` (dynamic).
+- **Every task ends green:** tsc, eslint on its files, all pure tests, the DB test files the task creates or modifies, `next build`.
+- **Neon:** only `tickets-dev` (worktree `.env.local`, seed v2 demo data) and `tickets-test` (`.env.test`). Never `main`, `development` or `preview`. Neon MCP calls always pass `project_id` AND `branch_id`; never print a connection string, a key or a secret; never `cat` an `.env*` file.
+- **Migrations:** P4 needs **none** (every column it reads or writes exists since 0011: `ticket_purchase.processing_at`, `livemode`, `checkout_session_id`, `checkout_url`, `customer.user_id`, `link_version`, `throttle`, `rate_limit`). If a task proves one is required it stops and reports. The index follow-ups of the P3 final review (FR:R11 `booking (created_at desc, id desc) where status = 'confirmed'` and `booking (professional_id, status)`, the `ticket_purchase (offer_id)` index of FR:R8 / FR:F6) belong to the P6 index migration of the P3 outcome, not to P4 (§ 10).
+- **Engine:** `src/lib/booking/*` keeps its rules (no `server-only`, `db` first, `now` last before test-only `opts`). P4 changes the engine only where this contract says so: Task 4 (`wallet.ts` `upsertCustomer` guard and phone rule, `claims.ts` `offerUnchanged` and `bookWithHeldTicket` types and docs, `fulfillment.ts` `recordOrphanPayment` export, `release.ts` doc) and Task 15 (`nightly.ts` `ensureAllHorizons` failures and deadline).
+- **Testable cores (P3 ruling, kept):** every action body and every read lives in a module that takes `(db, …, now)` and imports neither `server-only`, `next/*`, `@/lib/db` (index), `@/lib/env`, `@/lib/session`, `@/lib/auth` nor `@/lib/stripe`: `src/lib/public/*` (including `run-action.ts`, the tested body of `runPublicAction` / `runClientAction`), `src/lib/payments/*`, `src/lib/notify-core.ts`, `src/lib/notify-run.ts`, `src/lib/same-origin.ts`, `src/lib/back-office/customer-space.ts`, `src/lib/back-office/guest-link-page.ts`. The `"use server"` files (`src/server/public.ts`, `src/server/client.ts`), the `server-only` files (`src/server/public-context.ts`, `src/server/visitor.ts`, `src/server/public-queries.ts`) and the route handlers are thin wrappers. Their security wiring (fresh session, suspension, the effect budget, the cookie attributes) is pinned by source guards, the pattern of P3's `src/server/pro-context.test.ts` and `src/lib/back-office/guest-access.test.ts` (node:test cannot load `next/*`): `src/server/visitor.test.ts` (Task 5), `src/server/public-context.test.ts` (Task 7), the route guards of Tasks 13, 14 and 21a.
+- **Identity (security):** `professionalId` comes from the page slug resolved on the server (`resolvePublicPro`), never from input. A wallet (spend, resume URL, balance) is shown or used only for an Owner (`requireWalletOwner` / `resolveVisitor`), never for a customer resolved from a typed e-mail. The customer of a purchase came from a typed e-mail too (`upsertCustomer` of the buyer's address), so a purchase reference never stands for its customer (Decision 71). `upsertCustomer` identifies a row to attach a purchase or a booking to; it never authorises anything. A session counts only when read fresh (`getFreshSession`, never the 5-minute cookie cache) and its user is not suspended (`actingSession`, the rule of P3 `requireProContext` since FR:SEC-2): a suspended user is a visitor without session. `customer.user_id` is written only by that user's own act at that pro (`upsertCustomer` of a verified session of the same address, `linkCustomerUser` of `requireWalletOwner`); the cross-pro link at sign-in is removed (Decision 72, FR:SEC-5), so « Compte client lié » in the pro's client record never tells a pro that a typed address belongs to a Skedul user. Every id in an input (occurrence, offer, booking, purchase) is checked against the slug's pro by the engine (its `professional_id` filters) or by the core's own read before use.
+- **Capabilities:** the purchase reference `p` (a nanoid) authorises reading and releasing ITS purchase and ITS booking on ITS pro's pages only (checked against the slug); it never names a customer: no wallet, no other booking, no resume URL of another purchase; while an Owner is signed in, a reference of another customer is ignored (OUT:74). The `skedul_guest` cookie authorises reading and cancelling for ITS customer at ITS pro at the CURRENT `link_version` only (re-checked on every request, `customerFromGuestCookie`), and only when no verified or impersonating session is present. The guest cookie can be planted by a cross-site navigation or a forwarded link (LED:438): it never prefills, locks or replaces an identity field, never hides a booking form, never receives a Checkout URL and never chooses who pays; the personal link sets it only through a same-origin confirmation (Decision 68, Task 21a), and « Ce n'est pas moi » removes it. Its attributes come from `guestCookieOptions(slug, production)` (`src/lib/back-office/guest-access.ts`, FR:SEC-7: HttpOnly, SameSite=Lax, `Path=/<slug>`, 30 days, Secure in a production build) and are never spelled anywhere else; a stale link never touches it (P3 Task 41 ruling); the redirect slug is the customer row's own, refused unless it matches `SLUG_SHAPE` (no open redirect). Neither capability ever authorises spending.
+- **Validation:** every core takes `input: unknown` and validates the WHOLE input first with `parseFr(<strict schema>, input)` (`src/lib/zod-fr.ts`; `z.object({...}).strict()`, the honeypot as `website: z.unknown().optional()`) before the honeypot decision, any read, write or engine call; no English zod text reaches the UI. Engine failures become client French through `fromEngineClient(res, context, vars)` (`src/lib/public/result.ts`), never `proErrorMessage`. A result given to a visitor who is not a verified identity never carries a code or a sentence that depends on another customer's state (`already_booked`, `too_many_holds`: Decision 64). Names typed on public forms refuse links, addresses and long digit runs (`isPlainName`, `src/lib/public/plain-name.ts`).
+- **Rate limits:** the `free`, `buybook`, `shop`, `held`, `cancel` and `release` actions call `checkActionThrottle(db, { action, professionalId, ipHash, wideIpHash, subject, occurrenceId? }, now)` (§ 3.3) before any write or Stripe call. Keys consumed together: the IP bucket, the IPv6 /48 (when IPv6), then for a typed address a per-pro AND a global e-mail key, or for a verified identity its user key only (strangers typing an address cannot lock out its verified holder), plus a per-séance IP key on seat-taking actions and a per-pro IP key on free registrations (`THROTTLE_LIMITS`, Decisions 65 to 67). `ipHash` / `wideIpHash` = `ipHash(daily salt, bucket)` of `ipBuckets(clientIpFrom(headers))` only. Buy + book also refuses a new hold when a séance already carries `holdCeiling(capacity)` live holds (Decision 65). Honeypot field `website` must be empty (L786, L863). Better Auth rate limits and the per-address code cap stay as P2 built them.
+- **Effects:** every engine `effects` array is executed after the response by `runEffects(effects, budget)` (`src/server/notify.ts`, a thin wrapper of the tested `runEffectsWith`, `src/lib/notify-run.ts`), scheduled with `after()` by `runPublicAction` / `runClientAction`, the webhook and the mock route (the cron route runs no effect: `runNightly` returns none). `budget: EffectBudget` (`"pro" | "none"`, `src/lib/mail-budget.ts`) is required since P3 `a958375`: every P4 caller passes `"none"` (client-initiated actions, Stripe fulfilment, the mock checkout: the client gets what they asked or paid for, bounded by the throttle keys of § 3.3, never dropped); only `runProAction` passes `"pro"` (the per-pro budget `PRO_MAIL_BUDGET`, 50 client mails per 24 h while the pro's address is unverified, 2000 once verified, FR:SEC-1). P4 never adds a default to `budget` (Decision 74). A failing effect never fails the action and is logged without e-mail addresses, codes, tokens or session ids (`logSafeMessage`).
+- **Revalidation:** every successful public or client action calls `revalidatePath` for each of `PUBLIC_REVALIDATE` = `{ path: "/[slug]", type: "layout" }` and `{ path: "/mon-espace" }` (a literal path takes no type, revalidatePath docs). Client components never call `router.refresh()` right after a Server Action; navigation after an action is `router.push(x)` alone or, for an external Checkout URL, `window.location.assign(url)`. `router.refresh()` is allowed only after a Better Auth client call (`authClient.getSession({ query: { disableCookieCache: true } })` first, L1314-1315) and in `MerciRefresher` (a periodic read, after no action). A sign-out (`OtherAddressButton`, `ClientSignOutButton`) ends with `window.location.replace(<current path>)`, a full navigation that drops the router cache, never `router.refresh()`.
+- **Rendering and caching:** every P4 page reads the fresh session or a cookie, so it is dynamic; no `unstable_cache`, no `"use cache"`, no `export const revalidate`. A render never writes, except `after(() => ensureHorizon(db, pro.id))` on `/[slug]` when `needsHorizon` AND the per-pro `t:horizon:p:<professionalId>` key (1 per 5 minutes, `consumeThrottle`) lets it through (L436-438, L497-498). Route handlers answer with `Cache-Control: no-store`. Client component props never carry `professional.userId`, `stripeAccountId`, `googleCalendarId`, booking settings rows or any other customer's data: pages pass picked fields only. Public pages refuse framing: `next.config.ts` `headers()` sets `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY` on `/:slug`, `/:slug/:path*` and `/mon-espace`; the mock checkout and personal-link HTML responses set both themselves.
+- **URLs and logs:** no e-mail, name or phone in a URL or a query string, the pro's own client search included (`/dashboard/clients` searches through a Server Action, Task 20a, Decision 73, FR:UI-13); Checkout `success_url` / `cancel_url` are built on the server from `env.APP_URL` and ids; the mock route takes no redirect parameter; every `?next=` / `returnTo` goes through `safeNextPath`, and `returnTo` is built by the page from its own route params only (`/${pro.slug}`, `/${pro.slug}/seance/${occurrenceId}`, `/${pro.slug}/offre/${offerId}`, `/${pro.slug}/espace`, `/mon-espace`), without any query string, never from a header or a `next` parameter. Logs go through `logSafeMessage` and never print an e-mail, a code, a token, a guest link or a Stripe session id; no `console.*` call in a file P4 creates or modifies passes a raw error object (`, err)`): the P3 carries in `src/server/pro.ts` (Google finalize and unlink), `src/lib/auth-options.ts`, the dashboard layout and the dashboard and planning `ensureHorizon` `after()` blocks are converted where Tasks 16 and 20 touch them. One exception: the orphan-payment warning of spec L1116 (`recordOrphanPayment`, « [stripe] orphan payment <session>/<pi> ») keeps the Stripe session and payment intent ids, without any customer data, so the owner can refund it by hand. Accepted residual: the personal-link token travels in the request path of `/api/c/<token>` (the e-mail link), so the platform request log keeps it; no log drain exports request paths, `logSafeMessage` masks `/api/c/…` in application logs, and the link is revocable (« Déconnecter mes liens »).
+- **Next.js 16.2.9:** read `node_modules/next/dist/docs/` before touching a page, route, cookie or Server Action (route handlers: `01-app/03-api-reference/03-file-conventions/route.md`; `after`, `cookies`, `redirect`, `permanentRedirect`, `revalidatePath`, `connection`, `unstable_rethrow`: `01-app/03-api-reference/04-functions/`; segment config: `03-file-conventions/02-route-segment-config/`; response headers: `05-config/01-next-config-js/headers.md`). `params` and `searchParams` are `Promise`s. `redirect` is called outside `try`. `after` in a static page would run at build time: P4 pages are dynamic by construction (above). `cookies().set` only in Server Functions and Route Handlers. Server Actions are POST and Next compares `Origin` with `Host`; route handlers do not, so the mock route's POST checks the origin itself.
+- **Client/server boundary:** client components import labels and copy from `@/lib/tickets-vocab`, `@/lib/public/messages`, `@/lib/auth-messages`, pure helpers from `@/lib/back-office/format`, `@/lib/public/planning-view`, `@/lib/public-anchors` (`BOUTIQUE_ANCHOR`, `boutiqueHref`, P3 FR:UI-14), `@/components/ui/link-class` (`INLINE_LINK_CLASS`, FR:UI-2), schemas from `@/lib/tickets` only to validate a form, and actions from `src/server/public.ts` / `src/server/client.ts`. Never runtime imports from `@/lib/booking/*`, `@/lib/db/*`, `@/lib/public/*-reads.ts`, `*-actions.ts`, `@/lib/payments/*` or `src/server/*-queries.ts` (`import type` is fine). Props carry no `Date`: instants are ISO strings, calendar days are `DateKey`.
+- **UI rules:** load the `design-taste-frontend` skill before writing UI (user rule). Keep the existing system: `src/components/ui/*`, `PublicShell` (brand theming through `brandThemeVars`), the dashboard primitives that have no dashboard dependency (`FormField`, `FormError`, `ConfirmDialog`, `EmptyState`, `Skeleton`, `PageSkeleton`, `CoverageBadge`, `VerifyEmailBanner`, `SavedStatus`), `INLINE_LINK_CLASS` for a link inside a sentence, `lucide-react`; no new dependency. Server Components by default, client leaves only for interaction. Label above the input, help or error below, never a placeholder as label. Every page and dialog has a loading state, an empty state with an action and an error state. Every submit button shows a pending label (`COPY.PENDING_*`) and is disabled while pending; every success line sits in an always-mounted `role="status"` region, every failure in an always-mounted `role="alert"` region, and when a success removes the control that held the focus (a cancelled booking, a spent séance, a released hold) the focus moves to the section heading (`tabIndex={-1}`): the component passes `returnFocusTo={() => heading.current}` to its `ConfirmDialog` / `Dialog`, so the dialog's own focus restore lands there instead of on `<body>` (WCAG 2.4.3). Every destructive client gesture (cancel a booking, release a seat, disconnect links) opens a `ConfirmDialog` that states its consequences. `Dialog` (`src/components/ui/dialog.tsx`) keeps the keyboard focus inside the topmost open panel (P3 `09c5453`, `tabDestination` / `topmostOf` of `src/lib/focus-trap.ts`; the dialog is not portalled, so no `inert`) and, when it closes, gives the focus to `returnFocusTo()` when the caller passes it, else to its opener, when connected and enabled (`restoreTarget`, P3 `5c69d89`, FR:UI-1); `ConfirmDialog` forwards `returnFocusTo`. P4 does not modify `dialog.tsx` (Task 1 checks both commits). A success line « Enregistré » uses `SavedStatus` (always-mounted `role="status"`, `text-green-700`, FR:UI-3), never `text-success` for text. The sign-in-by-code form (`EmailCodeForm`, `OtpDialog`, `ClientSignInChoices`) is mounted only when `canOfferCodeSignIn(visitor.state)` (anonymous only, risk 7). WCAG AA (brand text in `text-accent-foreground`, never `text-primary`; inline links `INLINE_LINK_CLASS`; error text `text-rose-700` or the `text-destructive` token, which is rose-700 `#be123c` since P3 `d39c8d1`, FR:COV-9). User-supplied text (titles, type names, business names, locations) gets `wrap-anywhere` (LED:148, LED:199). Below 640 px: the public planning is a list per day, no horizontal page scroll. **Zero U+2014 and zero U+2013** in UI strings, e-mails, comments of scanned files. French with vouvoiement, one label per intent, buttons never wrap at desktop width. No emoji.
+- **SWC whitespace bug:** keep on ONE line any JSX text that contains an HTML entity, or use a JS string.
+- **Browser checks:** dev server = the `skedul-tickets` entry of the MAIN checkout `.claude/launch.json` (port 3102), started with `preview_start` name `skedul-tickets`. Payment flows are checked in mock mode: if Task 1 found `STRIPE_ENABLED` true on tickets-dev, use the `skedul-tickets-mock` entry Task 1 adds (same port, Stripe key overridden by a placeholder for that process only; stop the other entry first). Sign-ins use the one-click demo logins of `/sign-in` (« Pro · back-office », « Cliente · packs & réservations », « Admin · espace Skedul »); a code sign-in reads the code from the dev log (`📧 [email:mock]`); passwords are never typed into chat, commits or UI copy.
+- **Files:** Windows, CRLF working copies. Whole files with Write, partial changes with Edit. Never bash heredocs for files containing an apostrophe.
+- **Language:** code, comments and plan prose in English; user-facing strings in French.
+- **Commits:** one per task: `git add <files>` then `git commit -m "<type>(<scope>): <summary>" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"`. Never `--no-verify`, never push.
+- **No new dependencies.** zod 4.4.3, drizzle-orm 0.45.2, better-auth 1.6.19, stripe 22, lucide-react, @date-fns/tz are installed. tsconfig target ES2017: no regex `s` flag, no named groups.
+- **Test naming:** pure `*.test.ts`, DB `*.db.test.ts` (use `dbTest` from `src/test/db.ts`, which checks I1 to I6 after each test); helpers in `src/test/` are never `*.test.ts`. Time-sensitive pure tests run `Europe/Paris` AND `America/Los_Angeles` with one DST day each; host-zone independence is checked through PowerShell `$env:TZ`, never Git Bash `TZ=` (LED:168).
+
+---
+
+## 2. File map
+
+All paths relative to the worktree. "Task" = the task that creates the file or makes the change. No
+barrel files: callers import each module directly.
+
+### 2.1 Foundation (G1, Tasks 1 to 8)
+
+| Op | Path | Responsibility | Task |
+|---|---|---|---|
+| M | `C:/Users/Matheus/Documents/Codage/skedul/.claude/launch.json` (main checkout, untracked) | Only if `STRIPE_ENABLED` is true on tickets-dev: add the `skedul-tickets-mock` entry (port 3102, Stripe key overridden by a placeholder for that process); other entries untouched | 1 |
+| M | `src/lib/ui-copy.test.ts` | `OPTIONAL` gains every P4 path its `DIRECTORIES` do not already walk (§ 3.1); the scan stays comments-included | 1 |
+| C | `docs/superpowers/plans/2026-10-21-p4-public-contract.md` | This contract, copied verbatim from the session scratchpad (the scratchpad does not survive the session, P3 outcome carry) | 1 |
+| C | `src/lib/public/messages.ts`, `src/lib/public/messages.test.ts` | Client-facing French: page states, fixed sentences, engine code → client text per context | 2 |
+| C | `src/lib/public/result.ts`, `src/lib/public/result.test.ts` | `PublicResult`, `PublicCoreResult`, `publicFail`, `publicOk`, `fromEngineClient`, `withoutPublicEffects`, `PUBLIC_REVALIDATE` | 2 |
+| C | `src/lib/public/plain-name.ts`, `src/lib/public/plain-name.test.ts` | `isPlainName`, `plainNameSchema`: a typed name without link, address or long digit run (SEC-M9) | 2 |
+| C | `src/lib/client-ip.ts`, `src/lib/client-ip.test.ts` | Client address from proxy headers; IPv4-mapped, IPv6 /64 and /48 bucketing (OUT:109, SEC-I1) | 3 |
+| M | `src/lib/throttle.ts`, `src/lib/throttle.test.ts`, `src/lib/throttle.db.test.ts` | `actionThrottleKeys` (pure) and `checkActionThrottle`: IP, /48, per-pro and global e-mail or user, per-séance and per-pro IP keys; refuses an IP key that is not a 32-hex `ipHash` (OUT:109, SEC-I1, SEC-I6) | 3 |
+| M | `src/lib/tickets-vocab.ts`, `src/lib/tickets.test.ts` | `THROTTLE_ACTIONS` gains `held`, `cancel`, `release`; `THROTTLE_LIMITS` gains `ip48`, `emailGlobal`, `perOccurrenceIp`, `perProIp` (SEC-I1, SEC-I2, SEC-I6) | 3 |
+| M | `src/lib/booking/wallet.ts`, `src/lib/booking/wallet-customers.db.test.ts` | `upsertCustomer`: `user_id` only for a verified user with the same e-mail, on INSERT and on conflict (OUT:69); a missing phone is filled only by that verified user (SEC-M8). The rest of the file is P3's as it stands (`walletBalance`, `walletBalanceByExpiry`, the private `usableTickets(input, now)` predicate, `loadTypeFacts`): untouched | 4 |
+| M | `src/lib/booking/claims.ts`, `src/lib/booking/claims-buy.db.test.ts`, `src/lib/booking/claims.db.test.ts` | `ClientClaimBase.customerId` doc; `bookWithHeldTicket` takes `actorUserId: string` (OUT:75); `offerUnchanged` adds `not tt.rdv_free` in every scope (LED:139) | 4 |
+| M | `src/lib/booking/fulfillment.ts`, `src/lib/booking/fulfillment.db.test.ts` | Export `recordOrphanPayment` (the private `orphan` renamed) for the webhook's unresolvable sessions | 4 |
+| M | `src/lib/booking/release.ts` | JSDoc precondition of `releasePurchase` (OUT:74) | 4 |
+| M | `scripts/seed.ts` | `bookWithHeldTicket` call sites pass a string `actorUserId` (type change) | 4 |
+| C | `src/lib/public/identity.ts`, `src/lib/public/identity.test.ts`, `src/lib/public/identity.db.test.ts` | Session facts, visitor resolution (read-only), `linkCustomerUser`, `upsertUserIdFor`, `customerEmailOf` | 5 |
+| M | `src/lib/back-office/guest-access.ts`, `src/lib/back-office/guest-access.db.test.ts` | `ownedCustomerId` replaces `customerFromVerifiedEmail` (owner predicate, Decision 5); `SpaceSession` gains `userId`; `SpaceIdentity` gains `unverified` and `impersonating`; `resolveSpaceIdentity` maps them (COV-C1, SEC-M6); the two P3 tests that expected `anonymous` / the guest customer for an unverified or an impersonated session change their expectations | 5 |
+| C | `src/server/visitor.ts` | `server-only`: `visitorIpHashes`, `currentSessionFacts` (fresh session, `actingSession`), `currentPublicVisitor` (cached), `requireWalletOwner` | 5 |
+| C | `src/server/visitor.test.ts` | Source guard (the `pro-context.test.ts` pattern): `getFreshSession()` and `actingSession(` in `currentSessionFacts`, no `getSession()` | 5 |
+| M | `src/server/client-queries.ts` | `resolveSpaceCustomer` delegates to `currentPublicVisitor` (stricter owner predicate, unverified and impersonating kinds); `getSpaceProfile`, `getCustomerSpacePage` unchanged | 5 |
+| M | `src/app/[slug]/espace/page.tsx` | Compiles against the new `SpaceIdentity` kinds (unverified: banner, never the code form; impersonating: `COPY.IMPERSONATING`) | 5 |
+| C | `src/lib/payments/checkout.ts`, `src/lib/payments/checkout.test.ts` | Pure: Checkout request, gateway interface, URL builders, Stripe params with the app marker, close outcomes, mock ids, `paymentModeOf` (the one mode rule), `mockCheckoutAllowed` | 6 |
+| M | `src/lib/stripe.ts` | `paymentMode`, `mockCheckoutEnabled`, `checkoutGateway` (Stripe or mock), `expireCheckoutSession` short-circuits mock ids and keeps its `options` argument; `createCheckoutUrl`, `CheckoutKind`, `CheckoutParams`, `isStripeLive` deleted | 6 |
+| M | `src/lib/admin-metrics.ts` | `stripeMode` becomes `export const stripeMode = paymentModeOf` (one rule for « Encaissé » and the test banner, COV-M8); the P3 additions (`dayLabel` with `frenchFirst`, `activeProsHint`, `pageViewsDetail`) untouched | 6 |
+| C | `src/lib/public/context.ts`, `src/lib/public/context.test.ts` | Pure types `PublicPro`, `PublicDeps`, `ActionVisitor`; `publicProOfRow`, `SLUG_PARAM_RE`, `splitActionInput` | 7 |
+| C | `src/lib/public/run-action.ts`, `src/lib/public/run-action.test.ts` | Pure, tested body of the action wrappers: `runPublicActionWith`, `runClientActionWith` (COV-I12) | 7 |
+| C | `src/server/public-context.ts` | `server-only`: `resolvePublicPro`, `publicDeps`, `actionVisitor`, `runPublicAction`, `runClientAction` (real deps around `run-action.ts`; effects scheduled as `runEffects(effects, "none")`) | 7 |
+| C | `src/server/public-context.test.ts` | Source guard: both wrappers schedule `runEffects(effects, "none")` (Decision 74), never `"pro"` | 7 |
+| C / M | `src/test/public.ts` | Test helpers: `testIpHash`, `createTestClientUser`, `sessionOf` (5); `publicProOf`, `actionVisitorOf`, `fakeCheckout`, `publicDepsOf` (7) | 5, 7 |
+| C | `src/lib/emails/purchase-receipt.ts` | « Reçu de votre achat » (with expiry, test-mode line) | 8 |
+| C | `src/lib/emails/late-payment.ts` | « Paiement reçu » after the hold ended (L1136-1137) | 8 |
+| C | `src/lib/emails/pro-new-booking.ts` | Pro: « Nouvelle inscription » (client bookings only) | 8 |
+| C | `src/lib/emails/pro-booking-cancelled.ts` | Pro: « Annulation d'un client » | 8 |
+| C | `src/lib/emails/public-emails.test.ts` | One block per new template: escaping, money, plurals, no dash | 8 |
+| M | `src/lib/notify-core.ts`, `src/lib/notify-core.db.test.ts` | The 4 deferred effect types planned, each naming its pro (`emails(professionalId, …)`, FR:SEC-1); `EffectPlan` loses `deferred`; the P3 test « P4 types are deferred, … » is replaced | 8 |
+| C | `src/lib/notify-run.ts`, `src/lib/notify-run.test.ts` | Pure executor `runEffectsWith(deps, effects, budget)`: dedupe, the mail budget through `mailsToSend` (« pro » only), never throws, no address in a failure or budget log (LED:84, COV-M7, FR:SEC-1) | 8 |
+| M | `src/server/notify.ts` | `runEffects(effects, budget)` = `runEffectsWith` with the real deps (budget still required, no default); `deferred` branch removed (exhaustive switch) | 8 |
+
+### 2.2 Payments and server actions (G2, Tasks 9 to 15)
+
+| Op | Path | Responsibility | Task |
+|---|---|---|---|
+| C | `src/lib/public/booking-actions.ts`, `src/lib/public/booking-actions.db.test.ts` | Cores: `startBuyAndBookCore` (9), `registerFreeCore`, `bookWithHeldTicketCore` (10) | 9, 10 |
+| C | `src/server/public.ts` | `"use server"`: `startBuyAndBookAction` (9), `registerFreeAction`, `bookWithHeldTicketAction` (10), `startShopPurchaseAction` (11), `abandonCheckoutAction` (12) | 9 to 12 |
+| C | `src/lib/public/shop-actions.ts`, `src/lib/public/shop-actions.db.test.ts` | Core: `startShopPurchaseCore` (E9) | 11 |
+| C | `src/lib/public/purchase-reads.ts`, `src/lib/public/purchase-reads.db.test.ts` | `purchaseByReference` (the `?p=` capability, scoped to the pro) | 12 |
+| C | `src/lib/public/release-actions.ts`, `src/lib/public/release-actions.db.test.ts` | Core: `abandonCheckoutCore` (« Libérer ma place ») | 12 |
+| C | `src/lib/payments/webhook-core.ts`, `src/lib/payments/webhook-core.test.ts`, `src/lib/payments/webhook-core.db.test.ts` | Event → engine dispatch, app and environment marker, amount / currency / livemode checks, PI normalisation, purchase id resolution, session-id guard, second payment → orphan | 13 |
+| M | `src/app/api/stripe/webhook/route.ts` | Signature check on the raw body, 404 / 500 / 400 rules, core with `{ env, mode }`, `after(() => runEffects(effects, "none"))`; the raw `err` log of the stub goes (P3 carry) | 13 |
+| C | `src/lib/same-origin.ts`, `src/lib/same-origin.test.ts` | Pure `sameOrigin(originHeader, appUrl)` for route handlers (the mock checkout POST, the personal-link POST) | 14 |
+| C | `src/lib/payments/mock-checkout.ts`, `src/lib/payments/mock-checkout.test.ts`, `src/lib/payments/mock-checkout.db.test.ts` | Mock view, mock pay of simulated sessions only (fulfil, `livemode = false`), escaped HTML page | 14 |
+| M | `src/app/api/mock-checkout/route.ts` | GET simulated checkout page, POST pay → 303 `/{slug}/merci?p=` with `after(() => runEffects(effects, "none"))`; frame-refusing headers | 14 |
+| D | `src/lib/mock-redirect.ts`, `src/lib/mock-redirect.test.ts` | Dead (the mock route takes no redirect parameter, L1146-1147) | 14 |
+| C | `src/lib/cron-auth.ts`, `src/lib/cron-auth.test.ts` | Constant-time `Authorization: Bearer` check, secret of 32 characters at least | 15 |
+| C | `src/app/api/cron/daily/route.ts` | Nightly job (E12): 401, `runNightly`, counts-only JSON, 500 on errors | 15 |
+| M | `src/lib/env.ts`, `.env.example` | `CRON_SECRET` optional + `CRON_CONFIGURED` (L1184-1185, 32 characters at least); boot checks: `APP_ENV` must be `production` on a Vercel production deployment, `BETTER_AUTH_SECRET` of 32 characters at least in production (SEC-I5, SEC-M5) | 15 |
+| C | `src/lib/env-checks.ts`, `src/lib/env-checks.test.ts` | Pure `envBootErrors`: the two boot refusals, tested without loading `env.ts` | 15 |
+| M | `vercel.ts` | `crons: [{ path: "/api/cron/daily", schedule: "0 3 * * *" }]` (L1183) | 15 |
+| M | `src/lib/booking/nightly.ts`, `src/lib/booking/nightly.db.test.ts` | `ensureAllHorizons` catches per pro, reports failures into `errors` and stops starting pros past a deadline (OUT:126) | 15 |
+
+### 2.3 Identity UI and client spaces (G3, Tasks 16 to 22)
+
+| Op | Path | Responsibility | Task |
+|---|---|---|---|
+| M | `src/lib/auth-options.ts`, `src/lib/auth-options.test.ts`, `src/lib/auth.db.test.ts` | `email-verification` code sends need a session of the same address (OUT:129); `session.create.after` no longer links the `customer` rows of every pro (Decision 72, FR:SEC-5); its raw `err` logs go through `logSafeMessage` | 16 |
+| M | `src/lib/auth-messages.ts`, `src/lib/auth-messages.test.ts` | + `CODE_SENT`, `ACCOUNT_SUSPENDED`; `verifyCodeFailure` maps `BANNED_USER` | 16 |
+| M | `src/components/dashboard/verify-email-banner.tsx` | Imports `CODE_SENT` (one source) | 16 |
+| M | `src/components/auth/link-google-form.tsx` | Both error `<p>` get `role="alert"` (LED:405; the French mapping through `authFormErrorMessage` is P3 `444f102`, the `text-destructive` token is AA since `d39c8d1`) | 16 |
+| C | `src/lib/public/sign-in-flow.ts`, `src/lib/public/sign-in-flow.test.ts` | Pure: code input, return path (no query), Google callback URLs (public pages and `AuthForm`), name to send, `canOfferCodeSignIn` | 17 |
+| C | `src/components/auth/email-code-form.tsx` | Client: e-mail (+ optional name) → code → `signIn.emailOtp` → fresh session → refresh | 17 |
+| C | `src/components/auth/client-sign-in-choices.tsx` | Client: « Continuer avec Google » (flag) and « J'ai un mot de passe » | 17 |
+| C | `src/components/auth/otp-dialog.tsx` | Client: `OtpDialog` on `Dialog` wrapping `EmailCodeForm` + choices | 17 |
+| C | `src/lib/public/my-space.ts`, `src/lib/public/my-space.db.test.ts` | `getMySpace` (cards per pro, spec predicate) | 18 |
+| C | `src/lib/public/client-actions.ts`, `src/lib/public/client-actions.db.test.ts` | Cores: `updateMyNameCore`, `revokeMyLinksCore` | 18 |
+| C | `src/server/client.ts` | `"use server"`: `updateMyNameAction`, `revokeMyLinksAction` (18), `cancelMyBookingAction` (21), `forgetGuestLinkAction` (21a) | 18, 21, 21a |
+| M | `src/server/client-queries.ts` | + `getMySpacePage` (18, spec L1487 « client-queries.ts (dont getMySpace) »), `getSpendableSeances` (21) | 18, 21 |
+| C | `src/app/mon-espace/page.tsx`, `loading.tsx`, `error.tsx` | `/mon-espace` (signed out, unverified, impersonating, verified) in the `SiteHeader` shell (COV-M15) | 19 |
+| C | `src/components/public/my-space.tsx` | Server: cards per pro, account section | 19 |
+| C | `src/components/public/my-name-form.tsx`, `src/components/public/revoke-my-links-button.tsx`, `src/components/public/client-sign-out-button.tsx` | Client leaves of `/mon-espace` | 19 |
+| M | `src/lib/entry.ts`, `src/lib/entry.test.ts`, `src/server/entry.ts` | `resolveEntry({ isAdmin, hasProfessional, remembered })` (L1394-1395) | 20 |
+| M | `src/app/dashboard/layout.tsx`, `src/server/pro-context.ts`, `src/server/pro-context.test.ts`, `src/server/pro.ts` | A signed-in user without a pro page goes to `/mon-espace` (L1396); `requireProContext` keeps the fresh session, `actingSession`, `impersonatedBy` and `runEffects(effects, "pro")` (FR:SEC-2, FR:SEC-6, `a958375`), the guard test gains the `/mon-espace` redirect; the raw `err` logs of the layout and of `pro.ts` (Google finalize and unlink) go through `logSafeMessage` | 20 |
+| M | `src/app/dashboard/page.tsx`, `src/app/dashboard/planning/page.tsx` | The `ensureHorizon` `after()` blocks log `logSafeMessage(err)`, never the raw error (P3 carry) | 20 |
+| M | `src/app/(auth)/sign-in/page.tsx` | « Espace client » link to `/mon-espace` (L1391) | 20 |
+| M | `src/components/auth/auth-form.tsx` | Google callbacks through `authFormGoogleCallbacks`: sign-in mode never lands on `/onboarding` (L76, COV-I3) | 20 |
+| M | `src/lib/back-office/client-actions.ts`, `src/lib/back-office/client-actions.db.test.ts` | + `searchClientsCore` (strict `{ q, filter }`, `listClients`) | 20a |
+| M | `src/server/pro-clients.ts` | + `searchClientsAction` (`runProQuery`) | 20a |
+| C | `src/components/dashboard/client-search.tsx` | Client: the « Rechercher » form and its results, the search term kept in component state, never in the URL (Decision 73, FR:UI-13) | 20a |
+| M | `src/app/dashboard/clients/page.tsx`, `src/lib/back-office/client-filters.ts`, `src/lib/back-office/client-filters.test.ts`, `src/lib/back-office/dashboard-view.ts` | The page reads `?filter=` only; `clientsHref(filter)` loses its `q` argument | 20a |
+| C | `src/lib/public/space-actions.ts`, `src/lib/public/space-actions.db.test.ts` | Core: `cancelMyBookingCore` (throttled `cancel`); pure `spaceActorOf` | 21 |
+| C | `src/lib/public/spendable.ts`, `src/lib/public/spendable.db.test.ts` | `spendableSeances` (« Utiliser vos tickets ») | 21 |
+| M | `src/lib/back-office/customer-space.ts`, `src/lib/back-office/customer-space.db.test.ts` | `businessName`; `upcoming[].coverage`, `cancellable` and a `cancelText` that is never null (the P3 `cancelTextOf` hint, else « Seul(e) {pro} peut annuler maintenant. »); wallet classes from `classifyTypes(loadTypeFacts(…))` (LED:438) | 21 |
+| M | `src/lib/back-office/guest-access.ts`, `src/lib/back-office/guest-access.db.test.ts`, `src/lib/back-office/guest-access.test.ts` | `GuestCustomerRow` and the `ok` / `stale` link decisions carry `businessName` (the confirmation page); the pure tests' row literals gain it; `guestCookieOptions`, `SLUG_SHAPE` and the route source guard stay | 21a |
+| C | `src/lib/back-office/guest-link-page.ts`, `src/lib/back-office/guest-link-page.test.ts` | Pure: the escaped « Ouvrir mon espace » confirmation page of a personal link (no script, French) | 21a |
+| M | `src/app/api/c/[token]/route.ts` | GET: a valid link answers the confirmation page (no cookie); POST: same-origin, re-checked link, cookie from `guestCookieOptions`, 303 (LED:438, SEC-I4) | 21a |
+| M | `src/app/[slug]/espace/page.tsx` | Complete espace: code form (anonymous only), unverified banner, « Utiliser une autre adresse », cancel, spend, guest note with « Ce n'est pas moi » | 22 |
+| M | `src/components/public/customer-space.tsx` | `CustomerSpaceView({ businessName, slug, space })` gains the cancel button, the spend section, the orphan-type note and the upcoming empty-state action (P3 already renders « Aucun ticket » + « Voir la boutique » → `boutiqueHref(slug)` and the archived-type note, FR:UI-14) | 22 |
+| C | `src/components/public/cancel-booking-button.tsx`, `src/components/public/spend-seance-button.tsx`, `src/components/public/other-address-button.tsx`, `src/components/public/forget-guest-link-button.tsx` | Client leaves of the espace | 22 |
+
+### 2.4 Public pages (G4, Tasks 23 to 31)
+
+| Op | Path | Responsibility | Task |
+|---|---|---|---|
+| C | `src/lib/public/planning-reads.ts`, `src/lib/public/planning-reads.db.test.ts` | `listPublicSeances`, `nextPublicSeanceStart` (the public query of L490-496) | 23 |
+| C | `src/lib/public/planning-view.ts`, `src/lib/public/planning-view.test.ts` | Pure: séance state, labels, VM, days, navigation, params | 23 |
+| C | `src/lib/public/boutique-reads.ts`, `src/lib/public/boutique-reads.db.test.ts` | `listBoutique` | 23 |
+| C / M | `src/server/public-queries.ts` | `server-only` read wrappers: planning, boutique, horizon need (23); séance, offer, purchase reference, visitor facts (24) | 23, 24 |
+| C | `src/lib/public/seance-reads.ts`, `src/lib/public/seance-reads.db.test.ts` | `getPublicSeance`, `seanceVisitorFacts` (Owner or guest only), `livePendingHoldsOf` | 24 |
+| C | `src/lib/public/offer-reads.ts`, `src/lib/public/offer-reads.db.test.ts` | `getPublicOffer` | 24 |
+| C | `src/lib/public/visibility.ts`, `src/lib/public/visibility.test.ts` | Pure: `seanceViewerOf` (customer or reference), `referenceForPage`, `canSeePrivateSeance`, `seancePageMode` | 24 |
+| M | `src/app/[slug]/page.tsx`; C `src/app/[slug]/loading.tsx`, `src/app/[slug]/error.tsx` | Planning + Boutique (25a); wallet access, banners, `after(ensureHorizon)` behind its per-pro key (25b) | 25a, 25b |
+| M | `next.config.ts` | `headers()`: `frame-ancestors 'none'` and `X-Frame-Options: DENY` on the public routes (SEC-M11) | 25a |
+| C | `src/components/public/public-planning.tsx` | Server: « Liste » / « Semaine » views, navigation, empty states | 25a |
+| C | `src/components/public/boutique.tsx` | Server: offers by type, « Acheter » links; the section carries `id={BOUTIQUE_ANCHOR}` (`src/lib/public-anchors.ts`, the target of every « Voir la boutique » link, FR:UI-14) | 25a |
+| D | `src/components/coming-soon.tsx` | Only importer was the old `/[slug]` stub | 25a |
+| M | `src/app/[slug]/book/[eventTypeId]/page.tsx`, `src/app/[slug]/pack/[packId]/page.tsx` | `permanentRedirect` (308) to `/{slug}` (OUT:96) | 25a |
+| C | `src/components/public/wallet-panel.tsx` | Server: the Owner's balance by type (full and compact variants), « Mon espace » | 25b |
+| C | `src/components/public/owner-preview-banner.tsx` | Server: page-owner warning (L1349-1350) | 25b |
+| C | `src/components/public/test-payments-banner.tsx` | Server: « Paiements en mode test » (L1794) | 25b |
+| C | `src/components/public/visitor-bar.tsx` | Client: « J'ai déjà des tickets » → `OtpDialog`, « Mon espace », verify banner slot | 25b |
+| C | `src/app/[slug]/seance/[occurrenceId]/page.tsx`, `loading.tsx` | Séance page: states, private access, RDV redirect, banners, forms | 26, 27, 28 |
+| C | `src/components/public/occurrence-booking.tsx` | Client: free registration and held ticket (26), buy + book (27) | 26, 27 |
+| C | `src/components/public/identity-fields.tsx` | Client, presentational: name, e-mail (locked for an Owner), phone, data-use line, honeypot | 26 |
+| C | `src/components/public/question-fields.tsx` | Client, presentational: the event's questions | 26 |
+| C | `src/components/public/checkout-return.tsx` | Client: « Paiement interrompu », « Reprendre le paiement », « Libérer ma place » | 28 |
+| C | `src/components/public/pending-holds.tsx` | Client: the Owner's live holds at this pro, each with « Libérer ma place » (SEC-I6) | 28 |
+| C | `src/app/[slug]/offre/[offerId]/page.tsx`, `loading.tsx` | Offer page (E9), unavailable offer, checkout return | 29 |
+| C | `src/components/public/offer-checkout-form.tsx` | Client: identity + « Payer » (E9) | 29 |
+| M | `src/app/[slug]/merci/page.tsx`; C `src/app/[slug]/merci/loading.tsx` | Real states from `?p=` (L1460-1461) | 30 |
+| C | `src/lib/public/merci-view.ts`, `src/lib/public/merci-view.test.ts` | Pure: purchase reference → state and copy | 30 |
+| C | `src/components/public/merci-refresher.tsx` | Client: refreshes a pending state every 3 s, 20 times at most | 30 |
+| C | `docs/superpowers/plans/2026-10-21-p4-public-outcome.md` | P4 outcome: rulings, carries for P5 / P6 / final review, deferred minors, the owner list of every « Change to spec » (COV-I9) | 31 |
+| M | whatever the checks of Task 31 prove dead or broken | Final sweep | 31 |
+
+---
+
+## 3. Module contracts
+
+Conventions for every module below:
+- `Db` = `import type { Db } from "@/lib/db/atomic"`. `Effect`, `EngineFail` = type imports from `@/lib/booking/types`. `EngineErrorCode` from `@/lib/tickets-vocab`.
+- A **public core** has the signature `(db: Db, pro: PublicPro, visitor: ActionVisitor, input: X, [deps: PublicDeps,] now: Date) => Promise<PublicCoreResult<T>>`. It validates `input` with `parseFr` BEFORE any write, calls the engine with `pro.professionalId`, maps a failure with `fromEngineClient(res, <context>, { businessName: pro.businessName })` and returns the engine `effects` untouched (`[]` when none), on success AND on a failure that already committed something (a released seat).
+- A **public read** has the signature `(db: Db, professionalId | pro, …, now: Date) => Promise<…>` and filters every table on `professional_id`. Reads return `Date`s; pages turn them into ISO strings or labels before any client prop.
+- Every exported function has a one-line JSDoc; the one-liners below are the JSDoc to write.
+- Schema shorthand: `export const x: z.ZodObject<{ a: /* expr */ }>` means `export const x = z.object({ a: expr })` with exactly those zod expressions (imports from `@/lib/tickets`: `idSchema`, `answersInputSchema`, `customerInputSchema`, `BOUNDS`).
+- `{x}` in French copy = an interpolated value, escaped in e-mails (`escapeHtml` / `oneLine`), plain text in JSX.
+
+### 3.1 Preflight and copy guard (Task 1)
+
+**Preflight (no file):** stop and report on the first check that fails.
+1. P3 is complete: `git merge-base --is-ancestor 1954782 HEAD` succeeds (the P3 end commit), and `git log --oneline 983fa65..HEAD` contains `2311421` and `1b743cc` (Task 41), `a28d7d6` and `4d039a5` (Task 42), `09c5453` and `56cedf2` (Task 43), `0aa0919` (end of the final-review fix pass), `a958375`, `9752367`, `5507b44`, `1954782` (its follow-ups); `git status --short` is empty.
+2. The P3 interfaces this contract builds on are the ones it quotes (one `grep -n` each): `src/lib/back-office/guest-access.ts` exports `guestCookieOptions`, `findGuestCustomer`, `guestLinkDecision` (with the `SLUG_SHAPE` guard), `resolveGuestLink`, `customerFromGuestCookie`, `customerFromVerifiedEmail`, `resolveSpaceIdentity`, `SpaceIdentity` (kinds `customer`, `no_record`, `anonymous`) and `SpaceSession` (`email`, `emailVerified`, `impersonated`); `src/lib/back-office/customer-space.ts` exports `getCustomerSpace(db, professionalId, customerId, now)`, `cancelTextOf` and `CustomerSpace` (`cancelText: string | null`, no `businessName`); `src/app/api/c/[token]/route.ts` has a GET only, whose cookie is `guestCookieOptions(decision.slug, process.env.NODE_ENV === "production")`; `src/app/[slug]/espace/` holds `layout.tsx`, `page.tsx`, `loading.tsx`, `error.tsx`; `src/components/public/customer-space.tsx` exports `CustomerSpaceView`; `src/server/client-queries.ts` exports `getSpaceProfile`, `resolveSpaceCustomer`, `getCustomerSpacePage`; `src/lib/session.ts` exports `getFreshSession`; `src/lib/suspension.ts` exports `actingSession`; `src/lib/mail-budget.ts` exports `EffectBudget`, `mailsToSend`, `mailBudgetLogLine`, `PRO_MAIL_BUDGET`; `src/server/notify.ts` has `runEffects(effects, budget: EffectBudget)` and `src/server/pro-context.ts` calls it with `"pro"`; `src/lib/notify-core.ts` `EffectPlan` « emails » carries `professionalId` and still plans `{ kind: "deferred" }` for the four P4 types; `src/lib/emails/mock-log.ts` exports `mockMailLog` and `mockMailRefusal`, both used by `src/lib/email.ts`; `src/components/ui/dialog.tsx` imports `tabDestination`, `topmostOf` and `restoreTarget` from `src/lib/focus-trap.ts` and takes `returnFocusTo`; `src/lib/public-anchors.ts` exports `BOUTIQUE_ANCHOR` and `boutiqueHref`; `src/lib/analytics.ts` reserves and untracks `mon-espace` and untracks `/<slug>/espace`; `src/lib/ui-copy.test.ts` `DIRECTORIES` include `src/app/[slug]` and `src/components/public`; `src/server/pro-context.test.ts` exists.
+3. The archived ledger `docs/superpowers/plans/2026-10-14-p3-back-office-ledger.md` exists and its line 438 starts with « Task 41: carry (P4, SECURITY) » (the `LED:` numbers of this contract); the P3 outcome `docs/superpowers/plans/2026-10-14-p3-back-office-outcome.md` exists.
+Carries: re-read the archived ledger from LED:438 to its end and every « [P4] » line of the P3 outcome's « Carry notes »; the Task 1 ledger entry lists each with the task or the § 10 line of this contract that places it; stop and report one this contract does not place. Copy this contract verbatim to `docs/superpowers/plans/2026-10-21-p4-public-contract.md`. The environment flags are printed as booleans only (never a value): `./node_modules/.bin/tsx --env-file=.env.local -e "import('./src/lib/env.ts').then(({ env }) => console.log(JSON.stringify({ STRIPE_ENABLED: env.STRIPE_ENABLED, STRIPE_TEST_KEY: (env.STRIPE_SECRET_KEY ?? '').startsWith('sk_test_'), STRIPE_WEBHOOK_CONFIGURED: env.STRIPE_WEBHOOK_CONFIGURED, RESEND_ENABLED: env.RESEND_ENABLED, GOOGLE_CALENDAR_ENABLED: env.GOOGLE_CALENDAR_ENABLED, APP_ENV: env.APP_ENV, AUTH_SECRET_32: env.BETTER_AUTH_SECRET.length >= 32 })))"` (`STRIPE_TEST_KEY` decides the conditional Stripe test-mode step of Task 31; `AUTH_SECRET_32` false is reported to the owner: the Task 15 boot check would refuse it in production). When `STRIPE_ENABLED` is true, the main checkout `.claude/launch.json` gains `{ "name": "skedul-tickets-mock", "runtimeExecutable": "cmd", "runtimeArgs": ["/c", "set STRIPE_SECRET_KEY=sk_test_xxx&& pnpm -C .claude/worktrees/tickets --config.verify-deps-before-run=false dev --port 3102"], "port": 3102 }` (a placeholder key: `env.STRIPE_ENABLED` is false for that process only; Next never overrides a variable the process already has). The result goes in the ledger.
+
+**`src/lib/ui-copy.test.ts`**: since P3 `538e93d` its `DIRECTORIES` (always walked) are `src/components/dashboard`, `src/app/dashboard`, `src/lib/back-office`, `src/lib/emails`, `src/app/admin`, `src/components/admin`, `src/app/[slug]`, `src/components/public`, and `OPTIONAL` holds `src/lib/pro-messages.ts`, `src/lib/zod-fr.ts`, `src/lib/google-event.ts`, `src/lib/email-layout.ts`, `src/lib/admin-metrics.ts`, `src/lib/auth-admin.ts`. `OPTIONAL` gains, in this order: `"src/lib/public"`, `"src/lib/payments"`, `"src/lib/client-ip.ts"`, `"src/lib/cron-auth.ts"`, `"src/lib/auth-messages.ts"`, `"src/components/auth/email-code-form.tsx"`, `"src/components/auth/otp-dialog.tsx"`, `"src/components/auth/client-sign-in-choices.tsx"`, `"src/components/auth/link-google-form.tsx"`, `"src/app/mon-espace"`, `"src/app/api/mock-checkout"`, `"src/app/api/stripe"`, `"src/app/api/cron"`, `"src/server/public.ts"`, `"src/server/client.ts"`, `"src/server/public-context.ts"`, `"src/server/public-queries.ts"`, `"src/server/visitor.ts"`, then (files whose strings or comments P4 adds or turns into client copy, COV-I13): `"src/lib/notify-core.ts"`, `"src/lib/notify-run.ts"`, `"src/lib/tickets-vocab.ts"`, `"src/lib/oauth-errors.ts"`, `"src/lib/entry.ts"`, `"src/server/entry.ts"`, `"src/app/(auth)/sign-in"`, `"src/components/auth/auth-form.tsx"`, `"src/components/ui/dialog.tsx"`, `"src/lib/stripe.ts"`, `"src/lib/email.ts"`, `"src/lib/throttle.ts"`, `"src/lib/env.ts"`, `"src/lib/same-origin.ts"`, `"src/app/api/c"`, `"vercel.ts"`, `"next.config.ts"`, `"src/lib/booking/wallet.ts"`, `"src/lib/booking/claims.ts"`, `"src/lib/booking/fulfillment.ts"`, `"src/lib/booking/release.ts"`, `"src/lib/booking/nightly.ts"`, then (revision 2): `"src/lib/env-checks.ts"`, then (revision 3: files P4 now modifies outside the walked directories): `"src/lib/auth-options.ts"`, `"src/server/pro.ts"`, `"src/server/pro-context.ts"`, `"src/server/pro-clients.ts"`. `src/components/public`, `src/app/[slug]`, `src/lib/back-office/*` (`guest-access.ts`, `guest-link-page.ts`, `customer-space.ts`) and `src/lib/admin-metrics.ts` are already scanned and are not added again. Task 1 removes every dash the scan then reports, comments included (none is expected in the directories P3 `538e93d` cleaned).
+
+### 3.2 Client wording and results (Task 2)
+
+**`src/lib/public/messages.ts`** (pure; imports only `@/lib/tickets-vocab`)
+```ts
+export type PublicErrorContext = "buybook" | "free" | "held" | "shop" | "release" | "cancel";
+export type PublicStateKind = "cancelled" | "past" | "ongoing" | "onsite" | "notYet" | "closed" | "full" | "free" | "open";
+/** Page and planning states (L1441, L1448-1451). */
+export const PUBLIC_STATE_LABELS: Readonly<Record<Exclude<PublicStateKind, "open">, string>>;
+/** Client wording per action context (overrides of ENGINE_ERROR_MESSAGES); « {businessName} » is substituted. */
+export const CLIENT_CONTEXT_MESSAGES: Readonly<Partial<Record<PublicErrorContext, Partial<Record<EngineErrorCode, string>>>>>;
+/** `invalid` with an engine message → that message (French: buildAnswers, notes); else the context override; else ENGINE_ERROR_MESSAGES[code]. */
+export function clientErrorMessage(fail: { code: EngineErrorCode; message?: string }, context: PublicErrorContext, vars: { businessName: string }): string;
+/** Fixed client sentences (one source per intent). */
+export const COPY: { readonly [key: string]: string }; // exact keys below, `as const`
+/** « 1 place restante » / « 5 places restantes » (fr-FR thousands). */
+export function seatsLeftLabel(n: number): string;
+/** « Seul(e) {businessName} peut annuler maintenant. » (L921). */
+export function cancelLockedText(businessName: string): string;
+/** « Réserver avec 1 ticket (il vous en restera {n}) » for n ≥ 1, « Réserver avec mon dernier ticket » for 0 (L1353). */
+export function heldTicketButtonLabel(leftAfter: number): string;
+/** « Vos coordonnées sont transmises à {businessName} pour gérer votre réservation. » */
+export function dataUseLine(businessName: string): string;
+/** « Aucun ticket chez {businessName} pour {email}. » (L1389). */
+export function noRecordText(businessName: string, email: string): string;
+/** First character of the local part, then « ••• », then « @domain »: maskEmail("beatriz@example.com") === "b•••@example.com"; a string without « @ » → « ••• ». */
+export function maskEmail(email: string): string;
+/** « Vous consultez l'espace de {maskEmail(email)} avec un lien personnel. » (Decision 63). */
+export function guestNote(email: string): string;
+/** « Utilisable pour : {titles joined by ", "} » (one label for the Boutique and the offer page). */
+export function acceptedByLine(titles: readonly string[]): string;
+/** Receipt wallet line (COV-M1g): 1 → « 1 ticket est dans votre portefeuille. », n ≥ 2 → « {n} tickets sont dans votre portefeuille. » (fr-FR thousands), 0 → null. */
+export function walletLine(n: number): string | null;
+```
+- `PUBLIC_STATE_LABELS` (exact): `cancelled` « Annulée », `past` « Terminée », `ongoing` « En cours », `onsite` « Sur place », `notYet` « Réservations pas encore ouvertes », `closed` « Réservations fermées », `full` « Complet », `free` « Inscription libre ».
+- `CLIENT_CONTEXT_MESSAGES` (exact):
+  - `buybook`: `full` « Complet : il ne reste plus de place sur cette séance. »; `stale` « L'offre a changé : rafraîchissez la page. » (L665); `not_found` « Cette séance ou cette offre n'existe plus : rafraîchissez la page. »
+  - `free`: `full` « Complet : il ne reste plus de place sur cette séance. »; `not_found` « Cette séance n'existe plus : rafraîchissez la page. »
+  - `held`: `full` « Complet : il ne reste plus de place sur cette séance. »; `not_found` « Cette séance n'existe plus : rafraîchissez la page. »
+  - `shop`: `stale` « L'offre a changé : rafraîchissez la page. »; `not_found` « Cette offre n'est plus proposée. »
+  - `release`: `not_found` « Paiement introuvable : rafraîchissez la page. »
+  - `cancel`: `too_late_or_done` « Seul(e) {businessName} peut annuler maintenant. »; `not_found` « Inscription introuvable : rafraîchissez la page. »; `stale` « Cette inscription a changé : rafraîchissez la page. »
+- `COPY` (exact keys and strings): `PAGE_GONE` « Cette page n'est plus disponible. »; `HONEYPOT_REFUSED` « Votre demande n'a pas pu être envoyée. Réessayez. »; `PAYMENT_UNAVAILABLE` « Le paiement en ligne n'est pas disponible pour le moment. »; `CHECKOUT_FAILED` « Le paiement n'a pas pu démarrer. Réessayez dans un instant. »; `RELEASE_CHECK_FAILED` « Le paiement n'a pas pu être vérifié. Réessayez dans un instant. »; `CONFIRM_EMAIL_TO_SPEND` « Confirmez votre email pour utiliser vos tickets. »; `SIGNED_IN_ONLY` « Connectez-vous avec une adresse confirmée pour modifier votre compte. »; `IMPERSONATING` « L'espace client n'est pas disponible quand vous êtes connecté en tant que ce compte. »; `OWNER_BANNER` « Vous êtes sur votre propre page : vos réservations de test comptent dans vos chiffres. » (L1349-1350); `PAYMENTS_TEST_TITLE` « Paiements en mode test » (L1794); `PAYMENTS_TEST_MOCK` « Aucun paiement réel : le paiement est simulé. »; `PAYMENTS_TEST_STRIPE` « Aucun paiement réel : seules les cartes de test Stripe fonctionnent. »; `HAVE_TICKETS` « J'ai déjà des tickets » (L1357); `HAVE_TICKETS_HINT` « Vous avez déjà des tickets ? Recevez un code par email pour les utiliser. »; `MY_SPACE` « Mon espace »; `NO_SEANCE` « Aucune séance à venir » (L1616); `NO_SEANCE_WEEK` « Aucune séance cette semaine. »; `NEXT_SEANCE_WEEK` « Voir la semaine de la prochaine séance »; `NO_TICKET` « Aucun ticket » (L1614); `SEE_SHOP` « Voir la boutique »; `OFFER_GONE` « Cette offre n'est plus proposée » (L1458); `REGISTERED` « Inscription confirmée. Un email de confirmation vous a été envoyé. »; `BOOKED_WITH_TICKET` « Réservation confirmée avec 1 ticket. Un email de confirmation vous a été envoyé. »; `CANCELLED_OK` « Inscription annulée. »; `LINKS_REVOKED` « Liens déconnectés. »; `SAVED` « Enregistré »; `CODE_INTRO` « Recevez un code par email pour accéder à vos tickets et à vos réservations. »; `CODE_NAME_HELP` « Utilisé si c'est votre première connexion. »; `PASSWORD_LINK` « J'ai un mot de passe » (L1358); `GOOGLE` « Continuer avec Google » (L1357); `OTHER_ADDRESS` « Utiliser une autre adresse » (L1390); `NO_RESERVATION` « Aucune réservation pour l'instant » (L1385); `CREATE_PAGE` « Vous êtes pro ? Créer ma page » (L1384); `REVOKE_MY_LINKS` « Déconnecter mes liens » (L1384); `CLIENT_SPACE_LINK` « Espace client » (L1391); `NO_COVERING_OFFER` « Aucune offre ne permet de réserver cette séance en ligne. »; `PAYMENT_RECEIVED` « Paiement reçu » (L1167); `PROCESSING` « Paiement en cours de traitement » (L1141); then (revision 2): `BUYBOOK_NOT_POSSIBLE` « Cette réservation ne peut pas être payée en ligne avec cette adresse. Consultez vos emails ou cliquez sur « J'ai déjà des tickets ». » (Decision 64); `TOO_MANY_PAYMENTS` « Plusieurs paiements sont en cours sur cette séance. Réessayez dans quelques minutes. » (Decision 65); `GUEST_BOOKING_EXISTS` « Une inscription existe déjà pour cette séance avec votre lien personnel. » (Decision 63); `NOT_ME` « Ce n'est pas moi »; `PLAIN_NAME` « Prénom et nom : n'indiquez que votre nom. »; `TEST_PAYMENT_LINE` « Paiement de test : aucun montant n'a été débité. » (receipt and merci, one string); `ENDED_CANCELLED` « Votre inscription est annulée. »; `ENDED_EXPIRED` « Votre réservation a expiré. »; `PENDING_HOLDS_TITLE` « Paiements en attente »; `CONFIRM_EMAIL_FIRST` « Confirmez votre adresse pour voir vos réservations. »; `NO_UPCOMING` « Aucune inscription à venir. »; `ORPHAN_TYPE` « Aucune séance à venir n'accepte ce type pour le moment. »; `RETURN_LINK` « Reprendre ou libérer ma réservation »; pending labels `PENDING_SEND` « Envoi… », `PENDING_VERIFY` « Vérification… », `PENDING_REGISTER` « Inscription… », `PENDING_BOOK` « Réservation… », `PENDING_SAVE` « Enregistrement… », `PENDING_PAY` « Redirection vers le paiement… ».
+- Invariants: no string contains U+2014 / U+2013; no string equals a `PRO_ERROR_MESSAGES` value; vouvoiement only.
+
+**`src/lib/public/plain-name.ts`** (pure; client-importable)
+```ts
+/** False for a name containing « :// », « www. », « @ » or a run of 5 digits or more (SEC-M9: no phishing text relayed into Skedul mails). */
+export function isPlainName(name: string): boolean;
+/** z.string().trim().min(1).max(BOUNDS.name).refine(isPlainName, COPY.PLAIN_NAME): the name of every public identity, « Votre nom » and the first code sign-in. */
+export const plainNameSchema: z.ZodString;
+```
+
+**`src/lib/public/result.ts`** (pure)
+```ts
+export type PublicFail = { ok: false; error: string; code?: EngineErrorCode; fieldErrors?: Record<string, string> };
+export type PublicResult<T extends object = object> = ({ ok: true } & T) | PublicFail;
+/** What a core returns: the browser result plus the effects to run after the response (also on a failure that committed a release). */
+export type PublicCoreResult<T extends object = object> = (({ ok: true } & T) | PublicFail) & { effects: Effect[] };
+export const PUBLIC_UNEXPECTED = "Une erreur inattendue est survenue. Réessayez dans un instant.";
+/** A failure with its optional code, field errors and effects (default []). */
+export function publicFail(error: string, opts?: { code?: EngineErrorCode; fieldErrors?: Record<string, string>; effects?: Effect[] }): PublicFail & { effects: Effect[] };
+/** A success carrying `data` and its effects (default []). */
+export function publicOk<T extends object>(data: T, effects?: Effect[]): { ok: true; effects: Effect[] } & T;
+/** An engine failure in client words: clientErrorMessage(res, context, vars), the code kept unless opts.dropCode. */
+export function fromEngineClient(res: EngineFail, context: PublicErrorContext, vars: { businessName: string }, effects?: Effect[], opts?: { dropCode?: boolean }): PublicFail & { effects: Effect[] };
+/** A parseFr failure: its error and fieldErrors, no effect. */
+export function fromParse(parsed: { ok: false; error: string; fieldErrors: Record<string, string> }): PublicFail & { effects: Effect[] };
+/** The browser result: the same object without `effects`. */
+export function withoutPublicEffects<T extends object>(res: PublicCoreResult<T>): PublicResult<T>;
+/** revalidatePath targets of every successful public / client action. */
+export const PUBLIC_REVALIDATE: readonly { path: string; type?: "layout" }[]; // [{ path: "/[slug]", type: "layout" }, { path: "/mon-espace" }]: a route pattern needs its type, a literal path takes none
+```
+
+### 3.3 Client address and throttle hardening (Task 3)
+
+**`src/lib/client-ip.ts`** (pure)
+```ts
+/** The client address: x-vercel-forwarded-for, else the first x-forwarded-for entry, else x-real-ip (trimmed); null when none is set. Vercel overwrites these headers at its edge. */
+export function clientIpFrom(headers: { get(name: string): string | null }): string | null;
+/** The rate-limit bucket (OUT:109): IPv4 as is (also out of "::ffff:a.b.c.d"), IPv6 lower-cased, "[…]" and "%zone" stripped, "::" expanded, cut to its first 4 groups + "::/64"; "unknown" for null or anything unparsable. */
+export function ipBucket(ip: string | null): string;
+/** narrow = ipBucket(ip); wide = the IPv6 /48 (first 3 groups + "::/48"), null for IPv4, "unknown" or null input (SEC-I1). */
+export function ipBuckets(ip: string | null): { narrow: string; wide: string | null };
+```
+
+**`src/lib/tickets-vocab.ts`** (change, SEC-I1, SEC-I2, SEC-I6; code only: `throttle.key` is text, no migration)
+```ts
+export const THROTTLE_ACTIONS = ["free", "buybook", "rdv", "shop", "held", "cancel", "release"] as const;
+export type ThrottleLimits = { ip: number; ip48: number; email: number; emailGlobal: number; perOccurrenceIp: number | null; perProIp: number | null };
+export const THROTTLE_LIMITS: Record<ThrottleAction, ThrottleLimits>; // per THROTTLE_WINDOW_SEC (1 hour), exact values below
+```
+Exact values: `free` { ip 20, ip48 60, email 6, emailGlobal 20, perOccurrenceIp 2, perProIp 6 }; `buybook` { 20, 60, 6, 20, 2, null }; `rdv` { 20, 60, 6, 20, null, null } (P5 decides its seat key); `shop` { 20, 60, 6, 20, null, null }; `held` { 20, 60, 10, 20, null, null }; `cancel` { 20, 60, 10, 20, null, null }; `release` { 30, 90, 30, 30, null, null }. `email` is the per-pro e-mail limit AND the per-user limit; `emailGlobal` the mailbox anti-spam bound across pros. `src/lib/tickets.test.ts`: the key list and the exact table.
+
+**`src/lib/throttle.ts`** (change)
+```ts
+export const IP_HASH_RE = /^[0-9a-f]{32}$/;
+/** A typed address (per-pro and global e-mail keys) or a verified identity (its user key only: strangers typing the address cannot lock it out). */
+export type ThrottleSubject = { kind: "email"; email: string } | { kind: "user"; userId: string };
+export type ActionThrottleArgs = {
+  action: ThrottleAction; professionalId: string;
+  /** ipHash(daily salt, ipBuckets(ip).narrow), never an address */
+  ipHash: string;
+  /** ipHash(daily salt, ipBuckets(ip).wide), null for IPv4 */
+  wideIpHash: string | null;
+  subject: ThrottleSubject;
+  /** set by the seat-taking actions (buybook, free): adds the per-séance IP key */
+  occurrenceId?: string;
+};
+/** Pure: every key and limit the action consumes (exact list below). */
+export function actionThrottleKeys(args: ActionThrottleArgs): { key: string; limit: number }[];
+/** Throws (nothing consumed) when ipHash or a non-null wideIpHash fails IP_HASH_RE; else consumes every actionThrottleKeys entry in ONE Promise.all (THROTTLE_WINDOW_SEC); false if any is over. */
+export async function checkActionThrottle(db: ThrottleDb, args: ActionThrottleArgs, now: Date): Promise<boolean>;
+```
+Keys (exact; `<d>` = the first 32 hex of sha256(normalizeEmail(email)), as `throttleKey` does today): `t:<a>:ip:<ipHash>` (`ip`); `t:<a>:ip48:<wideIpHash>` when not null (`ip48`); subject email → `t:<a>:e:<d>` (`emailGlobal`) and `t:<a>:e:<professionalId>:<d>` (`email`); subject user → `t:<a>:u:<userId>` (`email`); `occurrenceId` set and `perOccurrenceIp` not null → `t:<a>:o:<occurrenceId>:ip:<ipHash>` (`perOccurrenceIp`); `perProIp` not null → `t:<a>:p:<professionalId>:ip:<ipHash>` (`perProIp`). The guard message: `"checkActionThrottle: ipHash must be the 32 hex characters of ipHash()"`. `throttleKey`, `otpThrottleKey`, `resetThrottleKey` stay for the auth caps; `hitThrottle(db, key, by, windowSec, now)` (the one upsert `consumeThrottle` now delegates to) and `proMailThrottleKey` (`t:mail:p:<professionalId>`, the mail budget) stay as P3 `f7f97d8` wrote them, and `checkActionThrottle` consumes through `consumeThrottle`. The `throttle` table also holds `t:mail:p:…` and `t:horizon:p:…` keys: `tickets.test.ts` asserts that no `ThrottleAction` is named `mail` or `horizon`, so no P4 key ever shares a counter with them; `purgeThrottle` keeps rows 2 days (`THROTTLE_PURGE_DAYS`), longer than the 24 h mail window.
+
+### 3.4 Engine security carries (Task 4)
+
+**`src/lib/booking/wallet.ts` `upsertCustomer`** (signature unchanged). The statement becomes (exact):
+```sql
+with u as (
+  select id from "user"
+  where id = ${input.userId ?? null}::text and email_verified and lower(email) = ${email}
+)
+insert into customer (id, professional_id, email, name, phone, user_id, link_version, created_at, updated_at)
+values (${nanoid()}, ${input.professionalId}, ${email}, ${input.name.trim()}, ${phone}, (select id from u), 1, ${ts(now)}, ${ts(now)})
+on conflict (professional_id, email) do update set
+  phone = case when customer.phone is null and excluded.user_id is not null then excluded.phone else customer.phone end,
+  user_id = coalesce(customer.user_id, excluded.user_id),
+  updated_at = excluded.updated_at
+returning id
+```
+(`email = normalizeEmail(input.email)`, `phone = input.phone?.trim() || null`; `excluded.user_id` is `(select id from u)`, so only a verified session of this same address fills a missing phone, SEC-M8; on INSERT the typed phone stays: a new row.) JSDoc: « `userId` is kept only when that user is verified and carries this e-mail, on insert and on conflict (OUT:69): a typed e-mail never links someone else's account, and anonymous input never fills an existing client's phone. The row identifies a customer to attach a booking or a purchase to; it authorises nothing (no wallet, no spend). »
+
+**`src/lib/booking/claims.ts`**
+- `ClientClaimBase.customerId` JSDoc: « E1 / E3: from upsertCustomer (identifies the row, authorises nothing). E2 (bookWithHeldTicket): ONLY the verified wallet owner's customer (requireWalletOwner), never a customer resolved from a typed e-mail (OUT:75). »
+- `bookWithHeldTicket(db, input: ClientClaimBase & { actorUserId: string }, now)` (was `string | null`; the spend's movement records the client user).
+- `offerUnchanged`: the base `where` gains `and not tt.rdv_free` (every scope: a type switched to « Gratuit » sells nothing, LED:139); the `rdv` scope fragment becomes `and f.ticket_type_id = ${scope.ticketTypeId} and tt.rdv_enabled` (at `1954782` it still reads `… and tt.rdv_enabled and not tt.rdv_free`, the only scope guarded today). This is the client half of the rdv_free race: no purchase starts on a free type, inside the engine batch. The pro half (FR:F9: the offer create, offer-tickets and convert statements and the switch to « Gratuit ») is not P4's (§ 10).
+
+**`src/lib/booking/fulfillment.ts`**: the private `orphan(db, payment, now)` becomes `export async function recordOrphanPayment(db: Db, payment: PaymentFacts, now: Date): Promise<EngineOk<FulfillData>>` (same body: `console.warn("[stripe] orphan payment <session>/<pi>")`, `bumpHealth(orphanPayments)`); `export type FulfillData` (was private). `fulfillPurchase` calls it. No behaviour change. Tickets are still issued on an `rdv_free` type (money always yields tickets, L1121; the orange alert shows them, P3 Q16).
+
+**`src/lib/booking/release.ts`** JSDoc gains: « Caller precondition (OUT:74): `purchaseId` is server-derived, or a `?p=` reference already checked against the page's pro by purchaseByReference and, when a wallet owner is signed in, against its customer. »
+
+**`scripts/seed.ts`**: every `bookWithHeldTicket` call passes a string `actorUserId` (it already does; tsc proves it).
+
+### 3.5 Visitor identity (Task 5)
+
+**`src/lib/public/identity.ts`** (DB, no `server-only`)
+```ts
+export type SessionFacts = {
+  userId: string; email: string; name: string; emailVerified: boolean;
+  /** = impersonatedBy !== null */
+  impersonated: boolean;
+  /** the admin's user id while an admin impersonates (session.impersonatedBy), else null: ids-only trace lines (Decision 75, FR:SEC-6) */
+  impersonatedBy: string | null;
+};
+export type SessionLike =
+  | { user: { id: string; email: string; name?: string | null; emailVerified?: boolean | null }; session: { impersonatedBy?: string | null } }
+  | null
+  | undefined;
+/** The fields of a (fresh, not suspended: visitor.ts applies actingSession first) Better Auth session P4 relies on; null without a session. */
+export function sessionFactsOf(session: SessionLike): SessionFacts | null;
+export type VisitorState = "anonymous" | "unverified" | "verified" | "impersonating";
+/** null → anonymous; impersonated → impersonating (checked first); !emailVerified → unverified; else verified. */
+export function visitorState(s: SessionFacts | null): VisitorState;
+export type WalletOwner = { professionalId: string; customerId: string; userId: string; email: string };
+export type PublicVisitor = {
+  state: VisitorState;
+  /** session e-mail and name, only for "unverified" and "verified" */
+  email: string | null;
+  name: string | null;
+  /** the session user owns this pro page (impersonation included) */
+  isPageOwner: boolean;
+  /** "verified" with a customer of this pro: e-mail = the session e-mail AND (user_id null OR the session user) */
+  owner: WalletOwner | null;
+  /** the skedul_guest cookie's customer of THIS pro at its current link_version; always null when state is "verified" (L1370) or "impersonating" (SEC-M6, Decision 19) */
+  guestCustomerId: string | null;
+};
+/** Read-only (a render never writes): state, owner (ownedCustomerId of guest-access.ts), guest cookie customer (customerFromGuestCookie, skipped for verified and impersonating), page ownership. */
+export async function resolveVisitor(
+  db: Db,
+  args: { session: SessionFacts | null; guestToken: string | undefined; key: Buffer },
+  pro: { professionalId: string; ownerUserId: string },
+): Promise<PublicVisitor>;
+/** requireWalletOwner's write (L1345): UPDATE customer SET user_id = owner.userId WHERE id = owner.customerId AND professional_id = owner.professionalId AND user_id IS NULL. */
+export async function linkCustomerUser(db: Db, owner: WalletOwner, now: Date): Promise<void>;
+/** userId for upsertCustomer and the throttle subject: the session user only when verified, not impersonated and normalizeEmail(email) equals the session e-mail; else null (OUT:69, defence in depth with § 3.4). */
+export function upsertUserIdFor(s: SessionFacts | null, email: string): string | null;
+/** The e-mail of THIS pro's customer (throttle subject of a guest cancel or a release); server-side only, never returned to the browser. */
+export async function customerEmailOf(db: Db, professionalId: string, customerId: string): Promise<string | null>;
+```
+
+**`src/lib/back-office/guest-access.ts`** (change; it stays the home of the espace identity, `identity.ts` imports from it, never the reverse). At `1954782` it exports `guestCookieOptions`, `GuestCustomerRow`, `findGuestCustomer`, `GuestLinkDecision`, `guestLinkDecision`, `resolveGuestLink`, `customerFromGuestCookie`, `customerFromVerifiedEmail`, `SpaceIdentity` (`customer` / `no_record` / `anonymous`), `SpaceSession = { email; emailVerified; impersonated }` and `resolveSpaceIdentity`, whose verified branch reads by e-mail only and whose unverified or impersonated session falls through to the guest cookie. Task 5 makes it:
+```ts
+/** The customer of this pro a verified session owns: email = normalizeEmail(s.email) AND (user_id IS NULL OR user_id = s.userId); null otherwise. Replaces customerFromVerifiedEmail (deleted with its tests when no importer is left). */
+export async function ownedCustomerId(db: Db, professionalId: string, s: { userId: string; email: string }): Promise<string | null>;
+export type SpaceIdentity =
+  | { kind: "customer"; customerId: string; via: "session" | "guest" }
+  | { kind: "no_record"; email: string }
+  /** signed in, address not confirmed: the banner, never the code form (a code sign-in would purge the password, risk 7); the cookie customer is shown read-only when set */
+  | { kind: "unverified"; email: string; guestCustomerId: string | null }
+  | { kind: "impersonating" }
+  | { kind: "anonymous" };
+export type SpaceSession = { userId: string; email: string; emailVerified: boolean; impersonated: boolean };
+/** impersonated → impersonating (the cookie is ignored); verified → ownedCustomerId → customer/session or no_record (the cookie is ignored, L1370); unverified → unverified (+ the cookie customer); no session → the cookie customer → customer/guest, else anonymous. */
+export async function resolveSpaceIdentity(db: Db, professionalId: string, input: { session: SpaceSession | null; guestToken: string | undefined; key: Buffer }): Promise<SpaceIdentity>;
+```
+
+**`src/server/visitor.ts`** (`server-only`)
+```ts
+/** ipHash(getDailySalt(dayKeyInTz(now, ADMIN_TZ)), bucket) of both ipBuckets(clientIpFrom(await headers())) entries; wideIpHash null when the wide bucket is null. */
+export async function visitorIpHashes(now: Date): Promise<{ ipHash: string; wideIpHash: string | null }>;
+/** sessionFactsOf(actingSession(await getFreshSession())): never the 5-minute cookie cache (L1321-1324), and a suspended user is no session (FR:SEC-2, as requireProContext). */
+export async function currentSessionFacts(): Promise<SessionFacts | null>;
+/** cache()d per request on (professionalId, ownerUserId): resolveVisitor with the fresh session, the skedul_guest cookie and guestKey(). */
+export const currentPublicVisitor: (professionalId: string, ownerUserId: string) => Promise<PublicVisitor>;
+/** The wallet owner of this pro (L1341-1346), or null: fresh session, not impersonated, verified, owned customer; then linkCustomerUser. Actions only (it writes). */
+export async function requireWalletOwner(pro: { professionalId: string; ownerUserId: string }, now: Date): Promise<WalletOwner | null>;
+```
+
+**`src/server/client-queries.ts`** (change): `resolveSpaceCustomer(pro: { id: string; userId: string }): Promise<SpaceIdentity>` = `currentPublicVisitor(pro.id, pro.userId)` then (exact order): `state === "impersonating"` → `{ kind: "impersonating" }`; `owner` → `{ kind: "customer", customerId, via: "session" }`; `state === "verified"` → `{ kind: "no_record", email }`; `state === "unverified"` → `{ kind: "unverified", email, guestCustomerId }`; `guestCustomerId` → `{ kind: "customer", customerId, via: "guest" }`; else `{ kind: "anonymous" }`. A signed-in visitor, verified or not, never maps to `anonymous` (COV-C1). At `1954782` the signature is `resolveSpaceCustomer(pro: { id: string })` and it reads `getFreshSession()` itself; the page passes the `getSpaceProfile(slug)` row (a `professional` row, so it has `userId`) and keeps compiling. Task 5 makes `src/app/[slug]/espace/page.tsx` handle the two new kinds (unverified: `VerifyEmailBanner({ email, verified: false })` + `COPY.CONFIRM_EMAIL_FIRST`, plus the read-only space of `guestCustomerId` when set; impersonating: `COPY.IMPERSONATING`). `resolveSpaceIdentity` (P3 `2311421`, `guest-access.ts`) gets the same mapping and the `userId` of `SpaceSession` (every test call passes one); its DB test gains « same e-mail, another user's `user_id` → `no_record` » (Decision 5), and two P3 tests change their expectations: « an UNVERIFIED session never reads a wallet » now expects `{ kind: "unverified", email, guestCustomerId: null }` without cookie and `guestCustomerId` = the cookie's customer with one (COV-C1), « an impersonated session never reads client data » now expects `{ kind: "impersonating" }` with or without a valid cookie (SEC-M6); the exported names stay.
+
+### 3.6 Checkout gateway (Task 6)
+
+**`src/lib/payments/checkout.ts`** (pure; `import type Stripe from "stripe"`)
+```ts
+export type PaymentMode = "mock" | "test" | "live";
+export type CheckoutKind = "buybook" | "shop";
+export type CheckoutRequest = {
+  kind: CheckoutKind; purchaseId: string; amountCents: number; currency: string; productName: string;
+  customerEmail: string; successUrl: string; cancelUrl: string; expiresAt: Date;
+  /** APP_ENV of the deployment that creates the session (SEC-I7) */
+  env: string;
+};
+/** The marker every Skedul tickets session carries in its metadata (SEC-I7); the webhook ignores any other session. */
+export const SESSION_APP = "skedul-tickets";
+export type CheckoutCreated = { sessionId: string; url: string };
+export type CheckoutCloseOutcome = "expired" | "already_expired" | "paid" | "processing" | "mock" | "failed";
+export interface CheckoutGateway {
+  readonly mode: PaymentMode;
+  /** Creates the Checkout session (idempotency key checkout:<purchaseId>); throws on any error. */
+  create(req: CheckoutRequest): Promise<CheckoutCreated>;
+  /** « Libérer ma place » (L1166-1167): retrieve, expire when open. Never throws ("failed"). */
+  closeForRelease(sessionId: string): Promise<CheckoutCloseOutcome>;
+  /** Best effort expiry of a session the engine refused to attach. Never throws. */
+  expire(sessionId: string): Promise<void>;
+}
+export const MOCK_SESSION_PREFIX = "mock_";
+/** `mock_<purchaseId>`: the session id stored for a simulated checkout. */
+export function mockSessionId(purchaseId: string): string;
+export function isMockSession(sessionId: string): boolean;
+/** `${appUrl}/api/mock-checkout?purchase=<id>` (L815): the only parameter. */
+export function mockCheckoutUrl(appUrl: string, purchaseId: string): string;
+export type CheckoutTarget = { slug: string; purchaseId: string } & ({ kind: "buybook"; occurrenceId: string } | { kind: "shop"; offerId: string });
+/** Path of the cancel page: /{slug}/seance/{o}?paiement=annule&p={id} (L812) or /{slug}/offre/{offerId}?paiement=annule&p={id}. */
+export function cancelPathOf(t: CheckoutTarget): string;
+/** success = `${appUrl}/{slug}/merci?p={id}` (L811); cancel = appUrl + cancelPathOf(t). Built from the trusted app URL only. */
+export function checkoutUrls(appUrl: string, t: CheckoutTarget): { successUrl: string; cancelUrl: string };
+/** nowMs + CHECKOUT_MINUTES minutes, computed right before the Stripe call (L808). */
+export function buybookCheckoutExpiry(nowMs: number): Date;
+/** The Stripe session params (exact list below). */
+export function stripeSessionParams(req: CheckoutRequest): Stripe.Checkout.SessionCreateParams;
+/** open → "open"; expired → "already_expired"; complete + paid → "paid"; anything else, no_payment_required included → "processing" (never release on doubt, COV-M2). */
+export function closeOutcomeOf(session: { status: string | null; payment_status: string | null }): "open" | "already_expired" | "paid" | "processing";
+/** "mock" when disabled or without key; "live" for sk_live_ / rk_live_; else "test". The ONE mode rule: src/lib/admin-metrics.ts re-exports it as stripeMode (COV-M8; IntegrationMode = PaymentMode). */
+export function paymentModeOf(secretKey: string | undefined, enabled: boolean): PaymentMode;
+/** The simulated checkout is reachable only without Stripe keys AND outside production, by APP_ENV and by VERCEL_ENV (SEC-I5, Decision 27): !STRIPE_ENABLED && APP_ENV !== "production" && VERCEL_ENV !== "production". */
+export function mockCheckoutAllowed(e: { STRIPE_ENABLED: boolean; APP_ENV: string; VERCEL_ENV?: string }): boolean;
+```
+- `stripeSessionParams` (exact): `{ mode: "payment", customer_email, client_reference_id: purchaseId, metadata: { purchaseId, app: SESSION_APP, env }, payment_intent_data: { metadata: { purchaseId, app: SESSION_APP, env } }, line_items: [{ quantity: 1, price_data: { currency, unit_amount: amountCents, product_data: { name: productName } } }], expires_at: Math.floor(expiresAt.getTime() / 1000), success_url, cancel_url, locale: "fr", submit_type: "pay" }` plus `payment_method_types: ["card"]` for `kind === "buybook"` only (L808; the shop uses the dashboard methods, L1103-1104).
+- Invariant: no output carries a `redirect` / `next` parameter; no URL contains `@`.
+
+**`src/lib/stripe.ts`** (`server-only`, rewrite of the checkout part)
+```ts
+export const stripe: Stripe | null; // unchanged
+/** paymentModeOf(env.STRIPE_SECRET_KEY, env.STRIPE_ENABLED). */
+export function paymentMode(): PaymentMode;
+/** mockCheckoutAllowed({ STRIPE_ENABLED: env.STRIPE_ENABLED, APP_ENV: env.APP_ENV, VERCEL_ENV: process.env.VERCEL_ENV }): the one rule (§ 6 Decision 27), used by the mock route and publicDeps; Task 31 greps that no other P4 file reads APP_ENV for payments. */
+export function mockCheckoutEnabled(): boolean;
+/** Stripe when configured, else the mock: create = { sessionId: mockSessionId(id), url: mockCheckoutUrl(env.APP_URL, id) }, closeForRelease = "mock", expire = no-op. */
+export const checkoutGateway: CheckoutGateway;
+/** Signature and results unchanged for src/server/admin.ts (DELETION_STRIPE_OPTIONS) and src/server/notify.ts; grep its callers before and after (COV-I8). */
+export async function expireCheckoutSession(checkoutSessionId: string, options?: { timeout?: number; maxNetworkRetries?: number }): Promise<"expired" | "not_open" | "mock" | "failed">; // + isMockSession(id) → "mock"
+```
+- Stripe `create`: `stripe.checkout.sessions.create(stripeSessionParams(req), { idempotencyKey: \`checkout:${req.purchaseId}\` })`; `url` null → throw. `closeForRelease`: `isMockSession` → "mock"; `sessions.retrieve(id, undefined, { timeout: 10_000, maxNetworkRetries: 1 })` → `closeOutcomeOf`; "open" → `sessions.expire(id)` → "expired"; any error → `console.error("[stripe] close failed: " + logSafeMessage(err))` → "failed". `expire`: `await expireCheckoutSession(id)`.
+- Deleted: `CheckoutKind` (old), `CheckoutParams`, `createCheckoutUrl`, `isStripeLive` (no importer left; grep proves it).
+- `expireCheckoutSession`'s `"not_open"` stands for a complete session (possibly paid) as well as an expired one (LED:429, P3 outcome carry): no P4 code releases a seat or decides an outcome on it. The release path decides through `closeForRelease` only (retrieve, `closeOutcomeOf`: `paid` / `processing` / `already_expired`); the two best-effort callers (`src/server/admin.ts` deletion with `DELETION_STRIPE_OPTIONS`, the `stripe.expire_session` effect of a pro cancellation) count `not_open` as « can no longer be paid » and never touch a booking on it; a payment that landed anyway reaches the webhook, which fulfils it (a late payment when the seat was released) or records it as an orphan when its purchase was deleted with its pro (§ 3.12 rule 5).
+
+### 3.7 Public action plumbing (Task 7)
+
+**`src/lib/public/context.ts`** (pure types)
+```ts
+export type PublicPro = {
+  professionalId: string; slug: string; businessName: string; timezone: string; currency: string;
+  /** professional.user_id: page-owner detection only, never sent to the browser */
+  ownerUserId: string;
+  window: BookingWindow;
+};
+export type PublicDeps = { appUrl: string; checkout: CheckoutGateway; mockAllowed: boolean; /** APP_ENV, stamped on every Checkout session (SEC-I7) */ env: string };
+/** Built on the server per action: never from input. guestCustomerId is null for a verified or impersonating session. */
+export type ActionVisitor = { session: SessionFacts | null; owner: WalletOwner | null; guestCustomerId: string | null; ipHash: string; wideIpHash: string | null };
+export const SLUG_PARAM_RE = /^[a-z0-9-]{1,60}$/;
+/** PublicPro of a professional row. */
+export function publicProOfRow(row: { id: string; slug: string; businessName: string; timezone: string; currency: string; userId: string; bookingHorizonDays: number; minNoticeMinutes: number; cancelDeadlineHours: number }): PublicPro;
+/** A Server Action input split into its slug and the rest: a plain object → { slug: input.slug, rest: the object without slug }; anything else → { slug: undefined, rest: input } (the core's strict schema then refuses it, SEC-M15). */
+export function splitActionInput(input: unknown): { slug: unknown; rest: unknown };
+```
+
+**`src/lib/public/run-action.ts`** (pure, tested; COV-I12)
+```ts
+export type RunPublicDeps = {
+  resolvePro: (slug: string) => Promise<PublicPro | null>; // null for an unknown or suspended pro
+  visitor: (pro: PublicPro, now: Date) => Promise<ActionVisitor>;
+  schedule: (effects: Effect[]) => void; // after(() => runEffects(effects, "none")): a client-initiated action never spends the pro's mail budget (Decision 74)
+  revalidate: () => void; // revalidatePath for each PUBLIC_REVALIDATE target
+  log: (line: string) => void; // console.error
+  info: (line: string) => void; // console.info: the impersonation trace
+  rethrowIfControlFlow: (err: unknown) => void; // unstable_rethrow
+  now: () => Date;
+};
+/** « [public] <name> by admin <impersonatedBy> for pro <professionalId> » (ids only), or null when no admin impersonates (Decision 75, the FR:SEC-6 line of runProAction). */
+export function publicImpersonationLogLine(name: string, session: SessionFacts | null, professionalId: string): string | null;
+/** slug not a string matching SLUG_PARAM_RE, or resolvePro null → { ok: false, error: COPY.PAGE_GONE } without calling fn; ONE now for visitor and fn; a throw → rethrowIfControlFlow(err), then log(« [public] <name> failed: <logSafeMessage(err)> ») and PUBLIC_UNEXPECTED; effects scheduled on success AND on a failure carrying some; on ok only: info(publicImpersonationLogLine(…)) when not null, then revalidate; returns withoutPublicEffects(res). */
+export async function runPublicActionWith<T extends object>(deps: RunPublicDeps, name: string, slug: unknown, fn: (pro: PublicPro, visitor: ActionVisitor, now: Date) => Promise<PublicCoreResult<T>>): Promise<PublicResult<T>>;
+export type RunClientDeps = Omit<RunPublicDeps, "resolvePro" | "visitor"> & { session: () => Promise<SessionFacts | null> };
+/** The same rules for the /mon-espace actions (no slug): fn receives the fresh session facts; no impersonation line (every /mon-espace core refuses an impersonated session before any write). */
+export async function runClientActionWith<T extends object>(deps: RunClientDeps, name: string, fn: (session: SessionFacts | null, now: Date) => Promise<PublicCoreResult<T>>): Promise<PublicResult<T>>;
+```
+
+**`src/server/public-context.ts`** (`server-only`; not a `"use server"` file)
+```ts
+/** getPublicProfile(slug, opts) → { pro: publicProOfRow(row), branding: the PublicBranding fields of the row } (a suspended pro is null unless includeSuspended). */
+export async function resolvePublicPro(slug: string, opts?: { includeSuspended?: boolean }): Promise<{ pro: PublicPro; branding: PublicBranding } | null>;
+/** { appUrl: env.APP_URL, checkout: checkoutGateway, mockAllowed: mockCheckoutEnabled(), env: env.APP_ENV }. */
+export function publicDeps(): PublicDeps;
+/** The fresh session facts, the visitor of this pro (owner, guest cookie), both IP hashes (visitorIpHashes); with linkOwner, requireWalletOwner's link write. */
+export async function actionVisitor(pro: PublicPro, now: Date, opts?: { linkOwner?: boolean }): Promise<ActionVisitor>;
+/**
+ * The wrapper of every public write: runPublicActionWith with the real deps (resolvePublicPro, actionVisitor,
+ * after(() => runEffects(effects, "none")), revalidatePath, console.error, console.info, unstable_rethrow,
+ * () => new Date()). No logic of its own; src/server/public-context.test.ts pins the "none" budget of both wrappers.
+ */
+export async function runPublicAction<T extends object>(
+  name: string,
+  slug: unknown,
+  fn: (pro: PublicPro, visitor: ActionVisitor, now: Date) => Promise<PublicCoreResult<T>>,
+  opts?: { linkOwner?: boolean },
+): Promise<PublicResult<T>>;
+/** The same for the /mon-espace actions (no slug): runClientActionWith with the real deps, fn receives the fresh session facts. */
+export async function runClientAction<T extends object>(
+  name: string,
+  fn: (session: SessionFacts | null, now: Date) => Promise<PublicCoreResult<T>>,
+): Promise<PublicResult<T>>;
+```
+Every `"use server"` export of `src/server/public.ts` and `src/server/client.ts` is `const { slug, rest } = splitActionInput(input); return runPublicAction(name, slug, (pro, visitor, now) => core(db, pro, visitor, rest, …, now), opts)`: the core receives `rest` as `unknown` and parses it whole.
+
+**`src/test/public.ts`** (test helpers, not a test file)
+```ts
+/** The PublicPro of a test pro (reads its row). */
+export async function publicProOf(db: Db, pro: TestPro): Promise<PublicPro>;
+/** 32 random lowercase hex characters (a valid ipHash). */
+export function testIpHash(): string;
+/** An ActionVisitor; defaults: no session, no owner, no guest, a fresh testIpHash(), wideIpHash null. */
+export function actionVisitorOf(opts?: Partial<ActionVisitor>): ActionVisitor;
+export type FakeCheckout = CheckoutGateway & {
+  created: CheckoutRequest[]; expired: string[]; closed: string[];
+  failCreate: boolean; closeOutcome: CheckoutCloseOutcome;
+  /** test hook run inside create, before it answers (e.g. expire the purchase to make the attach fail) */
+  onCreate?: (req: CheckoutRequest) => Promise<void>;
+};
+/** A recording gateway: create returns { sessionId: `cs_test_fake_${purchaseId}`, url: `https://checkout.test/${purchaseId}` } unless failCreate (throws); closeForRelease returns closeOutcome (default "expired"). */
+export function fakeCheckout(mode?: PaymentMode): FakeCheckout;
+export function publicDepsOf(checkout: CheckoutGateway, opts?: { mockAllowed?: boolean; appUrl?: string; env?: string }): PublicDeps; // appUrl default "https://app.test", env default "test"
+/** A `client` user row (verified or not), deleted by the caller with deleteTestUser. */
+export async function createTestClientUser(db: Db, opts: { email: string; name?: string; verified: boolean }): Promise<{ userId: string }>;
+/** impersonated → impersonatedBy "admin-test" (a fixed fake admin id), else null. */
+export function sessionOf(u: { userId: string; email: string; name?: string }, opts?: { verified?: boolean; impersonated?: boolean }): SessionFacts;
+```
+
+### 3.8 Receipts and confirmations (Task 8)
+
+Every template returns `{ subject: string; html: string }`, escapes every value (`escapeHtml` in html, `oneLine` in the subject), formats every amount with `formatMoney(cents, currency)`, uses `layout(escapeHtml(title), body)` and the `parts.ts` blocks, and contains no dash.
+
+| File | Export | Args type | Subject | Body (exact copy) |
+|---|---|---|---|---|
+| `purchase-receipt.ts` | `purchaseReceiptEmail(a: PurchaseReceiptArgs)` | `{ customerName: string; businessName: string; label: string; typeName: string; quantity: number; walletCount: number; amountLabel: string; paidOn: string; expiryText: string; bookingLine: string \| null; test: boolean; personalLinkUrl: string }` | `Reçu : {label} chez {businessName}` | h1 « Reçu de votre achat »; « Bonjour {customerName}, merci pour votre achat chez {businessName}. »; details « Achat » « {label} ({plural(quantity, "ticket", "tickets")} « {typeName} ») », « Montant » {amountLabel}, « Payé le » {paidOn}, « Validité » {expiryText}; {bookingLine} when set; `test` → `COPY.TEST_PAYMENT_LINE` (the string copied, a parity test pins it); `walletLine(walletCount)` when not null (`walletCount` from the plan below: the « À l'unité » ticket of a buy + book is already spent, so nothing is said to be in the wallet, COV-M1g); `mailPersonalLink` |
+| `late-payment.ts` | `latePaymentEmail(a: LatePaymentArgs)` | `{ customerName: string; businessName: string; title: string; whenLabel: string; count: number; pageUrl: string; personalLinkUrl: string }` | `Paiement reçu : votre place n'était plus réservée` | h1 « Paiement reçu »; « Bonjour {customerName}, »; then the spec sentence verbatim (L1136-1137, COV-M1c): count > 1 « Paiement reçu, votre place n'était plus réservée : vos {count} tickets sont dans votre portefeuille. », count = 1 « Paiement reçu, votre place n'était plus réservée : votre ticket est dans votre portefeuille. »; « La séance « {title} » ({whenLabel}) n'est pas réservée pour vous. Vous pouvez utiliser vos tickets sur une autre séance. »; `mailButton(pageUrl, "Voir la page de {businessName}")`; `mailPersonalLink` |
+| `pro-new-booking.ts` | `proNewBookingEmail(a: ProNewBookingArgs)` | `{ customerName: string; customerEmail: string; title: string; whenLabel: string; coverageLabel: string; planningUrl: string }` | `Nouvelle inscription : {title}` | h1 « Nouvelle inscription »; « {customerName} ({customerEmail}) s'est inscrit(e) à « {title} » ({whenLabel}). »; details « Couverture » {coverageLabel}; `mailButton(planningUrl, "Voir dans le planning")`. No personal link |
+| `pro-booking-cancelled.ts` | `proBookingCancelledEmail(a: ProBookingCancelledArgs)` | `{ customerName: string; customerEmail: string; title: string; whenLabel: string; ticketReturned: boolean; planningUrl: string }` | `Annulation : {title}` | h1 « Annulation d'un client »; « {customerName} ({customerEmail}) a annulé son inscription à « {title} » ({whenLabel}). »; `ticketReturned` → « Son ticket lui a été rendu. »; `mailButton(planningUrl, "Voir dans le planning")` |
+
+**`src/lib/notify-core.ts`** (change): `EffectPlan` loses `{ kind: "deferred" }` (it is `{ kind: "emails"; professionalId: string | null; emails } | { kind: "google"; … } | { kind: "stripe"; … }` since P3 `f7f97d8`); every new plan returns through the file's private `emails(professionalId, list)` helper with the purchase's / booking's own `professional_id` (an empty list or no pro gives `noEmail()`: `professionalId: null`, no mail), so the budget of `src/lib/mail-budget.ts` knows the pro (it is not spent: P4 runs these plans with `"none"`, Decision 74). `planEffect` gains (every read joins through the purchase's / booking's own `professional_id`):
+- `email.purchase_receipt {purchaseId}`: the purchase only when `status = 'paid'`, its customer (same pro), the pro (`business_name`, `timezone`), the type name (`ticket_type`), `min(ticket.expires_at)` of its tickets; `paidOn = formatDayMonthYear(todayKey(paid_at, tz))`; `expiryText = expiryLabel(expiresAt, tz, now, quantity)` (the count argument of P3 `878a171`: « valables » for several tickets, « valable » for one); `amountLabel = formatMoney(amount_cents, currency)`; `bookingLine` = « Un des tickets a servi pour votre inscription à « {title} » ({whenLabel}). » when a `confirmed` booking has `purchase_id = p`, else null; `walletCount` = the purchase's tickets that are still `available` (the spent one excluded); `test = !livemode`. → 1 e-mail to the customer.
+- `email.late_payment {purchaseId}`: the purchase `paid` AND a booking with `purchase_id = p` whose status is not `confirmed`; `count` = tickets of the purchase; title / when of that booking's occurrence; `pageUrl = ${appUrl}/{slug}`. → 1 e-mail, else none.
+- `email.pro_new_booking {bookingId}`: `readBookings` row with `status = 'confirmed'`; recipient = `"user".email` of `professional.user_id`; `planningUrl = ${appUrl}${planningHref({ occurrenceId, startsAt, tz })}`; `coverageLabel = COVERAGE_LABELS[coverage]`. → 1 e-mail to the pro.
+- `email.pro_booking_cancelled {bookingId}`: `status = 'cancelled' AND ended_by = 'client'`; `ticketReturned` = `returnedBookingIds`; same recipient and URL. → 1 e-mail to the pro.
+- A row that no longer exists → `{ kind: "emails", professionalId: null, emails: [] }` (`noEmail()`).
+- The confirmation of a buy + book or a held-ticket booking is P3's `email.booking_confirmed`, unchanged: its tickets-left lines per expiry date (`walletBalanceByExpiry`, `expiryGroups`, P3 `878a171`) and its calendar links (`calendarLinksOf`: Google, Outlook and the booking's ICS, whose `buildIcs` escapes every line-break lookalike and control character and folds lines at 75 octets, P3 `4d039a5`). The four P4 templates carry no calendar link.
+
+**`src/lib/notify-run.ts`** (pure, LED:84, FR:SEC-1)
+```ts
+export type RunEffectsDeps = {
+  plan: (effect: Effect) => Promise<EffectPlan>; // planEffect(db, effect, { appUrl, guestKey, now: new Date() })
+  /** mailsToSend(db, plan, budget, new Date()) of src/lib/mail-budget.ts: "pro" spends the pro's budget and may drop the tail of the plan, "none" sends every mail and counts nothing */
+  mailsToSend: (plan: Extract<EffectPlan, { kind: "emails" }>, budget: EffectBudget) => Promise<{ send: OutgoingEmail[]; dropped: number }>;
+  sendEmail: (mail: OutgoingEmail) => Promise<void>; // notify.ts sendPaced (the Resend pacing stays there)
+  syncOccurrence: (occurrenceId: string) => Promise<void>;
+  expireCheckout: (checkoutSessionId: string) => Promise<void>;
+  log: (line: string) => void; // console.error
+  warn: (line: string) => void; // console.warn: the budget line
+};
+/** Today's runEffects body, moved: dedupeEffects order, one plan then execute per effect, exhaustive switch on the plan kind; an « emails » plan goes through deps.mailsToSend(plan, budget) and, when dropped > 0 and plan.professionalId is not null, warns logSafeMessage({ message: mailBudgetLogLine(professionalId, dropped) }) (pro id and count, no address) before sending the rest; never throws: a throwing plan or execute logs « [notify] <type> failed: <logSafeMessage> » (no address) and the next effect still runs; an outer failure logs « [notify] run failed: … ». `budget` has no default. */
+export async function runEffectsWith(deps: RunEffectsDeps, effects: readonly Effect[], budget: EffectBudget): Promise<void>;
+```
+**`src/server/notify.ts`**: keeps `sendPaced` and `MAIL_GAP_MS`; `runEffects(effects, budget: EffectBudget)` (required, as P3 `a958375` made it) = `runEffectsWith({ plan, mailsToSend: (plan, budget) => mailsToSend(db, plan, budget, new Date()), sendEmail: sendPaced, syncOccurrence, expireCheckout: expireCheckoutSession, log: console.error, warn: console.warn }, effects, budget)`; the `deferred` case disappears with the move (the `never` check stays in `runEffectsWith`). Its callers after P4: `runProAction` and nothing else with `"pro"`; `runPublicAction`, `runClientAction`, the webhook and the mock route with `"none"`.
+
+### 3.9 Buy + book, free registration, held ticket (Tasks 9, 10)
+
+**`src/lib/public/booking-actions.ts`** (DB; no `server-only`)
+```ts
+export type IdentityInput = { name: string; email: string; phone?: string }; // what the client sends
+/** Strict typed identity (SEC-M15, SEC-M9, OUT:91): name plainNameSchema; email z.string().trim().pipe(customerInputSchema.shape.email); phone customerInputSchema.shape.phone; no other key. */
+export const identityInputSchema: z.ZodObject<{ name: /* plainNameSchema */; email: /* … */; phone: /* … */ }>;
+export const claimTargetSchema: z.ZodObject<{
+  occurrenceId: /* idSchema */; seenStartsAt: /* z.iso.datetime() */; answers: /* answersInputSchema */;
+}>;
+/** The WHOLE input of each core, `.strict()` (an extra key or a wrong type is refused before anything else, SEC-M15). */
+export const buyAndBookInputSchema: /* claimTargetSchema.extend({ offerId: idSchema, identity: identityInputSchema, website: z.unknown().optional() }).strict() */;
+export const freeRegistrationInputSchema: /* claimTargetSchema.extend({ identity: identityInputSchema, website: z.unknown().optional() }).strict() */;
+export const heldTicketInputSchema: /* claimTargetSchema.strict() */;
+export type BuyAndBookInput = { occurrenceId: string; offerId: string; seenStartsAt: string; identity: IdentityInput; answers: AnswerInput[]; website?: string };
+export type FreeRegistrationInput = { occurrenceId: string; seenStartsAt: string; identity: IdentityInput; answers: AnswerInput[]; website?: string };
+export type HeldTicketInput = { occurrenceId: string; seenStartsAt: string; answers: AnswerInput[] };
+/** The honeypot (L786, L863): filled = anything but undefined or "" (SEC-M15); checked right after the shape parse, before any read or write. */
+export function honeypotFilled(website: unknown): boolean;
+/** The identity to write: an Owner's session e-mail replaces the typed one (the field is read-only for them, L1353); name and phone as parsed (phone "" → null). */
+export function identityOf(parsed: { name: string; email: string; phone?: string }, visitor: Pick<ActionVisitor, "owner">): { name: string; email: string; phone: string | null };
+/** SEC-I6: a verified identity (upsertUserIdFor(session, email) not null) → { kind: "user", userId }; else { kind: "email", email }. */
+export function throttleSubjectOf(session: SessionFacts | null, email: string): ThrottleSubject;
+/** SEC-I1: live holds one séance may carry before buy + book refuses a typed address: Math.max(3, Math.ceil(capacity / 3)). */
+export function holdCeiling(capacity: number): number;
+/** A read, not a guard (a race lets one extra hold through, never a stranger's seat): live holds (status 'pending' and hold_expires_at > now) and the capacity of THIS pro's occurrence; null when not this pro's or unknown (the engine then answers not_found). */
+export async function seatPressureOf(db: Db, professionalId: string, occurrenceId: string, now: Date): Promise<{ liveHolds: number; capacity: number } | null>;
+/** Server-side only, never returned to the browser: the id of this customer's active booking on the séance (Decision 64). */
+export async function activeBookingIdOf(db: Db, professionalId: string, occurrenceId: string, customerId: string, now: Date): Promise<string | null>;
+/** E1 (L778-823): shape, honeypot, payment availability, throttle "buybook", seat pressure, upsertCustomer, startBuyAndBook, Checkout session, attachCheckoutSession; a Stripe failure or a refused attach releases the seat at once. */
+export async function startBuyAndBookCore(db: Db, pro: PublicPro, visitor: ActionVisitor, input: unknown, deps: PublicDeps, now: Date): Promise<PublicCoreResult<{ purchaseId: string; checkoutUrl: string }>>;
+/** E3 (L860-865): shape, honeypot, throttle "free", upsertCustomer, registerFree; for a typed address `already_booked` answers like a success (Decision 64). */
+export async function registerFreeCore(db: Db, pro: PublicPro, visitor: ActionVisitor, input: unknown, now: Date): Promise<PublicCoreResult<object>>;
+/** E2 client (L825-858): ONLY for an Owner (OUT:75), never a typed e-mail nor a guest cookie; throttle "held"; bookWithHeldTicket with the owner's customer and user. */
+export async function bookWithHeldTicketCore(db: Db, pro: PublicPro, visitor: ActionVisitor, input: unknown, now: Date): Promise<PublicCoreResult<{ bookingId: string }>>;
+```
+`fieldErrors` keys follow `parseFr` (`path.join(".")`): `identity.name`, `identity.email`, `identity.phone`, `answers.<i>.…`; `IdentityFields` reads the `identity.` keys.
+
+`startBuyAndBookCore` (exact order; each failure returns at once):
+1. `parsed = parseFr(buyAndBookInputSchema, input)` → `fromParse` (a hand-made call with a wrong shape or an extra key gets the French parse error; nothing read or written).
+2. `honeypotFilled(parsed.website)` → `publicFail(COPY.HONEYPOT_REFUSED)` (no throttle consumed).
+3. `identity = identityOf(parsed.identity, visitor)`; `subject = throttleSubjectOf(visitor.session, identity.email)`.
+4. `deps.checkout.mode === "mock" && !deps.mockAllowed` → `publicFail(COPY.PAYMENT_UNAVAILABLE)` (nothing written).
+5. `checkActionThrottle(db, { action: "buybook", professionalId, ipHash: visitor.ipHash, wideIpHash: visitor.wideIpHash, subject, occurrenceId }, now)` false → `publicFail(ENGINE_ERROR_MESSAGES.throttled, { code: "throttled" })`.
+6. `subject.kind === "email"` only (a verified identity skips this read): `p = seatPressureOf(db, professionalId, occurrenceId, now)`; `p && p.liveHolds >= holdCeiling(p.capacity)` → `publicFail(COPY.TOO_MANY_PAYMENTS)` (SEC-I1).
+7. `upsertCustomer(db, { professionalId, email: identity.email, name, phone, userId: subject.kind === "user" ? subject.userId : null }, now)` (= `upsertUserIdFor(visitor.session, email)`).
+8. `startBuyAndBook(db, { professionalId, occurrenceId, customerId, offerId, seenStartsAt: new Date(seenStartsAt), answers }, now)`; `!ok`: when `subject.kind === "email"` and the code is `already_booked` or `too_many_holds` → `publicFail(COPY.BUYBOOK_NOT_POSSIBLE)` WITHOUT `code` (Decision 64: no fact about another customer's state); otherwise `fromEngineClient(res, "buybook", vars)`.
+9. Title read (`coalesce(event.title)` of the occurrence, filtered on `professional_id`); `productName = \`${title} · ${res.label}\``.
+10. `deps.checkout.create({ kind: "buybook", purchaseId, amountCents, currency, productName, customerEmail: email, env: deps.env, ...checkoutUrls(deps.appUrl, { kind: "buybook", slug: pro.slug, purchaseId, occurrenceId }), expiresAt: buybookCheckoutExpiry(Date.now()) })`; a throw → `console.error("[public] checkout create failed: " + logSafeMessage(err))`, `releasePurchase(db, purchaseId, now)` → `publicFail(COPY.CHECKOUT_FAILED, { effects: rel.ok ? rel.effects : [] })` (L814).
+11. `attachCheckoutSession(db, { purchaseId, checkoutSessionId, checkoutUrl }, now)`; `!ok` → `deps.checkout.expire(sessionId)`, `releasePurchase` → `fromEngineClient({ code: "stale" }, "buybook", vars, rel effects)`.
+12. `publicOk({ purchaseId, checkoutUrl })` (no effect: the confirmation comes with the payment).
+
+`registerFreeCore`: 1 `parseFr(freeRegistrationInputSchema, input)` → `fromParse`; 2 honeypot; 3 `identityOf` + `throttleSubjectOf`; 4 throttle `"free"` (with `occurrenceId`: the per-séance and per-pro IP keys apply, SEC-I1); 5 `upsertCustomer` (same `userId` rule); 6 `registerFree` → ok → `publicOk({}, res.effects)`; `already_booked` with `subject.kind === "email"` → `existing = activeBookingIdOf(db, professionalId, occurrenceId, customerId, now)` → `publicOk({}, existing ? [{ type: "email.booking_confirmed", bookingId: existing }] : [])`: the browser gets exactly the fresh-registration success (`COPY.REGISTERED`), only the inbox owner receives the (re)confirmation, bounded by the `free` keys (Decision 64); any other failure → `fromEngineClient(res, "free", vars)`. A verified identity keeps the engine sentence « Vous êtes déjà inscrit(e). ».
+
+`bookWithHeldTicketCore`: 1 `parseFr(heldTicketInputSchema, input)` → `fromParse`; 2 `!visitor.owner || visitor.owner.professionalId !== pro.professionalId` → `publicFail(COPY.CONFIRM_EMAIL_TO_SPEND)` (a guest cookie alone, an unverified or impersonated session, an Owner of another pro: refused, COV-I11); 3 `checkActionThrottle(db, { action: "held", professionalId, ipHash, wideIpHash, subject: { kind: "user", userId: owner.userId } }, now)` false → `publicFail(ENGINE_ERROR_MESSAGES.throttled, { code: "throttled" })` (SEC-I2: the ticket comes back on every cancellation, so the wallet bounds nothing); 4 `bookWithHeldTicket(db, { professionalId, occurrenceId, customerId: owner.customerId, seenStartsAt, answers, actorUserId: owner.userId }, now)` → `fromEngineClient(res, "held", vars)` / `publicOk({ bookingId }, res.effects)`.
+
+**`src/server/public.ts`** (`"use server"`; exports only async functions; every export = `const { slug, rest } = splitActionInput(input); return runPublicAction(name, slug, (pro, visitor, now) => core(db, pro, visitor, rest, …, now), opts)`)
+```ts
+export async function startBuyAndBookAction(input: { slug: string } & BuyAndBookInput): Promise<PublicResult<{ purchaseId: string; checkoutUrl: string }>>;
+export async function registerFreeAction(input: { slug: string } & FreeRegistrationInput): Promise<PublicResult>;
+export async function bookWithHeldTicketAction(input: { slug: string } & HeldTicketInput): Promise<PublicResult<{ bookingId: string }>>; // opts { linkOwner: true }
+export async function startShopPurchaseAction(input: { slug: string } & ShopPurchaseInput): Promise<PublicResult<{ purchaseId: string; checkoutUrl: string }>>; // Task 11
+export async function abandonCheckoutAction(input: { slug: string; purchaseId: string }): Promise<PublicResult<{ outcome: AbandonOutcome }>>; // Task 12
+```
+
+### 3.10 Shop purchase (Task 11)
+
+**`src/lib/public/shop-actions.ts`**
+```ts
+export type ShopPurchaseInput = { offerId: string; identity: IdentityInput; website?: string };
+/** The WHOLE input, `.strict()` (SEC-M15): z.object({ offerId: idSchema, identity: identityInputSchema, website: z.unknown().optional() }).strict(). */
+export const shopPurchaseInputSchema: /* … */;
+/** E9 (L1099-1104): shape, honeypot, payment availability, throttle "shop", upsertCustomer, startPurchase, Checkout (expires_at = the purchase's checkout_expires_at, dashboard payment methods), attachCheckoutSession; a Stripe failure or a refused attach expires the purchase (releasePurchase). */
+export async function startShopPurchaseCore(db: Db, pro: PublicPro, visitor: ActionVisitor, input: unknown, deps: PublicDeps, now: Date): Promise<PublicCoreResult<{ purchaseId: string; checkoutUrl: string }>>;
+```
+Same order as § 3.9 `startBuyAndBookCore` steps 1 to 5 and 7 (`parseFr(shopPurchaseInputSchema, input)`, honeypot, `identityOf` + `throttleSubjectOf`, payment availability, `checkActionThrottle(db, { action: "shop", professionalId, ipHash, wideIpHash, subject }, now)` without `occurrenceId`, `upsertCustomer`), no seat pressure step (no seat); then `startPurchase(db, { professionalId, offerId, customerId }, now)` → `fromEngineClient(res, "shop", vars)` (its codes, `not_found` and `stale`, state nothing about another customer); `productName = \`${res.ticketTypeName} · ${res.label}\``; `deps.checkout.create({ …, env: deps.env, expiresAt: res.checkoutExpiresAt, ...checkoutUrls(deps.appUrl, { kind: "shop", slug, purchaseId, offerId }) })`; the create-failure and attach-refusal branches of § 3.9 steps 10 and 11.
+
+### 3.11 Purchase reference and « Libérer ma place » (Task 12)
+
+**`src/lib/public/purchase-reads.ts`**
+```ts
+export type PurchaseReference = {
+  purchaseId: string;
+  /** server-side only: never a viewer identity, never sent to the browser (Decision 71) */
+  customerId: string;
+  status: PurchaseStatus; processing: boolean; livemode: boolean;
+  label: string; quantity: number; amountCents: number; currency: string; ticketTypeName: string;
+  offerId: string | null; checkoutSessionId: string | null;
+  /** checkout_url while pending AND checkout_expires_at > now (the Stripe session is still open), else null */
+  resumeUrl: string | null;
+  /** the booking of THIS purchase (booking.purchase_id = purchaseId), whatever its status */
+  booking: {
+    bookingId: string; occurrenceId: string; status: BookingStatus; holdExpiresAt: Date | null;
+    title: string; startsAt: Date; endsAt: Date; location: string | null;
+  } | null;
+  /** tickets issued for the purchase (0 until paid) */
+  ticketCount: number;
+};
+/** The purchase of THIS pro named by a ?p= reference; null for a malformed id (idSchema, [A-Za-z0-9_-]), an unknown one or another pro's (L1461). It describes that purchase and its own booking only. */
+export async function purchaseByReference(db: Db, professionalId: string, purchaseId: string, now: Date): Promise<PurchaseReference | null>;
+```
+
+**`src/lib/public/release-actions.ts`**
+```ts
+export type AbandonOutcome = "released" | "paid" | "processing" | "already_ended";
+/** z.object({ purchaseId: idSchema }).strict() (SEC-M15). */
+export const abandonInputSchema: /* … */;
+/** E11 « Libérer ma place » (L1163-1168, OUT:74). */
+export async function abandonCheckoutCore(db: Db, pro: PublicPro, visitor: ActionVisitor, input: unknown, deps: PublicDeps, now: Date): Promise<PublicCoreResult<{ outcome: AbandonOutcome }>>;
+```
+Algorithm (exact, each failure returns at once):
+1. `parsed = parseFr(abandonInputSchema, input)` → `fromParse`. The purchase id is `parsed.purchaseId` and nothing else (never derived from a booking, a customer or a page).
+2. `ref = purchaseByReference(db, pro.professionalId, parsed.purchaseId, now)`; null → `fromEngineClient({ code: "not_found" }, "release", vars)`.
+3. `visitor.owner && ref.customerId !== visitor.owner.customerId` → the same `not_found` (OUT:74).
+4. `email = customerEmailOf(db, pro.professionalId, ref.customerId)` (null → the same `not_found`); `checkActionThrottle(db, { action: "release", professionalId, ipHash, wideIpHash, subject: throttleSubjectOf(visitor.session, email) }, now)` false → `publicFail(ENGINE_ERROR_MESSAGES.throttled, { code: "throttled" })` (SEC-I2; before any Stripe call).
+5. `paid` → `publicOk({ outcome: "paid" })`; `expired` → `publicOk({ outcome: "already_ended" })`; `ref.booking?.status === "confirmed"` → `publicOk({ outcome: "already_ended" })` (no Stripe call, SEC-C1).
+6. Pending with `checkoutSessionId` → `deps.checkout.closeForRelease(id)`: `"paid"` → `publicOk({ outcome: "paid" })`; `"processing"` → `publicOk({ outcome: "processing" })`; `"failed"` → `publicFail(COPY.RELEASE_CHECK_FAILED)` (nothing released); `"expired" | "already_expired" | "mock"` → release.
+7. Pending without session and `ref.processing` → `publicOk({ outcome: "processing" })`; pending without session otherwise → release.
+8. Release = `releasePurchase(db, ref.purchaseId, now)` → `!ok` → `fromEngineClient(res, "release", vars)`; ok → `publicOk({ outcome: res.released ? "released" : "already_ended" }, res.effects)`.
+It never fulfils (the webhook is the fulfilment path, L1109-1112) and never returns anything about the purchase's customer.
+
+### 3.12 Stripe webhook (Task 13)
+
+**`src/lib/payments/webhook-core.ts`** (DB; no `server-only`, no Stripe SDK value import)
+```ts
+export type CheckoutSessionLike = {
+  id: string;
+  mode?: string | null;
+  metadata?: Record<string, string> | null;
+  client_reference_id?: string | null;
+  payment_status?: string | null;
+  payment_intent?: string | { id: string } | null;
+  amount_total?: number | null;
+  currency?: string | null;
+};
+export type StripeEventLike = { id: string; type: string; livemode: boolean; data: { object: unknown } };
+export type WebhookHandled = "fulfilled" | "duplicate" | "orphan" | "processing" | "released" | "ignored";
+export type WebhookOutcome = { handled: WebhookHandled; effects: Effect[] };
+/** The deployment the handler runs in (SEC-I7, SEC-M1): env = APP_ENV, mode = paymentMode(). */
+export type WebhookOptions = { env: string; mode: PaymentMode };
+export const HANDLED_EVENTS: readonly [
+  "checkout.session.completed", "checkout.session.async_payment_succeeded",
+  "checkout.session.async_payment_failed", "checkout.session.expired",
+];
+/** A string id, an expanded object's id, or null (OUT:32). */
+export function paymentIntentIdOf(pi: CheckoutSessionLike["payment_intent"]): string | null;
+/** SEC-I7: "own" = mode "payment", metadata.app === SESSION_APP and metadata.env === opts.env; "other_env" = our marker with another env; "foreign" = anything else (SaaS billing, Payment Links, other apps on the account). */
+export function sessionOrigin(session: CheckoutSessionLike, opts: WebhookOptions): "own" | "other_env" | "foreign";
+export type SessionPurchase = { kind: "found"; purchaseId: string } | { kind: "none" } | { kind: "mismatch" };
+/** metadata.purchaseId (idSchema) of an existing purchase, else the purchase whose checkout_session_id = session.id (UNIQUE); a set client_reference_id that differs from the found id → mismatch (it is only a consistency check, SEC-I7). */
+export async function purchaseOfSession(db: Db, session: CheckoutSessionLike): Promise<SessionPurchase>;
+export type VerifiedWebhook = { ok: true; event: StripeEventLike } | { ok: false; reason: "missing_signature" | "bad_signature" };
+/** Pure: no signature → missing; `verify` throwing → bad (the route passes stripe.webhooks.constructEvent bound to the secret). */
+export function verifyWebhook(payload: string, signature: string | null, verify: (payload: string, signature: string) => StripeEventLike): VerifiedWebhook;
+/** E10 / E11 dispatch (rules below). Idempotent through the engine; throws on an unexpected error (the route answers 500 and Stripe retries). */
+export async function handleStripeEvent(db: Db, event: StripeEventLike, now: Date, opts: WebhookOptions): Promise<WebhookOutcome>;
+```
+Rules of `handleStripeEvent` (exact, in this order; every `ignored` and `orphan` answers 200):
+1. A type outside `HANDLED_EVENTS`, or `data.object` without a string `id` → `ignored`.
+2. `event.livemode !== (opts.mode === "live")` → `ignored` + `console.warn("[stripe] " + type + " ignored: livemode mismatch")` (SEC-M1: a live key behind a test webhook secret, or the reverse, issues nothing).
+3. `sessionOrigin` `"foreign"` → `ignored` (no log, no counter: not ours); `"other_env"` → `ignored` + `console.warn("[stripe] " + type + " ignored: other environment")`.
+4. `facts = { sessionId: session.id, paymentIntentId: paymentIntentIdOf(session.payment_intent), livemode: event.livemode }`; `found = purchaseOfSession(db, session)`; `mismatch` → `ignored` + `console.warn("[stripe] " + type + " ignored: reference mismatch")`.
+5. `completed` with `payment_status === "paid"`, and `async_payment_succeeded` → fulfil: `none` → `recordOrphanPayment(db, facts, now)` → `orphan` (our marker, our environment, no purchase row: among others a purchase deleted with its pro after the admin deletion's best-effort expiry, whose payment landed anyway; refunded by hand); `found` → read the purchase snapshot (`amount_cents`, `currency`, `status`, `checkout_session_id`, `payment_intent_id`, by id); `session.amount_total !== amount_cents` or `(session.currency ?? "").toLowerCase() !== currency` → `recordOrphanPayment` + `console.error("[stripe] amount mismatch on a purchase")` → `orphan` (no ticket; refunded by hand, SEC-M1); else `fulfillPurchase(db, purchaseId, facts, now)` → `handled = res.outcome`, `effects = res.effects`; when `res.outcome === "duplicate"` and the stored `payment_intent_id` (or `checkout_session_id`) is set and differs from `facts` → `recordOrphanPayment` and `handled = "orphan"`, `effects = []` (money taken twice, refunded by hand, SEC-M2, OUT:117).
+6. `completed` with `"no_payment_required"` → `ignored` + `console.warn("[stripe] no_payment_required ignored")` (COV-M2: only `"paid"` fulfils, L1110); `completed` with `"unpaid"` → `found` → `markProcessing` (`ok` → `processing`; `stale` → `ignored`); `none` → `ignored`.
+7. `async_payment_failed` and `expired` → `none` → `ignored` (this is the common case of LED:427: `deleteUser` expires the pro's open sessions just before its DELETE, so their `checkout.session.expired` events arrive for purchases that no longer exist and must answer 200, never 500, or Stripe would retry them for days); the purchase's `checkout_session_id` set and different from `session.id` → `ignored` (log « [stripe] <type> ignored: not the purchase's session »); `releasePurchase` → `ok` → `released` with its effects, `not_found` → `ignored` (the purchase deleted between the read and the release, LED:427).
+
+**`src/app/api/stripe/webhook/route.ts`**
+```ts
+export const dynamic = "force-dynamic";
+export async function POST(request: Request): Promise<Response>;
+```
+`!env.STRIPE_ENABLED || !stripe` → 404 « Not found »; `!env.STRIPE_WEBHOOK_CONFIGURED` → `console.error("[stripe] webhook secret missing")`, 500 (Stripe keeps retrying while the owner fixes it); `payload = await request.text()` (raw body); `verifyWebhook(payload, request.headers.get("stripe-signature"), (p, s) => stripe.webhooks.constructEvent(p, s, env.STRIPE_WEBHOOK_SECRET!) as unknown as StripeEventLike)` → not ok → `console.warn("[stripe] signature rejected: " + reason)`, 400; `handleStripeEvent(db, event, new Date(), { env: env.APP_ENV, mode: paymentMode() })` in `try`; a throw → `console.error("[stripe] " + event.type + " failed: " + logSafeMessage(err))`, 500; effects → `after(() => runEffects(effects, "none"))` (fulfilment mails are the client's due, never cut by the pro's budget, Decision 74); 200 « ok ». Every response `Cache-Control: no-store`. The raw `err` is never logged (LED:87; the stub's `console.error("[stripe] signature verification failed:", err)` goes with it).
+
+### 3.13 Mock checkout (Task 14)
+
+**`src/lib/same-origin.ts`** (pure)
+```ts
+/** Origin header equals new URL(appUrl).origin (route handlers get no automatic origin check); null, "null" or a malformed appUrl → false. */
+export function sameOrigin(originHeader: string | null, appUrl: string): boolean;
+```
+
+**`src/lib/payments/mock-checkout.ts`** (DB + pure; no `server-only`)
+```ts
+export type MockCheckoutView = { purchaseId: string; businessName: string; productLabel: string; amountLabel: string; cancelPath: string };
+/** GET of the simulated checkout (no write): a pending purchase whose checkout_session_id is null or a mock id → its view; a paid one → its merci path; else null (a purchase opened against Stripe is never shown here, SEC-M3). */
+export async function mockCheckoutState(db: Db, purchaseId: string): Promise<{ kind: "pending"; view: MockCheckoutView } | { kind: "paid"; merciPath: string } | null>;
+export type MockPayResult = { kind: "paid"; merciPath: string; effects: Effect[] } | { kind: "not_found" };
+/** POST: only a purchase whose checkout_session_id is null or isMockSession (SEC-M3, « the mock pays only simulated sessions »): fulfillPurchase(db, id, { sessionId: null, paymentIntentId: null, livemode: false }, now) (L1112); merciPath = /{slug of the purchase's own pro}/merci?p={id} (L1146-1147: no redirect parameter); anything else → not_found. */
+export async function mockPay(db: Db, purchaseId: string, now: Date): Promise<MockPayResult>;
+/** Server-built page « Paiement simulé » (exact copy below); every value escaped; no script; the form POSTs to /api/mock-checkout. */
+export function mockCheckoutHtml(view: MockCheckoutView): string;
+```
+The availability rule is `mockCheckoutAllowed` (`src/lib/payments/checkout.ts`, § 3.6) through `mockCheckoutEnabled()` (`src/lib/stripe.ts`): one rule, no copy here (SEC-I5).
+- `cancelPath`: the purchase's booking → `cancelPathOf({ kind: "buybook", … })`; else its offer → `cancelPathOf({ kind: "shop", … })`; no offer left → `/{slug}`.
+- HTML copy (exact): `<html lang="fr">`, title « Paiement simulé »; h1 « Paiement simulé »; « {businessName} »; « {productLabel} » « {amountLabel} »; note `COPY.PAYMENTS_TEST_MOCK` « Aucun paiement réel : le paiement est simulé. »; button « Payer (simulation) »; link « Annuler et revenir » → cancelPath. A single centred column, `max-width: 28rem`, button full width below 640 px (COV-M13).
+
+**`src/app/api/mock-checkout/route.ts`**: `export const dynamic = "force-dynamic"`. `GET(request)`: `!mockCheckoutEnabled()` → 404; `purchase` query value not an id → 404; `mockCheckoutState` null → 404, `paid` → 303 to `new URL(merciPath, env.APP_URL)`, `pending` → 200 `text/html; charset=utf-8` `mockCheckoutHtml(view)`. `POST(request)`: not enabled → 404; `!sameOrigin(request.headers.get("origin"), env.APP_URL)` → 403; form field `purchase` not an id → 404; `mockPay` `not_found` → 404; `paid` → `after(() => runEffects(effects, "none"))`, 303 to `new URL(merciPath, env.APP_URL)`. Every response: `Cache-Control: no-store`, `Content-Security-Policy: frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin` (Revision 3.1) (SEC-M11).
+
+### 3.14 Nightly job and boot checks (Task 15)
+
+**`src/lib/cron-auth.ts`** (pure, `node:crypto`)
+```ts
+export const CRON_SECRET_MIN_LENGTH = 32;
+/** True only for exactly `Bearer <secret>` with a secret of at least CRON_SECRET_MIN_LENGTH characters (SEC-M5), compared in constant time (sha256 digests + timingSafeEqual). */
+export function cronAuthorized(authorization: string | null, secret: string | undefined): boolean;
+```
+**`src/lib/env-checks.ts`** (pure, SEC-I5, SEC-M5)
+```ts
+/** Boot refusals, in this order: VERCEL_ENV "production" with APP_ENV not "production" → "APP_ENV must be production on a Vercel production deployment"; APP_ENV "production" with BETTER_AUTH_SECRET under 32 characters → "BETTER_AUTH_SECRET must be at least 32 characters in production". [] when none. */
+export function envBootErrors(raw: { VERCEL_ENV?: string; APP_ENV: string; BETTER_AUTH_SECRET: string }): string[];
+```
+**`src/app/api/cron/daily/route.ts`**
+```ts
+export const dynamic = "force-dynamic";
+export const maxDuration = 300;
+export async function GET(request: Request): Promise<Response>;
+```
+`!cronAuthorized(request.headers.get("authorization"), env.CRON_CONFIGURED ? env.CRON_SECRET : undefined)` → 401 « Unauthorized » (L1184-1185); `report = await runNightly(db, new Date())`; each `report.errors` entry logged `console.error("[cron] " + logSafeMessage(e))`; JSON (counts only, no id, no e-mail) `{ ok: errors.length === 0, expiredBookings, expiredPurchases, expiredTickets, horizonPros, horizonInserted, archivedEvents, purgedThrottle, invariantViolations, errors: report.errors.length }`, status 200 when `ok`, else 500 (OUT:126: `errors[]` is authoritative; one all-pros `sweepHolds` batch stays all-or-nothing, OUT:118, recorded in the outcome); `Cache-Control: no-store`. The route calls no `runEffects` (the nightly job sends nothing, OUT:118); were a later step to return effects, they would run with `"none"` (Decision 74).
+**`src/lib/env.ts`**: schema `CRON_SECRET: z.string().optional()`; `env.CRON_CONFIGURED = !isPlaceholder(raw.CRON_SECRET) && raw.CRON_SECRET!.length >= CRON_SECRET_MIN_LENGTH`; after parsing, `const errs = envBootErrors({ VERCEL_ENV: process.env.VERCEL_ENV, APP_ENV: raw.APP_ENV, BETTER_AUTH_SECRET: raw.BETTER_AUTH_SECRET }); if (errs.length) throw new Error(errs[0])` (fail at boot and at build, never silently; a local build has no `VERCEL_ENV`). The Resend refusal is not repeated here: `src/lib/email.ts` already throws at load when `APP_ENV` is `production` without a Resend key (`mockMailRefusal`, P3 FR:SEC-3). **`.env.example`**: a commented `CRON_SECRET=xxx` block (« Nightly job (Vercel cron): /api/cron/daily answers 401 without it; 32 characters at least »). **`vercel.ts`**: `crons: [{ path: "/api/cron/daily", schedule: "0 3 * * *" }]` (L1183).
+**`src/lib/booking/nightly.ts`** (engine change)
+```ts
+export async function ensureAllHorizons(
+  db: Db,
+  now: Date = new Date(),
+  opts: { ensure?: typeof ensureHorizon; deadline?: number } = {}, // test-only ensure; deadline = epoch ms, default Date.now() + 120_000
+): Promise<{ pros: number; inserted: number; failures: string[] }>;
+```
+Each pro runs in its own `try`; a throw → `failures.push(\`pro ${id}: ${message}\`)` and the next pro still runs; `!res.ok` → `failures.push(\`pro ${id}: ${res.code}\`)`. Before every pro after the first, `Date.now() > deadline` → `failures.push(\`deadline reached after ${n} pro(s)\`)` and stop (OUT:126: a slow step 4 no longer starves steps 5 to 7 within `maxDuration`). `runNightly` copies `pros` / `inserted` into `report.horizon` and pushes `ensureAllHorizons: <failure>` into `report.errors` for each failure.
+
+### 3.15 Auth hardening (Task 16)
+
+- **`src/lib/auth-options.ts` `hooks.before`**: for `type === "email-verification"`, after `otpCapEmail`, `const session = await getSessionFromCtx(ctx)` (`better-auth/api`; read its source in `node_modules/better-auth/dist/api` first); no session or `session.user.email.toLowerCase() !== email` → `return ctx.json({ success: true })` (no code, counter untouched, OUT:129). The account-existence query is dropped (a session implies the account). Sign-up's own code (core `emailVerification.sendOnSignUp`) is not an HTTP call of this path and is unaffected (T15 stays green).
+- **`src/lib/auth-options.ts` `databaseHooks.session.create.after`** (Decision 72, FR:SEC-5): the block that links the `customer` rows of every pro (`update customer set user_id = <session user> where email = <verified e-mail> and user_id is null`) is deleted with its comment; the `lastLoginAt` stamp, the impersonation early return and the password-session guard stay. A row gets `user_id` only from that user's own act at that pro: `upsertCustomer` (§ 3.4, a verified session of the same address booking or buying at this pro) and `linkCustomerUser` (`requireWalletOwner`, her own spend at this pro). Nothing a client sees depends on the deleted link: `getMySpace` and the Owner predicate also take the rows with `user_id IS NULL` and the verified e-mail (L1377-1378, Decision 5). The raw `err` of its remaining `console.error` lines (reset, `last_login_at`, password-disabled mail) goes through `logSafeMessage`.
+- **`src/lib/auth-messages.ts`**: `export const CODE_SENT = "Si l'adresse est valide, un code a été envoyé.";` (L1247); `verifyCodeFailure`: code `"BANNED_USER"` → `oauthErrorMessage("BANNED_USER")` (checked before the `WRONG_CODE` fallback; H2 of the identity map).
+- **`src/components/dashboard/verify-email-banner.tsx`**: its private `SENT` becomes the imported `CODE_SENT`.
+- **`src/lib/emails/mock-log.ts`** exists since P3 `e73b7bf` (FR:SEC-3) and P4 does not change it: `mockMailLog(mail, production)` prints the whole mail in development and, in a production build (preview deployments), the single line `[email:mock] <redactSubject(subject)>` (no recipient, no code, no link); `mockMailRefusal(appEnv, resendEnabled)` makes `src/lib/email.ts` throw at load when `APP_ENV` is `production` without a Resend key. Decision 59 follows it; Task 8 pins that no subject of the four new templates carries a client's name or address, so the redacted production line never holds client data.
+- **`src/components/auth/link-google-form.tsx`**: its failure text already comes from `authFormErrorMessage(result.error)` (P3 `444f102`, LED:405); P4 adds `role="alert"` to both error `<p>` (the password step and the Google step); their `text-destructive` class stays (rose-700, AA since `d39c8d1`).
+
+### 3.16 Code sign-in (Task 17)
+
+**`src/lib/public/sign-in-flow.ts`** (pure)
+```ts
+export const CODE_LENGTH = 6;
+/** Digits only, at most CODE_LENGTH. */
+export function codeInputValue(raw: string): string;
+export function isCompleteCode(code: string): boolean;
+/** The page to come back to: the path of safeNextPath(path) with its query and hash dropped (SEC-M7: a `p` never travels into /sign-in, the OAuth state or Google), else "/mon-espace". */
+export function returnPathOf(path: string): string;
+/** Google sign-in from a public page (never the pro onboarding, L76): callbackURL and newUserCallbackURL = returnTo; errorCallbackURL = /sign-in?next=<returnTo> (its account_not_linked handler). */
+export function googleCallbacks(returnTo: string): { callbackURL: string; newUserCallbackURL: string; errorCallbackURL: string };
+/** AuthForm's Google callbacks (COV-I3): callbackURL /sign-in[?next=]; newUserCallbackURL: sign-up → next ?? "/onboarding" (L1397), sign-in → /sign-in[?next=] (the page re-resolves the entry: /mon-espace for a non-pro), never "/onboarding"; errorCallbackURL /sign-up[?next=] or /sign-in[?next=] by mode. */
+export function authFormGoogleCallbacks(mode: "sign-in" | "sign-up", next: string | null): { callbackURL: string; newUserCallbackURL: string; errorCallbackURL: string };
+/** « J'ai un mot de passe »: /sign-in?next=<returnTo>. */
+export function passwordSignInHref(returnTo: string): string;
+/** The name sent with a first code sign-in (L1249): trimmed, at most BOUNDS.name characters, undefined when empty or not isPlainName. */
+export function nameToSend(name: string): string | undefined;
+/** Risk 7 (L1816, COV-C1): the sign-in-by-code form is offered to an anonymous visitor only; never to a signed-in one, verified or not, nor while impersonating. */
+export function canOfferCodeSignIn(state: VisitorState): boolean;
+```
+Invariant: every caller of `EmailCodeForm`, `OtpDialog` and `ClientSignInChoices` renders it only when `canOfferCodeSignIn(visitor.state)`; `returnTo` is built by the page from its route params (§ 1 URLs and logs) and passed through `returnPathOf`.
+
+**`src/components/ui/dialog.tsx`** is not modified by P4: P3 `09c5453` keeps Tab / Shift+Tab inside the topmost open dialog and brings stray focus back (`tabDestination`, `topmostOf`; the dialog is not portalled, so no `inert` is set), and P3 `5c69d89` gives the focus back on close to `returnFocusTo()` when the caller passes it, else to the opener, when still connected and enabled (`restoreTarget`); Escape reaches every open dialog, so a dialog opened from another one keeps its parent open the way `occurrence-dialog.tsx` does. Task 1 checks both (COV-I6); the Tab checks of Tasks 19, 25b and 31 still run. `OtpDialog` passes no `returnFocusTo` (its opener stays on the page and gets the focus back); every `ConfirmDialog` whose success removes its opener passes one (§ 1 UI rules).
+
+| Component | Kind | Props | Calls | Behaviour and copy (exact) |
+|---|---|---|---|---|
+| `src/components/auth/email-code-form.tsx` `EmailCodeForm` | client | `{ idPrefix: string; askName?: boolean; onSignedIn?: () => void }` | `authClient.emailOtp.sendVerificationOtp({ email, type: "sign-in" })`, `authClient.signIn.emailOtp({ email, otp, name: nameToSend(name) })`, `authClient.getSession({ query: { disableCookieCache: true } })`, `router.refresh()` | Step 1: `FormField` « Email » (`type="email"`, `autoComplete="email"`, empty: never prefilled from a cookie, Decision 7), when `askName` « Votre nom » (facultatif, help `COPY.CODE_NAME_HELP`; a value refused by `isPlainName` shows `COPY.PLAIN_NAME` under the field); button « Recevoir un code » (pending `COPY.PENDING_SEND`). The send answer is shown as `CODE_SENT` unless `sendCodeFailure` gives a text (429, 5xx): never a different sentence per address (L1247). Step 2: « Code reçu par email » (`inputMode="numeric"`, `autoComplete="one-time-code"`, `codeInputValue`, help « 6 chiffres, valable 5 minutes. »); buttons « Valider le code » (disabled until 6 digits, pending `COPY.PENDING_VERIFY`), « Renvoyer le code » (ghost), « Modifier l'adresse » (ghost). Failure → `verifyCodeFailure(res.error)` in `FormError`, focused. Success → fresh `getSession` (errors swallowed) → `onSignedIn?.()` → `router.refresh()` (L1314-1315). Status and alert regions always mounted. Mounted only when `canOfferCodeSignIn` (risk 7) |
+| `src/components/auth/client-sign-in-choices.tsx` `ClientSignInChoices` | client | `{ returnTo: string; googleEnabled: boolean }` | `signIn.social({ provider: "google", ...googleCallbacks(returnPathOf(returnTo)) })` | « ou » separator; when `googleEnabled` a secondary button with `GoogleLogo` « Continuer avec Google » (spinner, reset on `pageshow`); a link « J'ai un mot de passe » → `passwordSignInHref(returnPathOf(returnTo))`. Same mounting rule |
+| `src/components/auth/otp-dialog.tsx` `OtpDialog` | client | `{ open: boolean; onClose: () => void; returnTo: string; googleEnabled: boolean }` | `EmailCodeForm`, `ClientSignInChoices` | `Dialog` titled « Retrouver mes tickets », intro `COPY.CODE_INTRO` (`describedBy`); `EmailCodeForm` with `askName`, `onSignedIn={onClose}`; full width with stacked buttons below 640 px (COV-M13). The e-mail field is never prefilled nor locked (Decision 7) |
+
+### 3.17 My space and client actions (Tasks 18, 19)
+
+**`src/lib/public/my-space.ts`**
+```ts
+export const MY_SPACE_MAX_PROS = 20;
+export type MySpaceCard = { slug: string; businessName: string; space: CustomerSpace };
+/** L1377-1378: customer rows WHERE user_id = uid OR (email = normalizeEmail(verified e-mail) AND user_id IS NULL), of pros whose user is not suspended; one card per pro, by business name (Intl.Collator fr), at most MY_SPACE_MAX_PROS; space = getCustomerSpace of that row. */
+export async function getMySpace(db: Db, s: { userId: string; email: string }, now: Date): Promise<MySpaceCard[]>;
+```
+**`src/lib/public/client-actions.ts`**
+```ts
+/** z.object({ name: plainNameSchema }).strict() (SEC-M9, SEC-M15): this name reaches the pro's mails through the customer rows. */
+export const myNameInputSchema: /* … */;
+/** « Modifier mon nom » (L1384): a verified, non-impersonated session only; parseFr(myNameInputSchema, input); ONE db.batch = UPDATE "user" SET name WHERE id = uid + UPDATE customer SET name WHERE user_id = uid. */
+export async function updateMyNameCore(db: Db, s: SessionFacts | null, input: unknown, now: Date): Promise<PublicCoreResult>;
+/** « Déconnecter mes liens » (L1371): verified, non-impersonated; ONE statement: link_version + 1 on every row of the getMySpace predicate; returns their number. */
+export async function revokeMyLinksCore(db: Db, s: SessionFacts | null, now: Date): Promise<PublicCoreResult<{ customers: number }>>;
+```
+Refusal for both: `visitorState(s) !== "verified"` → `publicFail(COPY.SIGNED_IN_ONLY)` (checked before the parse: nothing is read for a stranger).
+**`src/server/client.ts`** (`"use server"`)
+```ts
+export async function updateMyNameAction(input: { name: string }): Promise<PublicResult>; // runClientAction
+export async function revokeMyLinksAction(): Promise<PublicResult<{ customers: number }>>; // runClientAction
+export async function cancelMyBookingAction(input: { slug: string; bookingId: string }): Promise<PublicResult>; // Task 21, runPublicAction
+/** « Ce n'est pas moi » (Task 21a, Decision 63): runPublicAction; (await cookies()).set(GUEST_COOKIE, "", { ...guestCookieOptions(pro.slug, process.env.NODE_ENV === "production"), maxAge: 0 }) (the attributes of FR:SEC-7 from their one source, the path included, so the browser drops the very cookie the link set); no DB write; publicOk({}). Read 01-app/03-api-reference/04-functions/cookies.md first. */
+export async function forgetGuestLinkAction(input: { slug: string }): Promise<PublicResult>;
+```
+**Read wrappers** (`server-only`; each = the read with `db` and `new Date()`): `src/server/client-queries.ts` gains `getMySpacePage(s: { userId: string; email: string })` (Task 18) and `getSpendableSeances(professionalId, customerId)` (Task 21); `src/server/public-queries.ts` (C, Task 23) holds `getPlanningPage(pro, range)`, `getNextSeanceStart(pro, after)`, `getBoutiquePage(professionalId)`, `getHorizonNeed(pro)` = `needsHorizon(await minGeneratedUntil(db, id, now), now, tz)` (23), then `getSeancePage(pro, occurrenceId)`, `getSeanceVisitorFacts(professionalId, occurrenceId, viewer)`, `getLivePendingHolds(professionalId, customerId)`, `getOfferPage(professionalId, offerId)`, `getPurchaseReference(professionalId, purchaseId)` (24).
+
+### 3.18 Entry routing (Task 20)
+
+**`src/lib/entry.ts`**
+```ts
+/** L1394-1395: an admin chooses (or gets the remembered choice); else a pro goes to /dashboard, everyone else to /mon-espace. */
+export function resolveEntry(input: { isAdmin: boolean; hasProfessional: boolean; remembered: EntryChoice | null }): "/admin" | "/dashboard" | "/mon-espace" | "choose";
+```
+**`src/server/entry.ts`**: `resolvePostSignIn` reads `getCurrentProfessional()` with `getAdminUser()`; `chooseEntry` for a non-admin returns `"/dashboard"` when a pro row exists, else `"/mon-espace"`. **`src/app/dashboard/layout.tsx`**, **`src/server/pro-context.ts`** (`requireProfessional`, `requireProContext`), **`src/server/pro.ts`** (its private `requirePro`): no pro row → `redirect("/mon-espace")` (L1396; `/onboarding` stays reachable through « Vous êtes pro ? Créer ma page » and the sign-up funnel, L1397; `createProfessionalProfile` keeps its own redirects). Nothing else of `pro-context.ts` changes: `requireProContext` keeps `actingSession(await getFreshSession())` with the `/sign-in` redirect (FR:SEC-2) and `impersonatedBy` in `ProCtx`, `runProAction` keeps the impersonation log line (FR:SEC-6) and `after(() => runEffects(effects, "pro"))` (`a958375`), `runProQuery` keeps its shape; `src/server/pro-context.test.ts` stays green and gains « no professional profile → `redirect("/mon-espace")` » for both functions. While there (P3 carries): `pro.ts`'s `console.error("[google] finalize connection failed:", err)` and `console.error("[google] unlink failed:", err)`, the layout's support-badge log and the `ensureHorizon` `after()` logs of `src/app/dashboard/page.tsx` and `src/app/dashboard/planning/page.tsx` print `logSafeMessage(err)`, never the raw error.
+
+**Client search (Task 20a, Decision 73, FR:UI-13)**: the pro's search terms (client names and e-mails) never reach a URL, the browser history or the platform request log.
+- **`src/lib/back-office/client-actions.ts`**: `export async function searchClientsCore(db: Db, ctx: ProCtx, input: unknown, now: Date): Promise<ActionResult<{ rows: ClientListRow[] }>>` = `parseFr(z.object({ q: z.string().trim().max(100), filter: z.enum(CLIENT_FILTERS) }).strict(), input)` then `listClients(db, ctx.professionalId, now, parsed)` → `{ ok: true, rows }` (the counts stay the page's: `listClients` counts every client whatever `q`).
+- **`src/server/pro-clients.ts`**: `export async function searchClientsAction(input: { q: string; filter: ClientFilter }): Promise<ActionResult<{ rows: ClientListRow[] }>>` = `runProQuery("searchClients", (ctx, now) => searchClientsCore(db, ctx, input, now))` (a read: no revalidation, no effect; fresh session, FR:SEC-2).
+- **`src/components/dashboard/client-search.tsx`** `ClientSearch` (client; props `{ filter: ClientFilter; initialRows: ClientListRow[]; total: number }`): the P3 form (« Rechercher », `type="search"`, `maxLength={100}`, `autoComplete="off"`) without `action` URL nor `name="q"` navigation: submit → `callOrFail(() => searchClientsAction({ q, filter }))` (pending: the button disabled), results in `ClientList`, the P3 empty text « Aucun client ne correspond à « {q} ». » and the capped line in an always-mounted `role="status"` region, a failure in `FormError`; an empty `q` shows `initialRows` again. The term lives in component state only.
+- **`src/app/dashboard/clients/page.tsx`**: `searchParams` keeps `filter` only; `getClientsPage(professionalId, { q: "", filter })`; renders `ClientSearch` with the filter's rows; the chips link to `clientsHref(f)`. **`src/lib/back-office/client-filters.ts`**: `clientsHref(filter: ClientFilter): string` (no `q`), its test and `dashboard-view.ts` callers follow. **`src/app/(auth)/sign-in/page.tsx`**: under the form « Vous êtes client ? » + `Link` « Espace client » → `/mon-espace` (L1391). **`src/components/auth/auth-form.tsx`**: `signIn.social({ provider: "google", ...authFormGoogleCallbacks(isSignUp ? "sign-up" : "sign-in", next) })` (COV-I3); the password sign-up path keeps `router.push(next ?? "/onboarding")` (the pro funnel, L1397).
+
+### 3.19 Client space cores and the personal link (Tasks 21, 21a)
+
+**`src/lib/back-office/customer-space.ts`** (change). At `1954782`: `getCustomerSpace(db, professionalId, customerId, now): Promise<CustomerSpace | null>`; `CustomerSpace = { customer; upcoming: { bookingId; title; whenLabel; location; coverageLabel; cancelText: string | null }[]; wallet }`; the exported `cancelTextOf(b, deadlineHours, now, tz, kind: "seance" | "rdv")` returns the hint (« Annulation en ligne possible jusqu'au {date}. », or « … jusqu'au début de la séance. » / « … du rendez-vous. » after a pro change or a move, FR:UI-14) or null when the client can no longer cancel; the wallet passes `new Map()` to `groupWallet`. Task 21 makes it (the signature and `cancelTextOf` unchanged):
+```ts
+export type CustomerSpace = {
+  businessName: string;
+  customer: { id: string; name: string; email: string };
+  upcoming: {
+    bookingId: string; title: string; whenLabel: string; location: string | null;
+    coverage: BookingCoverage; coverageLabel: string;
+    /** cancelTextOf(…) !== null: clientCanCancel allows it now (before the deadline, or after a pro change / move) */
+    cancellable: boolean;
+    /** cancelTextOf(…) when cancellable (its séance / rendez-vous wording kept), else cancelLockedText(businessName) (L921) */
+    cancelText: string;
+  }[];
+  /** typeClass from classifyTypes(await loadTypeFacts(db, professionalId, now)) passed to groupWallet (LED:438 carry: no more `new Map()`): "orphan" = a type no upcoming event accepts and not rdv_enabled, "archived", else "ok"; loadTypeFacts already reports an rdv_free type as not RDV-enabled (`rdvEnabled && !rdvFree`), the rule the P3 outcome asks of every new alert computation: no new SQL here */
+  wallet: { ticketTypeId: string; name: string; color: string; archived: boolean; typeClass: TypeClass; usable: number; expiries: string[] }[];
+};
+```
+**`src/lib/public/spendable.ts`**
+```ts
+export const SPENDABLE_MAX = 8;
+export const SPENDABLE_DAYS = 60;
+export type SpendableSeance = { occurrenceId: string; title: string; whenLabel: string; startsAt: string /* ISO, the seenStartsAt to post */; ticketTypeName: string; needsAnswers: boolean };
+/** « Utiliser vos tickets » (L1386-1387): public tickets-mode séances of the next SPENDABLE_DAYS open online now (status scheduled, not private, not archived, notice and local-date horizon with event overrides, no overlapping time off: the ONLINE_OK twin), a shown seat free, no active booking of this customer, and an ELIGIBLE ticket of theirs; soonest first, at most `limit`; ticketTypeName = the type spent first (consumption order); needsAnswers = the event has questions. */
+export async function spendableSeances(db: Db, professionalId: string, customerId: string, now: Date, limit?: number): Promise<SpendableSeance[]>;
+```
+**`src/lib/public/space-actions.ts`**
+```ts
+export type SpaceActor = { customerId: string; actorUserId: string | null; via: "session" | "guest" };
+/** Who acts in this pro's espace, in this order: an impersonating session → nobody (the cookie is ignored too, SEC-M6, Decision 19); the Owner; a verified session WITHOUT a record here → nobody (the cookie is ignored, L1370); else the guest cookie customer (L1368; read and cancel only). */
+export function spaceActorOf(visitor: Pick<ActionVisitor, "session" | "owner" | "guestCustomerId">): SpaceActor | null;
+/** z.object({ bookingId: idSchema }).strict() (SEC-M15). */
+export const cancelMyInputSchema: /* … */;
+/** E5 (L904-924): parse, actor, throttle "cancel", cancelByClient (exact steps below). */
+export async function cancelMyBookingCore(db: Db, pro: PublicPro, visitor: ActionVisitor, input: unknown, now: Date): Promise<PublicCoreResult>;
+```
+`cancelMyBookingCore` (exact): 1 `parseFr(cancelMyInputSchema, input)` → `fromParse`; 2 `actor = spaceActorOf(visitor)` null → `fromEngineClient({ code: "not_found" }, "cancel", vars)`; 3 subject = `actor.via === "session"` → `{ kind: "user", userId: actor.actorUserId }`, else `{ kind: "email", email: await customerEmailOf(db, pro.professionalId, actor.customerId) }` (null → the same `not_found`); `checkActionThrottle(db, { action: "cancel", professionalId, ipHash, wideIpHash, subject }, now)` false → `publicFail(ENGINE_ERROR_MESSAGES.throttled, { code: "throttled" })` (SEC-I2); 4 `cancelByClient(db, { professionalId, customerId: actor.customerId, bookingId, actorUserId: actor.actorUserId }, now)` → `fromEngineClient(res, "cancel", vars)` / `publicOk({}, res.effects)`.
+
+**Personal link confirmation (Task 21a, Decision 68, LED:438, SEC-I4).**
+`src/lib/back-office/guest-access.ts` (change): `GuestCustomerRow` (`{ customerId, linkVersion, slug, proSuspended }` at `1954782`) and the `ok` / `stale` decisions gain `businessName` (read with the slug, same join); no other change: `guestLinkDecision` keeps its order (not found for no link, no row, a suspended pro or another customer; not found for a row slug that fails `SLUG_SHAPE`, the open-redirect guard; then stale; then ok), `guestCookieOptions` stays the one source of the cookie attributes. The row literals of `guest-access.test.ts` gain `businessName`.
+**`src/lib/back-office/guest-link-page.ts`** (pure)
+```ts
+/** The page a valid personal link answers on GET: no script, every value escaped, one POST form to `actionPath` (exact copy below). */
+export function guestLinkPageHtml(a: { businessName: string; actionPath: string }): string;
+```
+Copy (exact): `<html lang="fr">`, title « Ouvrir mon espace »; h1 « Ouvrir mon espace chez {businessName} »; « Ce lien personnel donne accès à vos réservations et à vos tickets chez {businessName}. »; button « Ouvrir mon espace »; « Vous n'attendiez pas ce lien ? Fermez simplement cette page. ». A single centred column, button full width below 640 px.
+**`src/app/api/c/[token]/route.ts`** (change): `GET`: `resolveGuestLink` → `not_found` → 404 (unchanged); `stale` → 303 `/{slug}/espace?lien=invalide`, no cookie (unchanged, P3 Task 41 ruling); `ok` → 200 `text/html; charset=utf-8` `guestLinkPageHtml({ businessName, actionPath: \`/api/c/${encodeURIComponent(token)}\` })` and NO cookie, headers `Cache-Control: no-store`, `Referrer-Policy: strict-origin` (Revision 3.1), `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'`, `X-Frame-Options: DENY`, `X-Robots-Tag: noindex`. `POST`: `!sameOrigin(request.headers.get("origin"), env.APP_URL)` → 403 (no cookie); `resolveGuestLink` again (re-checked: MAC, row, `SLUG_SHAPE`, current `link_version`) → `not_found` 404, `stale` 303 `?lien=invalide` (no cookie touched), `ok` → 303 `/{slug}/espace` with `res.cookies.set(GUEST_COOKIE, token, guestCookieOptions(decision.slug, process.env.NODE_ENV === "production"))`, the very line the P3 source guard of `guest-access.test.ts` pins (« the personal-link route builds its cookie with guestCookieOptions and the production flag »; no `httpOnly`, `sameSite` or `maxAge` spelled in the route). Both 303s keep the P3 shape `NextResponse.redirect(new URL(path, request.url), 303)` with `Cache-Control: no-store`. A cross-site link or a mail scanner's GET no longer plants an identity: only a same-origin click on the page does. The token is never logged.
+
+### 3.20 Public planning and boutique (Task 23)
+
+**`src/lib/public/planning-reads.ts`**
+```ts
+export type PublicSeance = {
+  occurrenceId: string; eventId: string; title: string; color: string;
+  startsAt: Date; endsAt: Date;
+  /** the effective place: coalesce(o.location_override, e.location), "" → null (L1441, as customer-space.ts) */
+  location: string | null;
+  status: OccurrenceStatus; bookingMode: BookingMode;
+  /** the séance row's capacity (overrides included) */
+  capacity: number; seatsLeft: number; // seatsShown({ capacity, seatsTaken, elapsedHolds })
+  /** non-archived linked types, by position; [] unless bookingMode is "tickets" (badges only for tickets mode) */
+  acceptedTypes: { id: string; name: string; color: string }[];
+  window: BookingWindow; // effectiveWindow(pro, event overrides)
+  underTimeOff: boolean; // a time off overlaps (the séance is then closed online)
+};
+/** L490-496: séances of [start, end) of this pro, starts_at > now, of a non-private non-archived event, scheduled or cancelled, local date ≤ today + effective horizon, EXCEPT empty scheduled séances under a time off; by starts_at, id; at most 300. */
+export async function listPublicSeances(db: Db, pro: { professionalId: string; timezone: string; window: BookingWindow }, range: { start: Date; end: Date }, now: Date): Promise<PublicSeance[]>;
+/** The start of the first séance listPublicSeances would show at or after `after`; null when none. */
+export async function nextPublicSeanceStart(db: Db, pro: { professionalId: string; timezone: string; window: BookingWindow }, after: Date, now: Date): Promise<Date | null>;
+```
+SQL filter both share (exact): `o.professional_id = $p and o.event_id is not null and o.starts_at > $now and o.status in ('scheduled', 'cancelled') and not e.is_private and e.archived_at is null and (o.starts_at at time zone $tz)::date <= ($now at time zone $tz)::date + coalesce(e.booking_horizon_days, $proHorizon) and not (o.status = 'scheduled' and o.seats_taken = 0 and exists (select 1 from time_off t where t.professional_id = o.professional_id and t.start_at < o.ends_at and t.end_at > o.starts_at))`. Elapsed holds per séance by a grouped query (`status = 'pending' and hold_expires_at < $now`), never a correlated subquery in a one-table select (drizzle single-table trap, P3 § 4.9).
+
+**`src/lib/public/planning-view.ts`** (pure; imports `@/lib/booking-window`, `@/lib/civil-date`, `@/lib/back-office/format`, `./messages`)
+```ts
+export type PublicSeanceState =
+  | { kind: "cancelled" } | { kind: "past" } | { kind: "ongoing" } | { kind: "onsite" } | { kind: "notYet" }
+  | { kind: "closed" } | { kind: "full" } | { kind: "free"; seatsLeft: number } | { kind: "open"; seatsLeft: number };
+/** Precedence (exact): cancelled; then startsAt ≤ now → past (endsAt ≤ now) or ongoing; mode none → onsite; onlineBookability reason horizon → notYet; reason notice, underTimeOff, or tickets mode without an accepted type → closed; seatsLeft 0 → full; mode free → free; else open. */
+export function seanceState(s: Pick<PublicSeance, "status" | "startsAt" | "endsAt" | "bookingMode" | "seatsLeft" | "acceptedTypes" | "window" | "underTimeOff">, now: Date, tz: string): PublicSeanceState;
+/** PUBLIC_STATE_LABELS of the state; null for open. */
+export function stateLabel(state: PublicSeanceState): string | null;
+export type PublicSeanceVM = {
+  occurrenceId: string; href: string; title: string; color: string; dayKey: DateKey; timeLabel: string; // formatTimeRange
+  location: string | null; stateText: string | null; seatsText: string | null; // seatsLeftLabel for open / free
+  muted: boolean; // cancelled, past, closed, full
+  badges: { name: string; color: string }[];
+  /** COV-M12: « {title}, {dayLabel} {timeLabel}, {stateText ?? seatsText} » (the row link's accessible name) */
+  ariaLabel: string;
+};
+export function toPublicSeanceVM(s: PublicSeance, slug: string, now: Date, tz: string): PublicSeanceVM; // href = /{slug}/seance/{id}
+export type PublicDay = { dayKey: DateKey; label: string; seances: PublicSeanceVM[] }; // label = dayLongLabel
+export function groupByDay(vms: readonly PublicSeanceVM[], days: readonly DateKey[]): PublicDay[];
+export type PlanningView = "liste" | "semaine";
+/** ?semaine= (a DateKey, else undefined) and ?vue= ("semaine", else "liste"). */
+export function parsePlanningParams(sp: { semaine?: string | string[]; vue?: string | string[] }): { semaine: string | undefined; view: PlanningView };
+export type PlanningNav = { weekKey: DateKey; title: string; prevHref: string | null; nextHref: string | null; listHref: string; weekHref: string };
+/** Week navigation by local date (L1440): prev null on the current week; next null past todayKey + BOUNDS.bookingHorizonDays.max; title = weekTitle(days); hrefs /{slug}?semaine=<Monday>[&vue=semaine]. */
+export function planningNav(a: { slug: string; weekKey: DateKey; view: PlanningView; todayKey: DateKey }): PlanningNav;
+```
+
+**`src/lib/public/boutique-reads.ts`**
+```ts
+export type BoutiqueOffer = { offerId: string; label: string; quantity: number; priceCents: number; validityText: string | null };
+export type BoutiqueType = { ticketTypeId: string; name: string; description: string | null; color: string; offers: BoutiqueOffer[]; acceptedBy: string[] };
+/** L616-619, L1443: non-archived, non-rdv_free types with at least one active non-archived offer; offers by position, created_at, id; acceptedBy = distinct titles of non-private non-archived events linking the type (fr collation). Types by position, created_at, id. */
+export async function listBoutique(db: Db, professionalId: string): Promise<BoutiqueType[]>;
+```
+
+### 3.21 Séance, offer and visibility (Task 24)
+
+**`src/lib/public/seance-reads.ts`**
+```ts
+export type PublicOfferChoice = BoutiqueOffer & { ticketTypeId: string; ticketTypeName: string; covers: boolean /* offerCovers(now, validityOf(offer), tz, startsAt) */ };
+export type PublicSeanceDetail = PublicSeance & {
+  kind: "seance"; description: string | null; isPrivate: boolean; archived: boolean;
+  questions: QuestionRow[]; // loadQuestions({ eventId })
+  offers: PublicOfferChoice[]; // active, non-archived offers of the linked non-archived, non-rdv_free types
+};
+/** One occurrence of this pro: an event séance (any status, private and archived included: the page decides), { kind: "rdv" } for an RDV, null when not this pro's or unknown. */
+export async function getPublicSeance(db: Db, pro: { professionalId: string; timezone: string; window: BookingWindow }, occurrenceId: string, now: Date): Promise<PublicSeanceDetail | { kind: "rdv" } | null>;
+export type SeanceVisitorFacts = {
+  /** activeBookingOf; purchaseId and resumeUrl only for source "owner" (a guest cookie never receives a Checkout URL, Decision 63) */
+  booking: { bookingId: string; status: "pending" | "confirmed"; coverage: BookingCoverage; purchaseId: string | null; resumeUrl: string | null } | null;
+  /** no active booking: the status of this customer's latest booking on the séance when it ended (COV-M4a); source "owner" only */
+  ended: "cancelled" | "expired" | null;
+  /** source "owner" only: usableTickets[0]'s type; walletBalance(type).usable - 1 */
+  usable: { typeName: string; leftAfter: number } | null;
+};
+/** The state of ONE server-derived customer of this pro on this séance: an Owner or a guest cookie customer, never a typed e-mail nor the customer of a ?p= reference (Decision 71); for "guest" only `booking.status` is filled (no purchase id, no URL, no wallet, no ended state); empty facts when the customer is not this pro's. */
+export async function seanceVisitorFacts(db: Db, professionalId: string, occurrenceId: string, viewer: { customerId: string; source: "owner" | "guest" }, now: Date): Promise<SeanceVisitorFacts>;
+export type LivePendingHold = { purchaseId: string; occurrenceId: string; title: string; startsAt: Date; holdExpiresAt: Date };
+/** SEC-I6: the live pending holds (booking pending, hold_expires_at > now, purchase pending) of THIS Owner's customer at this pro, soonest hold end first (at most MAX_PENDING_HOLDS by the engine's quota): holds typed by strangers with her address land on her row, and she can always release them. Owner only. */
+export async function livePendingHoldsOf(db: Db, professionalId: string, customerId: string, now: Date): Promise<LivePendingHold[]>;
+```
+**`src/lib/public/offer-reads.ts`**
+```ts
+export type PublicOfferDetail =
+  | { kind: "on_sale"; offerId: string; ticketTypeId: string; ticketTypeName: string; typeDescription: string | null; color: string; label: string; quantity: number; priceCents: number; validityText: string | null; acceptedBy: string[] }
+  | { kind: "unavailable" };
+/** L1458-1459: an active offer of a non-archived, non-rdv_free type → on_sale; inactive, archived or of an archived type → unavailable; another pro's or unknown → null. */
+export async function getPublicOffer(db: Db, professionalId: string, offerId: string): Promise<PublicOfferDetail | null>;
+```
+**`src/lib/public/visibility.ts`** (pure)
+```ts
+/** What a ?p= reference lets a page show: THAT purchase and its own booking, never its customer (Decision 71). */
+export type ReferenceView = {
+  purchaseId: string; kind: "buybook" | "shop"; status: PurchaseStatus; processing: boolean; livemode: boolean;
+  resumeUrl: string | null; holdExpiresAt: string | null; // ISO
+  booking: { occurrenceId: string; status: BookingStatus } | null;
+};
+/** The reference as this page may use it, or null: null for no reference; on a séance page when its booking is not on this occurrence; on an offer page when its offer is not this offer or it has a booking; and whenever an Owner is signed in and the reference is not her customer's (OUT:74). The customerId is compared here and dropped. */
+export function referenceForPage(ref: PurchaseReference | null, page: { kind: "seance"; occurrenceId: string } | { kind: "offer"; offerId: string }, owner: WalletOwner | null): ReferenceView | null;
+export type SeanceViewer =
+  | { kind: "customer"; customerId: string; source: "owner" | "guest" }
+  | { kind: "reference"; reference: ReferenceView }
+  | null;
+/** A purchase reference shows THAT purchase and its own booking, never its customer: the customer of a purchase came from a typed e-mail (SEC-C1). Order: the Owner → customer/owner; an impersonating or verified session without a record → the reference when set, else null (the cookie is ignored, L1370); the guest cookie customer → customer/guest; else the reference when set; else null. Never a typed e-mail. */
+export function seanceViewerOf(a: { visitor: PublicVisitor; reference: ReferenceView | null }): SeanceViewer;
+/** L1452: a private séance is shown to the page owner, to a customer viewer (Owner or guest) with an active booking on it, or to a reference whose booking is on it; else notFound(). */
+export function canSeePrivateSeance(a: { isPageOwner: boolean; viewer: SeanceViewer; customerHasActiveBooking: boolean }): boolean;
+/** The booking state the page may act on: the Owner's active booking (from seanceVisitorFacts), or the reference's own booking (pending while the purchase is pending and its hold has not ended, confirmed when confirmed); NEVER the guest cookie's (Decision 63). */
+export type PageBooking = { status: "pending" | "confirmed"; via: "owner" | "reference" } | null;
+export type SeancePageMode =
+  | { kind: "state"; state: PublicSeanceState }
+  | { kind: "booked"; status: "pending" | "confirmed"; via: "owner" | "reference" }
+  | { kind: "free" }
+  | { kind: "tickets"; canSpend: boolean; coveringOffers: number };
+/** § 6 Decision 9, precedence (exact): booked (PageBooking) → booked; state cancelled → state; archived → state closed (COV-M4b); private → state closed (COV-M4a: a private séance is never bookable online); any other state than free / open → state; then the mode's form. A guest cookie's booking never hides the form: the page shows COPY.GUEST_BOOKING_EXISTS above it instead. */
+export function seancePageMode(a: { state: PublicSeanceState; archived: boolean; isPrivate: boolean; booked: PageBooking; mode: BookingMode; canSpend: boolean; coveringOffers: number }): SeancePageMode;
+```
+Séance page assembly (Task 24 wrappers, Tasks 26 to 28 page, exact order): `ref = paiement === "annule" && p ? await getPurchaseReference(pro.professionalId, p) : null`; `refView = referenceForPage(ref, { kind: "seance", occurrenceId }, visitor.owner)`; `viewer = seanceViewerOf({ visitor, reference: refView })`; `facts = viewer?.kind === "customer" ? await getSeanceVisitorFacts(pro.professionalId, occurrenceId, viewer) : null`; `booked` = `facts.booking` for source owner, else `refView.booking` mapped as above, else null; `guestBooked = viewer?.source === "guest" && facts?.booking !== null`; `ended` = `facts.ended` (owner) or the reference booking's ended status (`cancelled` / `expired`); `holds = visitor.owner ? await getLivePendingHolds(…) : []` minus the purchase shown by `CheckoutReturn`.
+
+### 3.22 Merci (Task 30)
+
+**`src/lib/public/merci-view.ts`** (pure)
+```ts
+export type MerciState =
+  | { kind: "booked"; title: string; whenLabel: string }
+  | { kind: "paid_shop"; count: number; typeName: string }
+  | { kind: "paid_late"; count: number }
+  | { kind: "processing" } | { kind: "pending" }
+  | { kind: "expired"; withBooking: boolean };
+/** paid + confirmed booking → booked; paid + ended booking → paid_late; paid without booking → paid_shop; pending + processing → processing; pending → pending; expired → expired (L1460-1461). */
+export function merciStateOf(ref: PurchaseReference, tz: string): MerciState;
+/** Title and body (exact copy in § 3.23). */
+export function merciCopy(state: MerciState): { title: string; body: string };
+```
+
+### 3.23 Public components (Tasks 19, 22, 25a to 30)
+
+Every component below reuses `src/components/ui/*` and the dashboard primitives named in § 1; props carry no `Date`. Every submit shows its `COPY.PENDING_*` label and is disabled while pending; success lines go to an always-mounted `role="status"` region, failures to an always-mounted `role="alert"` region (COV-M11). User-supplied text gets `wrap-anywhere`.
+
+| Component | Kind | Props | Calls | Content and copy (exact) |
+|---|---|---|---|---|
+| `owner-preview-banner.tsx` `OwnerPreviewBanner` | server | none | none | `role="note"` amber card with `COPY.OWNER_BANNER`; forms stay active (L1351). Shown on `/[slug]` AND on the séance page when `visitor.isPageOwner` (COV-I1) |
+| `test-payments-banner.tsx` `TestPaymentsBanner` | server | `{ mode: "mock" \| "test" }` | none | title `COPY.PAYMENTS_TEST_TITLE`; text `PAYMENTS_TEST_MOCK` (mock) or `PAYMENTS_TEST_STRIPE` (test). Rendered whenever `paymentMode() !== "live"` above every purchase control |
+| `visitor-bar.tsx` `VisitorBar` | client | `{ state: VisitorState; email: string \| null; slug: string; returnTo: string; googleEnabled: boolean; hasGuestSpace: boolean }` | `OtpDialog`, `VerifyEmailBanner` | `unverified` → `VerifyEmailBanner({ email, verified: false })`; `anonymous` → `COPY.HAVE_TICKETS_HINT` + button « J'ai déjà des tickets » (opens `OtpDialog`, `canOfferCodeSignIn`) + link « Mon espace » when `hasGuestSpace`; `verified` → link « Mon espace » (`/{slug}/espace`); `impersonating` → nothing. Stacks below 640 px |
+| `wallet-panel.tsx` `WalletPanel` | server | `{ slug: string; businessName: string; wallet: CustomerSpace["wallet"]; variant: "full" \| "compact" }` | none | Owner only. full (`/[slug]`): card « Vos tickets »: `{usable} × {name}` + expiries; `archived` → « Ce type n'est plus proposé par {businessName}. »; `typeClass === "orphan"` → `COPY.ORPHAN_TYPE`; empty `COPY.NO_TICKET` + link `COPY.SEE_SHOP` (`#${BOUTIQUE_ANCHOR}`, L1614); button « Mon espace ». compact (séance page, COV-M4d): one line « Vos tickets : {usable} × {name} » (joined by « , ») + link « Mon espace »; nothing when empty. Stacks below 640 px |
+| `public-planning.tsx` `PublicPlanning` | server | `{ nav: PlanningNav; view: PlanningView; days: PublicDay[]; empty: "week" \| "all" \| null; nextWeekHref: string \| null; shopHref: string \| null }` | none | Heading « Planning »; toggle links « Liste » / « Semaine » (`aria-current`); nav « Semaine précédente » / « Semaine suivante » + `nav.title`. « Liste »: each day a `<section aria-labelledby>` with an `h3` day label and a `<ul>` of rows (time, title, location, badges, state or seats; the row link's accessible name = `ariaLabel`, COV-M12). « Semaine »: 7 day columns of chips at ≥ 640 px (`hidden sm:grid`, chips named by `ariaLabel`); below 640 px the list always shows. Empty week → `COPY.NO_SEANCE_WEEK` + `COPY.NEXT_SEANCE_WEEK` link; nothing ahead → `EmptyState` `COPY.NO_SEANCE` + `COPY.SEE_SHOP` (`shopHref` = `#${BOUTIQUE_ANCHOR}`) when the Boutique has a type, else no button (COV-M9) |
+| `boutique.tsx` `Boutique` | server | `{ slug: string; currency: string; types: BoutiqueType[] }` | none | Section `id={BOUTIQUE_ANCHOR}` (« boutique », `src/lib/public-anchors.ts`: the target of every « Voir la boutique » link, the P3 espace's included, FR:UI-14) « Boutique »; per type: colour dot + name, description, `acceptedByLine(acceptedBy)` when any (one label with the offer page, COV-M1d); per offer « {label} · {formatMoney} » (+ « · valable {validityText} »), `Button asChild` « Acheter » → `/{slug}/offre/{offerId}` (L1443). Below 640 px one offer per row, « Acheter » full width (COV-M13) |
+| `identity-fields.tsx` `IdentityFields` | client, presentational | `{ idPrefix: string; value: IdentityInput; onChange: (v: IdentityInput) => void; emailLocked: boolean; errors: Record<string, string>; businessName: string; website: string; onWebsite: (v: string) => void }` | none | « Prénom et nom », « Email » (`readOnly` + help « Adresse de votre compte. » when locked: the VERIFIED session e-mail only, never a cookie's), « Téléphone » (facultatif); errors read from `errors["identity.name"]`, `["identity.email"]`, `["identity.phone"]`, each tied by `aria-describedby`; `dataUseLine(businessName)`; honeypot input `name="website"` inside an `aria-hidden` off-screen wrapper, `tabIndex={-1}`, `autoComplete="off"`, label « Laissez ce champ vide » |
+| `question-fields.tsx` `QuestionFields` | client, presentational | `{ idPrefix: string; questions: { id: string; label: string; type: QuestionType; options: string[] \| null; required: boolean }[]; value: Record<string, string>; onChange: (v: Record<string, string>) => void; errors: Record<string, string> }` | none | text → `Textarea` (max `BOUNDS.answer`); choice → `Select` (first option « Choisir »); boolean → two radios « Oui » / « Non » (`BOOLEAN_ANSWERS`); required → « (obligatoire) » after the label |
+| `occurrence-booking.tsx` `OccurrenceBooking` | client | `{ slug: string; occurrenceId: string; seenStartsAt: string; businessName: string; currency: string; mode: "free" \| "tickets"; questions: QuestionFields["questions"]; offers: { offerId: string; label: string; priceCents: number; validityText: string \| null; covers: boolean }[]; visitor: { state: VisitorState; email: string \| null /* verified session e-mail only */; name: string \| null; canSpend: boolean; leftAfter: number; typeName: string \| null }; googleEnabled: boolean; returnTo: string; testMode: "mock" \| "test" \| null }` | `registerFreeAction`, `bookWithHeldTicketAction`, `startBuyAndBookAction`, `OtpDialog` | free (Task 26): `IdentityFields` (email locked for a verified visitor) + `QuestionFields` + « S'inscrire » (`COPY.PENDING_REGISTER`) → success `COPY.REGISTERED`, focus to the status line. tickets (Tasks 26, 27): `canSpend` → `QuestionFields` + `heldTicketButtonLabel(leftAfter)` (`COPY.PENDING_BOOK`) → success `COPY.BOOKED_WITH_TICKET`; `anonymous` → « J'ai déjà des tickets » (`OtpDialog`); `unverified` → the hint `COPY.CONFIRM_EMAIL_TO_SPEND`, no dialog (the page shows the banner, COV-I1); buy block « Acheter et réserver »: a `<fieldset>` with `<legend>` « Choisissez une offre », radios « {label} · {formatMoney} » (+ « · valable {validityText} »), a non-covering offer disabled with « Validité trop courte pour cette séance » tied by `aria-describedby` (COV-M12); `TestPaymentsBanner` when `testMode`; `IdentityFields` + `QuestionFields`; « Payer {formatMoney} » (`COPY.PENDING_PAY`) → ok → `sessionStorage["skedul:hold:" + occurrenceId] = purchaseId` (in `try`/`catch`) then `window.location.assign(checkoutUrl)`; a failure → `FormError`, field errors from `fieldErrors`; on a failure, when `sessionStorage` holds an id for this séance matching `/^[A-Za-z0-9_-]{1,64}$/`, a link `COPY.RETURN_LINK` → `/{slug}/seance/{occurrenceId}?paiement=annule&p={encodeURIComponent(id)}` (COV-M6: no server identity involved, the id is the buyer's own reference). No covering offer and no spend → `COPY.NO_COVERING_OFFER`. Forms full width below 640 px |
+| `checkout-return.tsx` `CheckoutReturn` | client | `{ slug: string; purchaseId: string; kind: "buybook" \| "shop"; status: "pending" \| "paid" \| "expired"; processing: boolean; resumeUrl: string \| null; holdUntilLabel: string \| null; merciHref: string }` | `abandonCheckoutAction` | Rendered only for the `?p=` reference's own purchase or the Owner's pending booking, never for a guest cookie nor any other purchase id (SEC-C1, Decision 63). Title « Paiement interrompu ». paid → `COPY.PAYMENT_RECEIVED` + link « Voir la confirmation » (`merciHref`); processing → `COPY.PROCESSING`; expired → « Votre place a été libérée. Vous pouvez réserver à nouveau. » (shop: « Ce paiement n'a pas abouti. »); pending buybook: « Votre place est gardée jusqu'à {holdUntilLabel}. » (or « La page de paiement a expiré. Vous pouvez libérer votre place maintenant. » when `resumeUrl` is null), `Button asChild` « Reprendre le paiement » when `resumeUrl`, « Libérer ma place » → `ConfirmDialog` « Libérer votre place ? » / « La place est rendue aux autres clients et le paiement en cours est annulé. » / « Libérer ma place »; outcomes released « Votre place est libérée. », paid / processing as above, already_ended « Cette réservation n'est plus en attente de paiement. », `throttled` → the engine sentence; focus to the block heading after an outcome; pending shop: « Votre achat n'est pas payé. » + « Reprendre le paiement » when `resumeUrl` |
+| `pending-holds.tsx` `PendingHolds` | client | `{ slug: string; holds: { purchaseId: string; title: string; whenLabel: string; holdUntilLabel: string }[] }` | `abandonCheckoutAction` | Owner only (SEC-I6), nothing when empty. Title `COPY.PENDING_HOLDS_TITLE` « Paiements en attente »; per hold « {title} · {whenLabel} », « Place gardée jusqu'à {holdUntilLabel}. », « Libérer ma place » → the `CheckoutReturn` `ConfirmDialog` → released « Votre place est libérée. » in the row's status line; the row goes, so the dialog's `returnFocusTo` is the section heading |
+| `offer-checkout-form.tsx` `OfferCheckoutForm` | client | `{ slug: string; offerId: string; businessName: string; priceLabel: string; visitor: { state: VisitorState; email: string \| null; name: string \| null }; testMode: "mock" \| "test" \| null }` | `startShopPurchaseAction` | `TestPaymentsBanner` when `testMode`; `IdentityFields` (email locked for a verified visitor); « Payer {priceLabel} » (`COPY.PENDING_PAY`) → `window.location.assign(checkoutUrl)`; failures in `FormError` |
+| `merci-refresher.tsx` `MerciRefresher` | client | `{ active: boolean }` | `router.refresh()` (a read, after no action) | While `active`: `router.refresh()` every 3 s, 20 times at most, then the text « La confirmation vous sera envoyée par email. » (`role="status"`). The page puts the state title and body in an `aria-live="polite"` region (COV-M12) |
+| `cancel-booking-button.tsx` `CancelBookingButton` | client | `{ slug: string; bookingId: string; title: string; whenLabel: string; coverage: BookingCoverage; businessName: string }` | `cancelMyBookingAction` | « Annuler » → `ConfirmDialog` title « Annuler votre inscription ? », body coverage ticket « Votre ticket vous est rendu et {businessName} est prévenu par email. Vous recevez un email de confirmation. », else « {businessName} est prévenu par email. Vous recevez un email de confirmation. » (COV-M12), confirm « Annuler l'inscription »; ok → `COPY.CANCELLED_OK` and focus to the « Vos prochaines inscriptions » heading (the row is gone: `returnFocusTo={() => heading.current}` on the `ConfirmDialog`, the heading `tabIndex={-1}`) |
+| `spend-seance-button.tsx` `SpendSeanceButton` | client | `{ slug: string; seance: SpendableSeance; canSpend: boolean; visitorState: VisitorState; googleEnabled: boolean; returnTo: string }` | `bookWithHeldTicketAction`, `OtpDialog` | `needsAnswers` → `Button asChild` « Réserver » → séance page; `canSpend` → « Réserver avec 1 ticket » (`COPY.PENDING_BOOK`; posts `startsAt` as `seenStartsAt`, no answers) → « Réservation confirmée. », focus to the section heading; `visitorState === "anonymous"` (a guest cookie) → the same label opens `OtpDialog` with an EMPTY address (Decision 7, LED:438); `"unverified"` → disabled, described by `COPY.CONFIRM_EMAIL_TO_SPEND` (COV-C1); `"impersonating"` → not rendered |
+| `other-address-button.tsx` `OtherAddressButton` | client | `{ path: string }` | `signOut()` then `window.location.replace(path)` | « Utiliser une autre adresse » (L1390); the full navigation drops the router cache (SEC-M12) |
+| `forget-guest-link-button.tsx` `ForgetGuestLinkButton` | client | `{ slug: string }` | `forgetGuestLinkAction`, then `window.location.replace(\`/${slug}/espace\`)` | ghost button `COPY.NOT_ME` « Ce n'est pas moi » (Decision 63); a failure in `FormError` |
+| `my-space.tsx` `MySpaceView` | server | `{ name: string; email: string; cards: MySpaceCard[] }` | client leaves below | « Bonjour {name} » + email; per card: business name, « Vos prochaines inscriptions » (title, coverage, when, place, cancelText) or `COPY.NO_UPCOMING` + link « Voir la page de {businessName} » → `/{slug}` (COV-M9), « Vos tickets » (`{usable} × {name}`, expiries, the class notes of `WalletPanel`) or `COPY.NO_TICKET` + `COPY.SEE_SHOP` → `boutiqueHref(slug)`, link « Ouvrir l'espace chez {businessName} » → `/{slug}/espace`; empty `EmptyState` `COPY.NO_RESERVATION`; section « Mon compte »: `MyNameForm`, `RevokeMyLinksButton`, link `COPY.CREATE_PAGE` → `/onboarding`, `ClientSignOutButton`. Cards stack |
+| `my-name-form.tsx` `MyNameForm` | client | `{ initialName: string }` | `updateMyNameAction` | « Votre nom », « Enregistrer » (`COPY.PENDING_SAVE`), success `SavedStatus` with `COPY.SAVED` (always-mounted status, green-700); `COPY.PLAIN_NAME` from `fieldErrors.name` |
+| `revoke-my-links-button.tsx` `RevokeMyLinksButton` | client | none | `revokeMyLinksAction` | `COPY.REVOKE_MY_LINKS` → `ConfirmDialog` « Déconnecter vos liens personnels ? » / « Les liens reçus par email cessent de fonctionner. Les prochains emails contiendront un nouveau lien. » / « Déconnecter mes liens »; ok → `COPY.LINKS_REVOKED` |
+| `client-sign-out-button.tsx` `ClientSignOutButton` | client | none | `signOut()` then `window.location.replace("/mon-espace")` | « Se déconnecter » (SEC-M12) |
+
+- **Merci copy** (`merciCopy`, exact): booked « Inscription confirmée » / « Paiement reçu. Vous êtes inscrit(e) à « {title} » ({whenLabel}). Vous recevez par email la confirmation et le reçu. » (COV-M1e, Decision 55); paid_shop « Paiement reçu » / count 1 « Votre ticket « {typeName} » est dans votre portefeuille. », else « Vos {count} tickets « {typeName} » sont dans votre portefeuille. »; paid_late « Paiement reçu » / « Paiement reçu, votre place n'était plus réservée : vos {count} tickets sont dans votre portefeuille. » (count 1: « Paiement reçu, votre place n'était plus réservée : votre ticket est dans votre portefeuille. »); processing « Paiement en cours de traitement » / « Votre banque confirme le paiement. Vous recevrez un email dès qu'il sera validé. »; pending « Paiement en attente de confirmation » / « La confirmation arrive dans quelques secondes. Cette page se met à jour toute seule. »; expired withBooking « Place expirée » / « Le paiement n'a pas abouti et votre réservation a expiré. », else « Paiement non abouti » / « Le paiement n'a pas abouti. » (COV-M1f). The page adds `COPY.TEST_PAYMENT_LINE` « Paiement de test : aucun montant n'a été débité. » when `!livemode` and paid (the receipt's string, COV-M1d), and buttons « Voir mon espace » (`/{slug}/espace`) and « Retour à la page » (`/{slug}`).
+- **Séance page copy** (exact): next to the title the `PUBLIC_STATE_LABELS` badge of the state when it has one (« Annulée », « Terminée », …, COV-M1a); state lines `cancelled` « Cette séance est annulée. », `past` « Cette séance est terminée. », `ongoing` « Cette séance a commencé. », `onsite` « Pas de réservation en ligne : présentez-vous sur place. », `notYet` « Les réservations ne sont pas encore ouvertes pour cette séance. », `closed` « Les réservations en ligne sont fermées pour cette séance. », `full` « Cette séance est complète. »; booked confirmed (Owner or reference) « Vous êtes inscrit(e) à cette séance. » + link « Voir mon espace »; booked pending « Un paiement est en attente pour cette séance. » + `CheckoutReturn` (the reference's own purchase, or the Owner's pending booking with its purchase id and resume URL); ended (Owner or reference, no active booking) `COPY.ENDED_CANCELLED` / `COPY.ENDED_EXPIRED` above the form; a guest cookie's active booking → `COPY.GUEST_BOOKING_EXISTS` above the normal form (Decision 63); `PendingHolds` for an Owner with other live holds at this pro; `WalletPanel` compact for an Owner; `OwnerPreviewBanner` when `isPageOwner`; `VerifyEmailBanner({ email, verified: false })` when `state === "unverified"`; both banners above the booking block (COV-I1).
+- **Offer page copy** (exact, COV-M5): h1 « {label} »; a type chip « {ticketTypeName} » (colour dot); the type description; « {formatMoney} » (+ « · valable {validityText} »); `acceptedByLine(acceptedBy)`; « Vous recevez {plural(quantity, "ticket", "tickets")} « {ticketTypeName} » après le paiement. »; then `OfferCheckoutForm`; `?paiement=annule&p=` of a shop purchase of THIS offer → `CheckoutReturn` (shop) above the form.
+- **Espace additions** (exact): anonymous (`canOfferCodeSignIn`) card « Accéder à mon espace » + « Recevez un code par email pour voir vos réservations chez {businessName}. » + `EmailCodeForm` + `ClientSignInChoices` (the P3 « Ce lien n'est plus valide. » stays above it on `?lien=invalide`); unverified (COV-C1) `VerifyEmailBanner({ email, verified: false })` + `COPY.CONFIRM_EMAIL_FIRST`, then the read-only space of `guestCustomerId` when set (cancel allowed, spend disabled), never `EmailCodeForm` nor `ClientSignInChoices`; impersonating `COPY.IMPERSONATING`; no_record `noRecordText` + `OtherAddressButton` + « Voir la page de {businessName} »; customer: `CustomerSpaceView` with `CancelBookingButton` on each `cancellable` booking (else `cancelText`), the wallet class notes (`archived`, already rendered by P3, and `COPY.ORPHAN_TYPE`), an empty wallet `COPY.NO_TICKET` + `COPY.SEE_SHOP` → `boutiqueHref(slug)` (P3 `9d8ba45` renders the same strings; Task 22 swaps them for the `COPY` keys), and the section « Utiliser vos tickets » (only when `spendable` is not empty); guest note `guestNote(email)` « Vous consultez l'espace de {maskEmail(email)} avec un lien personnel. » + `ForgetGuestLinkButton` (Decision 63, SEC-I4).
+- **`/mon-espace` copy** (exact): `metadata.title` « Mon espace »; h1 « Mon espace client »; signed out (`canOfferCodeSignIn`) « Accédez à vos réservations et à vos tickets chez tous vos professionnels. » + `EmailCodeForm` (askName) + `ClientSignInChoices` (returnTo `/mon-espace`), never a redirect (L1376); unverified `VerifyEmailBanner` + `COPY.CONFIRM_EMAIL_FIRST`; impersonating `COPY.IMPERSONATING`; a link « Retour à l'accueil » → `/`.
+
+---
+
+## 4. Engine call table
+
+Every row takes ONE `now` per request. « pro » = `pro.professionalId` from the slug (`resolvePublicPro`), never input. « Owner » = `visitor.owner` (§ 3.5). « subject » = `throttleSubjectOf(session, email)`: a verified identity's user key, else the typed address's per-pro and global keys (§ 3.3). « Rev » = `PUBLIC_REVALIDATE` on success. Errors column: the `fromEngineClient` context, then the core's own refusals (`COPY.*`); a code not listed falls back to `ENGINE_ERROR_MESSAGES[code]`. Every core first runs `parseFr(<strict schema>, input)` (French parse errors, nothing read). Effects are run by `runEffects(effects, "none")` in `after()` on every row (Decision 74).
+
+| # | Caller (file) | Core | Engine call(s) and input mapping | Identity source | Refusals → French | Effects executed | Rev |
+|---|---|---|---|---|---|---|---|
+| 1 | `startBuyAndBookAction` (public.ts) | `startBuyAndBookCore` | `checkActionThrottle(buybook, subject, occurrenceId)` → (typed address only) `seatPressureOf` vs `holdCeiling` → `upsertCustomer(db, { professionalId: pro, email, name, phone, userId: upsertUserIdFor(session, email) })` → `startBuyAndBook(db, { professionalId: pro, occurrenceId, customerId, offerId, seenStartsAt: new Date(iso), answers })` → `gateway.create` (with `env`) → `attachCheckoutSession(db, { purchaseId: res.purchaseId, checkoutSessionId, checkoutUrl })`; on create failure `releasePurchase(db, res.purchaseId)`; on attach `stale` `gateway.expire` + `releasePurchase` | typed identity (Owner's session e-mail when an Owner); the purchase id only from this call's engine result | `buybook`: `not_found`, `unavailable`, `changed`, `offer_too_short`, `invalid` (+ buildAnswers / notes message), `full`, `stale` « L'offre a changé : rafraîchissez la page. »; `already_booked` and `too_many_holds` keep the engine sentence for a verified identity only, else `BUYBOOK_NOT_POSSIBLE` without code (Decision 64); `throttled`; `HONEYPOT_REFUSED`, `PAYMENT_UNAVAILABLE`, `TOO_MANY_PAYMENTS`, `CHECKOUT_FAILED` | release: `google.sync_occurrence` | yes |
+| 2 | `registerFreeAction` (public.ts) | `registerFreeCore` | `checkActionThrottle(free, subject, occurrenceId)` → `upsertCustomer` (same rule) → `registerFree(db, { professionalId: pro, occurrenceId, customerId, seenStartsAt, answers })`; `already_booked` for a typed address → `activeBookingIdOf` (server-side) | typed identity | `free`: `not_found`, `unavailable`, `changed`, `invalid`, `full`; `already_booked` → the success answer for a typed address (Decision 64), the engine sentence for a verified identity; `throttled`; `HONEYPOT_REFUSED` | `email.booking_confirmed`, `email.pro_new_booking`, `google.sync_occurrence`; for a typed `already_booked`, `email.booking_confirmed` of the existing booking only | yes |
+| 3 | `bookWithHeldTicketAction` (public.ts, `linkOwner`) | `bookWithHeldTicketCore` | `requireWalletOwner` (`ownedCustomerId` + `linkCustomerUser`) → `checkActionThrottle(held, user)` → `bookWithHeldTicket(db, { professionalId: pro, occurrenceId, customerId: owner.customerId, seenStartsAt, answers, actorUserId: owner.userId })` | Owner ONLY (OUT:75); never a typed e-mail nor a guest cookie (COV-I11) | `held`: `not_found`, `unavailable`, `changed`, `invalid`, `full`, `already_booked`, `no_ticket`; `throttled`; `CONFIRM_EMAIL_TO_SPEND` | `email.booking_confirmed`, `email.pro_new_booking`, `google.sync_occurrence` | yes |
+| 4 | `startShopPurchaseAction` (public.ts) | `startShopPurchaseCore` | `checkActionThrottle(shop, subject)` → `upsertCustomer` → `startPurchase(db, { professionalId: pro, offerId, customerId })` → `gateway.create` (expires_at = `res.checkoutExpiresAt`, with `env`) → `attachCheckoutSession`; failures → `releasePurchase` (+ `gateway.expire`) | typed identity | `shop`: `not_found` « Cette offre n'est plus proposée. », `stale` « L'offre a changé : rafraîchissez la page. »; `throttled`; `HONEYPOT_REFUSED`, `PAYMENT_UNAVAILABLE`, `CHECKOUT_FAILED` | none (no seat) | yes |
+| 5 | `abandonCheckoutAction` (public.ts) | `abandonCheckoutCore` | `purchaseByReference(db, pro, purchaseId)` → `checkActionThrottle(release, subject of the purchase's customer e-mail)` → `gateway.closeForRelease(checkoutSessionId)` → `releasePurchase(db, purchaseId)` unless paid / processing / failed / booking confirmed | `?p=` capability scoped to the pro (+ Owner's customer when an Owner, OUT:74); the purchase id only from the input, never derived | `release`: `not_found` « Paiement introuvable : rafraîchissez la page. »; `throttled`; `RELEASE_CHECK_FAILED` | `google.sync_occurrence` | yes |
+| 6 | `cancelMyBookingAction` (client.ts) | `cancelMyBookingCore` | `checkActionThrottle(cancel, user or the cookie customer's e-mail)` → `cancelByClient(db, { professionalId: pro, customerId: actor.customerId, bookingId, actorUserId: actor.actorUserId })` | `spaceActorOf`: impersonating → nobody; Owner; a verified session without a record here → nobody; else guest cookie of THIS pro at its current `link_version` (OUT:64) | `cancel`: `not_found` « Inscription introuvable : rafraîchissez la page. », `too_late_or_done` « Seul(e) {businessName} peut annuler maintenant. », `stale`; `throttled` | `email.booking_cancelled {by: "client"}`, `email.pro_booking_cancelled`, `google.sync_occurrence` | yes |
+| 7 | `updateMyNameAction` (client.ts) | `updateMyNameCore` | one `db.batch`: `UPDATE "user" SET name` + `UPDATE customer SET name WHERE user_id = uid` (no engine function) | verified, non-impersonated fresh session | `SIGNED_IN_ONLY`; parseFr « Votre nom : … », `PLAIN_NAME` | none | yes |
+| 8 | `revokeMyLinksAction` (client.ts) | `revokeMyLinksCore` | one `UPDATE customer SET link_version = link_version + 1` over the `getMySpace` predicate (the pro-side `revokeLinks` stays for the back-office) | verified, non-impersonated fresh session | `SIGNED_IN_ONLY` | none | yes |
+| 8b | `forgetGuestLinkAction` (client.ts, Task 21a) | none | no engine call, no DB write: the `skedul_guest` cookie of `/{slug}` is cleared | the visitor's own browser | `PAGE_GONE` (unknown pro) | none | yes |
+| 9 | `POST /api/stripe/webhook` | `handleStripeEvent` | after the livemode, origin (app + env marker) and reference checks: `completed` paid, `async_payment_succeeded` → snapshot read, amount and currency compared → `fulfillPurchase(db, purchaseId, { sessionId: session.id, paymentIntentId: paymentIntentIdOf(pi), livemode: event.livemode })`, or `recordOrphanPayment` (no purchase, amount mismatch, second payment); `completed` unpaid → `markProcessing`; `async_payment_failed`, `expired` → `releasePurchase` (same session id only) | Stripe signature (`constructEvent` on the raw body) AND our session marker for this environment; purchase id from `metadata.purchaseId` or `checkout_session_id` (`client_reference_id` checked only) | none shown: `duplicate` / `orphan` / `ignored` → 200; an unexpected throw → 500 (Stripe retries) | fulfil: `email.purchase_receipt` + (`email.booking_confirmed`, `email.pro_new_booking`, `google.sync_occurrence`) or `email.late_payment`; release: `google.sync_occurrence` | n/a |
+| 10 | `POST /api/mock-checkout` | `mockPay` | `fulfillPurchase(db, purchaseId, { sessionId: null, paymentIntentId: null, livemode: false })` for a purchase whose session is null or a mock id only | mock enabled (`mockCheckoutAllowed`: no Stripe, not production by `APP_ENV` nor `VERCEL_ENV`) + same-origin POST + purchase id | 404 / 403 | as row 9 | n/a |
+| 11 | `GET /api/cron/daily` | none | `runNightly(db, now)` (`sweepHolds`, `expireStalePurchases`, `expireTickets`, `ensureAllHorizons` with its deadline, `archiveFinishedEvents`, `purgeThrottle`, `checkInvariants` + `setHealth`) | `Authorization: Bearer CRON_SECRET` (constant time, 32 characters at least) | 401; 500 when `errors[]` is not empty | none (the nightly job sends nothing, OUT:118) | n/a |
+| 12 | `/[slug]` page render | none | `minGeneratedUntil(db, pro)` + `needsHorizon(min, now, tz)` → `after(async () => { if (await consumeThrottle(db, \`t:horizon:p:${pro}\`, { limit: 1, windowSec: 300 }, new Date())) await ensureHorizon(db, pro) })` (the key is written inside `after`, never during render, SEC-M13) | n/a (reads only) | n/a | none | n/a |
+| 13 | séance page render | none (reads) | `getPublicSeance`; `purchaseByReference(p)` → `referenceForPage`; for a customer viewer only (Owner or guest cookie): `activeBookingOf(db, { occurrenceId, customerId })`, and for the Owner `usableTickets(db, { customerId, occurrenceId })`, `walletBalance(db, { professionalId: pro, customerId })`, the latest ended booking, `livePendingHoldsOf` | viewer = `seanceViewerOf`: Owner or guest cookie customer, or a reference that names its purchase and booking only (never its customer, Decision 71); never typed | n/a | none | n/a |
+| 14 | `/[slug]`, espace, `/mon-espace` renders | none (reads) | `getCustomerSpace(db, professionalId, customerId, now)` through `getCustomerSpacePage(professionalId, customerId)` (wallet panel, espace, cards; type classes from `classifyTypes(loadTypeFacts)`), `spendableSeances` | Owner / guest cookie (espace), Owner (wallet panel), verified session predicate (`getMySpace`) | n/a | none | n/a |
+| 15 | `runEffects(effects, budget)` (notify.ts) | `runEffectsWith` (notify-run.ts) + `planEffect` (notify-core.ts) | fresh reads per effect (§ 3.8); `mailsToSend(db, plan, budget, now)` (`"none"` from every P4 caller: nothing counted or dropped; `"pro"` from `runProAction` only), `sendEmail`, `syncOccurrence`, `expireCheckoutSession` | n/a | logged `[notify] <type> failed: <message>` (no address); a cut « pro » plan logs `mailBudgetLogLine` (pro id and count) | n/a | n/a |
+| 16 | `GET`, `POST /api/c/[token]` (Task 21a) | `resolveGuestLink` (P3) | GET: decision only (no write, no cookie); POST: decision again, then the cookie | the signed personal link; the POST also needs a same-origin `Origin` | 404; 303 `?lien=invalide`; 403 | none | n/a |
+| 17 | `searchClientsAction` (pro-clients.ts, Task 20a) | `searchClientsCore` (client-actions.ts) | `listClients(db, ctx.professionalId, now, { q, filter })` (a read, no engine call) | the pro's own fresh session (`runProQuery` → `requireProContext`), never input | parseFr; a thrown call → `REQUEST_FAILED` (`callOrFail`) | none | no |
+
+Engine functions P4 does NOT call: `registerPro`, `bookRdv` (P5), `revokeLinks` (pro side only), `cancelBookingsByPro`, `cancelOccurrence` (P3).
+
+---
+
+## 5. Routes
+
+Common rules: every page below is a Server Component that reads the fresh session or a cookie (so it is dynamic: `ƒ` in the build list) and never writes during render (except row `/[slug]`'s `after`, whose key write runs after the response). Pages resolve the pro with `resolvePublicPro(slug)` (unknown or suspended → `notFound()`, except `merci`; the espace keeps P3's request-cached `getSpaceProfile`, see its row) and the visitor with `currentPublicVisitor(pro.professionalId, pro.ownerUserId)`. Each page renders inside `PublicShell branding={branding}` (back link `/{slug}` on sub-pages), has a `loading.tsx` (`PageSkeleton` inside the shell column) and is covered by `src/app/[slug]/error.tsx` (`"use client"`, `unstable_retry`, « Une erreur est survenue » / « Cette page n'a pas pu se charger. Réessayez dans un instant. » / « Réessayer »; the espace keeps its own). No page passes `ownerUserId`, the professional row, a purchase's `customerId` or another customer's data to a client component. Every page sets a `title` so the root default (which still holds a dash until P6, LED:68) never shows (COV-I7). `returnTo` = the page's own path from its params, no query (§ 1). `next.config.ts` refuses framing on every row below except the API routes, which set their own headers (SEC-M11).
+
+| Route | Files (Task) | Params | Identity and access | Data | Caching, headers, robots, title | Analytics | Empty / error | Mobile (< 640 px) |
+|---|---|---|---|---|---|---|---|---|
+| `/[slug]` | `page.tsx` (M), `loading.tsx`, `error.tsx` (C), Tasks 25a, 25b | `params { slug }`, `searchParams { semaine?, vue? }` (`parsePlanningParams`) | anyone; owner banner when `isPageOwner`; `VisitorBar` per state; `WalletPanel` full for an Owner; a guest cookie only gets the « Mon espace » link (Decision 61) | `getPlanningPage(pro, weekBounds(weekStartFromParam(semaine, tz, now)))`, `getNextSeanceStart` when the week is empty, `getBoutiquePage`, `getCustomerSpacePage(pro, owner.customerId)` for the wallet, `paymentMode()`; the horizon `after` of § 4 row 12 when `getHorizonNeed(pro)` (L436-438) | dynamic; `generateMetadata` title `businessName`, description `headline`; indexable | tracked (`/{slug}`, path only) | `COPY.NO_SEANCE_WEEK` + next-week link; `COPY.NO_SEANCE` + `COPY.SEE_SHOP` when the Boutique has a type; Boutique hidden when empty; wallet empty `COPY.NO_TICKET` + `COPY.SEE_SHOP` | list per day (L1618); week grid hidden; Boutique offers one per row, « Acheter » full width; `VisitorBar` and `WalletPanel` stacked |
+| `/[slug]/seance/[occurrenceId]` | `page.tsx`, `loading.tsx` (C), Tasks 26 to 28 | `params { slug, occurrenceId }`, `searchParams { paiement?, p? }` | not this pro's / unknown → `notFound()`; RDV → `redirect(\`/${slug}/espace\`)` (L1453); private → `canSeePrivateSeance` else `notFound()` (L1452); viewer = `seanceViewerOf` (§ 3.21 assembly); `OwnerPreviewBanner` when `visitor.isPageOwner`; `VerifyEmailBanner({ email, verified: false })` when `visitor.state === "unverified"`, both above the booking block (COV-I1) | `getSeancePage`, `getPurchaseReference(p)` when `paiement === "annule"`, `getSeanceVisitorFacts(viewer)` for a customer viewer, `getLivePendingHolds` and the compact wallet for an Owner, `paymentMode()` | dynamic; `metadata.referrer = "no-referrer"` (the URL may carry `p`); `generateMetadata` reads the séance only (never the viewer): a public, non-archived séance → title « {title} · {businessName} », indexable; private, archived, RDV, unknown or foreign → title « {businessName} », `robots { index: false }` (SEC-M10) | tracked by path (no query sent) | state lines and badge (§ 3.23); `CheckoutReturn` on `?paiement=annule` for the reference's own purchase; action errors in `FormError` | single column; forms and offer radios full width |
+| `/[slug]/offre/[offerId]` | `page.tsx`, `loading.tsx` (C), Task 29 | `params { slug, offerId }`, `searchParams { paiement?, p? }` | anyone; `getPublicOffer` null → `notFound()`; `unavailable` → `COPY.OFFER_GONE` + `COPY.SEE_SHOP` (`boutiqueHref(slug)`) (L1458-1459) | offer, `getPurchaseReference(p)` → `referenceForPage(…, { kind: "offer", offerId })` on `?paiement=annule` (a shop purchase of this offer only), `paymentMode()` | dynamic; `referrer: "no-referrer"`; title « {label} · {businessName} » on sale, « {businessName} » when unavailable | tracked by path | unavailable state; `CheckoutReturn` (shop) | single column; « Payer » full width |
+| `/[slug]/merci` | `page.tsx` (M), `loading.tsx` (C), Task 30 | `params { slug }`, `searchParams { p? }` | `resolvePublicPro(slug, { includeSuspended: true })` (a client who paid just before a suspension still sees it); `p` must be this pro's purchase (`getPurchaseReference`), else `notFound()` (L1461); the page shows that purchase only, never its customer | `merciStateOf(ref, tz)`; `MerciRefresher` active for `pending` | dynamic; `robots { index: false }`, `referrer: "no-referrer"`; title « Confirmation · {businessName} » | tracked by path (`/{slug}/merci`, no query) | `notFound()` for a missing, malformed or foreign `p` | single column |
+| `/[slug]/espace` | `page.tsx` (M), Task 22 (P3 Task 41's `layout.tsx`, `loading.tsx`, `error.tsx` kept: the layout answers a real 404 for an unknown pro before the loading boundary; a stale link keeps the cookie, P3 Task 41 ruling; the layout and the page share the request-cached `getSpaceProfile(slug)` of `client-queries.ts`, and the page builds its `PublicPro` with `publicProOfRow(profile.pro)` instead of a second `resolvePublicPro` read) | `params { slug }`, `searchParams { lien? }` | impersonating → `COPY.IMPERSONATING`; Owner wins; verified without record → `no_record`; unverified → banner, never the code form (+ the cookie's read-only space, COV-C1); else guest cookie (+ guest note and « Ce n'est pas moi »); else the anonymous code form (L1386-1390) | `getCustomerSpacePage(pro, customerId)`, `getSpendableSeances` | dynamic (session-dynamic, LED:349); P3 `robots { index: false }`; title « Mon espace » | untracked (P3 Task 41: `/<slug>/espace`) | P3 empties + § 3.23 additions | stacked cards; dialogs full width |
+| `/mon-espace` | `page.tsx`, `loading.tsx`, `error.tsx` (C), Task 19 | none | signed out → code form (never `/sign-in`, L1376); unverified → banner; impersonating → `COPY.IMPERSONATING`; verified → `getMySpacePage` | `currentSessionFacts()` | dynamic; `robots { index: false }`; title « Mon espace » | untracked (P3 Task 41: `/mon-espace`) | `COPY.NO_RESERVATION`; per card `COPY.NO_UPCOMING`, `COPY.NO_TICKET` | the site header (`SiteHeader`) and a `max-w-2xl` column (no pro branding, COV-M15); stacked cards |
+| `/[slug]/book/[eventTypeId]`, `/[slug]/pack/[packId]` | `page.tsx` (M), Task 25a | `params` (awaited first) | anyone | none | `permanentRedirect(\`/${encodeURIComponent(slug)}\`)` (308, OUT:96, L1463) | n/a | n/a | n/a |
+| `POST /api/stripe/webhook` | `route.ts` (M), Task 13 | raw body, `stripe-signature` | Stripe signature, then our session marker for this environment | § 3.12 | `dynamic = "force-dynamic"`, `no-store`; 404 / 500 / 400 / 200 rules | untracked (`/api`) | n/a | n/a |
+| `GET`, `POST /api/mock-checkout` | `route.ts` (M), Task 14 | `?purchase=` (GET), form `purchase` (POST) | `mockCheckoutEnabled()`; POST same-origin; simulated sessions only | § 3.13 | `no-store`, `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `strict-origin (Revision 3.1)`; 404 / 403 / 303 | untracked | 404 | a single centred column, button full width (checked at 375 px in the browser, Task 14) |
+| `GET`, `POST /api/c/[token]` | `route.ts` (M), Task 21a | `params { token }`; POST form | the signed link; POST same-origin | § 3.19 | `no-store`, CSP `default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'`, `X-Frame-Options: DENY`, `strict-origin (Revision 3.1)`, `X-Robots-Tag: noindex`; 200 page / 303 / 403 / 404 | untracked (`/api`) | 404 | a single centred column |
+| `GET /api/cron/daily` | `route.ts` (C), Task 15 | `Authorization` | `cronAuthorized` | `runNightly` | `force-dynamic`, `maxDuration = 300`, `no-store`; JSON counts only | untracked | 401; 500 with errors | n/a |
+| `/sign-in` | `page.tsx` (M), Task 20 | unchanged | unchanged | unchanged | unchanged | unchanged | « Espace client » link | unchanged |
+| `/dashboard/*` | `layout.tsx` (M), Task 20 | n/a | no pro row → `redirect("/mon-espace")` (L1396) | unchanged | unchanged | untracked | n/a | n/a |
+| `/dashboard/clients` | `page.tsx` (M), Task 20a | `searchParams { filter? }` only (no `q`) | the pro (`requireProContext`) | the filter's rows; the search through `searchClientsAction` | unchanged (title « Clients ») | untracked | P3 empty states; the search's empty text in a `role="status"` region | unchanged |
+
+- **`RESERVED_SEGMENTS`:** P4 adds no top-level segment other than `mon-espace`, which P3 Task 41 already reserves (and untracks); Task 1 verifies it. `/api/cron`, `/api/mock-checkout`, `/api/stripe`, `/api/c` live under the reserved `api`.
+- **Analytics rule:** `PageViewTracker` sends `usePathname()` only (never the query), so `p`, `paiement`, `lien` never reach `page_view`; `/[slug]`, `/[slug]/seance/*`, `/[slug]/offre/*`, `/[slug]/merci` are counted as public pages; `/[slug]/espace` and `/mon-espace` are never counted (P3 Task 41). No P4 change to `src/lib/analytics.ts`.
+- **Framing (Task 25a, SEC-M11):** `next.config.ts` `headers()` returns, for `source: "/:slug"`, `"/:slug/:path*"` and `"/mon-espace"`, the headers `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY` (read `05-config/01-next-config-js/headers.md`; the `/api/*` responses set theirs in the handlers).
+
+---
+
+## 6. Decisions
+
+Each settles a point the spec leaves open, one gap or tension of `map-spec-p4.md` § 19 (A1 to A18, B1 to B10), a carry, or a finding of the two critiques (§ 11). Writers apply them verbatim. « **Change to spec** » marks a decision that alters what the spec says; security won every trade-off. Each « Change to spec » decision is listed, with the spec line it amends and a one-line reason, in the « For the owner » section of the P4 outcome (Task 31, COV-I9); until the owner approves it the spec text stays as written and this contract wins for P4 only. Decisions marked « owner validation » are product calls without a security reason: the outcome lists them too.
+
+1. **P4 starts on the P3 end commit `1954782`; Task 1 checks the P3 names this contract quotes** (B4, B10, L1698): Task 41 (`2311421`) put `SpaceIdentity` and the testable `resolveSpaceIdentity` in `guest-access.ts` and the thin `resolveSpaceCustomer` in `client-queries.ts`, so Task 5 changes the verified-session branch in `resolveSpaceIdentity` and makes `resolveSpaceCustomer` delegate to `currentPublicVisitor`, keeping the exported names (revision 3 re-read both at `1954782`).
+2. **Analytics and the `mon-espace` reservation stay P3 Task 41's work** (B3, L1578-1579); P4 only checks them (Task 1) and changes nothing in `analytics.ts`.
+3. **Cores live in `src/lib/public/*` and `src/lib/payments/*`; `src/server/public.ts`, `src/server/client.ts` and the route handlers are thin wrappers** (P3 ruling: tsx tests cannot load `server-only` / `next/*`); the wrapper's own rules live in the tested `src/lib/public/run-action.ts` (COV-I12).
+4. **`requireWalletOwner` lives in `src/server/visitor.ts` (`server-only`), not in the `"use server"` `client.ts`.** **Change to spec** (L1483): every export of a `"use server"` file is a public endpoint; an identity helper returning a customer id must not be one. `client.ts` keeps the client actions.
+5. **Owner predicate = `email = lower(session e-mail) AND (user_id IS NULL OR user_id = session user)`, verified, not impersonated, fresh session.** **Change to spec** (L1344 names only the e-mail): the same predicate as `getMySpace` (L1377-1378), so a row already linked to another account is never treated as yours.
+6. **`upsertCustomer` keeps `userId` only for a verified user with the same e-mail, on INSERT and on conflict, in the statement; the actions also pass it only through `upsertUserIdFor`; a missing phone is filled only by that verified user (SEC-M8).** **Change to spec** (L791 « fourni que si une session vérifiée porte le même email », left to the caller): enforced in SQL (OUT:69, extended to the insert path, where a new row would otherwise be linked to an attacker).
+7. **Only an Owner spends tickets; a typed e-mail and the guest cookie never do; « Dépenser » for a guest-cookie visitor opens `OtpDialog` with an EMPTY address field, neither prefilled nor locked** (L827, L1368-1369, OUT:75, LED:438). **Change to spec** (L1369 « préremplie avec l'adresse »): the cookie can be planted by a cross-site navigation, and a prefilled or locked address would steer the victim onto the attacker's identity; the code proves the address anyway (SEC-I4 wins over COV-I2 item 3).
+8. **A signed-in but unverified visitor keeps the anonymous flows (free registration, buy + book, shop) with a typed e-mail; spending and the wallet need a verified address; the « Confirmez votre adresse » banner is shown on `/[slug]`, the séance page, the espace and `/mon-espace`** (A10, L68-69, L1354-1355). A signed-in visitor never sees the sign-in-by-code form (risk 7, L1816; Decision 70).
+9. **Séance page precedence** (A9, L1445-1455): unknown or another pro's → `notFound()`; RDV → redirect to `/{slug}/espace`; private and not visible (Decision 21) → `notFound()`; the Owner's or the `?p=` reference's own active booking (confirmed: « Vous êtes inscrit(e) », pending: the payment return block; a guest cookie's booking never hides the form, Decision 63); `cancelled`; archived event or private séance → `closed` (COV-M4); `past` / `ongoing`; `onsite`; `notYet`; `closed`; `full`; then the mode's form. **Change to spec**: two states are added to the table, « En cours » (started, not ended) and « Réservations pas encore ouvertes » (beyond the effective horizon, reachable by URL only).
+10. **« Réservations fermées » also covers a séance kept with registrants under a time off (L967) and a tickets-mode séance with no accepted active type (L620); a séance beyond its effective horizon is never listed (L460)**, whatever the notice (OUT:106). A notice override longer than a horizon lowered later shows every listed séance of that event « Réservations fermées » (LED:316): correct for the visitor; the warning stays a back-office matter (P5 carry in the outcome).
+11. **Boutique « Acheter » links to `/{slug}/offre/{offerId}`, which hosts the identity form; the buy + book form lives on the séance page** (A1, L1443, L1449, L1458, L1515-1516): every purchase starts from a page with its own URL, testable and linkable.
+12. **Identity fields = « Prénom et nom » (required, `plainNameSchema`), « Email » (required), « Téléphone » (optional) + one data-use line; no consent checkbox, no marketing opt-in, no notes field** (A2, L68-69, L788-792): the minimum the engine needs. A typed name with a link, an address or a long digit run is refused (SEC-M9).
+13. **Shop URLs: success `/{slug}/merci?p=`, cancel `/{slug}/offre/{offerId}?paiement=annule&p=`; the shop return block offers « Reprendre le paiement » only** (A3, L1099-1104, L811-812): no seat is held, the nightly job expires the purchase.
+14. **`/merci` maps the purchase reference to six states (§ 3.22), refreshes a pending state every 3 s (20 times), and answers `notFound()` for a missing, malformed or foreign `p`** (A4, L1460-1461): no hint about other purchases.
+15. **« Paiements en mode test » shows whenever `paymentMode() !== "live"` (mock included) above every purchase control: Boutique, the séance buy block, the offer page, the mock page** (A5, L1792-1795, L1803-1804): a runtime condition from the key prefix, so it disappears with live keys without a code change.
+16. **« Modifier mon nom » updates `user.name` and every `customer` row with `user_id = uid`** (A6, L1384, L1483): those rows are proven the user's; anonymous input still never overwrites a name (L791-792).
+17. **« Déconnecter mes liens » revokes every row of the `getMySpace` predicate, from `/mon-espace` only** (A7, L1371, L1384).
+18. **Spend in the espace = « Utiliser vos tickets »: at most 8 séances of the next 60 days the Owner can book now with a held ticket; a séance whose event has questions links to its page instead** (A8, L1386-1387): the spend needs the event's answers.
+19. **An admin impersonating a pro has no client identity on public pages**: no wallet, spend or session cancel, no `userId` to `upsertCustomer`, the guest cookie is ignored as well (`guestCustomerId` null, `spaceActorOf` null, SEC-M6, COV-M10), `VisitorBar` hidden, the owner banner shown; `/mon-espace` and the espace show `COPY.IMPERSONATING` (A11, L1343, P3 Decision 41).
+20. **A pro may book on their own page; the banner warns (on `/[slug]` and on the séance page); `/mon-espace` treats the pro's own customer rows like any client's** (A12, L1349-1351, L1861).
+21. **A private séance is visible to the page owner, to a customer viewer (Owner or guest cookie) with an active booking on it, and to a `?p=` reference whose booking is on it; otherwise `notFound()`** (L1452). It is never bookable online (`closed`).
+22. **Cron route = GET, constant-time `Bearer CRON_SECRET` (32 characters at least), 401 also when the secret is unset or short, counts-only JSON, 500 when `errors[]` is not empty, `maxDuration = 300`; `ensureAllHorizons` reports a failing pro, goes on, and stops starting pros past its deadline** (A13, L1181-1198, OUT:126, SEC-M5; engine change in Task 15).
+23. **Webhook: `livemode = event.livemode`, and an event whose livemode differs from the deployment's payment mode is ignored; idempotency is the engine's (`duplicate`), a second payment of a paid purchase is an orphan; only `payment_status === "paid"` fulfils; `expired` / `async_payment_failed` release only the purchase's own session; `not_found` and unknown event types answer 200; Stripe off → 404, secret missing while Stripe is on → 500 (Stripe retries until the owner fixes it), never the stub's silent 200** (A14, L1106-1143, L1110, LED:87, LED:427, SEC-M1, SEC-M2, COV-M2).
+24. **Purchase id of a session = `metadata.purchaseId`, else the row whose `checkout_session_id` is the session id; `client_reference_id` is only a consistency check (set and different → ignored); a paid session of OUR app and environment with no purchase, or whose amount or currency differs from the purchase snapshot, is an orphan payment (200, log, health counter); a session without our marker is ignored, never an orphan** (B9, L809, L1115-1117, SEC-I7, SEC-M1, Decision 69). Sessions carry all three ids and the marker (`stripeSessionParams`).
+25. **`session.payment_intent` is normalised (string or expanded object) before `fulfillPurchase`** (OUT:32, I6).
+26. **E1 stays card-only; risk 10 (Apple Pay / Google Pay, L1819 « À vérifier en P4 ») is checked in P4 when Stripe test keys exist** (A15, B1, COV-I5): Task 31 runs the conditional « Stripe test mode » step (Task 1 found `STRIPE_ENABLED` with an `sk_test_` key on tickets-dev): the owner starts `stripe listen --forward-to localhost:3102/api/stripe/webhook` and pastes the `whsec_` into the worktree `.env.local` himself (never into chat); a buy + book paid with card 4242 confirms the booking (`livemode = false`, receipt and confirmation in the dev log); « Libérer ma place » on a second attempt releases it; the Checkout page is recorded with or without its Apple Pay / Google Pay buttons. Without test keys, Task 31 records risk 10 as an owner action before P6 in the outcome. Task 13 pins the raw-body signature with the real verifier offline.
+27. **The mock checkout is reachable only when Stripe is disabled AND outside production, by `APP_ENV` and by `VERCEL_ENV` (`mockCheckoutAllowed`, one rule in `checkout.ts`); a Vercel production deployment refuses to boot when `APP_ENV` is not `production`; a production without keys answers « Le paiement en ligne n'est pas disponible pour le moment. »** **Change to spec** (L1145, L1870 « coupée dès que Stripe est actif »): stricter; `APP_ENV` defaults to `development` when unset, so a keyless production would otherwise hand out free tickets (SEC-I5).
+28. **The mock checkout GET shows a simulated checkout page and writes nothing; its same-origin POST pays only a simulated session (`checkout_session_id` null or `mock_…`, SEC-M3) and answers 303 to `/{slug}/merci?p=`.** **Change to spec** (L1146-1147 « redirige vers une page merci »): no side effect on a GET (the prefetch reason of L1847), and the abandon flow can be tested in mock mode; still `?purchase=` only, no redirect parameter.
+29. **A simulated checkout stores `mock_<purchaseId>` as its session id (through `attachCheckoutSession`); every Stripe call short-circuits on that prefix.**
+30. **E1 Stripe `expires_at` = `Date.now() + 31 min` computed right before the call (L808), never below the 30-minute Stripe minimum; the database `checkout_expires_at` (a few ms earlier) decides when « Reprendre le paiement » disappears** (B5, L801-802): the URL is withheld slightly before Stripe closes, never after.
+31. **« Reprendre le paiement » shows only while the session is open, and only to the `?p=` reference of that purchase or to the Owner; « Libérer ma place » while the purchase is pending; seats shown use the engine's `hold_expires_at < now`** (B6, L495-496, `activeBookingOf`, Decisions 63, 71).
+32. **« Libérer ma place » releases nothing when Stripe cannot be reached (« Le paiement n'a pas pu être vérifié. Réessayez dans un instant. »), nor when Stripe says paid or processing, nor when the purchase's booking is confirmed.** **Change to spec** (L1167-1168 « Sinon, on appelle releasePurchase »): releasing a session that may still be paid would turn a payment into a late payment; the `expired` webhook and the nightly job release it anyway. The decision reads `closeOutcomeOf` of a retrieved session, never `expireCheckoutSession`'s `not_open`, which cannot tell a paid session from an expired one (LED:429, § 3.6).
+33. **The abandon action never fulfils: the webhook stays the fulfilment path (L1109-1112); the page says « Paiement reçu » and links to `merci`.**
+34. **`stale` in the buy + book and shop contexts reads « L'offre a changé : rafraîchissez la page. »** (B8, L665).
+35. **The client error register is a new `src/lib/public/messages.ts`; `pro-messages.ts` stays the pro's** (P3 Decision 4).
+36. **The IP keys = `ipHash(daily salt, bucket)` of both `ipBuckets(clientIpFrom(headers))` entries (the /64 bucket, and the /48 for IPv6); `checkActionThrottle` refuses anything else** (OUT:109, L1268-1270, SEC-I1; the limits are Decisions 65 to 67).
+37. **Honeypot field `website`: checked right after the strict shape parse, refused before any read or write, with a neutral message, no throttle consumed** (L786, L863, SEC-M15).
+38. **No resume URL is ever derived from a typed e-mail nor from a guest cookie; for a visitor who is not a verified identity, `already_booked` and `too_many_holds` never reach the browser (Decision 64)** (L709, L822, `activeBookingOf` precondition): resume comes from the `?p=` reference or an Owner. Replaces the draft rule « `already_booked` only shows the engine sentence » (SEC-I3).
+39. **The P3 `VerifyEmailBanner` is reused on public pages and `/mon-espace`** (B7, L1337-1339, L1354-1355).
+40. **`OtpDialog` uses the `sign-in` code for signed-out visitors only; `email-verification` codes are sent only for a session of the same address.** **Change to spec** (L1228-1235 counts and sends verification codes for any existing account): closes OUT:129 (enumeration by timing, confirmation mails pushed to strangers).
+41. **`OtpDialog` asks an optional « Votre nom », sent only when non-empty and plain** (L1248-1249): the dialog cannot know whether the address has an account and must not reveal it.
+42. **« Continuer avec Google » from a public page returns to that page (callback and new-user callback, path only); errors go through `/sign-in?next=` and its `account_not_linked` handler** (L76, AGENTS Google rules, SEC-M7).
+43. **`resolveEntry` takes `hasProfessional`; the dashboard layout AND `requireProfessional`, `requireProContext`, `pro.ts` send a signed-in user without a pro page to `/mon-espace`; `AuthForm`'s Google new-user callback in sign-in mode goes back through `/sign-in` (never `/onboarding`); only the sign-up funnel lands on `/onboarding`** (L1394-1397, L76, COV-I3): no path still lands a client on the pro onboarding.
+44. **Held-ticket button: « Réserver avec 1 ticket (il vous en restera N) » for N ≥ 1, « Réserver avec mon dernier ticket » for N = 0.** **Change to spec** (L1353 copy, owner validation): « il vous en restera 0 » reads badly.
+45. **N = usable tickets (at now) of the type the engine will spend (consumption order), minus one** (L1353 ambiguity).
+46. **The public « Semaine » view is 7 day columns of chips (no hour grid, no lanes); below 640 px only the list per day shows.** **Change to spec** (L1521 reuses the pro planning geometry, owner validation): a public week needs order, not overlap geometry.
+47. **`?vue=liste|semaine` (default `liste`) and `?semaine=<Monday>`; « Semaine suivante » stops past today + 365 days; « Semaine précédente » never before the current week** (L1440).
+48. **No RDV libre cards in P4; P5 adds them with `/[slug]/rdv/[ticketTypeId]`.** **Change to spec** (L1441-1442, L1699 list them in P4; owner validation): a card would link to a route that does not exist until P5 (A18, L1700). The outcome carries « `/[slug]` RDV libre cards (L1441) » to P5 and asks the owner whether he wants link-less cards earlier (COV-I10).
+49. **Every P4 page is dynamic through its fresh-session or cookie read; no `unstable_cache`, no `revalidate`; `merci`, `/mon-espace` and the espace are `noindex`; pages that may carry `p` set `referrer: "no-referrer"`; every page sets its own title; a private séance's title never reaches its metadata** (A17, L1321-1324, LED:349, COV-I7, SEC-M10).
+50. **Client cancellation, « Libérer ma place » and « Déconnecter mes liens » open a `ConfirmDialog` that states the consequences** (A16, L1621-1622).
+51. **The espace lists confirmed future bookings only; pending holds stay on the séance return block and, for an Owner, in `PendingHolds` on the séance page** (P3 Decision 51 scope, SEC-I6): a hold lives 45 minutes.
+52. **An espace booking shows « Annuler » only when `clientCanCancel` allows it; otherwise « Seul(e) {pro} peut annuler maintenant. »** (L920-921).
+53. **The purchase receipt and `merci` say `COPY.TEST_PAYMENT_LINE` « Paiement de test : aucun montant n'a été débité. » (one string) for a `livemode = false` purchase** (L1823, risk 14, COV-M1d).
+54. **Pro e-mails go to the pro's user e-mail, carry the client's name and e-mail and a planning deep link** (L1542-1544).
+55. **Receipt and confirmation (or late payment) are separate e-mails** (L1135-1137).
+56. **`offerUnchanged` refuses `rdv_free` types in every scope; fulfilment still issues tickets on such a type** (LED:139, LED:142, L1121): money always yields tickets, the P3 orange alert shows them.
+57. **`bookWithHeldTicket` takes `actorUserId: string`** (OUT:75 « consider »): a client spend always has a user.
+58. **The old `/[slug]/book/*` and `/[slug]/pack/*` URLs answer 308 (`permanentRedirect`)** (OUT:96, L1463).
+59. **A mock e-mail in a production build logs neither recipient, code nor link: one line `[email:mock] <redactSubject(subject)>`; a production `APP_ENV` without a Resend key refuses to load the mailer** (OUT:128; P3 `e73b7bf`, FR:SEC-3, whose ruling kept the redacted subject; P4 adds no client name or address to any subject, Task 8 pins it).
+60. **`src/lib/mock-redirect.ts` and its test are deleted** (OUT:94): the mock route takes no redirect parameter.
+61. **On `/[slug]`, a guest-cookie visitor gets a « Mon espace » link; the wallet panel is for Owners only** (L1352): the cookie's data stays on the espace.
+62. **For an Owner, the forms use the session e-mail (read-only field) and the typed name, which never overwrites an existing customer name** (L792, L1353).
+63. **A guest-cookie viewer is read-and-cancel only, and the cookie may have been planted by someone else** (L1368, LED:438, SEC-I4, COV-I2): it never receives a Checkout URL nor a purchase id (`seanceVisitorFacts` fills only `booking.status` for it), never a wallet on public pages, never hides a booking form (the séance page shows `COPY.GUEST_BOOKING_EXISTS` above the normal form), never prefills or locks an identity field (Decision 7), never chooses who pays; the espace names it « Vous consultez l'espace de {maskEmail(email)} avec un lien personnel. » with a « Ce n'est pas moi » button that clears the cookie (`forgetGuestLinkAction`, no DB write).
+64. **For a visitor who is not a verified identity, no answer depends on another customer's state** (owner priority « no address enumeration », SEC-I3, COV-I4). **Change to spec** (L709, L822): free registration: `already_booked` answers exactly like a fresh success (`COPY.REGISTERED`) and re-sends the confirmation of the EXISTING booking to its address only (bounded by the `free` keys); buy + book: `already_booked` and `too_many_holds` both answer `COPY.BUYBOOK_NOT_POSSIBLE` without a code (one sentence for both: SEC-I3's single wording is kept over COV-I4's two, it says less). Residual, accepted for that path only and recorded in the outcome: a buy + book refusal still differs from a Checkout redirect, bounded by the e-mail keys. A verified identity keeps the engine sentences (its own state).
+65. **Seat holds and free registrations are bounded per séance, per pro and per IPv6 /48, not only per customer: a typed address costs nothing to make up** (SEC-I1). **Change to spec** (L1268-1273, stricter): `buybook` and `free` consume a per-séance IP key (2 per hour), `free` a per-pro IP key (6 per hour), every action a /48 key (3 times its IP limit); buy + book for a typed address also refuses when the séance already carries `holdCeiling(capacity) = max(3, ceil(capacity / 3))` live holds (`COPY.TOO_MANY_PAYMENTS`; a read, not a guard: a race lets one extra hold through, never a stranger's seat).
+66. **Booking with a held ticket, client cancellation and « Libérer ma place » are throttled (`held`, `cancel`, `release`)** (SEC-I2): the ticket comes back on every cancellation, so the wallet bounds nothing; each loop sends four e-mails and two calendar syncs. **Change to spec** (L1268-1273 lists `free`, `buybook`, `rdv`, `shop` only; stricter).
+67. **E-mail keys are per pro (the spec's 6 per hour) plus a global mailbox bound (20 per hour); a verified identity is throttled on its user key only** (SEC-I6): strangers typing an address can neither lock its verified holder out of every Skedul page nor pin her holds for good: an Owner sees her live pending holds at the pro (`PendingHolds`) and releases them. **Change to spec** (L1268-1273, per-address keys scoped).
+68. **A personal link sets the cookie only through a same-origin confirmation: `GET /api/c/<token>` answers a no-script page « Ouvrir mon espace chez {businessName} » and sets nothing; its same-origin POST re-checks the link, sets the cookie and answers 303 to the espace** (LED:438, SEC-I4). **Change to spec** (L1365-1366 « pose le cookie … et redirige (303) »): a cross-site navigation or a mail scanner can no longer plant an identity. The token still travels in the GET path (accepted residual, § 1).
+69. **Every Checkout session carries `metadata { purchaseId, app: "skedul-tickets", env: APP_ENV }` (and the same on its payment intent); the webhook handles only sessions of its own app and environment in `mode: "payment"`** (SEC-I7). **Change to spec** (L1115-1117 « orphan payment » for any paid session without a purchase): the account also receives the SaaS billing, Payment Links and, while production runs on test keys, the preview and dev deployments' events; none of them is ever an orphan to refund.
+70. **A signed-in unverified visitor gets the « Confirmez votre adresse » banner, never the sign-in-by-code form** (risk 7, L1354-1355, L1386, L1816, COV-C1): a code sign-in purges an unverified user's password and every session. `SpaceIdentity` gains `unverified` (and `impersonating`); `canOfferCodeSignIn(state)` (anonymous only) gates every `EmailCodeForm`, `OtpDialog` and `ClientSignInChoices`; « Réserver avec 1 ticket » is disabled with `COPY.CONFIRM_EMAIL_TO_SPEND` for that visitor.
+71. **A `?p=` purchase reference shows THAT purchase and its own booking, never its customer** (SEC-C1): the customer of a purchase came from a typed e-mail (`upsertCustomer` of the buyer's address), so a reference never yields a wallet, another booking, another purchase's resume URL or a customer id in a prop; `seanceViewerOf` returns `{ kind: "reference" }` for it, `seanceVisitorFacts` is called only for an Owner or a guest cookie, and `abandonCheckoutCore` takes its purchase id from its input only.
+72. **`customer.user_id` is set only by that user's own act at that pro; the cross-pro link at sign-in is removed** (FR:SEC-5, revision 3). **Change to spec** (L1345-1346 « À la connexion, `session.create.after` relie aussi au mieux les fiches `customer` de tous les pros pour un utilisateur vérifié »): that best-effort link turned the « Compte client lié » badge of every pro's client record (L1423, kept) into an oracle: a pro who typed an address learnt whether its owner used Skedul anywhere. Now the link comes from `upsertCustomer` (a verified session of the same address booking or buying at this pro, Decision 6) or `linkCustomerUser` (`requireWalletOwner`, her spend at this pro, L1345), so « lié » means « this client acted here while signed in », a fact the pro already sees. Nothing a client gets is lost: `getMySpace` (L1377-1378) and the Owner predicate (Decision 5) also take the unlinked rows of the verified address. The branch's existing links are test data only (the hook never reached production: `main` has no such link). Security first, so applied without waiting; the outcome lists it for the owner.
+73. **The pro's client search never puts the typed term in a URL** (FR:UI-13, revision 3, the P4 privacy review of the P3 carry): `/dashboard/clients` searches through `searchClientsAction` (a `runProQuery` read) and keeps the term in component state; `?filter=` stays in the URL (no personal data). **Change to the P3 contract** (its GET search form): client names and e-mails no longer reach the browser history, the address bar or the platform request logs. Cost: a search result has no shareable URL.
+74. **Every effect run P4 starts passes the budget `"none"`; only `runProAction` passes `"pro"`** (P3 `a958375`, FR:SEC-1 follow-up): the public and client actions, the Stripe webhook and the mock checkout send what the client asked or paid for (receipt, confirmation, the pro's notice), bounded by the throttle keys (§ 3.3), never dropped because a pro's own budget is spent (an unverified pro has 50 per 24 h); the cron route runs no effect. `runEffects` keeps its required argument, never a default; the source guards of Tasks 7, 13 and 14 pin `"none"`.
+75. **A public action follows the P3 session rules for writes: a fresh session whose suspended user counts as no session, and an ids-only trace line for each successful action made while an admin impersonates** (FR:SEC-2, FR:SEC-6, revision 3): `currentSessionFacts` applies `actingSession`; `runPublicActionWith` logs `publicImpersonationLogLine` (« [public] <name> by admin <id> for pro <id> »), never a name or an address. Decision 19 is unchanged: the impersonating admin still has no client identity.
+
+---
+
+## 7. Task breakdown
+
+34 tasks, executed in this order: 1 to 20, 20a, 21, 21a, 22 to 24, 25a, 25b, 26 to 31. Each ends green (Global Constraints). "Interfaces" points to § 3; the writer copies those declarations into the task's Interfaces block. Browser steps follow § 8.3. Tasks 4, 8, 15, 22 and 31 run the full DB suite (chunked). Commit scopes in parentheses. Every core test file includes the malformed-input cases of its strict schema (an extra key, a wrong type, `identity: null`, `website: ["x"]`: the French parse error or the honeypot refusal, nothing read or written, SEC-M15).
+
+### G1: Foundation (Tasks 1 to 8)
+
+**Task 1: Preflight and the copy guard over the public code** (G1)
+- Files: § 2.1 rows of Task 1, plus every existing file the scan reports.
+- Depends on: the P3 end commit `1954782` (Tasks 41 to 43 and the final-review fix pass). Interfaces: § 3.1.
+- Steps: the preflight of § 3.1, points 1 to 3 (stop and report on any missing P3 piece or any interface that differs from § 3); the carry re-read (the archived ledger from LED:438 to its end and every « [P4] » line of the P3 outcome), each carry listed in the Task 1 ledger entry with the task or § 10 line that places it (stop and report one this contract does not place, COV-I2); the copy of this contract to `docs/superpowers/plans/2026-10-21-p4-public-contract.md`; the environment booleans (recorded in the ledger, never a value); the conditional `skedul-tickets-mock` launch entry; the `OPTIONAL` additions; remove the reported dashes (comments included).
+- Tests: pure suite (`ui-copy.test.ts`).
+- Browser: `preview_start` `skedul-tickets`; `http://localhost:3102/altinha-paris` renders (P2 stub); `http://localhost:3102/altinha-paris/espace` shows the P3 anonymous hint; `http://localhost:3102/unknown-pro-xyz/espace` answers 404 (P3 `1b743cc`); console clean.
+- Commit: `chore(p4): preflight and copy guard over the public code`.
+
+**Task 2: Client wording, action results and plain names** (G1)
+- Files: § 2.1 rows of Task 2. Depends on: 1. Interfaces: § 3.2.
+- Tests (pure): `messages.test.ts`: every override key is a real `EngineErrorCode`; `clientErrorMessage({ code: "invalid", message: "Merci de répondre à : Niveau" }, "free", v)` returns the message; `too_late_or_done` in `cancel` → « Seul(e) Altinha Paris peut annuler maintenant. »; `stale` in `buybook` and `shop` → « L'offre a changé : rafraîchissez la page. »; `no_ticket` in `held` → the engine sentence; `seatsLeftLabel` 0 / 1 / 2 / 1000 (« 1 000 places restantes »); `heldTicketButtonLabel` 0 / 1 / 3; `maskEmail("beatriz@example.com") === "b•••@example.com"`, `maskEmail("x") === "•••"`; `guestNote`, `acceptedByLine(["Altinha débutants", "Roda libre"])` exact; `walletLine` 0 / 1 / 3 / 1000; every revision-2 `COPY` key exact; no string contains a dash; no string equals a `PRO_ERROR_MESSAGES` value; no string matches `/\b(tu|ton|ta|tes)\b/i`. `result.test.ts`: `publicFail` / `publicOk` default `effects: []`; `withoutPublicEffects` drops only `effects`; `fromEngineClient` keeps the code, drops it with `dropCode`; `fromParse` keeps `fieldErrors`; `PUBLIC_REVALIDATE` exact. `plain-name.test.ts`: « Beatriz Almeida », « Jean-Marie O'Neil », « Anne 2 » accepted; « www.exemple.fr », « https://x.fr », « appelez a@b.fr », « 0612345678 » refused; `plainNameSchema` gives `COPY.PLAIN_NAME` for a refused name and the parseFr « obligatoire » text for an empty one.
+- Commit: `feat(public): client wording, action results and plain names`.
+
+**Task 3: Client address buckets and the scoped throttle keys** (G1)
+- Files: § 2.1 rows of Task 3. Depends on: 1. Interfaces: § 3.3.
+- Tests: pure `client-ip.test.ts`: `x-vercel-forwarded-for` wins; the first `x-forwarded-for` entry trimmed; `x-real-ip` fallback; none → null; `ipBucket("203.0.113.7")` and `ipBucket("::ffff:203.0.113.7")` → `"203.0.113.7"`; `"2001:db8:abcd:12:1:2:3:4"`, `"2001:db8:abcd:12::99"`, `"[2001:db8:abcd:12::1]"`, `"2001:db8:abcd:12::1%eth0"` → `"2001:db8:abcd:12::/64"`; `"garbage"`, `""`, null → `"unknown"`; `ipBuckets("2001:db8:abcd:12::1").wide === "2001:db8:abcd::/48"`, `ipBuckets("203.0.113.7").wide === null`, `ipBuckets(null).wide === null`. `throttle.test.ts`: `IP_HASH_RE`; `actionThrottleKeys` exact lists: an e-mail subject gives the per-pro and the global e-mail keys, a user subject only `t:<a>:u:<userId>`; `wideIpHash` null gives no `ip48` key; `occurrenceId` adds the per-séance key for `buybook` and `free` only; `free` adds the per-pro IP key; the limits of the table. `tickets.test.ts`: the action list and the exact `THROTTLE_LIMITS` table; no action is named `mail` or `horizon` (the `t:mail:p:` budget and `t:horizon:p:` keys share the table). DB `throttle.db.test.ts` (the P3 `consumeThrottle` / `hitThrottle` cases stay green): `checkActionThrottle` with `"1.2.3.4"` (or a bad `wideIpHash`) throws and writes no row; the 21st request of one IP hash (distinct e-mails) is refused; the 7th of one e-mail at one pro (distinct IP hashes) is refused while the same e-mail at a second pro passes; the 21st of one e-mail across pros is refused (global key); a user subject passes after 7 e-mail-subject requests of the same address (SEC-I6); the 3rd `buybook` on one séance from one IP hash is refused (SEC-I1). Fresh `testIpHash()` and `testEmail(tag)` values only.
+- Commit: `feat(throttle): bucketed client address and scoped throttle keys`.
+
+**Task 4: Engine security carries** (G1)
+- Files: § 2.1 rows of Task 4. Depends on: 1. Interfaces: § 3.4.
+- Tests (DB): `wallet-customers.db.test.ts`: a verified user with the same e-mail → `user_id` set (insert and conflict); a verified user of another e-mail → `user_id` null on insert and stays null on an existing row; an unverified user of the same e-mail → null; an existing `user_id` is never replaced; the name is never overwritten; phone (SEC-M8): an anonymous typed phone never fills an existing row's empty phone, a verified same-address user fills it, an existing phone is never replaced, a new row keeps the typed phone. `claims-buy.db.test.ts`: an offer whose type is switched to `rdv_free` by SQL after its creation → `startPurchase` and `startBuyAndBook` answer `stale`, no purchase row. `claims.db.test.ts`: callers pass a string `actorUserId`; the spend movement records it. `fulfillment.db.test.ts`: `recordOrphanPayment` bumps `health:orphan_payments` and returns `outcome: "orphan"`. Then the full DB suite (chunked): an engine statement used by the seed, the claims, the fulfilment and the P3 cores changed (COV-I8).
+- Commit: `fix(engine): verified-only account link and phone fill, rdv_free refused in every offer scope`.
+
+**Task 5: Visitor identity and the wallet owner** (G1)
+- Files: § 2.1 rows of Task 5; C `src/test/public.ts` with `testIpHash`, `createTestClientUser`, `sessionOf` (Task 7 adds the rest). Depends on: 3, 4. Interfaces: § 3.5, § 3.7 (those three helpers).
+- Tests: pure `identity.test.ts`: `sessionFactsOf` null / undefined / full (`impersonatedBy` copied, `impersonated` true exactly when it is set); `visitorState` precedence (impersonated + unverified → impersonating); `src/server/visitor.test.ts` (source guard): `currentSessionFacts` reads `getFreshSession()` through `actingSession(`, never `getSession()`; `upsertUserIdFor`: verified same e-mail (case and spaces) → id, unverified / impersonated / other e-mail / null → null. DB `identity.db.test.ts`: `ownedCustomerId` same e-mail + null `user_id` → id, + own `user_id` → id, + another user's `user_id` → null, another pro's row → null; `resolveVisitor`: anonymous with a valid cookie → `guestCustomerId`; verified with a record → `owner`, `guestCustomerId` null even with a valid cookie; verified without a record → both null; unverified with a cookie → guest; impersonated with a valid cookie → no owner AND `guestCustomerId` null (SEC-M6); `isPageOwner` for the pro's own user; a cookie of another pro's customer → null; a revoked `link_version` → null; `linkCustomerUser` fills a null `user_id` and never replaces one; `customerEmailOf` of another pro's customer → null. `guest-access.db.test.ts`: same e-mail with another user's `user_id` → `no_record`; unverified session without cookie → `unverified`, never `anonymous` (COV-C1); impersonated session with a valid cookie → `impersonating`; the two P3 tests « an UNVERIFIED session never reads a wallet … » and « an impersonated session never reads client data … » rewritten to those expectations (§ 3.5), every `SpaceSession` literal with a `userId`. Run `src/lib/back-office/guest-access.db.test.ts`, `src/lib/back-office/customer-space.db.test.ts` and `src/lib/public/identity.db.test.ts` (COV-I8); the P3 espace page compiles against the new kinds.
+- Commit: `feat(identity): visitor resolution and the wallet owner`.
+
+**Task 6: Checkout gateway** (G1)
+- Files: § 2.1 rows of Task 6. Depends on: 2. Interfaces: § 3.6.
+- Steps: grep the callers of `expireCheckoutSession` (`src/server/admin.ts` with `DELETION_STRIPE_OPTIONS`, `src/server/notify.ts`) before and after: its signature and results stay byte-compatible (COV-I8).
+- Tests (pure): `checkout.test.ts`: `stripeSessionParams` buybook has `payment_method_types: ["card"]`, shop has none; `metadata` and `payment_intent_data.metadata` are exactly `{ purchaseId, app: "skedul-tickets", env }`; `client_reference_id` = the purchase id; `expires_at` in whole seconds; `locale: "fr"`; one line item with the amount and currency; `checkoutUrls` strips a trailing slash of `appUrl`, success `…/merci?p=`, cancel séance or offer; no URL has `redirect`, `next` or `@`; `mockCheckoutUrl` has only `purchase`; `buybookCheckoutExpiry(t)` = t + 31 min; `closeOutcomeOf` matrix (open, expired, complete paid, complete no_payment_required → processing, complete unpaid, null); `paymentModeOf` (`sk_live_`, `rk_live_`, `sk_test_`, disabled) and `stripeMode === paymentModeOf` (COV-M8); `isMockSession`; `mockCheckoutAllowed`: Stripe on → false; `APP_ENV` production → false; `{ STRIPE_ENABLED: false, APP_ENV: "development", VERCEL_ENV: "production" }` → false (SEC-I5); development or preview without Stripe → true. `admin-metrics.test.ts` stays green.
+- tsc proves `createCheckoutUrl` and `isStripeLive` have no importer left.
+- Commit: `feat(payments): Checkout gateway with session id, expiry and the app marker`.
+
+**Task 7: Public action plumbing** (G1)
+- Files: § 2.1 rows of Task 7 (M `src/test/public.ts`: `publicProOf`, `actionVisitorOf`, `fakeCheckout` with its `onCreate(req)` hook, `publicDepsOf`). Depends on: 5, 6. Interfaces: § 3.7.
+- Tests (pure): `context.test.ts`: `publicProOfRow` mapping; `SLUG_PARAM_RE` accepts `altinha-paris`, refuses `../x`, `A`, 61 characters; `splitActionInput` of an object → its slug and the rest without `slug`, of `null`, a string or an array → `{ slug: undefined, rest: input }`. `run-action.test.ts` (COV-I12, fake deps): slug `"../x"`, 61 characters or not a string → `PAGE_GONE` and `fn` not called; unknown or suspended pro → `PAGE_GONE`; `fn` throws → `PUBLIC_UNEXPECTED` and the log line contains no `@`; a control-flow error is rethrown (`rethrowIfControlFlow` throws it back); a failure carrying effects schedules them; `revalidate` on `ok` only; ONE `now` handed to `visitor` and `fn`; the result has no `effects` key; a successful action of an impersonated session calls `info` once with `[public] <name> by admin admin-test for pro <id>` (no `@`), a refused one and a non-impersonated one never (Decision 75); `runClientActionWith` the same rules without a slug and without the trace. `src/server/public-context.test.ts` (source guard): `runPublicAction` and `runClientAction` schedule `runEffects(effects, "none")`, and no `runEffects(` call of the file passes `"pro"` (Decision 74).
+- Commit: `feat(public): public action context and tested wrapper`.
+
+**Task 8: Receipts, late payment, pro notices and the effect runner** (G1)
+- Files: § 2.1 rows of Task 8. Depends on: 7. Interfaces: § 3.8.
+- Tests: pure `public-emails.test.ts`: per template every string arg `<script>&"'` is escaped; subject without CR/LF; no dash; `formatMoney` output (« 85 € »); receipt 1 / 4 tickets wording, the test line equals `COPY.TEST_PAYMENT_LINE` (parity), `bookingLine` toggles, `walletLine(walletCount)` absent for 0; late payment count 1 / 4 with the spec sentence verbatim; client mails carry the personal link, pro mails do not; the planning button `href`; no subject contains the customer's name or address (the production mock line prints the redacted subject, Decision 59). `notify-run.test.ts` (LED:84, FR:SEC-1): duplicates run once; a throwing plan logs and the next effect still runs; a throwing send logs and does not throw; `mailsToSend` receives the budget the run was given (`"pro"` and `"none"` cases); a « pro » plan with `dropped: 2` sends only the `send` mails and warns one `mailBudgetLogLine` line, without `@`; `dropped > 0` with `professionalId: null` warns nothing; no log line contains `@`; the `never` branch is exhaustive (tsc). DB `notify-core.db.test.ts` (the P3 test « P4 types are deferred, Google and Stripe pass through, a row that no longer exists plans no e-mail » becomes « Google and Stripe pass through, a row that no longer exists plans no e-mail »; every new plan is checked with the file's helper that asserts `plan.professionalId` is the pro's): a paid buy + book purchase of « Carnet de 4 » → `purchase_receipt` = 1 mail to the customer, subject « Reçu : Carnet de 4 chez … », amount, expiry « valables jusqu'au … » (count 4), booking line, « 3 tickets sont dans votre portefeuille. »; a paid buy + book of « À l'unité » → no wallet line (COV-M1g); a released then fulfilled purchase → `late_payment` mail with the ticket count; `registerFree` → `pro_new_booking` = 1 mail to the pro's user e-mail with the client name; `cancelByClient` → `pro_booking_cancelled` with the ticket line; an unpaid purchase → no receipt; a pro cancellation → no `pro_booking_cancelled` mail; unknown ids → `{ kind: "emails", emails: [] }`. Full DB suite (end of G1).
+- Commit: `feat(emails): receipts, late payment, pro notices and a tested effect runner`.
+
+### G2: Payments and server actions (Tasks 9 to 15)
+
+**Task 9: Buy + book (E1)** (G2)
+- Files: `src/lib/public/booking-actions.ts` (E1 part and the shared helpers), its `.db.test.ts`; C `src/server/public.ts` (`startBuyAndBookAction`). Depends on: 8. Interfaces: § 3.9, § 4 row 1.
+- Tests (DB, `fakeCheckout`): ok → purchase pending with the fake session id and URL; the recorded request has kind buybook, `env` "test", `expiresAt ≥ now + 30 min`, success `https://app.test/<slug>/merci?p=<id>`, cancel on the séance; create failure → booking expired, `seats_taken` back, purchase expired, `CHECKOUT_FAILED`, a `google.sync_occurrence` effect; `onCreate` expiring the purchase → attach refused → the fake records `expire(session)`, the seat is freed, the stale wording; honeypot → no customer row, no throttle row; the 7th request of one e-mail at this pro → `throttled`, no new row; three requests on one séance from one `ipHash` with three addresses → the third `throttled`, no third booking (SEC-I1); a capacity-6 séance already carrying 3 live holds (row helpers) → `TOO_MANY_PAYMENTS` for a typed address, nothing written, while an Owner still gets her hold; mock gateway with `mockAllowed: false` → `PAYMENT_UNAVAILABLE`, nothing written; a typed e-mail of another verified user → `customer.user_id` stays null; an Owner typing another e-mail → the purchase's customer is the Owner's; cross-tenant occurrence or offer of a second pro → the buybook `not_found` wording, nothing written; a typed address already booked on the séance → `BUYBOOK_NOT_POSSIBLE`, no `code` key in the result, no purchase row; a typed address holding two live holds → the same answer (Decision 64); an Owner already booked → « Vous êtes déjà inscrit(e). » with its code; missing required answer → « Merci de répondre à : … »; e-mail `x` → `fieldErrors["identity.email"]` « Email : adresse email invalide. »; name « www.arnaque.fr » → `fieldErrors["identity.name"]` `COPY.PLAIN_NAME`; an old `seenStartsAt` → « La séance a changé, rafraîchissez la page. »; the malformed-input cases.
+- Commit: `feat(public): buy and book with a held seat and Checkout`.
+
+**Task 10: Free registration (E3) and held ticket (E2)** (G2)
+- Files: `booking-actions.ts` (+ E2, E3), its `.db.test.ts`; M `src/server/public.ts`. Depends on: 9. Interfaces: § 3.9, § 4 rows 2, 3.
+- Tests (DB): free ok → confirmed, effects `booking_confirmed`, `pro_new_booking`, sync; a tickets-mode séance → the unavailable sentence; full → « Complet : il ne reste plus de place sur cette séance. »; throttle `free` (e-mail key; the 3rd on one séance from one IP; the 7th at the pro from one IP across séances); honeypot; a typed address already registered → the result deep-equals a fresh success, exactly one effect `email.booking_confirmed` for the EXISTING booking id, no second booking (Decision 64); a verified identity already registered → « Vous êtes déjà inscrit(e). ». Held, SECURITY: an anonymous visitor typing a holder's e-mail → `CONFIRM_EMAIL_TO_SPEND`, no booking, the ticket still available; `actionVisitorOf({ guestCustomerId: <holder> })` without a session → the same (COV-I11); an impersonated session whose e-mail matches the holder → the same; an unverified session → the same; an Owner → confirmed, ticket booked, movement `actor_user_id` = the owner's user; an Owner of another pro → refused; no usable ticket → « Aucun ticket utilisable pour cette séance. »; after 10 hits on `t:held:u:<userId>` in the hour → `throttled`, no booking (SEC-I2).
+- Commit: `feat(public): free registration and booking with a held ticket`.
+
+**Task 11: Shop purchase (E9)** (G2)
+- Files: § 2.2 rows of Task 11; M `src/server/public.ts`. Depends on: 9. Interfaces: § 3.10, § 4 row 4.
+- Tests (DB): ok → purchase pending, the request kind shop with `env` and `expiresAt` = the row's `checkout_expires_at`, cancel on the offer page; an inactive offer → « Cette offre n'est plus proposée. »; an `rdv_free` type → the stale wording; another pro's offer → not found wording; create failure → purchase expired, `CHECKOUT_FAILED`; throttle `shop` (per-pro e-mail key; a user subject for a verified identity); honeypot; the malformed-input cases.
+- Commit: `feat(public): shop purchase through Checkout`.
+
+**Task 12: Purchase reference and « Libérer ma place » (E11)** (G2)
+- Files: § 2.2 rows of Task 12; M `src/server/public.ts`. Depends on: 11. Interfaces: § 3.11, § 4 row 5.
+- Tests (DB): `purchaseByReference`: full reference (its own booking's title, `resumeUrl` while open, null once `checkout_expires_at` passed); another pro's id → null; `"../x"` and a 65-character id → null; `ticketCount` after payment; a later booking of the same customer on the same séance is NOT the reference's booking (SEC-C1). `abandonCheckoutCore`: close `"expired"`, `"already_expired"`, `"mock"` → released, booking expired, seat freed, sync effect; `"paid"` / `"processing"` → nothing released; `"failed"` → `RELEASE_CHECK_FAILED`, nothing released; a paid purchase → `paid` without calling the gateway; an expired one → `already_ended`; a pending purchase whose booking is confirmed (row helpers) → `already_ended`, no gateway call; the ok result's keys are exactly `ok` and `outcome` (no customer data); after 30 hits on the release key of the purchase's customer e-mail → `throttled`, no gateway call (SEC-I2); SECURITY: another pro's purchase → not found; an Owner who is not the purchase's customer → not found; no session id → released; the malformed-input cases.
+- Commit: `feat(public): purchase reference and seat release`.
+
+**Task 13: Stripe webhook (E10, E11)** (G2)
+- Files: § 2.2 rows of Task 13. Depends on: 12. Interfaces: § 3.12, § 4 row 9.
+- Tests: pure `webhook-core.test.ts`: `paymentIntentIdOf` string / object / null; `verifyWebhook` missing / throwing / ok; the real verifier offline (COV-I5): `(p, s) => new Stripe("sk_test_offline").webhooks.constructEvent(p, s, secret)` with a header from `stripe.webhooks.generateTestHeaderString({ payload, secret })`: a payload containing « séance » → ok, the same payload re-serialised (`JSON.stringify(JSON.parse(p))`) or one byte changed → `bad_signature` (the raw body is required); `sessionOrigin` matrix (marker and env → own; other env → other_env; no marker, `mode: "subscription"` or `"setup"` → foreign); `HANDLED_EVENTS`. DB `webhook-core.db.test.ts` (sessions carry the marker unless the case says otherwise): completed paid → fulfilled (N tickets, booking confirmed, receipt + confirmation + pro notice + sync effects); the same event again → duplicate, no ticket, no effect; a second paid session with another payment intent on the paid purchase → orphan, counter +1 (SEC-M2); completed unpaid → `processing_at` set, then `async_payment_succeeded` → fulfilled; `async_payment_failed` → released; `expired` → released, seat freed; `expired` of a session that is not the purchase's → ignored, nothing changed; unknown purchase on `expired` → ignored; LED:427: a pending purchase deleted with its pro (`deleteTestUser` of a second test pro after the session was attached) → its `expired` event is `ignored` (the route answers 200), its paid `completed` event is an `orphan` (+1 on the counter, no ticket); metadata purchase id missing but `checkout_session_id` known → resolved; a different `client_reference_id` → ignored; a paid session of ours with nothing resolvable → orphan (+1 on the counter); `amount_total` one cent off, or another currency → orphan, no ticket (SEC-M1); `no_payment_required` → ignored, nothing issued (COV-M2); a paid session without the marker → ignored, counter unchanged; one marked `env: "preview"` on a `test` handler → ignored (SEC-I7); `event.livemode: true` on a `test` handler → ignored; on a `live` handler it stores `livemode` and the payment intent (I6 holds); an expanded payment intent object stored by id; an unhandled type → ignored. Route source guard (in `webhook-core.test.ts`, the route cannot be loaded): `src/app/api/stripe/webhook/route.ts` schedules `runEffects(effects, "none")` and passes no raw `err` to `console.*` (Decision 74, LED:87).
+- Browser (curl through the dev server): `POST /api/stripe/webhook` without signature → 404 (Stripe off) or 400 (on); the dev log shows no stack and no raw error.
+- Commit: `feat(payments): Stripe webhook on the tickets engine`.
+
+**Task 14: Simulated checkout** (G2)
+- Files: § 2.2 rows of Task 14 (C `src/lib/same-origin.ts`; D `mock-redirect.ts` and its test). Depends on: 13. Interfaces: § 3.13, § 4 row 10.
+- Tests: pure `same-origin.test.ts`: same origin, other host, other scheme, other port, null, `"null"`, `appUrl` with a trailing slash or a path. `mock-checkout.test.ts`: `mockCheckoutHtml` escapes `<script>` in business name and label, has « Paiement simulé », « Payer (simulation) », a POST form to `/api/mock-checkout` with a hidden `purchase`, no `<script`, no dash. DB: `mockCheckoutState` pending → view (cancel path séance for buy + book, offer for the shop), paid → merci path, unknown → null, a pending purchase attached to `cs_test_x` → null; `mockPay` → fulfilled with `livemode = false`, merci path `/{slug}/merci?p=`; a second `mockPay` → paid path, no effect; unknown → `not_found`; a purchase attached to `cs_test_x` → `not_found`, nothing paid (SEC-M3). Route source guard (in `mock-checkout.test.ts`): `src/app/api/mock-checkout/route.ts` schedules `runEffects(effects, "none")` (Decision 74).
+- Browser (mock mode): curl `GET /api/mock-checkout?purchase=unknown` → 404; `POST` without `Origin` → 403; `curl -sI` on a pending purchase's page shows `X-Frame-Options: DENY` and `Cache-Control: no-store`; the simulated page opened in the browser pane at 375 px: one column, full-width button, no horizontal scroll (COV-M13).
+- Commit: `feat(payments): simulated checkout for simulated sessions only`.
+
+**Task 15: Nightly route, schedule and boot checks (E12)** (G2)
+- Files: § 2.2 rows of Task 15 (C `src/lib/env-checks.ts`, `src/lib/env-checks.test.ts`). Depends on: 14. Interfaces: § 3.14, § 4 row 11.
+- Tests: pure `cron-auth.test.ts`: exact `Bearer <secret>` ok with a 32-character secret; a 31-character secret → false (SEC-M5); wrong secret, missing header, `bearer` lower case, extra space, empty or undefined secret → false. `env-checks.test.ts`: `VERCEL_ENV` production + `APP_ENV` development → the APP_ENV error; `APP_ENV` production + a 31-character `BETTER_AUTH_SECRET` → the secret error; development without `VERCEL_ENV` → `[]`. DB `nightly.db.test.ts`: `ensureAllHorizons` with an `ensure` that throws for the first pro → `failures` names it and the second pro is still processed; `deadline: 0` → exactly one pro processed and « deadline reached after 1 pro(s) » reported (OUT:126); `runNightly` puts `ensureAllHorizons: pro …` in `errors`; the P2 nightly test T11 asserts `checkInvariants` reports no violation before its cleanup (OUT:126). Full DB suite (end of G2).
+- Browser (curl): `GET /api/cron/daily` without header → 401 « Unauthorized ».
+- Commit: `feat(cron): nightly route, CRON_SECRET, the Vercel schedule and boot checks`.
+
+### G3: Identity UI and client spaces (Tasks 16 to 22)
+
+**Task 16: Auth hardening** (G3)
+- Files: § 2.3 rows of Task 16. Depends on: 15. Interfaces: § 3.15.
+- Tests: DB `auth.db.test.ts`: an `email-verification` request for an existing account without session → 200 `{ success: true }`, no mail, no counter row; with the session of another address → the same; with its own session (password sign-up, unverified) → one mail; IDE2 expectations updated; T15 unchanged; the P2 test « a verified sign-in links the customer rows of that address » becomes « a verified sign-in links no customer row » (Decision 72: a row a pro created with that address, at this pro and at a second pro, keeps `user_id` null; `last_login_at` is still stamped). Before committing, grep the DB tests for another expectation of that link (`userId` of a `customer` row read after a sign-in) and update it; Task 22's full suite proves none is left. Pure `auth-messages.test.ts`: `CODE_SENT` exact; `verifyCodeFailure({ status: 403, code: "BANNED_USER" })` → the suspended sentence. `mock-log.test.ts` is P3's and stays green unchanged (`e73b7bf`).
+- Browser: `/link-google` with a wrong password shows « Email ou mot de passe incorrect. » in a `role="alert"` line.
+- Commit: `fix(auth): confirmation codes only for the signed-in address; no cross-pro customer link at sign-in`.
+
+**Task 17: Code sign-in form and dialog** (G3)
+- Files: § 2.3 rows of Task 17. Depends on: 16. Interfaces: § 3.16.
+- Steps: `src/components/ui/dialog.tsx` is not modified (§ 3.16; Task 1 checked the P3 trap and focus restore).
+- Tests (pure): `sign-in-flow.test.ts`: `codeInputValue("12 a3-456789")` → `"123456"`; `isCompleteCode`; `returnPathOf` refuses `//evil.example`, `https://evil.example`, `/\\evil` (→ `"/mon-espace"`) and turns `/altinha-paris/seance/x?paiement=annule&p=y#z` into `/altinha-paris/seance/x` (SEC-M7); `googleCallbacks` encodes `next`; `authFormGoogleCallbacks`: sign-in mode with and without `next` never yields `/onboarding`, sign-up mode `next ?? "/onboarding"` (COV-I3); `passwordSignInHref`; `nameToSend` trims, caps at 80, gives undefined for spaces and for « www.x.fr »; `canOfferCodeSignIn` true for `anonymous` only (COV-C1).
+- tsc, eslint, build (the components are exercised in Tasks 19, 22, 25b).
+- Commit: `feat(identity): code sign-in form and dialog`.
+
+**Task 18: My space read and client account actions** (G3)
+- Files: § 2.3 rows of Task 18 (`src/server/client.ts` with the two account actions; M `src/server/client-queries.ts` with `getMySpacePage`). Depends on: 17. Interfaces: § 3.17, § 4 rows 7, 8.
+- Tests (DB): `my-space.db.test.ts`: rows with `user_id = uid` at two pros → two cards in French order; a same-e-mail row with null `user_id` → included; a same-e-mail row linked to another user → excluded; a suspended pro → excluded. `client-actions.db.test.ts`: `updateMyNameCore` verified → `user.name` and the `user_id = uid` rows renamed, a null-`user_id` row and other users untouched; unverified / impersonated / null → `SIGNED_IN_ONLY`; empty name → « Nom : ce champ est obligatoire. »; « appelez le 0612345678 » → `fieldErrors.name` `COPY.PLAIN_NAME` (SEC-M9); an extra key → the parse error; `revokeMyLinksCore` bumps `link_version` on both predicate branches only; refused when unverified.
+- Commit: `feat(espace): my-space read and client account actions`.
+
+**Task 19: `/mon-espace`** (G3)
+- Files: § 2.3 rows of Task 19. Depends on: 18. Interfaces: § 3.23 (`MySpaceView`, `MyNameForm`, `RevokeMyLinksButton`, `ClientSignOutButton`, `/mon-espace` copy), § 5 `/mon-espace`.
+- Browser: signed out → the code form, « Continuer avec Google » when enabled, « J'ai un mot de passe »; `beatriz@example.com` → « Si l'adresse est valide, un code a été envoyé. » → the code from the dev log → signed in, the card « Altinha Paris » with her inscriptions and tickets; name edited twice (« Enregistré » each time) and restored; « Déconnecter mes liens » → confirmation text; Tab from the dialog's last control reaches its first, the page behind is not reached, Escape closes it (COV-I6) → « Liens déconnectés. »; « Se déconnecter » → a full reload on the code form, and Back does not show her space again (SEC-M12); a wrong code → « Code incorrect ou expiré. »; 375 px stacked; console clean.
+- Commit: `feat(espace): /mon-espace`.
+
+**Task 20: Clients land on `/mon-espace`** (G3)
+- Files: § 2.3 rows of Task 20. Depends on: 19. Interfaces: § 3.18.
+- Tests (pure): `entry.test.ts`: non-admin pro → `/dashboard`; non-admin without pro → `/mon-espace`; admin remembered / choose unchanged. `src/server/pro-context.test.ts` (P3 guard, extended): `requireProfessional` and `requireProContext` redirect a missing professional profile to `/mon-espace`, never `/onboarding`; the P3 assertions (fresh session, `actingSession`, `impersonatedBy`, the impersonation line after the failure return) stay green, plus `runProAction` schedules `runEffects(effects, "pro")`. A grep of the files of this task finds no `console.*(…, err)` left (P3 carry).
+- Browser: `/sign-in` shows « Espace client »; « Cliente » quick login, then `/dashboard` → `/mon-espace`; « Pro · back-office » → `/dashboard`; `AuthForm` in sign-in mode builds its Google `newUserCallbackURL` through `/sign-in` (read the request in `read_network_requests`, no Google sign-in performed).
+- Commit: `feat(identity): clients land on their space`.
+
+**Task 20a: Client search without names in the URL** (G3)
+- Files: § 2.3 rows of Task 20a. Depends on: 20. Interfaces: § 3.18 (client search), § 4 row 17, § 5 `/dashboard/clients`.
+- Tests: DB `client-actions.db.test.ts`: `searchClientsCore` finds a client by an accented name and by e-mail within the filter, never another pro's client (cross-tenant), refuses an extra key, a `q` of 101 characters and an unknown filter with the French parse error, nothing read; pure `client-filters.test.ts`: `clientsHref("tous")` → `/dashboard/clients`, `clientsHref("tickets")` → `/dashboard/clients?filter=tickets`, the type has no `q` any more.
+- Browser (« Pro · back-office »): `/dashboard/clients`, search « Beatriz » → her row, the address bar still `/dashboard/clients`; `read_network_requests` urlPattern `q=` → none; « zzz » → « Aucun client ne correspond à « zzz ». » in the status line; a filter chip → `?filter=…` only; Back never shows a search term; 375 px; console clean.
+- Commit: `fix(clients): the client search keeps names and e-mails out of the URL`.
+
+**Task 21: Cancellation and spend cores of the client space** (G3)
+- Files: § 2.3 rows of Task 21 (M `src/server/client.ts` `cancelMyBookingAction`; M `src/server/client-queries.ts` `getSpendableSeances`; M `src/components/public/my-space.tsx` and `src/components/public/customer-space.tsx` where the new `CustomerSpace` fields change a type). Depends on: 20. Interfaces: § 3.19 (cores), § 4 row 6.
+- Tests (DB): `customer-space.db.test.ts` additions: `cancellable` before the deadline; after it `cancellable: false` and « Seul(e) {businessName} peut annuler maintenant. » (the P3 expectations of `cancelText: null` become that text); `changed_at > created_at` → cancellable with the P3 « … jusqu'au début de la séance. » hint; `coverage`; `businessName`; a ticket of a type linked to no upcoming event and not `rdv_enabled` → `typeClass: "orphan"`, an archived type → `"archived"` (LED:438, COV-I2). `spendable.db.test.ts`: an eligible future tickets-mode séance listed; already booked, full, private, inside the notice, beyond the horizon, under a time off, free mode, no linked type → excluded; `needsAnswers`; `ticketTypeName` of the first ticket; another pro → `[]`. `space-actions.db.test.ts`: `spaceActorOf` cases (impersonating with a valid cookie → null, SEC-M6; verified without record + cookie → null; unverified + cookie → guest; Owner → session); cancel by the Owner before the deadline → cancelled, ticket returned, effects (`booking_cancelled` client, `pro_booking_cancelled`, sync); by the guest cookie customer → ok; after the deadline → « Seul(e) … »; another customer's or another pro's booking → the not-found wording; after 10 hits on the actor's cancel key in the hour → `throttled`, the booking unchanged (SEC-I2); the malformed-input cases.
+- Commit: `feat(espace): cancellation and ticket spend cores`.
+
+**Task 21a: Personal link confirmation and « Ce n'est pas moi »** (G3)
+- Files: § 2.3 rows of Task 21a (M `src/lib/back-office/guest-access.ts` `businessName`, M `src/lib/back-office/guest-access.test.ts`; C `src/lib/back-office/guest-link-page.ts` and its test; M `src/app/api/c/[token]/route.ts`; M `src/server/client.ts` `forgetGuestLinkAction`). Depends on: 21, 14. Interfaces: § 3.19 (personal link), § 3.17 (`forgetGuestLinkAction`), § 4 rows 8b, 16.
+- Tests: pure `guest-link-page.test.ts`: `<script>` and quotes in the business name escaped; no `<script`; one `method="post"` form whose action is the escaped path; `lang="fr"`; no dash. Pure `guest-access.test.ts`: the row literals gain `businessName`; the P3 route guard stays green (the POST sets the cookie with the exact `guestCookieOptions(decision.slug, process.env.NODE_ENV === "production")` line, no attribute spelled), and it gains: the GET branch sets no cookie, and `src/server/client.ts` clears it with `...guestCookieOptions(pro.slug, process.env.NODE_ENV === "production"), maxAge: 0` and spells no `httpOnly` or `sameSite`. DB `guest-access.db.test.ts`: `ok` and `stale` decisions carry the row's business name; the P3 « slug that is not a plain address segment » case still answers `not_found`.
+- Browser: a personal link from a client mail in the dev log (the pro offers a ticket to « Test P4 » with notify): curl GET → 200 page, no `Set-Cookie`, the § 5 headers; curl POST without `Origin` → 403; in the browser pane: open the link → « Ouvrir mon espace chez Altinha Paris » → « Ouvrir mon espace » → the guest space with « Vous consultez l'espace de t•••@skedul.test avec un lien personnel. »; « Ce n'est pas moi » → the anonymous espace (the cookie is gone); console clean. The pro removes the test ticket afterwards.
+- Commit: `fix(espace): a personal link sets the cookie only after a same-origin confirmation`.
+
+**Task 22: The complete client space** (G3)
+- Files: § 2.3 rows of Task 22. Depends on: 21a. Interfaces: § 3.23 (espace additions, `CancelBookingButton`, `SpendSeanceButton`, `OtherAddressButton`, `ForgetGuestLinkButton`), § 5 `/[slug]/espace`.
+- Tests: full DB suite (end of G3).
+- Browser: anonymous `/altinha-paris/espace` → the code form; code sign-in as Beatriz → her space; « Annuler » on a cancellable booking → the confirmation text → « Inscription annulée. », focus on the section heading (not `<body>`: `document.activeElement` read after the dialog closed), dev log one « Inscription annulée » mail to her and one « Annulation : … » to the pro; « Utiliser vos tickets » → « Réserver avec 1 ticket » → « Réservation confirmée. »; signed in as the pro → « Aucun ticket chez Altinha Paris pour pro@skedul.app. » → « Utiliser une autre adresse » → a full reload on the code form; personal-link flow (Task 21a) → guest space → « Réserver avec 1 ticket » opens the dialog with an EMPTY address field (Decision 7); unverified (COV-C1): a password sign-up `test-p4-unverified@skedul.test` (a generated password typed only into the form, never written down) opens `/altinha-paris/espace` → the « Confirmez votre adresse » banner, no code form; with a personal-link cookie → the guest space under the banner and « Réserver avec 1 ticket » disabled with « Confirmez votre email pour utiliser vos tickets. »; the account is kept for Tasks 25b and 26, which delete it (Admin quick login, `/admin/users`); 375 px; console clean. The pro unenrols the test bookings afterwards.
+- Commit: `feat(espace): cancel and spend from the client space`.
+
+### G4: Public pages (Tasks 23 to 31)
+
+**Task 23: Public planning and boutique reads** (G4)
+- Files: § 2.4 rows of Task 23; C `src/server/public-queries.ts` (planning, boutique, horizon wrappers). Depends on: 22. Interfaces: § 3.20.
+- Tests: pure `planning-view.test.ts`: each `seanceState` branch and its precedence (cancelled before past; past vs ongoing; onsite; notYet; closed for notice, time off, no type; full; free; open) in Paris and Los Angeles with a DST day; `stateLabel`; `toPublicSeanceVM` (`href`, « 19:00 à 20:00 », seats text, `ariaLabel` exact); `groupByDay` keeps empty days; `parsePlanningParams`; `planningNav` (prev null on the current week, next null past + 365, hrefs). DB `planning-reads.db.test.ts`: private / archived events excluded; cancelled séance included; past excluded; beyond the pro horizon and beyond an event override excluded; an empty séance under a time off excluded, a booked one kept with `underTimeOff`; an elapsed hold counts as a free seat; archived accepted types dropped; a free-mode séance has `acceptedTypes: []`; `location` = the override, else the event's, `""` → null (COV-M16); another pro excluded; `nextPublicSeanceStart` skips hidden séances. `boutique-reads.db.test.ts`: archived and `rdv_free` types, inactive and archived offers, types without an on-sale offer excluded; `acceptedBy` without private events; order.
+- Commit: `feat(public): planning and boutique reads`.
+
+**Task 24: Séance and offer reads, viewer rules** (G4)
+- Files: § 2.4 rows of Task 24; M `src/server/public-queries.ts` (séance, offer, purchase, holds wrappers). Depends on: 23. Interfaces: § 3.21.
+- Tests: pure `visibility.test.ts`: `referenceForPage` (booking on another séance → null; an Owner and a reference of another customer → null; offer page: another offer or a buy + book purchase → null; the view has no `customerId` key, SEC-C1); `seanceViewerOf` matrix (Owner wins; impersonating or verified without record + cookie → the reference or null; guest; reference alone → `{ kind: "reference" }`; never a customer id for a reference); `canSeePrivateSeance`; `seancePageMode` precedence (a guest cookie's booking never yields `booked`, archived and private → closed, Owner and reference bookings → booked). DB `seance-reads.db.test.ts`: RDV → `{ kind: "rdv" }`; another pro → null; `covers` false for a 1-day offer on a séance in 10 days; archived type offers excluded; questions loaded; `seanceVisitorFacts` for the Owner: confirmed, pending with `purchaseId` and `resumeUrl`, `usable` type and `leftAfter`, `ended` cancelled / expired; for a guest viewer: `booking.status` only, `purchaseId`, `resumeUrl`, `usable` and `ended` null (Decision 63); another pro's customer → empty; `livePendingHoldsOf`: two holds started with the Owner's address by anonymous requests → listed, another customer's hold → not listed; SEC-C1 scenario: an attacker's purchase P on the victim's row, the victim's later pending booking on the same séance → `referenceForPage(purchaseByReference(P))` carries only P's own booking, no victim purchase id, no victim resume URL, no balance. `offer-reads.db.test.ts`: on_sale / unavailable (inactive, archived, archived type, `rdv_free`) / null.
+- Commit: `feat(public): séance and offer reads with viewer rules`.
+
+**Task 25a: The public page: planning and boutique** (G4)
+- Files: § 2.4 rows of Task 25a (`src/app/[slug]/page.tsx` planning and Boutique, `loading.tsx`, `error.tsx`, `public-planning.tsx`, `boutique.tsx`, D `coming-soon.tsx`, the two redirect pages, `next.config.ts` headers). Depends on: 24. Interfaces: § 3.23 (`PublicPlanning`, `Boutique`), § 5 `/[slug]`, § 5 Framing.
+- Browser: anonymous `/altinha-paris`: « Planning » list of this week (débutants, intermédiaires, Roda « Inscription libre », « Annulée » when a cancelled séance is in the week; « Équipe compétition » absent); « Semaine » columns; next / previous; the « Vacances » week hides its empty séances; « Boutique » offers with « Utilisable pour : … » and « Acheter » (`/altinha-paris/offre/<id>`, 404 until Task 29); `/altinha-paris#boutique` (the P3 espace's « Voir la boutique » target) scrolls to the Boutique block; `/altinha-paris/book/x` → 308 to `/altinha-paris`; `curl -sI http://localhost:3102/altinha-paris` shows `X-Frame-Options: DENY` and `frame-ancestors 'none'`; 375 px list per day, offers one per row; console clean.
+- Commit: `feat(public): planning and boutique on the public page`.
+
+**Task 25b: The public page: visitor bar, wallet and banners** (G4)
+- Files: § 2.4 rows of Task 25b (`src/app/[slug]/page.tsx` visitor part and the horizon `after`, `wallet-panel.tsx`, `owner-preview-banner.tsx`, `test-payments-banner.tsx`, `visitor-bar.tsx`). Depends on: 25a. Interfaces: § 3.23 (`OwnerPreviewBanner`, `TestPaymentsBanner`, `VisitorBar`, `WalletPanel`), § 4 row 12.
+- Browser: « Paiements en mode test »; « J'ai déjà des tickets » opens the dialog, Tab stays inside it, Escape closes it (COV-I6); code sign-in as Beatriz → « Vos tickets »; the pro → the owner banner; the Task 22 unverified account → the « Confirmez votre adresse » banner, no « J'ai déjà des tickets »; a personal-link cookie only → the « Mon espace » link, no wallet; 375 px stacked; console clean.
+- Commit: `feat(public): wallet access and banners on the public page`.
+
+**Task 26: Séance page: states, free registration, held ticket** (G4)
+- Files: § 2.4 rows of Task 26 (`occurrence-booking.tsx` free and held parts). Depends on: 25b. Interfaces: § 3.23 (`OccurrenceBooking` Task 26 part, `IdentityFields`, `QuestionFields`, séance copy, banners), § 3.21 (page assembly), § 5.
+- Browser: a débutants séance from the planning: header (title, « lun. … · 19:00 à 20:00 », place, seats, type chips), tab title « Altinha débutants · Altinha Paris »; as « Pro · back-office » → the owner banner above the form (COV-I1); the Task 22 unverified account → the « Confirmez votre adresse » banner and the hint « Confirmez votre email pour utiliser vos tickets. », no « J'ai déjà des tickets »; then the account is deleted; Roda libre: « Test P4 » / `test-p4@skedul.test` → « Inscription confirmée… », dev log: confirmation to the client and « Nouvelle inscription : Roda libre » to the pro; the same address again → « Inscription confirmée… » again and one more confirmation mail to that address only (Decision 64); Beatriz (code sign-in) on a débutants séance → the compact wallet line, « Réserver avec 1 ticket (il vous en restera N) » → « Vous êtes inscrit(e) à cette séance. »; a private séance URL signed out → 404 with the tab title « Altinha Paris »; a cancelled séance → the « Annulée » badge and « Cette séance est annulée. »; a personal-link cookie whose customer is booked → « Une inscription existe déjà pour cette séance avec votre lien personnel. » above the form (Decision 63); 375 px. The RDV redirect is proven by `seance-reads.db.test.ts` (`{ kind: "rdv" }`) and by reading the page branch (no RDV occurrence exists before P5, COV-M14b). The pro unenrols the test bookings.
+- Commit: `feat(public): séance page with free registration and held tickets`.
+
+**Task 27: Séance page: buy + book** (G4)
+- Files: `occurrence-booking.tsx` (buy part), the séance page. Depends on: 26. Interfaces: § 3.23 (`OccurrenceBooking` buy part).
+- Browser (mock mode): anonymous on a débutants séance: the offers in a group « Choisissez une offre »: « À l'unité · 25 € », « Carnet de 4 · 85 € · valable 3 mois »; « Payer 25 € » → « Redirection vers le paiement… » → « Paiement simulé » → « Payer (simulation) » → `/altinha-paris/merci?p=…`; dev log « Reçu : … », « Inscription confirmée : … », « Nouvelle inscription : … »; the planning seat count drops by one; a second attempt with the same address → « Cette réservation ne peut pas être payée en ligne avec cette adresse. … » and the link « Reprendre ou libérer ma réservation » (COV-M6); the test banner shows; 375 px.
+- Commit: `feat(public): buy and book from the séance page`.
+
+**Task 28: Payment return on the séance page and the Owner's holds** (G4)
+- Files: § 2.4 rows of Task 28; M the séance page (`?paiement=annule&p=`, private access by reference, `PendingHolds`). Depends on: 27. Interfaces: § 3.23 (`CheckoutReturn`, `PendingHolds`), § 3.21 (`referenceForPage`, `seanceViewerOf`).
+- Browser (mock): start a buy + book, « Annuler et revenir » → « Paiement interrompu », « Votre place est gardée jusqu'à HH:MM. », « Reprendre le paiement » (back to the simulated page), « Libérer ma place » → the confirmation → « Votre place est libérée. », the seat is back; reload → « Votre place a été libérée. Vous pouvez réserver à nouveau. »; a tampered `p` → no block; signed out, start a buy + book typed with `beatriz@example.com`, then sign in as Beatriz on another séance → « Paiements en attente » lists that hold → « Libérer ma place » releases it (SEC-I6); 375 px.
+- Commit: `feat(public): payment return with resume and release`.
+
+**Task 29: Offer page (E9)** (G4)
+- Files: § 2.4 rows of Task 29. Depends on: 28. Interfaces: § 3.23 (`OfferCheckoutForm`, offer page copy, `CheckoutReturn` shop), § 5.
+- Browser (mock): Boutique « Acheter » on « Carnet de 4 » → the offer page (type chip, label, price, validity, « Utilisable pour : … », « Vous recevez 4 tickets « Cours collectif » après le paiement. », tab title « Carnet de 4 · Altinha Paris ») → identity → « Payer 85 € » → simulated page → pay → `merci`; dev log « Reçu : Carnet de 4 chez Altinha Paris »; « Annuler et revenir » on a second attempt → « Votre achat n'est pas payé. » + « Reprendre le paiement »; an archived offer id → « Cette offre n'est plus proposée » + « Voir la boutique »; 375 px.
+- Commit: `feat(public): offer page and shop checkout`.
+
+**Task 30: `merci` with the real states** (G4)
+- Files: § 2.4 rows of Task 30. Depends on: 29. Interfaces: § 3.22, § 3.23 (merci copy, `MerciRefresher`).
+- Tests (pure): `merci-view.test.ts`: each state from a reference, every title and body exact (booked « Vous recevez par email la confirmation et le reçu. »; expired shop « Paiement non abouti »), plurals 1 / 4, `withBooking`.
+- Browser (mock): after a buy + book → « Inscription confirmée » with the séance and date; after a shop purchase → « Vos 4 tickets « Cours collectif » sont dans votre portefeuille. »; an unpaid purchase opened directly → « Paiement en attente de confirmation » and the refresher; an unknown `p` → 404; « Paiement de test : aucun montant n'a été débité. »; 375 px.
+- Commit: `feat(public): merci with the real payment states`.
+
+**Task 31: Final sweep and the P4 outcome** (G4)
+- Files: whatever the checks below require (no new feature); C `docs/superpowers/plans/2026-10-21-p4-public-outcome.md`.
+- Depends on: 1 to 30.
+- Steps: tsc; eslint on every file changed since the P4 base (`git diff --name-only <Task 1 commit>^..HEAD -- '*.ts' '*.tsx'`); pure suite, then the zone-sensitive pure files (`planning-view`, `merci-view`, `public-emails`, `checkout`) again under PowerShell `$env:TZ = "America/Los_Angeles"` and `"Europe/Paris"`; full DB suite (chunked); build (every P4 route `ƒ`). Greps that must return nothing in `src/` (tests excluded): `createCheckoutUrl`, `isStripeLive`, `ComingSoon`, `coming-soon`, `mock-redirect`, `is wired in P4`, `kind: "deferred"`; `getSession()` in `src/app/[slug]`, `src/app/mon-espace`, `src/components/public`, `src/server/public*.ts`, `src/server/client.ts` (fresh session only); `unstable_cache` / `"use cache"` in public code; `ownerUserId`, `userId` or `customerId` of a purchase in a client component's props; `APP_ENV` read for payments outside `src/lib/payments/checkout.ts`, `src/lib/stripe.ts`, `src/lib/env*.ts` (SEC-I5); `text-primary` in `src/components/public` and `src/components/auth`; `router.refresh()` in P4 client components outside `EmailCodeForm` and `MerciRefresher`; `console\.(log|info|warn|error)\(.*(email|token|cs_)` in P4 files, the one allowed line being the orphan-payment warning of `recordOrphanPayment` (COV-M3); `console\.(log|info|warn|error)\([^)]*, ?(err|error)\)` (a raw error object) in every file P4 created or modified; `runEffects\([^)]*"pro"` outside `src/server/pro-context.ts` (every P4 call passes `"none"`, Decision 74; tsc already refuses a call without a budget); `getSession\(\)` in `src/server/visitor.ts` and `src/server/public-context.ts`; a write of `customer.user_id` (`set({ userId` on `customer`, `set user_id` in SQL) anywhere but `upsertCustomer` (`src/lib/booking/wallet.ts`) and `linkCustomerUser` (`src/lib/public/identity.ts`) (Decision 72); `q=` in `src/app/dashboard/clients` and `src/lib/back-office/client-filters.ts` (Decision 73). Orphan check: `customerFromVerifiedEmail` (deleted with its test lines when no importer). Browser tour of every § 5 route at 1280 and 375 px, console clean, no horizontal page scroll, every dialog Tab-trapped (COV-I6). Curl checks: webhook, cron, mock; `curl -s` of every § 5 page: the `<title>` contains no U+2014 / U+2013 (COV-I7); `curl -sI` of `/altinha-paris`, a séance page and `/mon-espace`: `X-Frame-Options: DENY` (SEC-M11); of the espace and `/mon-espace`: `Cache-Control` contains `no-store` (SEC-M12). Conditional « Stripe test mode » step of Decision 26 (only when Task 1 recorded `STRIPE_TEST_KEY` true; the owner runs `stripe listen` and fills the secret himself).
+- Outcome (COV-I9), format of the P2 outcome: Rulings; Carry notes, P5 section: `/[slug]` RDV libre cards (L1441, Decision 48), `bookRdv` in `src/server/public.ts` with the `rdv` throttle action (L1273, L1482), OUT:76 and OUT:120 (slot loader, `slot_taken` as « Reprendre le paiement »), LED:316 and OUT:106 (a notice override above a lowered horizon, notice checked before horizon), LED:106 (`bookRdv` stale not replanned), FR:F9 (the pro half of the rdv_free race: engine guards on the offer create, offer-tickets, convert and convert-on-move statements and on the switch to « Gratuit », § 10), `bookRdv`'s effects run with `"none"` (Decision 74); P6 section: the index migration of the P3 outcome (FR:R11 `booking (created_at desc, id desc) where status = 'confirmed'` and `booking (professional_id, status)`, `ticket_purchase (offer_id)`, `booking (purchase_id)`, the `ticket` index of FR:R3, the parked 0013), the Resend go-live decision of FR:SEC-1 residual (c) (a sending identity for auth codes apart from client mail, a cross-account circuit breaker, a cross-instance pacer), the Google backfill above 200 occurrences (FR:COV-2 limit: a resync button or a nightly sweep, which needs a « backfill pending » marker), risk 10 when the Stripe step did not run (Decision 26), webhook events enabled (`completed`, `async_payment_succeeded`, `async_payment_failed`, `expired`), `CRON_SECRET` of 32 characters set in production, `APP_ENV=production` on the production project, Resend domain verified, existing admin and pro accounts confirmed, Google consent out of Testing, the root title's dash (LED:68), the live-switch script also lists for each pro the future bookings covered by a `livemode = false` purchase and the pro planning shows the « Test » badge on them (SEC-M14); every ledger carry tagged P5, P6 or final review, copied verbatim; residuals accepted (Decision 64's buy + book refusal, the token in the personal-link path, the all-or-nothing `sweepHolds` batch OUT:118, `redactSubject` hard-coding 6 digits OUT:128, the redacted subject of the production mock line, Decision 59); Deferred minors (§ 10 of this contract); « For the owner »: each « Change to spec » decision (4, 5, 6, 7, 9, 27, 28, 32, 40, 44, 46, 48, 64 to 69, 72) with its spec line and one-line reason, Decision 73 (a change to the P3 contract's GET search), and the owner-validation decisions (44, 46, 48); FR:SEC-5 answered by Decision 72.
+- Commit: `chore(p4): final sweep and outcome`.
+
+---
+
+## 8. Test strategy
+
+### 8.1 Pure tests (`*.test.ts`, no DB, no env)
+- Every pure module of § 3 has a test file next to it: `public/messages`, `public/result`, `public/plain-name`, `client-ip`, `throttle` (`IP_HASH_RE`, `actionThrottleKeys`), `tickets` (actions and limits), `public/identity` (pure part), `payments/checkout` (`mockCheckoutAllowed` included), `public/context` (`splitActionInput`), `public/run-action`, `emails/public-emails`, `notify-run`, `payments/webhook-core` (pure part, the real Stripe verifier offline), `same-origin`, `payments/mock-checkout` (pure part), `cron-auth`, `env-checks`, `auth-messages`, `emails/mock-log` (P3's, kept green), `public/sign-in-flow` (`canOfferCodeSignIn`, `authFormGoogleCallbacks`), `back-office/guest-link-page`, `entry`, `public/planning-view`, `public/visibility`, `public/merci-view`, `ui-copy` (scan list extended in Task 1), `back-office/client-filters` (Task 20a). Source guards of the wrappers that node:test cannot load (the P3 pattern): `src/server/visitor.test.ts`, `src/server/public-context.test.ts`, `src/server/pro-context.test.ts` (P3, extended in Task 20), the route guards in `webhook-core.test.ts`, `mock-checkout.test.ts` and `back-office/guest-access.test.ts`.
+- Time-zone discipline: `planning-view`, `merci-view` and the e-mail labels run `Europe/Paris` AND `America/Los_Angeles`, one DST day each (2026-03-29 / 2026-10-25 Paris, 2026-03-08 / 2026-11-01 LA); host-zone independence is re-run through PowerShell `$env:TZ` in Task 31.
+- Copy discipline: tests compare exact French strings from this contract and assert no U+2014 / U+2013.
+
+### 8.2 DB tests (`*.db.test.ts`, tickets-test via `.env.test`)
+- Harness: `dbTest(name, async ({ db, pro }) => …)` (fresh pro, invariants I1 to I6 checked after each test, user deleted); `createTestPro(db, { tz })` for a second pro (cross-tenant) and a Los Angeles pro, deleted in `finally`; fixtures `makeType`, `makeOffer`, `makeEvent`, `makeCustomer`, `giveTickets`, `occurrencesOf`, `getBooking`, `ticketsOf`, `movementsOf`; row helpers `rowPurchase`, `rowBooking`, … for states the engine reaches slowly (live holds for the hold ceiling, a pending purchase with a confirmed booking, a purchase attached to `cs_test_x`); P4 helpers in `src/test/public.ts` (`publicProOf`, `actionVisitorOf`, `testIpHash`, `fakeCheckout`, `publicDepsOf`, `createTestClientUser`, `sessionOf`); auth harness `makeTestAuth`, `browser` (Task 16).
+- What is DB-tested: every public core (`booking-actions`, `shop-actions`, `release-actions`, `space-actions`, `client-actions`), every public read (`planning-reads`, `boutique-reads`, `seance-reads`, `offer-reads`, `purchase-reads`, `spendable`, `my-space`, `customer-space`), the identity core and `guest-access`, the throttle keys, the webhook core, the mock checkout core, `notify-core` plans, and the engine changes (Tasks 4, 15). Each file has at least one cross-tenant case with a second pro, asserts French messages verbatim, includes the malformed-input cases of its strict schemas, and uses `fakeCheckout` (never the network).
+- Shared branch discipline: throttle and rate-limit rows persist on tickets-test, so throttle tests use fresh `testIpHash()` and `testEmail(tag)` values; a « after N hits » case pre-consumes the key with `checkActionThrottle` on fresh values, never by looping real bookings; nightly tests inject failures through `opts.ensure` and `opts.deadline`, never a future `now` that would sweep other runs' holds (OUT:118).
+- Running: implementers run their own DB files (one file per process); Tasks 4, 8, 15, 22, 31 run the whole suite in foreground chunks (Global Constraints).
+
+### 8.3 Browser checks (no component test framework)
+- Server: `preview_start` `skedul-tickets` (or `skedul-tickets-mock` when Task 1 found Stripe enabled; one at a time on port 3102); reuse it when running. Sign-ins: « Pro · back-office », « Cliente · packs & réservations », « Admin · espace Skedul » one-click logins, or a code sign-in whose code is read from the dev log (`preview_logs` with `search: "[email:mock]"`); no password is ever typed in chat, a commit or UI copy. The one password sign-up of Task 22 (`test-p4-unverified@skedul.test`) uses a generated password typed only into the local form, never recorded, and the account is deleted in Task 26.
+- Data: seed v2 on tickets-dev (pro `pro@skedul.app`, page `altinha-paris`, events « Altinha débutants », « Altinha intermédiaires », « Roda libre » (free), « Atelier technique », « Équipe compétition » (private); offers « À l'unité » 25 €, « Carnet de 4 » 85 € 3 mois, « Carnet de 10 » 190 € 6 mois, « Cours d'essai »; client Beatriz Almeida `beatriz@example.com` with tickets; a « Vacances » time off about 3 weeks ahead). Objects created by a check are named « Test P4… » / `test-p4…@skedul.test` and removed by the same check (the pro unenrols bookings from the planning).
+- Phrasing (every UI task ends with this block):
+  ```
+  - [ ] **Step N: Browser check** (dev server `skedul-tickets`; identity as the step says)
+    1. Open http://localhost:3102/<route>. Expect: <exact visible copy and data>.
+    2. Do: <interaction>. Expect: <result, exact copy>; dev log: <mock e-mails, one line per recipient>.
+    3. Repeat the action (a second submit or a second object). Expect: <the refusal or the success again>.
+    4. Resize to 375×812 (`resize_window` preset mobile), reload. Expect: <mobile layout>, `document.documentElement.scrollWidth <= innerWidth`.
+    5. `read_console_messages` (onlyErrors) → empty; `read_network_requests` urlPattern `api/track` → no request for espace pages. Reset the viewport (preset desktop).
+  ```
+- Curl checks (route handlers, headers, titles) go through the dev server: `curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:3102/api/stripe/webhook` and the like; never with a real secret on the command line.
+
+### 8.4 Security test list (one test per rule)
+
+| # | Rule | Test (file → case) | Task |
+|---|---|---|---|
+| S1 | A typed e-mail or a guest cookie never spends tickets (OUT:75, L1368-1369, COV-I11) | `booking-actions.db.test.ts` → anonymous visitor typing a holder's e-mail, and a visitor holding only the holder's guest cookie: `CONFIRM_EMAIL_TO_SPEND`, no booking, ticket available | 10 |
+| S2 | An unverified or impersonated session never spends | `booking-actions.db.test.ts` → unverified owner-less visitor and an impersonated session of the holder refused; `identity.db.test.ts` → impersonated: no owner | 10, 5 |
+| S3 | `upsertCustomer` links an account only for a verified same-e-mail user, insert and conflict (OUT:69) | `wallet-customers.db.test.ts` → other e-mail user: null on insert and on an existing row | 4 |
+| S4 | The action passes `userId` only through `upsertUserIdFor` | `identity.test.ts` → the five cases | 5 |
+| S5 | Owner predicate refuses a row linked to another user | `identity.db.test.ts` → same e-mail, other `user_id` → null | 5 |
+| S6 | Ids of another pro are refused (tenancy) | one cross-tenant case in every core and read DB file (occurrence, offer, booking, purchase, customer of a second pro) | 9 to 24 |
+| S7 | `?p=` is scoped to the slug's pro and to the Owner's customer (OUT:74) | `release-actions.db.test.ts` → another pro's purchase, another customer's purchase: not found; `purchase-reads.db.test.ts` → foreign id null; `visibility.test.ts` → `referenceForPage` null for an Owner of another customer | 12, 24 |
+| S8 | « Libérer ma place » never releases a paid, processing, unverifiable or confirmed purchase | `release-actions.db.test.ts` → paid / processing / failed outcomes and a confirmed booking leave the booking as it was | 12 |
+| S9 | Guest cookie: current `link_version` and this pro only (OUT:64) | `identity.db.test.ts` → revoked version and another pro's customer: null; `space-actions.db.test.ts` → cancel refused after revocation | 5, 21 |
+| S10 | A verified session wins over the cookie (L1370) | `space-actions.db.test.ts` → verified without record + valid cookie: `spaceActorOf` null; `visibility.test.ts` → the same for the séance viewer | 21, 24 |
+| S11 | Webhook: no signature or a bad one never reaches the engine; the raw body is required | `webhook-core.test.ts` → `verifyWebhook` missing / bad, the real verifier offline on a re-serialised body; curl 400 (Stripe on) | 13 |
+| S12 | Webhook idempotency: one payment, tickets once, e-mails once | `webhook-core.db.test.ts` → same `completed` event twice | 13 |
+| S13 | Webhook releases only the purchase's own session | `webhook-core.db.test.ts` → `expired` of another session: nothing changes | 13 |
+| S14 | Webhook payment intent normalised; live payments satisfy I6 (OUT:32) | `webhook-core.db.test.ts` → expanded object stored by id; `livemode: true` on a live handler stores the PI | 13 |
+| S15 | Mock checkout off with Stripe and in production by `APP_ENV` or `VERCEL_ENV`; production refuses to boot without `APP_ENV=production`; no GET write; same-origin POST (SEC-I5) | `checkout.test.ts` → `mockCheckoutAllowed` matrix with `VERCEL_ENV: "production"`; `env-checks.test.ts`; `same-origin.test.ts`; `mock-checkout.db.test.ts` → `mockCheckoutState` writes nothing | 6, 14, 15 |
+| S16 | No redirect parameter, no personal data in Checkout URLs | `checkout.test.ts` → no `redirect` / `next` / `@`; mock URL only `purchase` | 6 |
+| S17 | Cron needs the exact bearer secret of 32 characters at least, compared in constant time (SEC-M5) | `cron-auth.test.ts` → the matrix, a 31-character secret refused; curl 401 | 15 |
+| S18 | Throttle keys are hashed buckets, never addresses (OUT:109) | `throttle.db.test.ts` → raw IP or bad wide hash throws, no row; `client-ip.test.ts` → /64 and /48 buckets | 3 |
+| S19 | Rate limits apply before any write or Stripe call, on every public action (SEC-I2) | `booking-actions.db.test.ts` / `shop-actions.db.test.ts` → 7th request of one e-mail refused with no new customer or purchase; held after 10 hits, `space-actions.db.test.ts` cancel after 10 hits, `release-actions.db.test.ts` release after 30 hits: refused, nothing changed, no gateway call | 9 to 12, 21 |
+| S20 | Honeypot refuses before any read or write | `booking-actions.db.test.ts` → no customer row, no throttle row | 9 |
+| S21 | Confirmation codes only for the signed-in address (OUT:129) | `auth.db.test.ts` → no session / another session: no mail, no counter | 16 |
+| S22 | One neutral answer to a code request (no enumeration) | `EmailCodeForm` uses `CODE_SENT` unless `sendCodeFailure` (429 / 5xx); `auth-messages.test.ts` → `sendCodeFailure` null for 200 and 400 | 16, 17 |
+| S23 | `returnTo`, `next` and Google callbacks never leave the site and never carry a query (SEC-M7) | `sign-in-flow.test.ts` → `//`, absolute, backslash refused; `?p=` dropped | 17 |
+| S24 | A resume URL or a wallet is never derived from a typed e-mail, a `?p=` reference's customer or a guest cookie | `visibility.test.ts` → `seanceViewerOf` has no typed-e-mail input and gives no customer for a reference; `booking-actions.db.test.ts` → a refused buy + book carries no URL; `seance-reads.db.test.ts` → guest facts without URL | 9, 24 |
+| S25 | A private séance is visible only to its owner, a customer viewer with an active booking, or its reference; never bookable online | `visibility.test.ts` → `canSeePrivateSeance` matrix, `seancePageMode` private → closed | 24 |
+| S26 | `?p=` of another pro gives 404 on `merci` | `purchase-reads.db.test.ts` → null (the page maps null to `notFound()`) | 12 |
+| S27 | Client account actions only for a verified session, own rows only | `client-actions.db.test.ts` → refusals; other users' rows untouched | 18 |
+| S28 | `getMySpace` excludes rows linked to another user and suspended pros | `my-space.db.test.ts` | 18 |
+| S29 | No mock mail log of recipient, code or link in production; the subject is redacted and carries no client data (OUT:128, Decision 59) | `mock-log.test.ts` (P3 `e73b7bf`, kept green); `public-emails.test.ts` → no subject with the customer's name or address | 8, 16 |
+| S30 | No dash in any P4 file | `ui-copy.test.ts` with the Task 1 list | 1 |
+| S31 | Logs never print an e-mail, token or session id (one allowed line: the orphan-payment warning) | `logSafeMessage` already tested; `notify-run.test.ts` → no `@`; `run-action.test.ts` → no `@`; Task 31 grep of P4 `console.*` calls | 7, 8, 31 |
+| S32 | A `?p=` reference never exposes its customer: no wallet, no other booking, no other purchase's resume URL (SEC-C1) | `visibility.test.ts` → `ReferenceView` has no `customerId`; `seance-reads.db.test.ts` → the attacker-purchase scenario; `release-actions.db.test.ts` → ok keys exactly `ok`, `outcome` | 12, 24 |
+| S33 | Seat holds and free registrations are bounded per séance, per /48 and by the hold ceiling, not only per customer (SEC-I1) | `throttle.db.test.ts` → 3rd `buybook` on one séance from one IP refused; `booking-actions.db.test.ts` → three addresses from one `ipHash`: no third booking; the ceiling refuses a typed address; `client-ip.test.ts` → `/48` | 3, 9, 10 |
+| S34 | No answer to a typed address depends on another customer's state (SEC-I3) | `booking-actions.db.test.ts` → free `already_booked` deep-equals a fresh success with one confirmation of the existing booking; buy + book `already_booked` / `too_many_holds` without `code`, no purchase row | 9, 10 |
+| S35 | A guest cookie never hides a booking form and never receives a purchase id, a Checkout URL or a wallet (SEC-I4, COV-I2) | `visibility.test.ts` → a guest booking never yields `booked`; `seance-reads.db.test.ts` → guest facts carry the status only | 24 |
+| S36 | Strangers typing an address cannot lock out its verified holder (SEC-I6) | `throttle.db.test.ts` → per-pro e-mail key and the user key; `seance-reads.db.test.ts` → `livePendingHoldsOf` lists holds typed with her address; Task 28 browser release | 3, 24, 28 |
+| S37 | Only Skedul tickets sessions of this environment are handled; foreign sessions are never orphans (SEC-I7) | `webhook-core.db.test.ts` → no marker, another env: ignored, counter unchanged | 13 |
+| S38 | A signed-in unverified visitor never gets the code sign-in form (risk 7, COV-C1) | `sign-in-flow.test.ts` → `canOfferCodeSignIn`; `guest-access.db.test.ts` → unverified kind; Task 22 browser | 5, 17, 22 |
+| S39 | A paid session issues tickets only for the purchase's amount, currency and livemode; a second payment is an orphan (SEC-M1, SEC-M2, COV-M2) | `webhook-core.db.test.ts` → one cent off, other currency, livemode mismatch, second payment intent, `no_payment_required` | 13 |
+| S40 | The mock pays only simulated sessions (SEC-M3) | `mock-checkout.db.test.ts` → a purchase attached to `cs_test_x`: state null, pay `not_found` | 14 |
+| S41 | A personal link sets the cookie only after a same-origin POST (SEC-I4, Decision 68) | `guest-link-page.test.ts`; Task 21a curl: GET without `Set-Cookie`, POST without `Origin` 403 | 21a |
+| S42 | The guest cookie is ignored while impersonating (SEC-M6) | `identity.db.test.ts` → `guestCustomerId` null; `space-actions.db.test.ts` → `spaceActorOf` null; `guest-access.db.test.ts` → `impersonating` | 5, 21 |
+| S43 | Every core refuses a malformed input whole before any read (SEC-M15) | the malformed-input cases of every core DB file; `context.test.ts` → `splitActionInput` | 7 to 21 |
+| S44 | Typed names refuse links, addresses and long digit runs (SEC-M9) | `plain-name.test.ts`; `booking-actions.db.test.ts` and `client-actions.db.test.ts` → `COPY.PLAIN_NAME` | 2, 9, 18 |
+| S45 | The action wrapper checks the slug, catches without leaking, schedules effects on a committing failure and revalidates on success only (COV-I12) | `run-action.test.ts` | 7 |
+| S46 | Anonymous input never fills an existing client's phone (SEC-M8) | `wallet-customers.db.test.ts` | 4 |
+| S47 | Public pages and the HTML route responses refuse framing (SEC-M11) | Tasks 14, 25a and 31 `curl -sI` checks | 14, 25a, 31 |
+| S48 | A pro never learns from « Compte client lié » that a typed address belongs to a Skedul user (FR:SEC-5, Decision 72) | `auth.db.test.ts` → a verified sign-in leaves the rows of that address at two pros unlinked; Task 31 grep of `customer.user_id` writers | 16, 31 |
+| S49 | Client-initiated and fulfilment mails never spend or depend on a pro's budget; a pro's own actions still do (FR:SEC-1, Decision 74) | `notify-run.test.ts` → the budget passed through, a cut « pro » plan; source guards of `public-context.ts`, the webhook and the mock route (`"none"`), `pro-context.test.ts` (`"pro"`); Task 31 grep | 7, 8, 13, 14, 20, 31 |
+| S50 | No client name or e-mail typed by the pro reaches a URL (FR:UI-13, Decision 73) | `client-filters.test.ts` → `clientsHref` has no `q`; Task 20a browser (`read_network_requests` urlPattern `q=` empty); Task 31 grep | 20a, 31 |
+| S51 | A suspended user's session counts as none on public pages and actions; an action made while an admin impersonates leaves an ids-only trace (FR:SEC-2, FR:SEC-6, Decision 75) | `visitor.test.ts` → `actingSession(getFreshSession())`; `run-action.test.ts` → the trace line once on success, never on a refusal, no `@` | 5, 7 |
+| S52 | The guest cookie's attributes have one source and a stale link never touches the cookie (FR:SEC-7, P3 Task 41 ruling) | `guest-access.test.ts` → the route and `client.ts` build it with `guestCookieOptions`, the GET and stale branches set none; Task 21a curl (no `Set-Cookie` on GET) | 21a |
+
+---
+
+## 9. Review focus
+
+The failure modes P4 is most likely to ship that its automated tests would not catch. Reviewers check them first on every task, security first.
+
+| # | Failure mode | Why the tests miss it | Owning task(s) and proof |
+|---|---|---|---|
+| 1 | **Identity taken from input.** A core or a page uses the customer of a typed e-mail (or a `customerId`, `userId`, `professionalId` sent by the browser) to spend tickets, show a wallet, expose a resume URL, cancel, or link an account; a wrapper reads `getSession()` (5-minute cookie cache) instead of the fresh session. | Core tests pass the visitor the test builds; nothing exercises a wrapper that builds it wrongly or a page that renders from the wrong id. | Tasks 5, 7, 9, 10, 21, 24 to 28. Reviewer checks that every `"use server"` input type carries only ids of rows plus `slug`, that every identity comes from `actionVisitor` / `currentPublicVisitor`, and greps P4 code for `getSession(` (must be `getFreshSession` / `currentSessionFacts`, which applies `actingSession`); and that `customer.user_id` is written only by `upsertCustomer` and `linkCustomerUser` (Decision 72). S1 to S5, S24, S48, S51. |
+| 2 | **Capabilities not scoped or promoted.** `?p=`, the guest cookie or a booking id accepted without checking the slug's pro, the current `link_version`, or the Owner's customer; **a `?p=` reference treated as a customer identity** (its customer's wallet, bookings or resume URLs shown, Decision 71); **a guest cookie trusted** to hide a form, prefill an address, show a Checkout URL or a purchase id (Decision 63); a private séance shown to anyone holding a URL. | Most DB tests use one pro and one customer; a missing filter or a promoted capability returns correct data for the only customer present. | Tasks 12, 21, 21a, 24, 28, 30. Each read and core has a second-pro case (S6, S7, S9, S25, S26); S32, S35; reviewer greps every new query for `professional_id`, every page for `customerId` reaching a prop, and reads `seanceViewerOf` / `referenceForPage` against § 3.21. |
+| 3 | **Payment state machine.** A webhook answering 200 on a missing secret or 500 on a duplicate; a foreign or other-environment session counted as an orphan; tickets issued for an amount, currency or livemode that is not the purchase's; a release of a paid, processing or confirmed purchase; an `expired` event releasing another session's purchase; the mock route reachable with Stripe keys, in production or for a Stripe session, or writing on GET; the purchase id of a create failure left holding a seat; `payment_intent` stored as an object. | Stripe itself never runs in tests (except the offline verifier); `fakeCheckout` returns what the test tells it. | Tasks 6, 9, 11, 12, 13, 14, 15. S8, S11 to S16, S37, S39, S40; reviewer reads the route handler's status table against § 3.12 / § 3.13, runs the curl checks and, when keys exist, the Decision 26 step. |
+| 4 | **Writes and personal data during render or in caches.** A page writes (links a customer, expires a hold, consumes the horizon key) while rendering; `after(ensureHorizon)` without `needsHorizon` or its key; `unstable_cache` or a static page around a session read; a client component receiving the professional row (`userId`, `stripeAccountId`) or another customer's data; `p` leaking through a referrer; a private séance's title in its metadata. | Renders are not unit-tested; the build shows `ƒ` but not what a prop contains. | Tasks 19, 22, 25a to 30. Reviewer checks `requireWalletOwner` / `linkCustomerUser` / `consumeThrottle` appear only in actions or inside `after`, the build list (every P4 route `ƒ`), client prop types (no `Date`, no row object), `referrer` / `robots` / title metadata (§ 5). |
+| 5 | **Sign-in flows.** The sign-in-by-code form shown to a signed-in unverified user (purges their password, risk 7); a missing fresh `getSession` before `router.refresh()` (the page keeps `emailVerified: false`); different sentences per address (enumeration); `router.refresh()` right after a Server Action (Next 16 hang); Google sending a client to the pro onboarding (public pages or `AuthForm`); a `returnTo` carrying `p`; a sign-out that leaves the previous client in the router cache. | No component tests; the auth DB tests drive Better Auth directly. | Tasks 16, 17, 19, 20, 22, 25b. Browser checks sign in by code twice (fresh and returning user), check the banner instead of the form for an unverified session, read the dev log for exactly one code mail per request, and press Back after a sign-out. S21 to S23, S38. |
+| 6 | **Time and money.** `seenStartsAt` rebuilt in the browser zone instead of the ISO the server rendered; labels or « today » computed with the host zone; a Stripe `expires_at` below 30 minutes or above 24 hours; amounts not through `formatMoney(cents, currency)`; N in « il vous en restera N » counted over every type. | Tests and the dev machine both run in Europe/Paris with euros. | Tasks 6, 9, 23, 26, 27, 30. Pure tests in Paris and Los Angeles; reviewer greps client components for `new Date(` with arguments other than an ISO string and for money formatted without `formatMoney`. |
+| 7 | **Effects and e-mails.** A new plan sending the pro notice to the client (or the reverse), a receipt for an unpaid purchase, two receipts for one payment, effects not scheduled on a failure that released a seat, a thrown e-mail failing a committed action, a re-sent confirmation reaching the browser's answer instead of the inbox only (Decision 64), a P4 caller passing `"pro"` (an unverified pro's clients would lose their receipts past 50 mails) or a new plan that names no pro. | `after()` and Resend are not exercised; DB tests only plan e-mails; the budget is chosen in wrappers node:test cannot load. | Tasks 7, 8, 9, 10, 13, 14. `notify-core.db.test.ts` asserts each recipient and `professionalId`; `notify-run.test.ts` the never-throw rule and the budget pass-through; the source guards pin `"none"`; browser checks count one mock line per recipient; reviewer checks every wrapper schedules `res.effects` on success AND on a failure that carries some, with `"none"`. |
+| 8 | **Copy, accessibility and confirmations.** An English or pro-worded message reaching a client, a dash (page titles included), « tu », a destructive client gesture without its `ConfirmDialog`, a form error not tied to its field, a dialog that lets Tab escape, a submit without its pending label, focus lost after a row disappears, text on brand colour below AA. | Copy is partly unit-tested; contrast and focus only show in a browser. | Tasks 2, 19, 22, 25a to 30, 31. `messages.test.ts`, `ui-copy.test.ts`; browser checks open every confirmation, Tab through every dialog, submit an invalid form, and test at 375 px; Task 31 greps `text-primary` and checks titles. |
+| 9 | **Abuse bounds.** A throttle consumed after a write or a Stripe call, a key built from a raw address, an action without its throttle (`held`, `cancel`, `release`), a verified identity keyed on its e-mail (lockout), the hold ceiling skipped, a response to a typed address that tells another customer's state. | Each limit is tested once; a new path that forgets the call passes every other test. | Tasks 3, 9 to 12, 21. S19, S33, S34, S36; reviewer checks the step order of each core against § 3.9 to § 3.11 and § 3.19. |
+
+---
+
+## 10. Deferred minors
+
+Every Minor of both critiques is applied (§ 11) except the items below, and so is every « [P4] » carry of the P3 final review and outcome except the last four rows (revision 3). Each line says why.
+
+| Finding | Not applied in P4 | Why |
+|---|---|---|
+| SEC-M14 | The live-switch listing of future bookings covered by a `livemode = false` purchase, and the « Test » badge on those bookings in the pro planning | P4 never serves production (go-live is P6), and both belong with the P6 live switch; Task 31 writes them into the outcome's P6 section. |
+| COV-M4 (c) | Prefilling the dialog with the guest cookie customer's address | Rejected: the cookie can be planted by a cross-site navigation (LED:438), so it never prefills an identity field (SEC-I4, Decision 7); security wins. |
+| COV-M7 (part) | `redactSubject` driven by `CODE_LENGTH` (OUT:128 rest) | Task 16 runs before `CODE_LENGTH` exists (Task 17) and the code length is fixed since P2; recorded as a residual in the outcome. |
+| COV-M15 (part) | `src/app/[slug]/not-found.tsx` with « Voir la page » → `/{slug}` | Next renders a segment's own `not-found` for a `notFound()` thrown by that segment's page, so an unknown pro would get a link to its own 404; the global « Page introuvable » stays. The `/mon-espace` shell half is applied. |
+| FR:F9 (pro half) | Engine guards `G(not rdv_free, 'stale')` on the offer create, offer-tickets, convert and convert-on-move statements, and the `readFreeBlockers` predicate as a guard of `updateTicketType` when it switches to « Gratuit » | P4 takes the client half (Task 4: `offerUnchanged` refuses a sale on a free type inside the batch, in every scope, so no money ever reaches a free type through a race) and touches none of those pro statements. What is left is a pro racing two of their own tabs within milliseconds; an offer left en vente on a free type sells nothing after Task 4 (the Boutique, the offer page and `offerUnchanged` all exclude `rdv_free`), and tickets offered or converted onto it stay usable on its linked tickets-mode events only, the class F2 already accepted; no tenancy, identity or money property is involved. P5 owns `rdv_free` (RDV libre) and rewrites those statements: Task 31 writes it into the outcome's P5 section. |
+| FR:R11, FR:R8 / FR:F6 indexes | `booking (created_at desc, id desc) where status = 'confirmed'`, `booking (professional_id, status)`, `ticket_purchase (offer_id)`; and, noticed by revision 3, `booking (purchase_id)` (the engine's fulfilment and release reads and `purchaseByReference` filter on it) | P4 adds no migration (§ 1); the P3 outcome already gives these to the P6 index migration (with the parked 0013 and the `ticket` index of FR:R3). The P4 reads otherwise ride existing indexes (`ticket_purchase_checkout_session_uq`, `booking_occurrence_status_idx`, `booking_customer_idx`, `ticket_by_purchase_idx`). Task 31 copies the list into the outcome's P6 section. |
+| FR:SEC-1 residual (c) | A sending identity (Resend key or subdomain) for sign-in codes apart from client mail, a circuit breaker across pro accounts, a cross-instance pacer | Infrastructure and product decisions for the go-live (P6); P4 never serves production, and its client-initiated mails are bounded by the throttle keys of § 3.3 (Decision 74). Task 31 writes it into the outcome's P6 section. |
+| FR:COV-2 (limit) | Syncing the booked occurrences past the 200 of the Google backfill from the nightly cron | The cron would need a « backfill pending » marker per pro (a migration P4 does not have) and shares its 300 s `maxDuration` with the sweeps (OUT:126); the rest syncs on its next change today. Task 31 writes it into the outcome's P6 section. |
+
+---
+
+## 11. Revision log
+
+### Revision 2
+
+Revision 2 applies the security critique (`SEC-*`, 1 Critical, 7 Important, 16 Minor) and the coverage critique (`COV-*`, 1 Critical, 13 Important, 16 Minor). Where they disagreed, the security finding won: COV-I2 item 3 and COV-M4 (c) asked to prefill the dialog from the guest cookie, SEC-I4 forbids it (no prefill, no lock, Decision 7); COV-I4 proposed two buy + book sentences, SEC-I3's single neutral sentence was kept (Decision 64); COV-I2 item 2 and SEC-I4 both asked for « Ce n'est pas moi », SEC-I4's masked note and cookie clearing with the same flags were kept. Task count 31 → 33 (Task 21a added, Task 25 split into 25a and 25b). Decisions 63 to 71 added; Decisions 3, 6, 7, 8, 9, 10, 12, 19 to 24, 26, 27, 28, 31, 32, 36 to 38, 41 to 44, 46, 48, 49, 51, 53 rewritten.
+
+| Finding | Change (sections) |
+|---|---|
+| SEC-C1 | § 1 Identity and Capabilities (a reference never names its customer); § 3.11 (`customerId` server-only, purchase id from the input only, confirmed booking → `already_ended`); § 3.21 `ReferenceView`, `referenceForPage`, `SeanceViewer` kind `reference`, `seanceVisitorFacts` for Owner / guest only, page assembly; § 3.23 `CheckoutReturn` mounting rule; § 4 row 13; § 5 séance and merci rows; Decision 71, Decisions 9, 21, 31; Tasks 12, 24; S24 rewritten, S32; § 9 row 2. |
+| SEC-I1 | § 1 Rate limits; § 2.1 rows of Task 3; § 3.3 `ipBuckets`, `ThrottleLimits` (`ip48`, `perOccurrenceIp`, `perProIp`), `actionThrottleKeys`; § 3.5 `visitorIpHashes`; § 3.7 `wideIpHash`; § 3.9 `holdCeiling`, `seatPressureOf`, per-séance and per-pro keys; § 4 rows 1, 2; Decisions 36, 65; Tasks 3, 9, 10; S33. |
+| SEC-I2 | § 3.3 actions `held`, `cancel`, `release` and their limits; § 3.9 `bookWithHeldTicketCore` step 3; § 3.11 step 4; § 3.19 `cancelMyBookingCore` step 3; § 4 rows 3, 5, 6; Decision 66; Tasks 10, 12, 21; S19 extended. |
+| SEC-I3 | § 1 Validation; § 3.2 `fromEngineClient` `dropCode`, `COPY.BUYBOOK_NOT_POSSIBLE`; § 3.9 steps (free success-like answer with the existing booking's confirmation, buy + book without code); § 4 rows 1, 2; Decisions 38, 64; Tasks 9, 10, 26, 27; S34; § 9 rows 7, 9. |
+| SEC-I4 | § 1 Capabilities (planted cookie rule); § 2.3 Task 21a rows; § 3.2 `maskEmail`, `guestNote`, `COPY.GUEST_BOOKING_EXISTS`, `COPY.NOT_ME`; § 3.17 `forgetGuestLinkAction`; § 3.19 personal-link confirmation page and route; § 3.21 `seancePageMode` (guest never `booked`); § 3.23 espace guest note, `ForgetGuestLinkButton`, séance copy, `SpendSeanceButton`; § 4 rows 8b, 16; § 5 `/api/c` row; Decisions 7, 63, 68; Task 21a; S35, S41. |
+| SEC-I5 | § 3.6 `mockCheckoutAllowed` with `VERCEL_ENV` as the one rule, `mockCheckoutEnabled`; § 3.13 (no copy of the rule); § 3.14 `env-checks.ts` boot refusal; § 2.2 env rows; Decision 27; Tasks 6, 15, 31 (APP_ENV grep); S15. |
+| SEC-I6 | § 1 Rate limits; § 3.3 per-pro and global e-mail keys, user key; § 3.9 `throttleSubjectOf`; § 3.10, § 3.11, § 3.19 subjects; § 3.21 `livePendingHoldsOf`; § 3.23 `PendingHolds`; § 2.4 `pending-holds.tsx`; Decisions 51, 67; Tasks 3, 24, 28; S36. |
+| SEC-I7 | § 3.6 `SESSION_APP`, metadata `app` and `env`, `CheckoutRequest.env`, `PublicDeps.env`; § 3.12 `sessionOrigin`, `purchaseOfSession` (`client_reference_id` as a check only), `WebhookOptions`, rules 3 and 4; § 4 row 9; Decisions 24, 69; Tasks 6, 13; S37. |
+| SEC-M1 | § 3.12 `CheckoutSessionLike` gains `mode`, `amount_total`, `currency`; rules 2 and 5 (livemode mismatch ignored, amount or currency mismatch → orphan); Decision 23; Task 13; S39. |
+| SEC-M2 | § 3.12 rule 5 (a duplicate with another payment intent or session → orphan); Decision 23; Task 13; S39. |
+| SEC-M3 | § 3.13 `mockCheckoutState` / `mockPay` for simulated sessions only; § 4 row 10; Decision 28; Task 14; S40. |
+| SEC-M4 | § 1 URLs and logs: the orphan-payment warning is the one allowed exception; Task 31 grep allow-list. |
+| SEC-M5 | § 3.14 `CRON_SECRET_MIN_LENGTH`, `CRON_CONFIGURED` length rule, `envBootErrors` for `BETTER_AUTH_SECRET`; § 3.1 preflight `AUTH_SECRET_32`; Decision 22; Task 15; S17. |
+| SEC-M6 | § 3.5 `guestCustomerId` null while impersonating, `SpaceIdentity` `impersonating`; § 3.19 `spaceActorOf` first check; Decision 19; Tasks 5, 21; S42. |
+| SEC-M7 | § 1 URLs and logs (`returnTo` from route params, no query); § 3.16 `returnPathOf` drops query and hash; § 5 common rules; Decision 42; Task 17; S23. |
+| SEC-M8 | § 3.4 phone rule in the statement; § 2.1 Task 4 row; Decision 6; Task 4; S46. |
+| SEC-M9 | § 2.1 `plain-name.ts`; § 3.2 `isPlainName`, `plainNameSchema`, `COPY.PLAIN_NAME`; § 3.9 `identityInputSchema`; § 3.16 `nameToSend`; § 3.17 `myNameInputSchema`; Decisions 12, 41; Tasks 2, 9, 18; S44. |
+| SEC-M10 | § 5 séance row `generateMetadata` (reads the séance only, private → business name and `noindex`); Decision 49; Task 26. |
+| SEC-M11 | § 1 Rendering and caching; § 2.4 `next.config.ts` row; § 3.13 mock headers; § 3.19 personal-link headers; § 5 Framing; Tasks 14, 25a, 31; S47. |
+| SEC-M12 | § 1 Revalidation (sign-out ends with `window.location.replace`); § 3.23 `OtherAddressButton`, `ClientSignOutButton`, `ForgetGuestLinkButton`; Tasks 19, 31 (no-store curl). |
+| SEC-M13 | § 1 Rendering (per-pro horizon key); § 4 row 12 (the key consumed inside `after`); § 5 `/[slug]` row; § 9 row 4. |
+| SEC-M14 | Deferred to P6 (§ 10); Task 31 outcome P6 section. |
+| SEC-M15 | § 1 Validation; § 3.7 `splitActionInput`, wrapper shape; § 3.9 strict schemas, `honeypotFilled(unknown)`; § 3.10, § 3.11, § 3.17, § 3.19 strict schemas and `input: unknown`; Decision 37; § 7 preamble (malformed cases in every core test); S43. |
+| SEC-M16 | § 1 URLs and logs: accepted residual stated (token in the GET path, masked in app logs, revocable); Decision 68. |
+| COV-C1 | § 2.1 `guest-access.ts` row; § 3.5 `SpaceIdentity` `unverified`, `resolveSpaceCustomer` mapping; § 3.16 `canOfferCodeSignIn` and the mounting invariant; § 1 UI rules; § 3.23 espace and `/mon-espace` copy, `SpendSeanceButton` `visitorState`; § 5 espace row; Decisions 8, 70; Tasks 5, 17, 22; S38. |
+| COV-I1 | § 3.23 `OwnerPreviewBanner` on the séance page, `OccurrenceBooking` unverified hint, séance copy; § 5 séance row; Decision 20; Task 26 browser. |
+| COV-I2 | Item 1: Decision 63, § 3.21 guest facts without URL; item 2: `forgetGuestLinkAction`, `ForgetGuestLinkButton` (SEC-I4's form); item 3: « not locked » applied, « prefilled » rejected (SEC-I4); item 4: § 3.19 `typeClass` from `classifyTypes(loadTypeFacts)`, Task 21 test; item 5: § 3.1 preflight and Task 1 ledger re-read; item 6: S35. |
+| COV-I3 | § 2.3 `auth-form.tsx` row; § 3.16 `authFormGoogleCallbacks`; § 3.18 `auth-form.tsx`; Decision 43; Tasks 17, 20. |
+| COV-I4 | Merged with SEC-I3 (Decision 64, one neutral buy + book sentence instead of two; free success-like answer as proposed). |
+| COV-I5 | Decision 26 rewritten (risk 10 checked in P4 when test keys exist); § 3.12 none; Task 13 real verifier offline; Task 31 conditional Stripe step; § 3.1 `STRIPE_TEST_KEY` boolean. |
+| COV-I6 | § 1 UI rules; § 2.3 dialog row; § 3.16 dialog note (P3 `09c5453` already traps focus; Task 1 records it); Tasks 1, 17, 19, 25b, 31 Tab checks. |
+| COV-I7 | § 5 titles per route (séance, offer, merci, espace, `/mon-espace`) and common rule; Decision 49; Tasks 26, 29, 31 (title curl). |
+| COV-I8 | § 1 DB tests all (Task 4 added); Task 4 full suite; Task 5 named DB files; § 3.6 `expireCheckoutSession` kept, Task 6 grep of its callers. |
+| COV-I9 | § 2.4 outcome row; § 6 preamble (owner list); Task 31 outcome content (P5 and P6 carries, residuals, deferred minors, owner list). |
+| COV-I10 | Decision 48 kept with the P5 carry and the owner question; Decisions 44, 46 marked owner validation; Decision 26 per COV-I5. |
+| COV-I11 | § 3.9 `bookWithHeldTicketCore` step 2 (guest cookie alone refused); § 4 row 3; Task 10 tests; S1 rule. |
+| COV-I12 | § 2.1 `run-action.ts` row; § 3.7 `runPublicActionWith`, `runClientActionWith`, thin `public-context.ts`; Decision 3; Task 7 tests; S45. |
+| COV-I13 | § 3.1 `OPTIONAL` gains every listed file (and the other P4-touched files). |
+| COV-M1 | (a) § 3.23 séance badge; (b) Decision 44 owner validation; (c) § 3.8 late payment sentence verbatim; (d) `COPY.TEST_PAYMENT_LINE` one string, `acceptedByLine` one label (Boutique, offer page); (e) merci booked body; (f) merci expired shop title « Paiement non abouti »; (g) § 3.8 `walletCount` and `walletLine`. |
+| COV-M2 | § 3.6 `closeOutcomeOf` maps `no_payment_required` to `processing`; § 3.12 rule 6 ignores it; Decision 23; Tasks 6, 13. |
+| COV-M3 | Same as SEC-M4 (§ 1 exception, Task 31 allow-list). |
+| COV-M4 | (a) § 3.21 `seancePageMode` private → closed, `SeanceVisitorFacts.ended`, § 3.23 ended lines; (b) archived → closed; (c) rejected (§ 10); (d) `WalletPanel` compact on the séance page. |
+| COV-M5 | § 3.23 offer page copy. |
+| COV-M6 | § 3.23 `OccurrenceBooking` `sessionStorage` return link, `COPY.RETURN_LINK`; Task 27. |
+| COV-M7 | § 3.14 `ensureAllHorizons` deadline and T11 invariants (OUT:126); OUT:118 recorded in the outcome; OUT:117 = SEC-M2; § 3.8 `runEffectsWith` (LED:84); § 1 `wrap-anywhere` (LED:148, LED:199); `redactSubject` deferred (§ 10). |
+| COV-M8 | § 3.6 `paymentModeOf` the one rule, `stripeMode` re-export; § 2.1 `admin-metrics.ts` row; Task 6 parity test. |
+| COV-M9 | § 3.23 `PublicPlanning` empty state with `COPY.SEE_SHOP`, `MySpaceView` `COPY.NO_UPCOMING` and wallet empty state, espace empty wallet; § 5 `/[slug]` row. |
+| COV-M10 | Same as SEC-M6. |
+| COV-M11 | § 1 UI rules; § 3.2 `COPY.PENDING_*`; § 3.23 pending labels, status / alert regions, focus after a removed row. |
+| COV-M12 | § 3.20 `ariaLabel`; § 3.23 planning sections, offer `fieldset`, `MerciRefresher` live region, cancel dialog mail line. |
+| COV-M13 | § 5 Mobile cells; § 3.13 and § 3.19 page layout; § 3.23 stacked components; Task 14 browser at 375 px. |
+| COV-M14 | (a) Task 25 split into 25a and 25b; (b) Task 26 RDV browser step replaced by the DB proof; (c) Task 31 TZ re-run, `text-primary`, `router.refresh()`, title and Tab checks; (d) § 5 espace row keeps `layout.tsx` and the stale-link ruling. |
+| COV-M15 | § 5 `/mon-espace` shell (`SiteHeader`, `max-w-2xl`, « Retour à l'accueil »); the `[slug]/not-found.tsx` half deferred (§ 10). |
+| COV-M16 | § 3.20 `PublicSeance.location`, `acceptedTypes` for tickets mode only, `capacity` of the row; Task 23 tests. |
+
+### Revision 3 (2026-10-21)
+
+Revision 2 quoted the engine and P3 at `983fa65` and the Task 41 brief, while P3 Tasks 42 and 43 and the final-review fix pass were still to come. Revision 3 re-reads, with `git diff 983fa65..1954782`, the 27 files the contract names that those commits changed (plus the files of the same commits it relies on: `src/lib/back-office/format.ts`, `src/lib/suspension.ts`, `src/components/dashboard/confirm-dialog.tsx`, `src/components/ui/link-class.ts`, `src/components/dashboard/saved-status.tsx`, `src/lib/public-anchors.ts`, `src/lib/calendar-links.ts`, `src/lib/stripe.ts` unchanged), fixes every quote to the code, and places every « [P4] » carry of the P3 final review and outcome. Task count 33 → 34 (Task 20a); Decisions 72 to 75 added; Decisions 1, 32, 59 rewritten; § 10 gains four rows; S48 to S52 added. Task numbers are unchanged; `LED:` numbers are unchanged (the archive is verbatim).
+
+**Code drift (file at `1954782`, the P3 commit that changed it)**
+
+| # | File (commit) | Contract sections | Change | Why |
+|---|---|---|---|---|
+| D1 | `src/server/notify.ts`, `src/lib/mail-budget.ts` (`f7f97d8`, `a958375`) | § 1 Effects; § 2.1 notify-run and notify.ts rows; § 2.2 webhook and mock rows; § 3.7 `RunPublicDeps.schedule`, `runPublicAction` doc; § 3.8 `notify-run.ts`, `notify.ts`; § 3.12 route; § 3.13 route; § 3.14 cron; § 4 preamble, row 15; Decision 74; Tasks 7, 8, 13, 14, 31; S49; § 9 row 7 | `runEffects(effects, budget: EffectBudget)` is required; `runEffectsWith(deps, effects, budget)` gains the `mailsToSend` and `warn` deps and the budget line; every P4 caller passes `"none"`, `runProAction` alone `"pro"`; source guards pin it | The P3 fix made the budget required; with `"pro"` an unverified pro's clients would lose receipts and confirmations past 50 mails |
+| D2 | `src/lib/notify-core.ts` (`f7f97d8`, `878a171`, `a84ebed`, `16a8fbd`) | § 2.1 row; § 3.8 plans | `EffectPlan` « emails » carries `professionalId`; the four new plans go through `emails(professionalId, …)`; an empty plan is `noEmail()`; the receipt's `expiryLabel` takes the ticket count; the confirmation's tickets-left per expiry and calendar links are P3's, untouched | The type changed; `expiryLabel` gained `count` (« valables ») |
+| D3 | `src/lib/notify-core.db.test.ts` | § 2.1 row; Task 8 tests | The P3 test to replace is named exactly; new plans asserted with the file's `professionalId` helper | Exact names for the writer |
+| D4 | `src/server/pro-context.ts`, `src/server/pro-context.test.ts` (`dd24560`, `5dd61da`, `a958375`) | § 2.3 Task 20 row; § 3.18; Task 20 tests | Task 20 keeps `actingSession(await getFreshSession())`, `impersonatedBy`, the impersonation line, `runEffects(effects, "pro")`; the P3 source guard stays and gains the `/mon-espace` redirect | Task 20 edits this file; the P3 security fixes must survive it |
+| D5 | `src/lib/suspension.ts`, `src/lib/session.ts` (`dd24560`, `2311421`) | § 1 Identity; § 2.1 visitor rows; § 3.5 `SessionFacts`, `currentSessionFacts`; § 3.7 trace; Decision 75; Tasks 5, 7; S51 | `currentSessionFacts` = `sessionFactsOf(actingSession(await getFreshSession()))`; `SessionFacts.impersonatedBy`; `publicImpersonationLogLine`; `src/server/visitor.test.ts` | The P3 rules for writes (fresh session, suspension, admin trace) applied to the public writes |
+| D6 | `src/server/pro.ts` (`0aa0919`) | § 2.3 Task 20 row; § 3.18; § 3.1 `OPTIONAL` | The private `requirePro` named; the raw `err` of the Google finalize and unlink logs goes through `logSafeMessage` | Real name; P3 log carry |
+| D7 | `src/lib/back-office/guest-access.ts` (`2311421`, `1b743cc`, `4bdd9fb`) | § 1 Capabilities; § 2.1 Task 5 row; § 2.3 Task 21a row; § 3.1 preflight; § 3.5; § 3.17 `forgetGuestLinkAction`; § 3.19 | Its real exports listed; `SpaceSession` has no `userId` yet (Task 5 adds it); unverified and impersonated sessions fall through to the cookie today; `guestCookieOptions` is the one source of the cookie attributes (the clear included); `SLUG_SHAPE` guards the redirect slug | The contract quoted the Task 41 brief, not the code |
+| D8 | `src/lib/back-office/guest-access.db.test.ts`, `guest-access.test.ts` | § 2.1, § 2.3 rows; § 3.5; Tasks 5, 21a tests; S52 | Two P3 tests change their expectations (unverified → `unverified`, impersonated → `impersonating`); `userId` in every `SpaceSession`; the route source guard kept and extended to `client.ts` | Exact test impact |
+| D9 | `src/app/api/c/[token]/route.ts` (`2311421`, `1b743cc`, `4bdd9fb`) | § 2.3 row; § 3.19 route; Task 21a | The POST sets the cookie with the exact line the P3 guard pins; the 303s keep `NextResponse.redirect(new URL(path, request.url), 303)` and `no-store`; stale touches no cookie | SEC-7 guard; Task 41 ruling |
+| D10 | `src/app/[slug]/espace/layout.tsx`, `page.tsx` (`2311421`, `1b743cc`) | § 3.1 preflight; § 3.5; § 5 common rules and espace row; Task 1 browser | The layout and the page share `getSpaceProfile`; the page builds `publicProOfRow(profile.pro)`; Task 1 checks the 404 of an unknown pro | Real structure |
+| D11 | `src/server/client-queries.ts` (`2311421`) | § 2.1 row; § 3.1; § 3.5; § 4 row 14 | `resolveSpaceCustomer(pro: { id })` today; `getSpaceProfile`, `getCustomerSpacePage(professionalId, customerId)` kept | Real signatures |
+| D12 | `src/lib/back-office/customer-space.ts`, `customer-space.db.test.ts` (`2311421`, `9d8ba45`) | § 2.3 Task 21 row; § 3.19 `CustomerSpace`; § 4 row 14; Task 21 tests | `getCustomerSpace(db, professionalId, customerId, now)`; `cancelTextOf` with its séance / rendez-vous wording; P3 `cancelText: null` becomes the locked text; `coverage` added | Real shape; FR:UI-14 wording kept |
+| D13 | `src/components/public/customer-space.tsx` (`9d8ba45`) | § 2.3 Task 22 row; § 3.23 espace additions | P3 already renders « Aucun ticket » + « Voir la boutique » (`boutiqueHref`) and the archived note | Avoid redoing P3 work |
+| D14 | `src/components/ui/dialog.tsx`, `src/lib/focus-trap.ts`, `confirm-dialog.tsx` (`09c5453`, `5c69d89`) | § 1 UI rules; § 2.3 (dialog row removed); § 3.16; § 3.23 `CancelBookingButton`, `PendingHolds`; Tasks 17, 22; preflight | P4 does not modify the dialog; `returnFocusTo` / `restoreTarget` replace a hand-made focus move when a success removes the opener | The trap and the restore exist; the conditional work is gone |
+| D15 | `src/components/auth/link-google-form.tsx` (`444f102`) | § 2.3 row; § 3.15 | Only `role="alert"` on both error lines is left | P3 did the French mapping |
+| D16 | `src/lib/email.ts`, `src/lib/emails/mock-log.ts`, `mock-log.test.ts` (`e73b7bf`) | § 2.3 (two rows removed); § 3.14; § 3.15; Decision 59; Tasks 8, 16 | `mockMailLog` and `mockMailRefusal` exist; the production line keeps the redacted subject; no template subject carries client data (Task 8 test); the Resend refusal is not repeated in `envBootErrors` | P3 SEC-3 did it, with a ruling on the subject |
+| D17 | `src/lib/throttle.ts` (`f7f97d8`) | § 3.3; Task 3 tests | `hitThrottle` and `proMailThrottleKey` stay; no action may be named `mail` or `horizon`; purge keeps 2 days | Shared table, no shared counter |
+| D18 | `src/lib/tickets-vocab.ts` (`7943041`) | Task 3 tests only | Its only change (the `timezone_locked` sentence) touches no P4 statement; `THROTTLE_*` verified unchanged | Verified |
+| D19 | `src/lib/booking/wallet.ts` (`878a171`) | § 2.1 Task 4 row | `upsertCustomer` verified unchanged; `walletBalanceByExpiry` and the private `usableTickets` predicate untouched | Verified |
+| D20 | `src/lib/ui-copy.test.ts` (`538e93d`) | § 2.1 row; § 3.1 | `DIRECTORIES` now walk `src/app/[slug]`, `src/components/public` and the admin space; the `OPTIONAL` additions drop what is already walked and gain the revision-3 files | Real scan |
+| D21 | `src/lib/admin-metrics.ts` (`77840a2`, `c112efd`) | § 2.1 Task 6 row | `stripeMode` is still its own function; the P3 additions stay | Verified |
+| D22 | `src/lib/analytics.ts` (`2311421`) | § 3.1 preflight | `mon-espace` reserved and untracked, `/<slug>/espace` untracked, the query stripped | Checked, not changed |
+| D23 | `src/lib/back-office/format.ts`, `src/lib/calendar-links.ts` (`878a171`, `4d039a5`) | Header; § 3.8 | `expiryLabel(…, count)`; the ICS escaping and 75-octet folding noted; P4 templates carry no calendar link | Relied-on helpers |
+| D24 | `src/lib/public-anchors.ts`, `link-class.ts`, `saved-status.tsx`, `--color-destructive` (`9d8ba45`, `5f7f856`, `8e4b888`, `d39c8d1`) | § 1 boundary and UI rules; § 2.4 Boutique row; § 3.23 `Boutique`, `WalletPanel`, `PublicPlanning`, `MySpaceView`, `MyNameForm`; § 5 offer row; Task 25a | `id={BOUTIQUE_ANCHOR}`, every « Voir la boutique » through `boutiqueHref`; `INLINE_LINK_CLASS`, `SavedStatus`, the AA destructive token | P3 FR:UI-14 carry and the P3 UI system |
+| D25 | Header, § 3.1, § 6, § 7 preamble and Task 1 | Header lines; preflight; Decision 1; Task 1 | `LED:` points to the archived ledger; `FR:` notation; P3 end state `1954782`; Task 1 checks the real final commits and interfaces and copies this contract into `docs/` | Tasks 41 to 43 are done; the scratchpad does not survive |
+
+**P3 carries addressed to P4**
+
+| Carry | Placed in | Decision |
+|---|---|---|
+| FR:SEC-5 « Compte client lié » leak | Task 16 (`auth-options.ts` cross-pro link removed, `auth.db.test.ts` inverted); § 1 Identity; § 3.15; S48; Task 31 grep and owner list | Decision 72, « Change to spec » L1345-1346: the safest rule that keeps the spec's badge and every client view |
+| FR:UI-13 client search in GET URLs | Task 20a (C `client-search.tsx`, `searchClientsCore`, `searchClientsAction`, `clientsHref(filter)`); § 1 URLs; § 3.18; § 4 row 17; § 5; S50 | Decision 73 |
+| `runEffects` budget for P4 callers (P3 outcome) | D1 | Decision 74 |
+| FR:R11 index migration (+ `ticket_purchase (offer_id)`, + `booking (purchase_id)`) | § 1 Migrations; § 10; Task 31 outcome P6 | Deferred to the P6 index migration: P4 adds none |
+| FR:F9 rdv_free guards outside the batch | Client half: Task 4 `offerUnchanged` (already); pro half: § 10, Task 31 outcome P5 | Deferred: no client path, P5 owns rdv_free |
+| LED:142 fulfilment of an expired purchase on a free type | Decision 56 (tickets issued, the orange alert flags them) | Unchanged |
+| LED:427 webhook 200 for `expired` of a deleted purchase | § 3.12 rules 5 and 7; Task 13 tests | Paid → orphan, expired → ignored, both 200 |
+| LED:429 `expireCheckoutSession` paid vs expired | § 3.6; Decision 32 | Only `closeForRelease` decides a release |
+| Raw `err` logs (webhook, `pro.ts`, dashboard and planning `after()`, `auth-options.ts`) | § 1 URLs and logs; § 2.2, § 2.3 rows; § 3.12, § 3.15, § 3.18; Tasks 13, 16, 20; Task 31 grep | |
+| FR:SEC-2, FR:SEC-6 patterns | D5 | Decision 75 |
+| FR:SEC-7 cookie attributes | D7, D9; § 3.17; S52 | |
+| FR:UI-14 Boutique anchor | D24 | |
+| FR:SEC-1 residual (c) Resend go-live | § 10; Task 31 outcome P6 | Deferred: infrastructure, P6 |
+| FR:COV-2 backfill above 200 | § 10; Task 31 outcome P6 | Deferred: needs a marker migration |
+| Copy the contract into `docs/` | § 2.1 Task 1 row; § 3.1; Task 1 | |
+| Already placed by revision 2, checked again: login CSRF on `/api/c` (Task 21a), `resolveSpaceIdentity` alignment (Task 5), real type classes (Task 21; `loadTypeFacts` already treats `rdv_free` as not RDV-enabled, § 3.19), test-mode banner (Task 25b), cron and `CRON_SECRET` (Task 15), `upsertCustomer` guard (Task 4), v1 `createCheckoutUrl` (Task 6), `mon-espace` reserved (done by P3, Task 1 checks), session-dynamic espace (§ 5), `parseFr` first (§ 1), notice override above a lowered horizon (Decision 10, P5 carry), Decision 35 docs drift (§ 3.19 follows the Task 41 ruling), the scope set aside by the final review (Tasks 19 to 22) | as listed | |
+
+### Revision 3.1 (2026-10-22): plan review amendments
+
+| Where | Change | Why |
+|---|---|---|
+| § 3.13, § 5 mock row | `Referrer-Policy: strict-origin` on every mock-checkout response and in the page's `<meta name="referrer">` | a `no-referrer` document sends `Origin: null` on its own form POST, refused by `sameOrigin` (the « Payer (simulation) » click would answer 403) |
+| § 3.19, § 5 `/api/c` row | `Referrer-Policy: strict-origin` on the confirmation page (`GUEST_LINK_PAGE_HEADERS`) | same reason (the « Ouvrir mon espace » click) |
+| Task 16 | `src/lib/auth.ts`: `logResetLink: !env.RESEND_ENABLED && process.env.NODE_ENV !== "production"`, pinned by a source guard in `auth-ui-guards.test.ts` | § 1 « no token in logs »: a production build without Resend printed the single-use reset link |
+| § 10, Task 31 | `booking (purchase_id)` dropped from the P6 index list | the unique constraint `booking_purchase_uq` already indexes it |
+| Task 1 | checks `git ls-files --error-unmatch docs/superpowers/plans/2026-10-21-p4-public-contract.md` instead of copying the contract | the controller commits the contract with the plan |
+| plan additions accepted | `createCheckoutAndAttach` (Tasks 9, 11); `isReferenceId` (Task 12); `spaceIdentityOf` (Task 5); extra guards in `linkCustomerUser` and `planLatePayment`; `mockCancelPath`; `GUEST_LINK_PAGE_HEADERS`; `src/lib/public/space-view.ts`, `space-status.tsx`, `occurrence-form.ts`, `seance-copy.ts`, `buy-and-book-form.ts`; `src/app/mon-espace/layout.tsx`; `src/app/[slug]/layout.tsx` (a real 404 before the loading boundary); `next.config.ts` `redirects()` for book/pack; `ClientSearch` props `limit` and `children`; a demo client account for Thomas in the seed | each is stricter or additive and tested; listed again in the Task 31 outcome for the owner |
+
