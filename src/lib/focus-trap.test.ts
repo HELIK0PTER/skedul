@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { tabDestination, topmostOf, type TabRelation } from "./focus-trap";
+import { restoreTarget, tabDestination, topmostOf, type TabRelation } from "./focus-trap";
 
 const rel = (text: string): TabRelation[] =>
   [...text].map((c) => (c === "<" ? "before" : c === "=" ? "self" : "after"));
@@ -69,4 +69,31 @@ test("topmostOf: a dialog nested in another one is on top of it, whichever effec
 
 test("topmostOf: no dialog open, no top", () => {
   assert.equal(topmostOf([], inside), null);
+});
+
+type Fake = { name: string; isConnected: boolean; disabled: boolean; matches: (selector: string) => boolean };
+const fake = (name: string, over: { isConnected?: boolean; disabled?: boolean } = {}): Fake => {
+  const el = { name, isConnected: over.isConnected ?? true, disabled: over.disabled ?? false };
+  return { ...el, matches: (selector: string) => selector === ":disabled" && el.disabled };
+};
+
+test("restoreTarget: the element the caller asked for wins while it can take the focus (final review UI-1)", () => {
+  const asked = fake("Supprimer l'événement");
+  const opener = fake("opener");
+  assert.equal(restoreTarget(asked, opener), asked);
+  assert.equal(restoreTarget(asked, null), asked);
+});
+
+test("restoreTarget: a requested element that left the page or is disabled falls back to the opener (final review UI-1)", () => {
+  const opener = fake("opener");
+  assert.equal(restoreTarget(fake("gone", { isConnected: false }), opener), opener);
+  assert.equal(restoreTarget(fake("busy", { disabled: true }), opener), opener);
+  assert.equal(restoreTarget(null, opener), opener);
+  assert.equal(restoreTarget(undefined, opener), opener);
+});
+
+test("restoreTarget: nothing usable gives null, so the focus is left where it is (final review UI-1)", () => {
+  assert.equal(restoreTarget(null, null), null);
+  assert.equal(restoreTarget(fake("gone", { isConnected: false }), fake("gone too", { isConnected: false })), null);
+  assert.equal(restoreTarget(fake("busy", { disabled: true }), fake("busy too", { disabled: true })), null);
 });

@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { X } from "lucide-react";
 
-import { tabDestination, topmostOf, type TabRelation } from "@/lib/focus-trap";
+import { restoreTarget, tabDestination, topmostOf, type TabRelation } from "@/lib/focus-trap";
 
 /**
  * The element that holds the focus right now, when it is worth coming back to:
@@ -57,8 +57,9 @@ function inModalDialog(node: Node): boolean {
  * into the dialog.
  *
  * When it closes (`open` turns false, or the component unmounts while open) the
- * focus goes back to the element that held it when the dialog opened, as long
- * as that element is still on the page (WCAG 2.4.3). That element is read while
+ * focus goes back to `returnFocusTo` when the caller gave one, else to the
+ * element that held it when the dialog opened, as long as that element is still
+ * on the page and enabled (WCAG 2.4.3, `restoreTarget`). That element is read while
  * rendering, at the moment `open` turns true: an `autoFocus` control inside the
  * dialog takes the focus during the commit, before any effect runs, so an
  * effect would only ever see the dialog's own control. A dialog opened from a
@@ -76,6 +77,7 @@ export function Dialog({
   title,
   labelledBy,
   describedBy,
+  returnFocusTo,
   children,
 }: {
   open: boolean;
@@ -83,6 +85,13 @@ export function Dialog({
   title: string;
   labelledBy?: string;
   describedBy?: string;
+  /**
+   * The element that takes the focus back when the dialog closes, asked at that moment. For a dialog whose opener
+   * cannot be known when it opens: the trigger was disabled while the answer loaded, so it did not hold the focus.
+   * Keep the function's identity stable (useCallback). Without it, or when the element is gone or disabled, the
+   * focus returns to the element that held it when the dialog opened.
+   */
+  returnFocusTo?: () => HTMLElement | null;
   children: React.ReactNode;
 }) {
   const generatedTitleId = useId();
@@ -148,9 +157,9 @@ export function Dialog({
     return () => {
       // Strict Mode runs this cleanup once while the dialog is still on screen: nothing has closed then.
       if (el?.isConnected) return;
-      if (opener && opener.isConnected) opener.focus();
+      restoreTarget(returnFocusTo?.(), opener)?.focus();
     };
-  }, [open, opener]);
+  }, [open, opener, returnFocusTo]);
 
   useEffect(() => {
     if (!open) return;

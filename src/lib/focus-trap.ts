@@ -40,3 +40,18 @@ export function topmostOf<T>(stack: readonly T[], isInside: (inner: T, outer: T)
   }
   return top;
 }
+
+/** What `restoreTarget` needs of an element: whether it is still on the page, and CSS matching (`:disabled`). */
+export type Restorable = { isConnected: boolean; matches: (selector: string) => boolean };
+
+/**
+ * Where the focus goes when a dialog closes: the element the caller asked for (`preferred`, read at close time) when it
+ * is still on the page and enabled, else the element that held the focus when the dialog opened (`opener`) under the
+ * same conditions, else nowhere (null: the focus stays where it is). A disabled button cannot take the focus, so
+ * trying it would drop the focus on the page.
+ */
+export function restoreTarget<T extends Restorable>(preferred: T | null | undefined, opener: T | null): T | null {
+  const usable = (el: T | null | undefined): el is T => el != null && el.isConnected && !el.matches(":disabled");
+  if (usable(preferred)) return preferred;
+  return usable(opener) ? opener : null;
+}

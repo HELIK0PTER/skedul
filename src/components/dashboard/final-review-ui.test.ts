@@ -41,6 +41,21 @@ test("the branding preview shows the tickets vocabulary, not the v1 pack button 
   assert.match(form, />\s*Acheter des tickets\s*</, "the preview's second button speaks of tickets");
 });
 
+test("the event delete confirmation keeps one dialog instance, gives « Retour » the focus when the preview is ready and returns it (final review UI-1)", () => {
+  const card = source("src/components/dashboard/event-delete-card.tsx");
+  assert.doesNotMatch(card, /<ConfirmDialog[^>]*\bkey=/, "no key remount: it dropped the focus on <body> when the dialog closed");
+  assert.match(card, /returnFocusTo=\{returnFocus\}/, "the trigger that opened the dialog gets the focus back");
+  assert.match(card, /ref=\{wholeButton\}/, "« Supprimer l'événement » is a focus target");
+  assert.match(card, /ref=\{customButton\}/, "« Voir les conséquences » is a focus target");
+  const confirm = source("src/components/dashboard/confirm-dialog.tsx");
+  assert.match(confirm, /ref=\{back\}/, "« Retour » can be focused from the effect");
+  assert.match(confirm, /if \(open && !pending\) focusBack\(\)/, "once nothing is awaited, « Retour » takes the focus");
+  assert.match(confirm, /if \(!error\) back\.current\?\.focus\(\)/, "unless the action failed: the error text has it then");
+  assert.match(confirm, /returnFocusTo=\{returnFocusTo\}/, "handed to the dialog");
+  const dialog = source("src/components/ui/dialog.tsx");
+  assert.match(dialog, /restoreTarget\(returnFocusTo\?\.\(\), opener\)/, "the dialog restores the focus through the pure rule");
+});
+
 test("catalog forms call their Server Actions through callOrFail, so a failed call shows a message (final review UI-4)", () => {
   const dir = "src/components/dashboard";
   const files = [

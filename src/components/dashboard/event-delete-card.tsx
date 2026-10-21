@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { Loader2, Trash2 } from "lucide-react";
 
 import { ConfirmDialog } from "@/components/dashboard/confirm-dialog";
@@ -38,6 +38,13 @@ export function EventDeleteCard({
 }) {
   const router = useRouter();
   const errorBox = useRef<HTMLParagraphElement>(null);
+  const wholeButton = useRef<HTMLButtonElement>(null);
+  const customButton = useRef<HTMLButtonElement>(null);
+  /** The trigger the dialog gives the focus back to: the button that opened it (it was disabled while the answer loaded, so it never held the focus). */
+  const returnTo = useRef<HTMLElement | null>(null);
+  const returnFocus = useCallback(() => returnTo.current, []);
+  /** Set when a delete went through and the dialog closed while the buttons were still disabled: the focus is put on « Supprimer l'événement » when they come back. */
+  const refocusAfterDelete = useRef(false);
   const [loadingWhole, startWhole] = useTransition();
   const [loadingCustom, startCustom] = useTransition();
   const [deleting, startDeleting] = useTransition();
@@ -57,12 +64,19 @@ export function EventDeleteCard({
     if (errorFocus > 0) errorBox.current?.focus();
   }, [errorFocus]);
 
+  const busy = loadingWhole || loadingCustom || deleting || leaving;
+  useEffect(() => {
+    if (!refocusAfterDelete.current || busy) return;
+    refocusAfterDelete.current = false;
+    wholeButton.current?.focus();
+  }, [busy]);
+
   if (fromDate === null) {
     return <p className="text-sm text-zinc-600">{NO_FUTURE}</p>;
   }
   const from: DateKey = fromDate;
 
-  const busy = loadingWhole || loadingCustom || deleting || leaving;
+
   const dialogPending = loadingWhole || deleting || leaving;
   const copy: ConfirmCopy = target
     ? deleteEventCopy({
@@ -88,6 +102,7 @@ export function EventDeleteCard({
 
   function openWhole() {
     if (busy) return;
+    returnTo.current = wholeButton.current;
     setError(null);
     setDone(null);
     // The page data can be minutes old: the dialog opens at once on it, with both buttons disabled until the fresh answer replaces it.
@@ -108,6 +123,7 @@ export function EventDeleteCard({
     setCustomError(null);
     setError(null);
     setDone(null);
+    returnTo.current = customButton.current;
     const date: DateKey = customDate;
     startCustom(async () => {
       const preview = await load(date);
@@ -140,6 +156,8 @@ export function EventDeleteCard({
         }
         setTarget(null);
         setCustomOpen(false);
+        // The buttons are still disabled while this action ends and the custom panel is gone: the focus comes back when they are enabled.
+        refocusAfterDelete.current = true;
         // Part of the series went and part did not: the line says so instead of "done".
         if (res.incomplete !== null) {
           setError(res.incomplete);
@@ -158,7 +176,7 @@ export function EventDeleteCard({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="destructive" onClick={openWhole} disabled={busy}>
+        <Button ref={wholeButton} type="button" variant="destructive" onClick={openWhole} disabled={busy}>
           {loadingWhole && target === null ? (
             <Loader2 className="size-4 animate-spin" />
           ) : (
@@ -193,7 +211,7 @@ export function EventDeleteCard({
               }}
             />
           </FormField>
-          <Button type="button" variant="secondary" size="sm" onClick={openCustom} disabled={busy}>
+          <Button ref={customButton} type="button" variant="secondary" size="sm" onClick={openCustom} disabled={busy}>
             {loadingCustom && <Loader2 className="size-4 animate-spin" />}
             Voir les conséquences
           </Button>
@@ -206,15 +224,15 @@ export function EventDeleteCard({
         {done}
       </p>
 
-      {/* Keyed on the waiting state: « Retour » is disabled while the fresh answer (or the delete) is awaited, so its autoFocus is ignored at mount; the dialog remounts when the wait ends and « Retour » takes the focus (also after a failed delete). */}
+      {/* One dialog instance for the whole flow: « Retour » is disabled while the fresh answer (or the delete) is awaited and takes the focus when the wait ends (ConfirmDialog); the focus goes back to the button that opened it. */}
       <ConfirmDialog
-        key={dialogPending ? "wait" : "ready"}
         open={target !== null}
         copy={copy}
         pending={dialogPending}
         error={target !== null ? error : null}
         onConfirm={confirm}
         onClose={close}
+        returnFocusTo={returnFocus}
       />
     </div>
   );
