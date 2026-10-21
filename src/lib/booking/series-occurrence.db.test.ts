@@ -16,8 +16,9 @@ import {
 import { instantAt } from "../civil-date";
 import { event, eventTicketType } from "../db/schema";
 import { cancelByClient } from "./cancel";
-import { bookWithHeldTicket } from "./claims";
+import { bookWithHeldTicket, registerPro } from "./claims";
 import { bookingsExpiringBefore, editEventInPlace, updateOccurrence } from "./series";
+import type { Effect } from "./types";
 
 function must<T extends { ok: boolean }>(res: T, what: string): asserts res is Extract<T, { ok: true }> {
   assert.ok(res.ok, `${what}: ${JSON.stringify(res)}`);
@@ -222,6 +223,112 @@ dbTest("E7 éditeur: capacity propagates to future séances without capacity_ove
   });
   assert.equal(stale.ok ? "ok" : stale.code, "stale");
   assert.equal((await occurrencesOf(db, eventId)).length, 3);
+});
+
+dbTest("E7 éditeur: a capacity edit re-syncs the Google events of the booked séances it reaches, and only those (final review COV-3)", async ({ db, pro }) => {
+  const typeId = await makeType(db, pro);
+  const { eventId, occurrences } = await makeEvent(db, pro, {
+    ticketTypeIds: [typeId],
+    capacity: 12,
+    rule: {
+      startDate: dayIn(pro, 2),
+      startMinute: 600,
+      freq: "daily",
+      interval: 1,
+      weekdays: null,
+      monthlyBy: null,
+      monthWeek: null,
+      endMode: "count",
+      untilDate: null,
+      occurrenceCount: 3,
+    },
+  });
+  const [first, second, third] = occurrences;
+  const book = async (occurrenceId: string) => {
+    const customerId = await makeCustomer(db, pro);
+    must(
+      await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId, customerId, asGuest: true }),
+      "register",
+    );
+  };
+  await book(first.id);
+  await book(second.id);
+  // the second séance has its own capacity (an override); the third has nobody
+  must(
+    await updateOccurrence(db, {
+      professionalId: pro.proId,
+      actorUserId: pro.userId,
+      occurrenceId: second.id,
+      seenStartsAt: second.startsAt,
+      patch: { capacity: 5 },
+    }),
+    "override one séance",
+  );
+  const sync = (occurrenceId: string): Effect => ({ type: "google.sync_occurrence", occurrenceId });
+  const byOccurrence = (effects: readonly Effect[]) =>
+    [...effects].sort((a, b) =>
+      "occurrenceId" in a && "occurrenceId" in b ? (a.occurrenceId < b.occurrenceId ? -1 : 1) : 0,
+    );
+
+  // the whole event: the Google event of a booked séance shows its capacity, so the one that changed is synced
+  // (not the overridden one, whose capacity did not change; not the empty one, which has no Google event)
+  const capacityOnly = await editEventInPlace(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    eventId,
+    seenVersion: 1,
+    patch: { capacity: 20 },
+  });
+  must(capacityOnly, "event capacity");
+  assert.equal((await getOccurrence(db, first.id)).capacity, 20);
+  assert.equal((await getOccurrence(db, second.id)).capacity, 5);
+  assert.equal((await getOccurrence(db, third.id)).capacity, 20);
+  assert.deepEqual(capacityOnly.effects, [sync(first.id)]);
+
+  // capacity and title together: the title shows on every booked séance, the overridden one included
+  const both = await editEventInPlace(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    eventId,
+    seenVersion: 2,
+    patch: { capacity: 30, title: "Cours du soir" },
+  });
+  must(both, "capacity and title");
+  assert.deepEqual(byOccurrence(both.effects), byOccurrence([sync(first.id), sync(second.id)]));
+
+  // a title alone is unchanged by this fix: still every booked séance
+  const titleOnly = await editEventInPlace(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    eventId,
+    seenVersion: 3,
+    patch: { title: "Cours du matin" },
+  });
+  must(titleOnly, "title");
+  assert.deepEqual(byOccurrence(titleOnly.effects), byOccurrence([sync(first.id), sync(second.id)]));
+
+  // « cette séance »: its own capacity is synced too
+  const own = await updateOccurrence(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    occurrenceId: first.id,
+    seenStartsAt: first.startsAt,
+    patch: { capacity: 9 },
+  });
+  must(own, "this séance");
+  assert.deepEqual(own.effects, [sync(first.id)]);
+
+  // nobody booked anywhere: nothing to sync
+  const empty = await makeEvent(db, pro, { ticketTypeIds: [typeId], capacity: 12 });
+  const quiet = await editEventInPlace(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    eventId: empty.eventId,
+    seenVersion: 1,
+    patch: { capacity: 15 },
+  });
+  must(quiet, "empty event");
+  assert.deepEqual(quiet.effects, []);
 });
 
 dbTest("E7 éditeur: links, questions and location are replaced in place; the location change is e-mailed", async (h) => {

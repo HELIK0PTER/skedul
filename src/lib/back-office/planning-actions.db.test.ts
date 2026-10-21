@@ -326,6 +326,19 @@ dbTest("updateCapacityCore: « Cette séance » vs « Toutes les séances à ven
   );
   assert.ok(low.ok, JSON.stringify(low));
   assert.equal((await getOccurrence(db, third.id)).capacity, 2);
+
+  // The Google event of a booked séance shows its capacity: the event-wide edit re-syncs the booked séance it
+  // changes (the second). The third has people too but its own capacity, the first has its own capacity and nobody.
+  await register(db, pro, second.id, await makeCustomer(db, pro));
+  const wide = await updateCapacityCore(
+    db,
+    ctx,
+    { occurrenceId: second.id, seenStartsAt: second.startsAt.toISOString(), scope: "event", capacity: 6, seenVersion: 3 },
+    now,
+  );
+  assert.ok(wide.ok, JSON.stringify(wide));
+  assert.deepEqual(wide.effects, [{ type: "google.sync_occurrence", occurrenceId: second.id }]);
+  assert.deepEqual(await snapshot(), [[20, true], [6, false], [2, true]]);
 });
 
 dbTest("cancelOccurrenceCore: séance and bookings cancelled, one occurrence_cancelled effect, tickets returned", async ({ db, pro }) => {

@@ -428,9 +428,14 @@ export async function editEventInPlace(
   if (!res.ok) return failOf(res);
 
   const effects: Effect[] = [];
-  if (outcome.describedChanged) {
+  // The Google event of a séance shows its title, its place and its capacity: a capacity edit re-syncs too.
+  if (outcome.describedChanged || p.capacity !== undefined) {
     const future = await db
-      .select({ id: occurrence.id, locationOverride: occurrence.locationOverride })
+      .select({
+        id: occurrence.id,
+        locationOverride: occurrence.locationOverride,
+        capacityOverride: occurrence.capacityOverride,
+      })
       .from(occurrence)
       .where(and(eq(occurrence.eventId, input.eventId), eq(occurrence.status, "scheduled"), gt(occurrence.startsAt, now)));
     const byOcc = await activeBookingsByOccurrence(
@@ -445,7 +450,9 @@ export async function editEventInPlace(
         }
       }
     }
-    effects.push(...syncEffects([...byOcc.keys()]));
+    // A séance with its own capacity keeps it, so a capacity edit alone leaves its Google event as it is.
+    const ownCapacity = new Set(future.filter((o) => o.capacityOverride).map((o) => o.id));
+    effects.push(...syncEffects([...byOcc.keys()].filter((id) => outcome.describedChanged || !ownCapacity.has(id))));
   }
   return { ok: true, effects, version: input.seenVersion + 1 };
 }
