@@ -18,6 +18,7 @@ import {
   timeOffConflictCopy,
   timeOffConflictLine,
   unenrollCopy,
+  unenrollReasonHelp,
   type ConfirmCopy,
 } from "./confirm-copy";
 
@@ -159,6 +160,12 @@ test("unenrollCopy: the title follows the names, the body follows tickets and pe
     "the payment sentence only with a pending payment",
   );
   assert.ok(!unenrollCopy({ names: ["Léa Martin"], ticketCount: 1, pendingCount: 0 }).body.includes("paiement"));
+});
+
+test("unenrollReasonHelp: the optional reason is told to go to the client (final review F11)", () => {
+  assert.equal(unenrollReasonHelp({ count: 1 }), "Ce motif apparaît tel quel dans l'email envoyé au client.");
+  assert.equal(unenrollReasonHelp({ count: 3 }), "Ce motif apparaît tel quel dans l'email envoyé à chaque client.");
+  assert.equal(DASH.test(unenrollReasonHelp({ count: 1 }) + unenrollReasonHelp({ count: 2 })), false);
 });
 
 test("closeTicketsCopy and retireTicketsCopy count with plural", () => {

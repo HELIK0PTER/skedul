@@ -7,6 +7,7 @@ import { ArrowRightLeft, ArrowUpRight, Ban, CircleCheck, MapPin, Pencil, RotateC
 import { BookingStatusBadge } from "@/components/dashboard/booking-status-badge";
 import { ConfirmDialog } from "@/components/dashboard/confirm-dialog";
 import { CoverageBadge } from "@/components/dashboard/coverage-badge";
+import { FormField } from "@/components/dashboard/form-field";
 import { MoveAttendeeDialog } from "@/components/dashboard/move-attendee-dialog";
 import { OccurrenceEditForm } from "@/components/dashboard/occurrence-edit-form";
 import { RegisterAttendeeDialog } from "@/components/dashboard/register-attendee-dialog";
@@ -15,9 +16,8 @@ import { TypeChip } from "@/components/dashboard/type-chip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { cancelOccurrenceCopy, restoreOccurrenceCopy, unenrollCopy } from "@/lib/back-office/confirm-copy";
+import { cancelOccurrenceCopy, restoreOccurrenceCopy, unenrollCopy, unenrollReasonHelp } from "@/lib/back-office/confirm-copy";
 import { formatWhen, plural } from "@/lib/back-office/format";
 import { MODE_SHORT_LABELS } from "@/lib/back-office/labels";
 import { unenrolledMessage, type PlanningAttendeeVM, type PlanningItemVM } from "@/lib/back-office/planning-view";
@@ -554,8 +554,12 @@ function OccurrenceDialogBody({
           onClose={closeConfirm}
         >
           {confirm.kind === "unenroll" && (
-            <div className="grid gap-1.5">
-              <Label htmlFor={reasonId}>Motif (facultatif)</Label>
+            <FormField
+              label="Motif"
+              htmlFor={reasonId}
+              optional
+              help={unenrollReasonHelp({ count: peopleOf(confirm.ids).length })}
+            >
               <Textarea
                 id={reasonId}
                 value={reason}
@@ -564,7 +568,7 @@ function OccurrenceDialogBody({
                 disabled={pending}
                 onChange={(e) => setReason(e.target.value)}
               />
-            </div>
+            </FormField>
           )}
         </ConfirmDialog>
       )}

@@ -77,6 +77,13 @@ export function unenrollCopy(a: { names: readonly string[]; ticketCount: number;
   };
 }
 
+/** The help line of the optional « Motif » of an unenrol: the reason goes into the e-mail the client gets, as typed. */
+export function unenrollReasonHelp(a: { count: number }): string {
+  return a.count === 1
+    ? "Ce motif apparaît tel quel dans l'email envoyé au client."
+    : "Ce motif apparaît tel quel dans l'email envoyé à chaque client.";
+}
+
 export function closeTicketsCopy(a: { count: number; reasonLabel: string }): ConfirmCopy {
   return {
     title: `Clore ${plural(a.count, "ticket", "tickets")} ?`,
