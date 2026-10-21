@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { guestLinkDecision, type GuestCustomerRow } from "./guest-access";
+import { GUEST_COOKIE_MAX_AGE } from "../guest-link";
+import { guestCookieOptions, guestLinkDecision, type GuestCustomerRow } from "./guest-access";
 
 const ROW: GuestCustomerRow = { customerId: "c1", linkVersion: 3, slug: "altinha-paris", proSuspended: false };
 const LINK = { customerId: "c1", linkVersion: 3 };
@@ -35,4 +37,31 @@ test("guestLinkDecision: a slug that is not a plain address segment is never a r
     assert.deepEqual(guestLinkDecision(LINK, { ...ROW, slug }), { kind: "not_found" }, slug);
     assert.deepEqual(guestLinkDecision({ ...LINK, linkVersion: 1 }, { ...ROW, slug }), { kind: "not_found" }, slug);
   }
+});
+
+test("guestCookieOptions: httpOnly, lax, scoped to the pro's path, 30 days, secure in production only (SEC-7)", () => {
+  assert.deepEqual(guestCookieOptions("altinha-paris", true), {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/altinha-paris",
+    maxAge: 2_592_000,
+  });
+  assert.deepEqual(guestCookieOptions("altinha-paris", false), {
+    httpOnly: true,
+    secure: false,
+    sameSite: "lax",
+    path: "/altinha-paris",
+    maxAge: 2_592_000,
+  });
+  // The path is the pro's own slug, so another pro's pages never receive this client's cookie.
+  assert.equal(guestCookieOptions("autre-pro", true).path, "/autre-pro");
+  assert.equal(guestCookieOptions("autre-pro", true).maxAge, GUEST_COOKIE_MAX_AGE);
+});
+
+test("the personal-link route builds its cookie with guestCookieOptions and the production flag", () => {
+  // The route imports next/server and the process db, so it cannot be loaded here: guard its source instead.
+  const route = readFileSync("src/app/api/c/[token]/route.ts", "utf8");
+  assert.match(route, /res\.cookies\.set\(GUEST_COOKIE, token, guestCookieOptions\(decision\.slug, process\.env\.NODE_ENV === "production"\)\)/);
+  assert.doesNotMatch(route, /httpOnly|sameSite|maxAge/, "no attribute is spelled out in the route any more");
 });

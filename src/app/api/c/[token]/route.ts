@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 
-import { resolveGuestLink } from "@/lib/back-office/guest-access";
+import { guestCookieOptions, resolveGuestLink } from "@/lib/back-office/guest-access";
 import { db } from "@/lib/db";
-import { GUEST_COOKIE, GUEST_COOKIE_MAX_AGE } from "@/lib/guest-link";
+import { GUEST_COOKIE } from "@/lib/guest-link";
 import { guestKey } from "@/server/guest-key";
 
 const NO_STORE = { "Cache-Control": "no-store" } as const;
@@ -36,13 +36,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
   }
 
   const res = NextResponse.redirect(new URL(`/${decision.slug}/espace`, request.url), 303);
-  res.cookies.set(GUEST_COOKIE, token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: `/${decision.slug}`,
-    maxAge: GUEST_COOKIE_MAX_AGE,
-  });
+  res.cookies.set(GUEST_COOKIE, token, guestCookieOptions(decision.slug, process.env.NODE_ENV === "production"));
   res.headers.set("Cache-Control", "no-store");
   return res;
 }

@@ -14,7 +14,7 @@ import { and, eq, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/atomic";
 import { customer, professional, user } from "@/lib/db/schema";
-import { verifyGuestLink, type GuestLink } from "@/lib/guest-link";
+import { GUEST_COOKIE_MAX_AGE, verifyGuestLink, type GuestLink } from "@/lib/guest-link";
 import { userIsSuspended } from "@/lib/suspension";
 import { normalizeEmail } from "@/lib/tickets";
 
@@ -23,6 +23,22 @@ const SLUG_SHAPE = /^[a-z0-9-]+$/;
 
 /** A real token is `customerId.version.mac`, well under 150 characters. */
 const MAX_TOKEN_LENGTH = 200;
+
+/**
+ * The attributes of the skedul_guest cookie (final review SEC-7), in one place so a test pins each:
+ * HttpOnly (the token is a credential no script reads), SameSite=Lax (sent on the click from the
+ * e-mail, not on a cross-site request), scoped to the pro's own path (another pro's pages never
+ * receive it), 30 days, and Secure in a production build.
+ */
+export function guestCookieOptions(slug: string, production: boolean) {
+  return {
+    httpOnly: true,
+    secure: production,
+    sameSite: "lax",
+    path: `/${slug}`,
+    maxAge: GUEST_COOKIE_MAX_AGE,
+  } as const;
+}
 
 export type GuestCustomerRow = { customerId: string; linkVersion: number; slug: string; proSuspended: boolean };
 
