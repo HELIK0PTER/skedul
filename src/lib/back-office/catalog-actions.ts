@@ -41,6 +41,7 @@ import { parseFr } from "@/lib/zod-fr";
 import { readFreeBlockers, readProWindow } from "./catalog-reads";
 import { NOTICE_TOO_LONG, noticeExceedsHorizon } from "./notice";
 import { actionFail, fromEngine, type ActionFail, type CoreResult, type ProCtx } from "./result";
+import { mergeAvailabilityRules } from "./week-hours";
 
 export type TicketTypePatch = Partial<TicketTypeInput>;
 
@@ -333,7 +334,7 @@ export async function deleteOfferCore(
 
 /* ───────────────────────────── Hours and questions ───────────────────────────── */
 
-/** Per-type RDV hours (empty list = back to the global hours): parseFr(array of availabilityRuleInputSchema, max 168), setAvailabilityRules. */
+/** Per-type RDV hours (empty list = back to the global hours): parseFr(array of availabilityRuleInputSchema, max 168), overlapping and touching ranges of a day merged into one, setAvailabilityRules. */
 export async function setTypeHoursCore(
   db: Db,
   ctx: ProCtx,
@@ -344,7 +345,7 @@ export async function setTypeHoursCore(
   if (!parsed.ok) return actionFail(parsed.error);
   const res = await setAvailabilityRules(
     db,
-    { professionalId: ctx.professionalId, ticketTypeId: parsed.data.ticketTypeId, rules: parsed.data.rules },
+    { professionalId: ctx.professionalId, ticketTypeId: parsed.data.ticketTypeId, rules: mergeAvailabilityRules(parsed.data.rules) },
     now,
   );
   return res.ok ? res : fromEngine(res, "catalog");

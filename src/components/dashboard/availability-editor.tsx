@@ -5,7 +5,7 @@ import { Check, Loader2 } from "lucide-react";
 
 import { FormError } from "@/components/dashboard/form-error";
 import { Button } from "@/components/ui/button";
-import { firstRangeProblem } from "@/lib/back-office/week-hours";
+import { firstRangeProblem, mergeAvailabilityRules } from "@/lib/back-office/week-hours";
 import { REQUEST_FAILED } from "@/lib/pro-messages";
 import { saveAvailabilityAction } from "@/server/pro";
 import {
@@ -53,7 +53,9 @@ export function AvailabilityEditor({
       return;
     }
     setInvalid(null);
-    const rules = rulesFromByDay(byDay);
+    // Overlapping and touching ranges of a day are saved as one (the server does the same): show what is saved.
+    const rules = mergeAvailabilityRules(rulesFromByDay(byDay));
+    setByDay(byDayFromRules(rules));
     startTransition(async () => {
       try {
         const res = await saveAvailabilityAction(rules);

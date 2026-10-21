@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ByDay } from "../../components/dashboard/weekly-hours-editor";
-import { DAY_LABELS, DAY_ORDER, firstRangeProblem } from "./week-hours";
+import { DAY_LABELS, DAY_ORDER, firstRangeProblem, mergeAvailabilityRules } from "./week-hours";
 
 const DASH = new RegExp(`[${String.fromCharCode(0x2014)}${String.fromCharCode(0x2013)}]`);
 
@@ -106,4 +106,27 @@ test("firstRangeProblem messages end with a period and hold no dash", () => {
     assert.ok(problem.message.endsWith("."), problem.message);
     assert.ok(!DASH.test(problem.message), problem.message);
   }
+});
+
+const r = (dayOfWeek: number, startMinute: number, endMinute: number) => ({ dayOfWeek, startMinute, endMinute });
+
+test("mergeAvailabilityRules: overlapping and touching ranges of a day become one (an RDV fits inside a single range)", () => {
+  assert.deepEqual(mergeAvailabilityRules([r(1, 540, 720), r(1, 660, 840)]), [r(1, 540, 840)], "overlap");
+  assert.deepEqual(mergeAvailabilityRules([r(1, 540, 720), r(1, 720, 840)]), [r(1, 540, 840)], "touching: 12:00 ends one, starts the next");
+  assert.deepEqual(mergeAvailabilityRules([r(1, 540, 1020), r(1, 600, 720)]), [r(1, 540, 1020)], "contained");
+  assert.deepEqual(mergeAvailabilityRules([r(1, 540, 720), r(1, 540, 720)]), [r(1, 540, 720)], "identical twice");
+  assert.deepEqual(
+    mergeAvailabilityRules([r(1, 840, 960), r(1, 540, 720), r(1, 700, 850)]),
+    [r(1, 540, 960)],
+    "a chain, given out of order, is one range",
+  );
+});
+
+test("mergeAvailabilityRules: a gap stays, days stay apart, the result is ordered by day then start, the input is untouched", () => {
+  const input = [r(3, 600, 700), r(1, 840, 900), r(1, 540, 720), r(3, 701, 800), r(0, 0, 1440)];
+  const copy = JSON.parse(JSON.stringify(input));
+  assert.deepEqual(mergeAvailabilityRules(input), [r(0, 0, 1440), r(1, 540, 720), r(1, 840, 900), r(3, 600, 700), r(3, 701, 800)]);
+  assert.deepEqual(input, copy);
+  assert.deepEqual(mergeAvailabilityRules([r(1, 540, 720), r(2, 720, 840)]), [r(1, 540, 720), r(2, 720, 840)], "adjacent in time but on two days");
+  assert.deepEqual(mergeAvailabilityRules([]), []);
 });

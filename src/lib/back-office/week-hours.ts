@@ -43,3 +43,25 @@ export function firstRangeProblem(byDay: ByDay): RangeProblem | null {
   }
   return null;
 }
+
+type HourRule = { dayOfWeek: number; startMinute: number; endMinute: number };
+
+/**
+ * One range per run of hours: the overlapping AND the touching ranges of a day become one, the result is ordered by
+ * day (0 to 6) then start. The RDV engine needs it: slots are generated per range and an RDV must fit inside a single
+ * one (fitsAvailability), so 09:00-12:00 + 12:00-14:00 would refuse an RDV at 11:30 although the pro is there all
+ * morning, and 09:00-12:00 + 11:00-14:00 would offer the same slot twice. Pure; the input is not modified.
+ */
+export function mergeAvailabilityRules(rules: readonly HourRule[]): HourRule[] {
+  const sorted = [...rules].sort((a, b) => a.dayOfWeek - b.dayOfWeek || a.startMinute - b.startMinute || a.endMinute - b.endMinute);
+  const merged: HourRule[] = [];
+  for (const rule of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && last.dayOfWeek === rule.dayOfWeek && rule.startMinute <= last.endMinute) {
+      if (rule.endMinute > last.endMinute) last.endMinute = rule.endMinute;
+    } else {
+      merged.push({ dayOfWeek: rule.dayOfWeek, startMinute: rule.startMinute, endMinute: rule.endMinute });
+    }
+  }
+  return merged;
+}

@@ -451,6 +451,28 @@ dbTest("setTypeHoursCore sets, validates and clears the hours of a type", async 
   assert.equal((await setTypeHoursCore(db, ctx, { ticketTypeId: typeId, rules: tooMany }, now)).ok, false, "more than 168 ranges");
   assert.deepEqual((await detailOf(db, pro, typeId, now)).ownHours, rules, "the refusals changed nothing");
 
+  // Overlapping and touching ranges of a day are one range: an RDV must fit inside a single one.
+  must(
+    await setTypeHoursCore(
+      db,
+      ctx,
+      {
+        ticketTypeId: typeId,
+        rules: [
+          { dayOfWeek: 4, startMinute: 720, endMinute: 840 },
+          { dayOfWeek: 4, startMinute: 540, endMinute: 720 },
+          { dayOfWeek: 4, startMinute: 960, endMinute: 1020 },
+        ],
+      },
+      now,
+    ),
+    "touching ranges",
+  );
+  assert.deepEqual((await detailOf(db, pro, typeId, now)).ownHours, [
+    { dayOfWeek: 4, startMinute: 540, endMinute: 840 },
+    { dayOfWeek: 4, startMinute: 960, endMinute: 1020 },
+  ]);
+
   must(await setTypeHoursCore(db, ctx, { ticketTypeId: typeId, rules: [] }, now), "clear");
   assert.deepEqual((await detailOf(db, pro, typeId, now)).ownHours, []);
 });

@@ -151,6 +151,31 @@ dbTest("saveAvailabilityCore replaces the global hours and leaves a type's hours
   }
 });
 
+dbTest("saveAvailabilityCore stores overlapping and touching ranges of a day as one (an RDV must fit inside a single range)", async ({ db, pro }) => {
+  const now = new Date();
+  const saved = await saveAvailabilityCore(
+    db,
+    proCtx(pro),
+    {
+      rules: [
+        { dayOfWeek: 1, startMinute: 720, endMinute: 840 },
+        { dayOfWeek: 1, startMinute: 540, endMinute: 720 },
+        { dayOfWeek: 1, startMinute: 780, endMinute: 900 },
+        { dayOfWeek: 1, startMinute: 1020, endMinute: 1080 },
+        { dayOfWeek: 2, startMinute: 540, endMinute: 600 },
+        { dayOfWeek: 2, startMinute: 540, endMinute: 600 },
+      ],
+    },
+    now,
+  );
+  assert.deepEqual(saved, OK);
+  assert.deepEqual(await hoursOf(db, pro.proId, null), [
+    [1, 540, 900],
+    [1, 1020, 1080],
+    [2, 540, 600],
+  ]);
+});
+
 dbTest("saveAvailabilityCore refuses an inverted or empty range with « Plage horaire invalide. » and keeps the old hours", async ({ db, pro }) => {
   const now = new Date();
   const seeded = await setAvailabilityRules(db, {

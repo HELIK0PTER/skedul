@@ -8,6 +8,7 @@ import { FormError } from "@/components/dashboard/form-error";
 import { Switch } from "@/components/dashboard/switch";
 import { WeeklyHoursEditor, byDayFromRules, rulesFromByDay, type ByDay } from "@/components/dashboard/weekly-hours-editor";
 import { Button } from "@/components/ui/button";
+import { mergeAvailabilityRules } from "@/lib/back-office/week-hours";
 import type { AvailabilityRuleInput } from "@/lib/tickets";
 import { setTypeHoursAction } from "@/server/pro-catalog";
 
@@ -59,6 +60,14 @@ export function TypeHoursEditor({
     }
     if (rules.some((r) => !Number.isInteger(r.startMinute) || !Number.isInteger(r.endMinute))) {
       setError("Une plage horaire est incomplète.");
+      return;
+    }
+    // Overlapping and touching ranges of a day are saved as one (the server does the same): show what is saved.
+    // An inverted range goes to the server as it is, which refuses it in French (merging could swallow it).
+    if (rules.every((r) => r.startMinute < r.endMinute)) {
+      const merged = mergeAvailabilityRules(rules);
+      setByDay(byDayFromRules(merged));
+      run("save", merged);
       return;
     }
     run("save", rules);

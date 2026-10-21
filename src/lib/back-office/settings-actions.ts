@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import { NOTICE_TOO_LONG, noticeExceedsHorizon } from "@/lib/back-office/notice";
 import { actionFail, fromEngine, type CoreResult, type ProCtx } from "@/lib/back-office/result";
+import { mergeAvailabilityRules } from "@/lib/back-office/week-hours";
 import { setAvailabilityRules, updateBookingSettings } from "@/lib/booking/catalog";
 import { failOf } from "@/lib/booking/types";
 import { G, lockRows, tryAtomic, ts, type Db } from "@/lib/db/atomic";
@@ -114,7 +115,8 @@ const globalHoursSchema = z.object({ rules: z.array(availabilityRuleInputSchema)
 /**
  * The global RDV hours (ticketTypeId null), replaced in one engine batch: the hours of
  * a ticket type are untouched, an empty list closes every day. An inverted range is
- * « Plage horaire invalide. » (the schema's own message). Context "settings".
+ * « Plage horaire invalide. » (the schema's own message). Overlapping and touching ranges of a day are stored as
+ * one (mergeAvailabilityRules: an RDV must fit inside a single range). Context "settings".
  */
 export async function saveAvailabilityCore(
   db: Db,
@@ -126,7 +128,7 @@ export async function saveAvailabilityCore(
   if (!parsed.ok) return actionFail(parsed.error);
   const res = await setAvailabilityRules(
     db,
-    { professionalId: ctx.professionalId, ticketTypeId: null, rules: parsed.data.rules },
+    { professionalId: ctx.professionalId, ticketTypeId: null, rules: mergeAvailabilityRules(parsed.data.rules) },
     now,
   );
   if (!res.ok) return fromEngine(res, "settings");
