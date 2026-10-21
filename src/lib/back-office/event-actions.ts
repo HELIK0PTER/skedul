@@ -117,6 +117,11 @@ async function typesUsable(db: Db, professionalId: string, ids: readonly string[
   return Number(res.rows[0]?.n ?? 0) === ids.length;
 }
 
+/** True when `startDate` is more than 730 days after the pro's local today (Decision 15's typo guard, creation and schedule cut alike). */
+function startTooFar(startDate: DateKey, tz: string, now: Date): boolean {
+  return startDate > addDays(todayKey(now, tz), START_MAX_DAYS);
+}
+
 /**
  * The start window of a NEW event, shared by the create core and the create-form
  * preview so both refuse the same things with the same text: the start date is in
@@ -128,7 +133,7 @@ async function typesUsable(db: Db, professionalId: string, ids: readonly string[
 function startProblem(rule: RecurrenceRuleInput, durationMin: number, tz: string, now: Date): string | null {
   const today = todayKey(now, tz);
   if (rule.startDate < today) return EVENT_START_PAST;
-  if (rule.startDate > addDays(today, START_MAX_DAYS)) return EVENT_START_TOO_FAR;
+  if (startTooFar(rule.startDate, tz, now)) return EVENT_START_TOO_FAR;
   // A first séance on a later local day starts after `now`: only a start date of today can already be behind us.
   if (rule.startDate === today) {
     const [first] = expand({ ...rule, durationMin }, tz, today, today);
@@ -171,7 +176,7 @@ async function deleteRefusal(db: Db, professionalId: string, eventId: string, fr
 
 /**
  * parseFr(eventInputSchema); the start window (`startProblem`: the start date in
- * [local today, today + 730] and a first séance that has not started); the types deduped, each an active non-rdv_free type of the pro; the notice
+ * [local today, today + 730] and a first séance that has not started); the types deduped (none unless the mode is « Sur tickets »), each an active non-rdv_free type of the pro; the notice
  * of the effective window within its horizon; createEvent. Context "event".
  */
 export async function createEventCore(
@@ -187,7 +192,8 @@ export async function createEventCore(
   const badStart = startProblem(draft.rule, draft.durationMin, ctx.timezone, now);
   if (badStart !== null) return actionFail(badStart);
 
-  const typeIds = [...new Set(draft.ticketTypeIds)];
+  // Only « Sur tickets » accepts tickets: any other mode carries no link (the browser rule is not enough).
+  const typeIds = draft.bookingMode === "tickets" ? [...new Set(draft.ticketTypeIds)] : [];
   if (!(await typesUsable(db, ctx.professionalId, typeIds))) return actionFail(EVENT_TYPE_UNAVAILABLE);
   const tooLong = await noticeProblem(db, ctx.professionalId, draft.overrides);
   if (tooLong !== null) return actionFail(tooLong);
@@ -205,7 +211,7 @@ export async function createEventCore(
 
 /**
  * « Informations » (in place on one segment, Q7): parseFr(eventInfoSchema);
- * the types deduped, each active and non-rdv_free OR already linked to this
+ * the types deduped (none unless the mode is « Sur tickets »: any other mode drops the links), each active and non-rdv_free OR already linked to this
  * event; the notice within its horizon; editEventInPlace with the full info
  * patch. Context "event".
  */
@@ -219,7 +225,8 @@ export async function editEventInfoCore(
   if (!parsed.ok) return actionFail(parsed.error);
   const { eventId, seenVersion, info } = parsed.data;
 
-  const typeIds = [...new Set(info.ticketTypeIds)];
+  // Only « Sur tickets » accepts tickets: any other mode drops every link (the browser rule is not enough).
+  const typeIds = info.bookingMode === "tickets" ? [...new Set(info.ticketTypeIds)] : [];
   if (!(await typesUsable(db, ctx.professionalId, typeIds, eventId))) return actionFail(EVENT_TYPE_UNAVAILABLE);
   const tooLong = await noticeProblem(db, ctx.professionalId, info.overrides);
   if (tooLong !== null) return actionFail(tooLong);
@@ -253,7 +260,7 @@ export async function editEventInfoCore(
 /* ───────────────────────────── Horaire et récurrence (cut) ───────────────────────────── */
 
 /**
- * parseFr of the rule and the duration; previewSeriesEdit; describeSeriesEdit
+ * parseFr of the rule and the duration; the new rule's start within 730 days (EVENT_START_TOO_FAR, like a creation); previewSeriesEdit; describeSeriesEdit
  * for both orphan choices; the RDV that overlap the new dates over
  * [max(fromDate, today), today + MATERIALIZE_DAYS]. Context "series".
  */
@@ -266,6 +273,7 @@ export async function previewScheduleCore(
   const parsed = parseFr(scheduleSchema, input);
   if (!parsed.ok) return actionFail(parsed.error);
   const { eventId, fromDate, rule, durationMin } = parsed.data;
+  if (startTooFar(rule.startDate, ctx.timezone, now)) return actionFail(EVENT_START_TOO_FAR);
 
   const res = await previewSeriesEdit(db, { professionalId: ctx.professionalId, eventId, fromDate, rule, durationMin }, now);
   if (!res.ok) return fromEngine(res, "series");
@@ -287,7 +295,7 @@ export async function previewScheduleCore(
 }
 
 /**
- * editSeriesFrom; `eventId` is the new segment after a split (the same event
+ * The new rule's start within 730 days (EVENT_START_TOO_FAR, like a creation), then editSeriesFrom; `eventId` is the new segment after a split (the same event
  * when nothing precedes the cut). The engine's TIM1 refusal (« La série change
  * déjà à partir du … ») passes through. Context "series".
  */
@@ -307,6 +315,7 @@ export async function applyScheduleCore(
   const parsed = parseFr(applySchema, input);
   if (!parsed.ok) return actionFail(parsed.error);
   const { eventId, seenVersion, fromDate, rule, durationMin, orphans } = parsed.data;
+  if (startTooFar(rule.startDate, ctx.timezone, now)) return actionFail(EVENT_START_TOO_FAR);
 
   const res = await editSeriesFrom(
     db,

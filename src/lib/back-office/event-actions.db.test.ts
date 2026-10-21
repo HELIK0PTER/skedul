@@ -219,6 +219,52 @@ dbTest("createEventCore: duplicate type ids link once; archived, rdv_free, forei
   }
 });
 
+dbTest("createEventCore and editEventInfoCore keep ticket type links only in « Sur tickets » mode", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const typeId = await makeType(db, pro);
+  const linksOf = async (eventId: string) =>
+    (await db.select().from(eventTicketType).where(eq(eventTicketType.eventId, eventId))).map((l) => l.ticketTypeId);
+
+  for (const bookingMode of ["free", "none"] as const) {
+    const created = await createEventCore(db, ctx, eventInput(pro, now, { bookingMode, ticketTypeIds: [typeId] }), now);
+    must(created, `create in ${bookingMode} mode`);
+    assert.deepEqual(await linksOf(created.eventId), [], `${bookingMode}: no link written, whatever the browser sent`);
+  }
+  const tickets = await createEventCore(db, ctx, eventInput(pro, now, { bookingMode: "tickets", ticketTypeIds: [typeId] }), now);
+  must(tickets, "create in tickets mode");
+  assert.deepEqual(await linksOf(tickets.eventId), [typeId]);
+
+  // Leaving « Sur tickets » drops the links even when the request still carries the types...
+  const toFree = await editEventInfoCore(
+    db,
+    ctx,
+    { eventId: tickets.eventId, seenVersion: 1, info: infoOf({ bookingMode: "free", ticketTypeIds: [typeId] }) },
+    now,
+  );
+  must(toFree, "switch to free");
+  assert.deepEqual(await linksOf(tickets.eventId), [], "links dropped on the way to « Libre »");
+  assert.equal((await getEvent(db, tickets.eventId)).bookingMode, "free");
+  // ...and a mode that is not « Sur tickets » never links a type, not even one that is archived or unknown.
+  const stillNone = await editEventInfoCore(
+    db,
+    ctx,
+    { eventId: tickets.eventId, seenVersion: toFree.version, info: infoOf({ bookingMode: "none", ticketTypeIds: [typeId, "unknown-type"] }) },
+    now,
+  );
+  must(stillNone, "switch to none");
+  assert.deepEqual(await linksOf(tickets.eventId), []);
+  // Back to « Sur tickets »: the types sent are linked again.
+  const back = await editEventInfoCore(
+    db,
+    ctx,
+    { eventId: tickets.eventId, seenVersion: stillNone.version, info: infoOf({ bookingMode: "tickets", ticketTypeIds: [typeId] }) },
+    now,
+  );
+  must(back, "back to tickets");
+  assert.deepEqual(await linksOf(tickets.eventId), [typeId]);
+});
+
 dbTest("createEventCore: French validation, notice against horizon, and the number of séances created", async ({ db, pro }) => {
   const ctx = proCtx(pro);
   const now = new Date();
@@ -556,6 +602,30 @@ dbTest("applyScheduleCore: the engine refusal « La série change déjà à part
     `La série change déjà à partir du ${formatDayMonthYear(d2)} : modifiez-la depuis cette date, ou terminez celle-ci avant.`,
   );
 }, { timeout: 240_000 });
+
+dbTest("previewScheduleCore and applyScheduleCore: a new rule may start at most 730 days from today, like a creation", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = MIDDAY_PARIS;
+  const { eventId, occurrences } = await makeEvent(db, pro, { rule: onceRule(dayIn(pro, 3, now)) }, now);
+  const fromDate = occurrences[0].seriesDate ?? "";
+  const ruleAt = (offset: number) => weekly(dayIn(pro, offset, now), [1], { endMode: "count", occurrenceCount: 3 });
+
+  const farPreview = await previewScheduleCore(db, ctx, { eventId, fromDate, rule: ruleAt(731), durationMin: 60 }, now);
+  assert.equal(outcome(farPreview), EVENT_START_TOO_FAR, "a typo year");
+  const farApply = await applyScheduleCore(
+    db,
+    ctx,
+    { eventId, seenVersion: 1, fromDate, rule: ruleAt(731), durationMin: 60, orphans: "keep" },
+    now,
+  );
+  assert.equal(outcome(farApply), EVENT_START_TOO_FAR);
+  assert.equal((await getEvent(db, eventId)).version, 1, "nothing was written");
+  assert.equal((await occurrencesOf(db, eventId)).length, 1);
+
+  // The day 730 is still allowed (the same bound as a creation).
+  const edge = await previewScheduleCore(db, ctx, { eventId, fromDate, rule: ruleAt(730), durationMin: 60 }, now);
+  must(edge, "the 730th day");
+});
 
 dbTest("applyScheduleCore: a stale version and another pro's event", async (h) => {
   const { db, pro } = h;
