@@ -47,7 +47,9 @@ export async function loadOccurrenceForSync(db: Db, occurrenceId: string): Promi
   const attendees = await db
     .select({ name: customer.name, email: customer.email })
     .from(booking)
-    .innerJoin(customer, eq(customer.id, booking.customerId))
+    // The customer is joined through the occurrence's own pro (no composite FK enforces it): a booking
+    // pointing at another pro's customer never puts that person's name and address in this pro's calendar.
+    .innerJoin(customer, and(eq(customer.id, booking.customerId), eq(customer.professionalId, row.professionalId)))
     .where(
       and(
         eq(booking.occurrenceId, occurrenceId),

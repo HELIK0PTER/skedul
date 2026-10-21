@@ -48,7 +48,9 @@ export async function loadIcsFacts(db: Db, bookingId: string): Promise<IcsFacts 
       businessName: professional.businessName,
     })
     .from(booking)
-    .innerJoin(occurrence, eq(occurrence.id, booking.occurrenceId))
+    // The séance is joined through the booking's own pro (no composite FK enforces it): a booking pointing
+    // at another pro's séance gives no file, so it never leaks that séance's title, place and hours.
+    .innerJoin(occurrence, and(eq(occurrence.id, booking.occurrenceId), eq(occurrence.professionalId, booking.professionalId)))
     .leftJoin(event, eq(event.id, occurrence.eventId))
     .leftJoin(ticketType, eq(ticketType.id, occurrence.ticketTypeId))
     .innerJoin(professional, eq(professional.id, booking.professionalId))

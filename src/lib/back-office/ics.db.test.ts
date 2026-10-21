@@ -169,3 +169,26 @@ dbTest("buildBookingIcs: a hostile title and location read from the database inj
   // Nor any other character a lenient parser reads as a line break.
   assert.equal(body.split(/\r\n|[\n\v\f\r\u001C-\u001E\u0085\u2028\u2029]/).length, body.split("\r\n").length);
 });
+
+dbTest("loadIcsFacts: a confirmed booking whose séance belongs to another pro has no file (SEC-4)", async ({ db, pro }) => {
+  const other = await createTestPro(db);
+  let crossedId: string | null = null;
+  try {
+    const foreignSeance = await rowSeance(db, other, await rowEvent(db, other), { seatsTaken: 0 });
+    const ownCustomer = await rowCustomer(db, pro);
+    // Built by hand on purpose: booking.occurrence_id has no composite FK to the booking's pro, so only
+    // the loader's own join keeps another pro's séance (title, place, hours) out of this booking's file.
+    const crossed = await rowBooking(db, pro, { occurrenceId: foreignSeance, customerId: ownCustomer, status: "confirmed" });
+    crossedId = crossed;
+    assert.equal(await loadIcsFacts(db, crossed), null);
+
+    // Control: the same booking on its own pro's séance still has its file.
+    const ownSeance = await rowSeance(db, pro, await rowEvent(db, pro), { seatsTaken: 1 });
+    const fine = await rowBooking(db, pro, { occurrenceId: ownSeance, customerId: ownCustomer, status: "confirmed" });
+    assert.equal((await loadIcsFacts(db, fine))?.bookingId, fine);
+  } finally {
+    // The crossed booking would block the other pro's séance delete (plain FK).
+    if (crossedId) await db.delete(schema.booking).where(eq(schema.booking.id, crossedId));
+    await deleteTestUser(db, other.userId);
+  }
+});

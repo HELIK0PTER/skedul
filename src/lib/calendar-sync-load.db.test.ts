@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 
-import { event, occurrence, professional } from "@/lib/db/schema";
+import { booking, event, occurrence, professional } from "@/lib/db/schema";
 
 import { createTestPro, dbTest, deleteTestUser } from "../test/db";
 import { rowBooking, rowCustomer, rowEvent, rowOffer, rowPurchase, rowRdv, rowRdvType, rowSeance, rowType } from "../test/rows";
@@ -162,6 +162,27 @@ dbTest("attendees are read for the occurrence's own pro only: a booking row of a
     assert.deepEqual(loaded?.attendees, [{ name: "Alice", email: "alice@example.com" }]);
   } finally {
     // Cascades the foreign booking away, so I1 (seats_taken = 1) holds when the harness checks.
+    await deleteTestUser(db, other.userId);
+  }
+});
+
+dbTest("attendees are read through the pro's own customers only: a booking pointing at another pro's customer is ignored (SEC-4)", async ({ db, pro }) => {
+  const other = await createTestPro(db);
+  let crossed: string | null = null;
+  try {
+    const seance = await rowSeance(db, pro, await rowEvent(db, pro), { seatsTaken: 1 });
+    const alice = await rowCustomer(db, pro, { name: "Alice", email: "alice@example.com" });
+    const mallory = await rowCustomer(db, other, { name: "Mallory", email: "mallory@example.com" });
+    await rowBooking(db, pro, { occurrenceId: seance, customerId: alice });
+    // Built by hand on purpose: booking.customer_id has no composite FK to the booking's pro, so only the
+    // loader's own join keeps another pro's customer (name, address) out of this pro's Google event.
+    crossed = await rowBooking(db, pro, { occurrenceId: seance, customerId: mallory });
+
+    const loaded = await loadOccurrenceForSync(db, seance);
+    assert.deepEqual(loaded?.attendees, [{ name: "Alice", email: "alice@example.com" }]);
+  } finally {
+    // The crossed booking would block the other pro's customer delete (plain FK), and the harness's I1 wants 1 seat.
+    if (crossed) await db.delete(booking).where(eq(booking.id, crossed));
     await deleteTestUser(db, other.userId);
   }
 });
