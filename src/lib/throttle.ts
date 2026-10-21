@@ -46,17 +46,31 @@ export function resetThrottleKey(email: string): string {
   return throttleKey("reset", "email", email);
 }
 
-/** Atomic upsert on `throttle` (one statement); true while hits ≤ limit. */
-export async function consumeThrottle(db: ThrottleDb, key: string, limit: ThrottleLimit, now: Date): Promise<boolean> {
+/** Client e-mails sent from a pro's actions (src/lib/mail-budget.ts): one counter per pro, so one pro never spends another one's budget. */
+export function proMailThrottleKey(professionalId: string): string {
+  return `t:mail:p:${professionalId}`;
+}
+
+/**
+ * Atomic upsert on `throttle` (one statement) that counts `by` hits at once and
+ * returns the hits of the window after them: a new window opens with `by` hits
+ * when the previous one has elapsed, else `by` is added to it.
+ */
+export async function hitThrottle(db: ThrottleDb, key: string, by: number, windowSec: number, now: Date): Promise<number> {
   const at = sql`${now.toISOString()}::timestamptz`;
-  const elapsed = sql`throttle.window_start <= ${at} - make_interval(secs => ${limit.windowSec}::int)`;
+  const elapsed = sql`throttle.window_start <= ${at} - make_interval(secs => ${windowSec}::int)`;
   const result = await db.execute<{ hits: number }>(sql`
-    insert into throttle (key, window_start, hits) values (${key}, ${at}, 1)
+    insert into throttle (key, window_start, hits) values (${key}, ${at}, ${by}::int)
     on conflict (key) do update set
       window_start = case when ${elapsed} then ${at} else throttle.window_start end,
-      hits = case when ${elapsed} then 1 else throttle.hits + 1 end
+      hits = case when ${elapsed} then ${by}::int else throttle.hits + ${by}::int end
     returning hits`);
-  return Number(result.rows[0]?.hits) <= limit.limit;
+  return Number(result.rows[0]?.hits);
+}
+
+/** Atomic upsert on `throttle` (one statement); true while hits ≤ limit. */
+export async function consumeThrottle(db: ThrottleDb, key: string, limit: ThrottleLimit, now: Date): Promise<boolean> {
+  return (await hitThrottle(db, key, 1, limit.windowSec, now)) <= limit.limit;
 }
 
 /** P4 actions: consumes the IP key and the e-mail key (THROTTLE_LIMITS, THROTTLE_WINDOW_SEC); false if either is over. */

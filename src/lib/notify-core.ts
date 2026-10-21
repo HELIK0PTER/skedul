@@ -28,7 +28,7 @@ import { COVERAGE_LABELS } from "@/lib/tickets-vocab";
 export type OutgoingEmail = { to: string; subject: string; html: string };
 export type NotifyDeps = { appUrl: string; guestKey: Buffer; now: Date };
 export type EffectPlan =
-  | { kind: "emails"; emails: OutgoingEmail[] }
+  | { kind: "emails"; professionalId: string | null; emails: OutgoingEmail[] }
   | { kind: "google"; occurrenceId: string }
   | { kind: "stripe"; purchaseId: string; checkoutSessionId: string }
   | { kind: "deferred"; type: Effect["type"] };
@@ -183,8 +183,10 @@ async function ticketsLeftOf(db: Db, b: BookingFacts, now: Date) {
 
 /* ───────────────────────────── Small helpers ───────────────────────────── */
 
-const emails = (list: OutgoingEmail[]): EffectPlan => ({ kind: "emails", emails: list });
-const noEmail = (): EffectPlan => emails([]);
+/** The mails of one effect, with the pro whose budget they spend (src/lib/mail-budget.ts); no mail, no pro. */
+const emails = (professionalId: string | undefined, list: OutgoingEmail[]): EffectPlan =>
+  list.length === 0 || professionalId === undefined ? noEmail() : { kind: "emails", professionalId, emails: list };
+const noEmail = (): EffectPlan => ({ kind: "emails", professionalId: null, emails: [] });
 
 /** A hold the client never paid: confirmed_at is null and the hold ended before the booking did. */
 function isLapsedHold(b: Pick<BookingFacts, "confirmedAt" | "holdExpiresAt" | "endedAt">): boolean {
@@ -235,7 +237,7 @@ async function planBookingConfirmed(db: Db, bookingId: string, deps: NotifyDeps)
       icsUrl: `${deps.appUrl.replace(/\/+$/, "")}/api/bookings/${b.bookingId}/calendar.ics`,
     },
   });
-  return emails([{ to: b.customerEmail, ...mail }]);
+  return emails(b.professionalId, [{ to: b.customerEmail, ...mail }]);
 }
 
 function cancelledMail(b: BookingFacts, by: "pro" | "client", ticketReturned: boolean, deps: NotifyDeps): OutgoingEmail {
@@ -256,7 +258,7 @@ async function planBookingCancelled(db: Db, bookingId: string, by: "pro" | "clie
   const [b] = await readBookings(db, eq(booking.id, bookingId));
   if (!b || b.status !== "cancelled" || isLapsedHold(b)) return noEmail();
   const returned = await returnedBookingIds(db, b.professionalId, [b.bookingId]);
-  return emails([cancelledMail(b, by, returned.has(b.bookingId), deps)]);
+  return emails(b.professionalId, [cancelledMail(b, by, returned.has(b.bookingId), deps)]);
 }
 
 async function planOccurrenceCancelled(
@@ -275,6 +277,7 @@ async function planOccurrenceCancelled(
     heard.map((b) => b.bookingId),
   );
   return emails(
+    heard[0].professionalId,
     heard.map((b) => {
       const mail = occurrenceCancelledEmail({
         customerName: b.customerName,
@@ -303,6 +306,7 @@ async function planOccurrenceChanged(
       b.status === "confirmed" || (b.status === "pending" && b.holdExpiresAt !== null && b.holdExpiresAt.getTime() > nowMs),
   );
   return emails(
+    active[0]?.professionalId,
     active.map((b) => {
       const mail = occurrenceChangedEmail({
         customerName: b.customerName,
@@ -333,7 +337,7 @@ async function planAttendeeMoved(db: Db, bookingId: string, fromOccurrenceId: st
     toLocation: b.location,
     personalLinkUrl: linkOf(b, deps),
   });
-  return emails([{ to: b.customerEmail, ...mail }]);
+  return emails(b.professionalId, [{ to: b.customerEmail, ...mail }]);
 }
 
 async function planTicketsOffered(db: Db, customerId: string, actionId: string, deps: NotifyDeps): Promise<EffectPlan> {
@@ -374,7 +378,7 @@ async function planTicketsOffered(db: Db, customerId: string, actionId: string, 
     expiryText: expiryLabel(offered[0].expiresAt, c.tz, deps.now),
     personalLinkUrl: personalLinkUrl(deps.appUrl, { id: c.id, linkVersion: c.linkVersion }, deps.guestKey),
   });
-  return emails([{ to: c.email, ...mail }]);
+  return emails(c.professionalId, [{ to: c.email, ...mail }]);
 }
 
 /**

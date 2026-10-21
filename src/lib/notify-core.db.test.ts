@@ -17,7 +17,7 @@ import { planEffect, type EffectPlan, type NotifyDeps, type OutgoingEmail } from
 
 const APP = "https://app.test";
 const KEY = guestLinkKey("test-secret");
-const NONE: EffectPlan = { kind: "emails", emails: [] };
+const NONE: EffectPlan = { kind: "emails", professionalId: null, emails: [] };
 const esc = escapeHtml;
 
 const depsAt = (now: Date): NotifyDeps => ({ appUrl: APP, guestKey: KEY, now });
@@ -28,9 +28,12 @@ function must<T extends { ok: boolean }>(res: T): Extract<T, { ok: true }> {
   return res as Extract<T, { ok: true }>;
 }
 
-function emailsOf(plan: EffectPlan): OutgoingEmail[] {
+/** The mails of an e-mails plan; with `proId`, also that the plan names that pro (the budget of src/lib/mail-budget.ts is spent on it). */
+function emailsOf(plan: EffectPlan, proId?: string): OutgoingEmail[] {
   assert.equal(plan.kind, "emails", JSON.stringify(plan));
-  return plan.kind === "emails" ? plan.emails : [];
+  if (plan.kind !== "emails") return [];
+  if (proId !== undefined) assert.equal(plan.professionalId, proId, "the plan names the pro whose budget it spends");
+  return plan.emails;
 }
 
 function effectOf<T extends Effect["type"]>(effects: readonly Effect[], type: T): Extract<Effect, { type: T }> {
@@ -64,7 +67,7 @@ dbTest("booking_confirmed: one e-mail with the links, the ticket, the tickets le
   );
 
   const plan = await planEffect(db, { type: "email.booking_confirmed", bookingId: reg.bookingId }, depsAt(now));
-  const mails = emailsOf(plan);
+  const mails = emailsOf(plan, pro.proId);
   assert.equal(mails.length, 1);
   const [mail] = mails;
   assert.equal(mail.to, email);
@@ -213,6 +216,7 @@ dbTest("booking_cancelled: the reason, the personal link and the ticket line onl
 
   const [m1] = emailsOf(
     await planEffect(db, { type: "email.booking_cancelled", bookingId: withTicket.bookingId, by: "pro" }, depsAt(now)),
+    pro.proId,
   );
   assert.equal(m1.to, holderEmail);
   assert.equal(m1.subject, "Inscription annulée : Altinha du soir");
@@ -274,7 +278,7 @@ dbTest("occurrence_cancelled mails the confirmed client only: a lapsed hold hear
   const cancelled = effectOf(res.effects, "email.occurrence_cancelled");
   assert.equal(cancelled.bookingIds.length, 2);
 
-  const mails = emailsOf(await planEffect(db, cancelled, depsAt(now)));
+  const mails = emailsOf(await planEffect(db, cancelled, depsAt(now)), pro.proId);
   assert.equal(mails.length, 1);
   assert.equal(mails[0].to, confirmedEmail);
   assert.equal(mails[0].subject, "Séance annulée : Altinha du soir");
@@ -364,7 +368,7 @@ dbTest("occurrence_changed: the new time and place, the cancel line only for tho
 
   const own = effectOf(upd.effects, "email.occurrence_changed");
   assert.deepEqual(own.bookingIds, [reg1.bookingId]);
-  const [first] = emailsOf(await planEffect(db, own, depsAt(changedAt)));
+  const [first] = emailsOf(await planEffect(db, own, depsAt(changedAt)), pro.proId);
   assert.equal(first.subject, "Séance modifiée : Altinha du soir");
   assert.ok(first.html.includes("Studio Marais"));
   const cancelLine = esc("Si ce changement ne vous convient pas, vous pouvez annuler en ligne jusqu'au début de la séance.");
@@ -419,7 +423,7 @@ dbTest("attendee_moved: before and after; a séance of another pro is never read
   );
 
   const effect = effectOf(moved.effects, "email.attendee_moved");
-  const [mail] = emailsOf(await planEffect(db, effect, depsAt(addMinutes(now, 1))));
+  const [mail] = emailsOf(await planEffect(db, effect, depsAt(addMinutes(now, 1))), pro.proId);
   assert.equal(mail.to, email);
   assert.equal(mail.subject, "Inscription déplacée : Altinha du samedi");
   assert.ok(mail.html.includes("Altinha du soir"), "the old séance");
@@ -454,7 +458,7 @@ dbTest("tickets_offered: the count and the type of that action; another pro's cu
   const one = must(await offerTickets(db, { ...base, quantity: 1, expiresAt: null }, addMinutes(now, 1)));
 
   const threeEffect = effectOf(three.effects, "email.tickets_offered");
-  const [m3] = emailsOf(await planEffect(db, threeEffect, depsAt(now)));
+  const [m3] = emailsOf(await planEffect(db, threeEffect, depsAt(now)), pro.proId);
   assert.equal(m3.to, email);
   assert.equal(m3.subject, `${business} vous offre 3 tickets`);
   assert.ok(

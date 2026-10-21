@@ -5,6 +5,7 @@ import { syncOccurrence } from "@/lib/calendar-sync";
 import { db } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
 import { env } from "@/lib/env";
+import { applyMailBudget, mailBudgetLogLine } from "@/lib/mail-budget";
 import { dedupeEffects, logSafeMessage, planEffect, type EffectPlan, type OutgoingEmail } from "@/lib/notify-core";
 import { expireCheckoutSession } from "@/lib/stripe";
 import { guestKey } from "@/server/guest-key";
@@ -28,9 +29,15 @@ async function sendPaced(mail: OutgoingEmail): Promise<void> {
 
 async function execute(plan: EffectPlan): Promise<void> {
   switch (plan.kind) {
-    case "emails":
-      for (const mail of plan.emails) await sendPaced(mail);
+    case "emails": {
+      // Final review SEC-1: the mails of a pro's action spend the pro's budget; past it they are dropped, with one line and no address.
+      const { send, dropped } = await applyMailBudget(db, plan, new Date());
+      if (dropped > 0 && plan.professionalId !== null) {
+        console.warn(logSafeMessage({ message: mailBudgetLogLine(plan.professionalId, dropped) }));
+      }
+      for (const mail of send) await sendPaced(mail);
       return;
+    }
     case "google":
       await syncOccurrence(plan.occurrenceId);
       return;
