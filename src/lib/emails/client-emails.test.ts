@@ -62,6 +62,14 @@ const cancelled: BookingCancelledArgs = {
   personalLinkUrl: LINK,
 };
 
+/** The links of the new time, as the planner builds them for one booking. */
+const NEW_TIME_CALENDAR = {
+  googleUrl: "https://calendar.google.com/calendar/render?action=TEMPLATE&text=Altinha&dates=20261013T173000Z/20261013T183000Z",
+  outlookUrl: "https://outlook.live.com/calendar/0/deeplink/compose?subject=Altinha&startdt=2026-10-13T17%3A30%3A00.000Z",
+  icsUrl: "https://myskedul.com/api/bookings/bk_1/calendar.ics",
+};
+const EVIL_CALENDAR = { googleUrl: EVIL, outlookUrl: EVIL, icsUrl: EVIL };
+
 const changed: OccurrenceChangedArgs = {
   customerName: "Beatriz Almeida",
   businessName: "Altinha Paris",
@@ -70,6 +78,7 @@ const changed: OccurrenceChangedArgs = {
   location: "Gymnase Japy",
   canCancelUntilStart: true,
   personalLinkUrl: LINK,
+  calendar: NEW_TIME_CALENDAR,
 };
 
 const seanceCancelled: OccurrenceCancelledArgs = {
@@ -91,6 +100,7 @@ const moved: AttendeeMovedArgs = {
   toWhenLabel: "mer. 14 octobre 2026 · 20:00 à 21:00",
   toLocation: "Gymnase Japy",
   personalLinkUrl: LINK,
+  calendar: NEW_TIME_CALENDAR,
 };
 
 const offered: TicketsOfferedArgs = {
@@ -158,6 +168,7 @@ const TEMPLATES: { name: string; normal: Mail; evil: Mail; title: string }[] = [
       location: EVIL,
       canCancelUntilStart: true,
       personalLinkUrl: EVIL,
+      calendar: EVIL_CALENDAR,
     }),
   },
   {
@@ -187,6 +198,7 @@ const TEMPLATES: { name: string; normal: Mail; evil: Mail; title: string }[] = [
       toWhenLabel: EVIL,
       toLocation: EVIL,
       personalLinkUrl: EVIL,
+      calendar: EVIL_CALENDAR,
     }),
   },
   {
@@ -349,6 +361,30 @@ test("occurrence-changed: details, and the cancel sentence only when the client 
   const locked = occurrenceChangedEmail({ ...changed, canCancelUntilStart: false, location: null });
   assert.equal(locked.html.includes("annuler en ligne"), false);
   assert.equal(locked.html.includes(">Lieu<"), false);
+});
+
+/** The three calendar buttons of the new time, and the sentence that introduces them. */
+function assertNewTimeButtons(html: string, name: string): void {
+  assert.ok(html.includes("Pour mettre à jour votre agenda :"), `${name}: intro`);
+  assert.ok(html.includes(`href="${NEW_TIME_CALENDAR.googleUrl.replaceAll("&", "&amp;")}"`), `${name}: Google`);
+  assert.ok(html.includes(">Ajouter à Google Agenda</a>"), name);
+  assert.ok(html.includes(`href="${NEW_TIME_CALENDAR.outlookUrl.replaceAll("&", "&amp;")}"`), `${name}: Outlook`);
+  assert.ok(html.includes(">Ajouter à Outlook</a>"), name);
+  assert.ok(html.includes(`href="${NEW_TIME_CALENDAR.icsUrl}"`), `${name}: .ics`);
+  assert.ok(html.includes(">Télécharger pour mon agenda (.ics)</a>"), name);
+}
+
+test("occurrence-changed: the calendar links of the new time, none when there is no confirmed place yet", () => {
+  assertNewTimeButtons(TEMPLATES[2].normal.html, "occurrence-changed");
+  const pending = occurrenceChangedEmail({ ...changed, calendar: null });
+  assert.equal(pending.html.includes("Pour mettre à jour votre agenda"), false);
+  assert.equal(pending.html.includes("calendar.ics"), false);
+  assert.equal(pending.html.includes("calendar.google.com"), false);
+  assert.ok(pending.html.includes(">Date</td>"), "the rest of the mail is unchanged");
+});
+
+test("attendee-moved: the calendar links of the new séance", () => {
+  assertNewTimeButtons(TEMPLATES[4].normal.html, "attendee-moved");
 });
 
 test("occurrence-cancelled: the ticket line toggles", () => {

@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { eq, inArray } from "drizzle-orm";
 
 import { addDaysMs, addMinutes, createTestPro, dbTest, deleteTestUser, testEmail, type Db } from "../test/db";
-import { dayIn, giveTickets, makeCustomer, makeEvent, makeOffer, makeType } from "../test/fixtures";
+import { dayIn, getOccurrence, giveTickets, makeCustomer, makeEvent, makeOffer, makeType } from "../test/fixtures";
 import { rowBooking } from "../test/rows";
 import { expiryLabel } from "./back-office/format";
+import { googleCalendarUrl, outlookCalendarUrl } from "./calendar-links";
 import { cancelBookingsByPro, cancelOccurrence } from "./booking/cancel";
 import { setAvailabilityRules } from "./booking/catalog";
 import { attachCheckoutSession, bookRdv, registerPro, startBuyAndBook } from "./booking/claims";
@@ -477,6 +478,19 @@ dbTest("occurrence_changed: the new time and place, the cancel line only for tho
   const [first] = emailsOf(await planEffect(db, own, depsAt(changedAt)), pro.proId);
   assert.equal(first.subject, "Séance modifiée : Altinha du soir");
   assert.ok(first.html.includes("Studio Marais"));
+  // the calendar links carry the NEW time and place, and the file is this booking's
+  const updated = await getOccurrence(db, occ.id);
+  const asked = {
+    title: "Altinha du soir",
+    description: `Avec ${await businessNameOf(db, pro.proId)}`,
+    location: "Studio Marais",
+    startAt: updated.startsAt,
+    endAt: updated.endsAt,
+  };
+  assert.equal(updated.startsAt.getTime(), addMinutes(occ.startsAt, 60).getTime());
+  assert.ok(first.html.includes(esc(googleCalendarUrl(asked))), "Google link of the new time");
+  assert.ok(first.html.includes(esc(outlookCalendarUrl(asked))), "Outlook link of the new time");
+  assert.ok(first.html.includes(`${APP}/api/bookings/${reg1.bookingId}/calendar.ics`), "ICS link of this booking");
   const cancelLine = esc("Si ce changement ne vous convient pas, vous pouvez annuler en ligne jusqu'au début de la séance.");
   assert.ok(first.html.includes(cancelLine), "booked before the change: may cancel until the start");
 
@@ -499,6 +513,55 @@ dbTest("occurrence_changed: the new time and place, the cancel line only for tho
     ),
   );
   assert.equal(emailsOf(await planEffect(db, both, depsAt(addMinutes(now, 12)))).length, 1, "a cancelled booking is skipped");
+});
+
+dbTest("occurrence_changed: a client who has not paid yet gets the new time but no calendar file", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await makeType(db, pro, { name: "Cours collectif" });
+  const offerId = await makeOffer(db, pro, typeId);
+  const { occurrences: [occ] } = await makeEvent(db, pro, { title: "Altinha du soir", ticketTypeIds: [typeId] });
+  const holder = await makeCustomer(db, pro, { name: "Beatriz Almeida", email: testEmail("paid") });
+  const buyer = await makeCustomer(db, pro, { name: "Thomas Leroy", email: testEmail("unpaid") });
+  await giveTickets(db, pro, holder, typeId, 1);
+  const reg = must(
+    await registerPro(
+      db,
+      { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: occ.id, customerId: holder, asGuest: false },
+      now,
+    ),
+  );
+  const hold = must(
+    await startBuyAndBook(
+      db,
+      { professionalId: pro.proId, occurrenceId: occ.id, customerId: buyer, seenStartsAt: occ.startsAt, offerId },
+      now,
+    ),
+  );
+  const changedAt = addMinutes(now, 5);
+  const upd = must(
+    await updateOccurrence(
+      db,
+      {
+        professionalId: pro.proId,
+        actorUserId: pro.userId,
+        occurrenceId: occ.id,
+        seenStartsAt: occ.startsAt,
+        patch: { startsAt: addMinutes(occ.startsAt, 60) },
+      },
+      changedAt,
+    ),
+  );
+  const effect = effectOf(upd.effects, "email.occurrence_changed");
+  assert.deepEqual([...effect.bookingIds].sort(), [reg.bookingId, hold.bookingId].sort());
+  const mails = emailsOf(await planEffect(db, effect, depsAt(changedAt)));
+  assert.equal(mails.length, 2);
+  const toHolder = mails.find((m) => m.html.includes(linkOf(holder)));
+  const toBuyer = mails.find((m) => m.html.includes(linkOf(buyer)));
+  assert.ok(toHolder && toBuyer);
+  assert.ok(toHolder.html.includes(`${APP}/api/bookings/${reg.bookingId}/calendar.ics`), "a confirmed place has its file");
+  assert.ok(!toBuyer.html.includes("calendar.ics"), "the file of a pending booking would answer 404");
+  assert.ok(!toBuyer.html.includes("calendar.google.com"), "no calendar for a place that is not confirmed yet");
+  assert.ok(toBuyer.html.includes("Séance modifiée") && toBuyer.html.includes(">Date<"), "the new time is still told");
 });
 
 dbTest("attendee_moved: before and after; a séance of another pro is never read", async ({ db, pro }) => {
@@ -535,6 +598,17 @@ dbTest("attendee_moved: before and after; a séance of another pro is never read
   assert.ok(mail.html.includes("Altinha du soir"), "the old séance");
   assert.ok(mail.html.includes("Altinha du samedi"), "the new séance");
   assert.ok(mail.html.includes(linkOf(customerId)));
+  // the calendar links are those of the NEW séance, the file is the booking's
+  const asked = {
+    title: "Altinha du samedi",
+    description: `Avec ${await businessNameOf(db, pro.proId)}`,
+    location: null,
+    startAt: to.startsAt,
+    endAt: to.endsAt,
+  };
+  assert.ok(mail.html.includes(esc(googleCalendarUrl(asked))), "Google link of the new séance");
+  assert.ok(mail.html.includes(esc(outlookCalendarUrl(asked))), "Outlook link of the new séance");
+  assert.ok(mail.html.includes(`${APP}/api/bookings/${reg.bookingId}/calendar.ics`), "ICS link of the moved booking");
 
   const other = await createTestPro(db);
   try {

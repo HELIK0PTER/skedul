@@ -1,10 +1,10 @@
 /**
  * « Inscription déplacée »: sent to a client whose registration the pro moved
- * to another séance.
+ * to another séance, with the calendar links of the new séance (the registration is confirmed).
  */
 import { escapeHtml, layout } from "@/lib/email-layout";
 
-import { mailDetails, mailParagraph, mailPersonalLink, oneLine } from "./parts";
+import { mailCalendarButtons, mailDetails, mailParagraph, mailPersonalLink, oneLine, type MailCalendarLinks } from "./parts";
 
 export type AttendeeMovedArgs = {
   customerName: string;
@@ -15,6 +15,7 @@ export type AttendeeMovedArgs = {
   toWhenLabel: string;
   toLocation: string | null;
   personalLinkUrl: string;
+  calendar: MailCalendarLinks;
 };
 
 export function attendeeMovedEmail(a: AttendeeMovedArgs): { subject: string; html: string } {
@@ -29,6 +30,8 @@ export function attendeeMovedEmail(a: AttendeeMovedArgs): { subject: string; htm
     ${mailParagraph(`Bonjour ${a.customerName}, ${a.businessName} a déplacé votre inscription.`)}
     ${mailDetails(rows)}
     ${mailParagraph("Si ce changement ne vous convient pas, vous pouvez annuler en ligne jusqu'au début de la séance.")}
+    ${mailParagraph("Pour mettre à jour votre agenda :")}
+    ${mailCalendarButtons(a.calendar)}
     ${mailPersonalLink(a.personalLinkUrl)}
   `,
   );

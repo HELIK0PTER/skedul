@@ -8,7 +8,7 @@ import { escapeHtml } from "@/lib/email-layout";
 const BUTTON_STYLE =
   "display:inline-block;background:#6366f1;color:#fff;text-decoration:none;font-weight:600;padding:12px 20px;border-radius:10px;margin:0 8px 8px 0";
 
-/** The three « Ajouter à mon agenda » links of a confirmed registration. */
+/** The three « Ajouter à mon agenda » links of a confirmed registration (its .ics file is that booking's). */
 export type MailCalendarLinks = { googleUrl: string; outlookUrl: string; icsUrl: string };
 
 /** <p> with escaped text. */
@@ -30,6 +30,14 @@ export function mailDetails(rows: readonly { label: string; value: string }[]): 
     )
     .join("");
   return `<table style="width:100%;font-size:14px;margin:16px 0;border-collapse:collapse">${lines}</table>`;
+}
+
+/** The three « Ajouter à mon agenda » buttons of a booking (Google, Outlook, .ics file). */
+export function mailCalendarButtons(calendar: MailCalendarLinks): string {
+  return `<p style="margin:20px 0 8px">${mailButton(calendar.googleUrl, "Ajouter à Google Agenda")}${mailButton(
+    calendar.outlookUrl,
+    "Ajouter à Outlook",
+  )}${mailButton(calendar.icsUrl, "Télécharger pour mon agenda (.ics)")}</p>`;
 }
 
 /** Button link; href and label escaped. */

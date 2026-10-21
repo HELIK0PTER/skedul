@@ -6,7 +6,15 @@
 import { formatCount } from "@/lib/back-office/format";
 import { escapeHtml, layout } from "@/lib/email-layout";
 
-import { mailButton, mailDetails, mailLines, mailParagraph, mailPersonalLink, oneLine, type MailCalendarLinks } from "./parts";
+import {
+  mailCalendarButtons,
+  mailDetails,
+  mailLines,
+  mailParagraph,
+  mailPersonalLink,
+  oneLine,
+  type MailCalendarLinks,
+} from "./parts";
 
 /**
  * What the client still holds of one ticket type. `expiry` has one entry per last valid day (soonest first), the tickets
@@ -57,10 +65,7 @@ export function bookingConfirmedEmail(a: BookingConfirmedArgs): { subject: strin
         ].join("\n    ")
       : "";
   const cancel = a.cancelText.trim() ? mailParagraph(a.cancelText) : "";
-  const calendar = `<p style="margin:20px 0 8px">${mailButton(a.calendar.googleUrl, "Ajouter à Google Agenda")}${mailButton(
-    a.calendar.outlookUrl,
-    "Ajouter à Outlook",
-  )}${mailButton(a.calendar.icsUrl, "Télécharger pour mon agenda (.ics)")}</p>`;
+  const calendar = mailCalendarButtons(a.calendar);
   const html = layout(
     escapeHtml("Inscription confirmée"),
     `

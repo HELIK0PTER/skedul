@@ -21,6 +21,7 @@ import { bookingCancelledEmail } from "@/lib/emails/booking-cancelled";
 import { bookingConfirmedEmail, type TicketsLeft } from "@/lib/emails/booking-confirmed";
 import { occurrenceCancelledEmail } from "@/lib/emails/occurrence-cancelled";
 import { occurrenceChangedEmail } from "@/lib/emails/occurrence-changed";
+import type { MailCalendarLinks } from "@/lib/emails/parts";
 import { ticketsOfferedEmail } from "@/lib/emails/tickets-offered";
 import { personalLinkUrl } from "@/lib/guest-link";
 import { COVERAGE_LABELS } from "@/lib/tickets-vocab";
@@ -212,6 +213,25 @@ function whenOf(b: Pick<BookingFacts, "startsAt" | "endsAt" | "tz">): string {
   return formatWhen(b.startsAt, b.endsAt, b.tz);
 }
 
+/**
+ * The « add to my calendar » links of a booking at its occurrence AS IT IS NOW: the Google and Outlook web links
+ * carry its time and place, the .ics file is the booking's own (it answers only for a confirmed booking).
+ */
+function calendarLinksOf(b: BookingFacts, deps: NotifyDeps): MailCalendarLinks {
+  const input = {
+    title: b.title,
+    description: `Avec ${b.businessName}`,
+    location: b.location,
+    startAt: b.startsAt,
+    endAt: b.endsAt,
+  };
+  return {
+    googleUrl: googleCalendarUrl(input),
+    outlookUrl: outlookCalendarUrl(input),
+    icsUrl: `${deps.appUrl.replace(/\/+$/, "")}/api/bookings/${b.bookingId}/calendar.ics`,
+  };
+}
+
 /* ───────────────────────────── Plans ───────────────────────────── */
 
 async function planBookingConfirmed(db: Db, bookingId: string, deps: NotifyDeps): Promise<EffectPlan> {
@@ -224,13 +244,6 @@ async function planBookingConfirmed(db: Db, bookingId: string, deps: NotifyDeps)
     deadline.getTime() > deps.now.getTime()
       ? `Vous pouvez annuler en ligne jusqu'au ${formatWhenShort(deadline, b.tz)}.`
       : `L'annulation en ligne n'est plus possible : contactez ${b.businessName}.`;
-  const calendarInput = {
-    title: b.title,
-    description: `Avec ${b.businessName}`,
-    location: b.location,
-    startAt: b.startsAt,
-    endAt: b.endsAt,
-  };
   const mail = bookingConfirmedEmail({
     customerName: b.customerName,
     businessName: b.businessName,
@@ -242,11 +255,7 @@ async function planBookingConfirmed(db: Db, bookingId: string, deps: NotifyDeps)
     ticketsLeft,
     cancelText,
     personalLinkUrl: linkOf(b, deps),
-    calendar: {
-      googleUrl: googleCalendarUrl(calendarInput),
-      outlookUrl: outlookCalendarUrl(calendarInput),
-      icsUrl: `${deps.appUrl.replace(/\/+$/, "")}/api/bookings/${b.bookingId}/calendar.ics`,
-    },
+    calendar: calendarLinksOf(b, deps),
   });
   return emails(b.professionalId, [{ to: b.customerEmail, ...mail }]);
 }
@@ -328,6 +337,8 @@ async function planOccurrenceChanged(
         location: b.location,
         canCancelUntilStart: (b.changedAt !== null && b.changedAt.getTime() > b.createdAt.getTime()) || b.movedAt !== null,
         personalLinkUrl: linkOf(b, deps),
+        // the .ics file only answers for a confirmed booking: a live hold that is not paid yet has none
+        calendar: b.status === "confirmed" ? calendarLinksOf(b, deps) : null,
       });
       return { to: b.customerEmail, ...mail };
     }),
@@ -348,6 +359,7 @@ async function planAttendeeMoved(db: Db, bookingId: string, fromOccurrenceId: st
     toWhenLabel: whenOf(b),
     toLocation: b.location,
     personalLinkUrl: linkOf(b, deps),
+    calendar: calendarLinksOf(b, deps),
   });
   return emails(b.professionalId, [{ to: b.customerEmail, ...mail }]);
 }

@@ -1,10 +1,12 @@
 /**
  * « Séance modifiée »: sent to the registered clients when the pro changes the
- * time, the place or the title of a séance they attend.
+ * time, the place or the title of a séance they attend. A client whose place is
+ * confirmed also gets the calendar links of the new time (`calendar`); one who has
+ * not paid yet has no .ics file to download, so `calendar` is null for them.
  */
 import { escapeHtml, layout } from "@/lib/email-layout";
 
-import { mailDetails, mailParagraph, mailPersonalLink, oneLine } from "./parts";
+import { mailCalendarButtons, mailDetails, mailParagraph, mailPersonalLink, oneLine, type MailCalendarLinks } from "./parts";
 
 export type OccurrenceChangedArgs = {
   customerName: string;
@@ -14,6 +16,7 @@ export type OccurrenceChangedArgs = {
   location: string | null;
   canCancelUntilStart: boolean;
   personalLinkUrl: string;
+  calendar: MailCalendarLinks | null;
 };
 
 export function occurrenceChangedEmail(a: OccurrenceChangedArgs): { subject: string; html: string } {
@@ -25,6 +28,7 @@ export function occurrenceChangedEmail(a: OccurrenceChangedArgs): { subject: str
   const cancel = a.canCancelUntilStart
     ? mailParagraph("Si ce changement ne vous convient pas, vous pouvez annuler en ligne jusqu'au début de la séance.")
     : "";
+  const calendar = a.calendar ? `${mailParagraph("Pour mettre à jour votre agenda :")}${mailCalendarButtons(a.calendar)}` : "";
   const html = layout(
     escapeHtml("Séance modifiée"),
     `
@@ -33,6 +37,7 @@ export function occurrenceChangedEmail(a: OccurrenceChangedArgs): { subject: str
     )}
     ${mailDetails(rows)}
     ${cancel}
+    ${calendar}
     ${mailPersonalLink(a.personalLinkUrl)}
   `,
   );
