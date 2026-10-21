@@ -3,6 +3,8 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { X } from "lucide-react";
 
+import { tabDestination, topmostOf, type TabRelation } from "@/lib/focus-trap";
+
 /**
  * The element that holds the focus right now, when it is worth coming back to:
  * not `document.body`, which is where the focus rests when nothing has it. Null
@@ -12,6 +14,37 @@ function focusedElement(): HTMLElement | null {
   if (typeof document === "undefined") return null;
   const el = document.activeElement;
   return el instanceof HTMLElement && el !== document.body ? el : null;
+}
+
+/** The panels of the open dialogs, in the order they registered (see `topmostOf`). */
+const openPanels: HTMLElement[] = [];
+
+const TAB_STOPS =
+  'a[href], area[href], button, input:not([type="hidden"]), select, textarea, summary, iframe, [contenteditable=""], [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
+
+/** The tab stops inside `panel`, in document order: enabled, shown, and the one checked radio of each group. */
+function tabStopsOf(panel: HTMLElement): HTMLElement[] {
+  return Array.from(panel.querySelectorAll<HTMLElement>(TAB_STOPS)).filter((el) => {
+    if (el.matches(":disabled") || el.closest("[inert]") || el.tabIndex < 0) return false;
+    if (el.getClientRects().length === 0 || getComputedStyle(el).visibility === "hidden") return false;
+    if (el instanceof HTMLInputElement && el.type === "radio" && el.name && !el.checked) {
+      const group = (el.form ?? panel).querySelectorAll<HTMLInputElement>('input[type="radio"]');
+      for (const other of group) if (other.name === el.name && other.checked) return false;
+    }
+    return true;
+  });
+}
+
+/** Where `stop` stands in the document compared with `from` (the element that holds the focus). */
+function relationOf(stop: HTMLElement, from: Element): TabRelation {
+  if (stop === from) return "self";
+  return from.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING ? "after" : "before";
+}
+
+/** True for a node inside any modal dialog panel, open dialogs that have not registered yet included. */
+function inModalDialog(node: Node): boolean {
+  const el = node instanceof Element ? node : node.parentElement;
+  return el?.closest('[role="dialog"][aria-modal="true"]') != null;
 }
 
 /**
@@ -30,6 +63,12 @@ function focusedElement(): HTMLElement | null {
  * dialog takes the focus during the commit, before any effect runs, so an
  * effect would only ever see the dialog's own control. A dialog opened from a
  * dialog hands the focus back to its opener inside the outer one.
+ *
+ * While it is open the focus stays inside it: Tab and Shift+Tab cycle through
+ * the tab stops of the dialog on top (see `tabDestination`), so the controls
+ * behind it are never reached from the keyboard. Escape is untouched: every open
+ * dialog still receives it, and the callers keep a sub-dialog from closing its
+ * parent (the guards of `occurrence-dialog.tsx`, `booking-detail-dialog.tsx`).
  */
 export function Dialog({
   open,
@@ -62,6 +101,45 @@ export function Dialog({
     if (!open) return;
     const el = panel.current;
     if (el && !el.contains(document.activeElement)) el.focus();
+  }, [open]);
+
+  // Focus trap. Declared before the opener effect: on close its cleanup runs first, so the dialog has left the
+  // stack when the opener takes the focus back. The panel is not rendered in a portal, so the page behind cannot be
+  // made `inert` from here: Tab is steered by hand instead, and only by the dialog on top of the open ones.
+  useEffect(() => {
+    if (!open) return;
+    const el = panel.current;
+    if (!el) return;
+    openPanels.push(el);
+    const isTop = () => topmostOf(openPanels, (inner, outer) => outer !== inner && outer.contains(inner)) === el;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Tab" || e.defaultPrevented || e.ctrlKey || e.altKey || e.metaKey || !isTop()) return;
+      const stops = tabStopsOf(el);
+      e.preventDefault();
+      if (stops.length === 0) {
+        el.focus();
+        return;
+      }
+      const from = document.activeElement ?? document.body;
+      const to = tabDestination(
+        stops.map((stop) => relationOf(stop, from)),
+        e.shiftKey,
+      );
+      stops[to ?? 0].focus();
+    };
+    // Focus that lands behind every dialog (a script, the browser coming back from its own controls) is brought back in.
+    const onFocusIn = (e: FocusEvent) => {
+      if (!isTop() || !(e.target instanceof Node) || inModalDialog(e.target)) return;
+      (tabStopsOf(el)[0] ?? el).focus();
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("focusin", onFocusIn);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("focusin", onFocusIn);
+      const at = openPanels.indexOf(el);
+      if (at !== -1) openPanels.splice(at, 1);
+    };
   }, [open]);
 
   useEffect(() => {
