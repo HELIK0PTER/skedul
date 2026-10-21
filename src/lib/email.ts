@@ -2,9 +2,13 @@ import "server-only";
 import { Resend } from "resend";
 
 import { env } from "@/lib/env";
-import { mockLinks } from "@/lib/emails/mock-links";
+import { mockMailLog, mockMailRefusal } from "@/lib/emails/mock-log";
 import { redactSubject } from "@/lib/emails/redact-subject";
 import { logSafeMessage } from "@/lib/log-safe";
+
+// A production deployment without a Resend key fails when this module loads (the build fails).
+const refusal = mockMailRefusal(env.APP_ENV, env.RESEND_ENABLED);
+if (refusal) throw new Error(refusal);
 
 const resend = env.RESEND_ENABLED ? new Resend(env.RESEND_API_KEY!) : null;
 
@@ -27,12 +31,9 @@ type SendResult =
  */
 export async function sendEmail({ to, subject, html }: SendArgs): Promise<SendResult> {
   if (!resend) {
-    // Development aid: the links of the mail (personal link, calendar file), so the
-    // flow can be followed without a mailbox. Never logged in production.
-    const links = process.env.NODE_ENV === "production" ? [] : mockLinks(html);
-    console.info(
-      `\n📧 [email:mock] → ${to}\n   subject: ${subject}\n${links.map((link) => `   link: ${link}\n`).join("")}`,
-    );
+    // Development aid: the whole mail (recipient, code, links), so a flow can be followed without a
+    // mailbox. A production build (preview deployments included) prints the redacted subject only (SEC-3).
+    console.info(mockMailLog({ to, subject, html }, process.env.NODE_ENV === "production"));
     return { id: "mock", mocked: true };
   }
   try {
