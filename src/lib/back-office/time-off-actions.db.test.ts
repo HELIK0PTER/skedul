@@ -150,10 +150,12 @@ dbTest("preview: booked séances and RDVs come with their kind, another pro's bo
   const clientA = await makeCustomer(db, pro);
   const clientB = await makeCustomer(db, pro);
   const clientC = await makeCustomer(db, pro);
-  // Two registrants on the séance, one on the RDV: a count read against the wrong row would give both the same number.
-  for (const customerId of [clientA, clientC]) {
+  // Two registrants on the séance (one on a ticket, one as a guest), one on the RDV: a count read against the wrong
+  // row would give both the same number, and only the ticket is given back when the séance is cancelled.
+  await giveTickets(db, pro, clientC, classType, 1);
+  for (const [customerId, asGuest] of [[clientA, true], [clientC, false]] as const) {
     must(
-      await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: seance.id, customerId, asGuest: true }),
+      await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: seance.id, customerId, asGuest }),
       "register on the séance",
     );
   }
@@ -197,10 +199,12 @@ dbTest("preview: booked séances and RDVs come with their kind, another pro's bo
       title: "Altinha test",
       whenLabel: formatWhen(seance.startsAt, seance.endsAt, pro.tz),
       activeBookings: 2,
+      ticketBookings: 1,
     });
     assert.equal(byRdv.kind, "rdv");
     assert.equal(byRdv.title, "Cours particulier");
     assert.equal(byRdv.activeBookings, 1);
+    assert.equal(byRdv.ticketBookings, 0, "a free RDV holds no ticket");
     assert.ok(!preview.conflicts.some((c) => c.occurrenceId === empty.id || c.occurrenceId === theirs.id));
     assert.deepEqual(await checkInvariants(db, { proId: other.proId }), []);
   } finally {

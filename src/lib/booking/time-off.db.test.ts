@@ -307,21 +307,23 @@ dbTest("E6c: the preview of an empty or inverted range has no conflict and does 
   );
 });
 
-dbTest("E6c: the preview counts every active booking of a conflicting séance", async ({ db, pro }) => {
+dbTest("E6c: the preview counts every active booking of a conflicting séance, and the ones that hold a ticket", async ({ db, pro }) => {
   const typeId = await makeType(db, pro);
   const {
     occurrences: [occ],
   } = await makeEvent(db, pro, { ticketTypeIds: [typeId] });
-  for (let i = 0; i < 2; i++) {
+  // one place on a ticket, one as a guest: cancelling them gives back one ticket, not two
+  for (const asGuest of [false, true]) {
     const customerId = await makeCustomer(db, pro);
+    if (!asGuest) await giveTickets(db, pro, customerId, typeId, 1);
     must(
-      await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: occ.id, customerId, asGuest: true }),
+      await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: occ.id, customerId, asGuest }),
       "registerPro",
     );
   }
   const preview = await previewTimeOffConflicts(db, { professionalId: pro.proId, startAt: occ.startsAt, endAt: occ.endsAt });
   assert.deepEqual(
-    preview.map((p) => [p.occurrenceId, p.activeBookings]),
-    [[occ.id, 2]],
+    preview.map((p) => [p.occurrenceId, p.activeBookings, p.ticketBookings]),
+    [[occ.id, 2, 1]],
   );
 });

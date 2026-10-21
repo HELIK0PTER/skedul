@@ -44,6 +44,8 @@ export type TimeOffConflictVM = {
   title: string;
   whenLabel: string;
   activeBookings: number;
+  /** how many of those bookings hold a ticket (cancelling them gives it back) */
+  ticketBookings: number;
 };
 
 export const TIME_OFF_TOO_LONG = "Une indisponibilité dure au plus un an.";
@@ -111,6 +113,7 @@ async function conflictsOf(db: Db, ctx: ProCtx, interval: Interval, now: Date): 
     title: c.title,
     whenLabel: formatWhen(c.startsAt, c.endsAt, ctx.timezone),
     activeBookings: c.activeBookings,
+    ticketBookings: c.ticketBookings,
   }));
 }
 

@@ -37,30 +37,80 @@ const event = (over: Partial<Parameters<typeof deleteEventCopy>[0]> = {}) =>
 
 test("cancelOccurrenceCopy: a séance, by number of registrants, with the past sentence", () => {
   const base = { title: "Annuler cette séance ?", confirm: "Annuler la séance" };
-  assert.deepEqual(cancelOccurrenceCopy({ kind: "seance", registrants: 0, past: false }), {
+  assert.deepEqual(cancelOccurrenceCopy({ kind: "seance", registrants: 0, tickets: 0, past: false }), {
     ...base,
     body: "Personne n'est inscrit : la séance est simplement annulée.",
   });
-  assert.deepEqual(cancelOccurrenceCopy({ kind: "seance", registrants: 1, past: false }), {
+  assert.deepEqual(cancelOccurrenceCopy({ kind: "seance", registrants: 1, tickets: 1, past: false }), {
     ...base,
     body: "La personne inscrite est désinscrite, son ticket est rendu et elle est prévenue par email.",
   });
-  assert.deepEqual(cancelOccurrenceCopy({ kind: "seance", registrants: 3, past: false }), {
+  assert.deepEqual(cancelOccurrenceCopy({ kind: "seance", registrants: 3, tickets: 3, past: false }), {
     ...base,
     body: "Les 3 inscrits sont désinscrits, leurs tickets sont rendus et ils sont prévenus par email.",
   });
   assert.equal(
-    cancelOccurrenceCopy({ kind: "seance", registrants: 3, past: true }).body,
+    cancelOccurrenceCopy({ kind: "seance", registrants: 3, tickets: 3, past: true }).body,
     "Les 3 inscrits sont désinscrits, leurs tickets sont rendus et ils sont prévenus par email. Cette séance est déjà passée : les tickets sont rendus quand même.",
   );
 });
 
+test("cancelOccurrenceCopy: tickets are promised back only when the bookings hold some (final review UI-7, COV-4)", () => {
+  // nobody holds a ticket (free places, guests, paid places): who is told, and no ticket sentence at all
+  const none1 = cancelOccurrenceCopy({ kind: "seance", registrants: 1, tickets: 0, past: false }).body;
+  assert.equal(none1, "La personne inscrite est désinscrite et prévenue par email.");
+  const none3 = cancelOccurrenceCopy({ kind: "seance", registrants: 3, tickets: 0, past: false }).body;
+  assert.equal(none3, "Les 3 inscrits sont désinscrits et prévenus par email.");
+  for (const body of [none1, none3]) assert.equal(/ticket/.test(body), false, body);
+  // some hold one: the count is told, with its agreement
+  assert.equal(
+    cancelOccurrenceCopy({ kind: "seance", registrants: 3, tickets: 2, past: false }).body,
+    "Les 3 inscrits sont désinscrits et prévenus par email. 2 tickets sont rendus.",
+  );
+  assert.equal(
+    cancelOccurrenceCopy({ kind: "seance", registrants: 3, tickets: 1, past: false }).body,
+    "Les 3 inscrits sont désinscrits et prévenus par email. 1 ticket est rendu.",
+  );
+  // a past séance: the « rendus quand même » sentence only when there is a ticket to give back
+  assert.equal(
+    cancelOccurrenceCopy({ kind: "seance", registrants: 3, tickets: 0, past: true }).body,
+    "Les 3 inscrits sont désinscrits et prévenus par email.",
+  );
+  assert.equal(
+    cancelOccurrenceCopy({ kind: "seance", registrants: 2, tickets: 1, past: true }).body,
+    "Les 2 inscrits sont désinscrits et prévenus par email. 1 ticket est rendu, même si cette séance est déjà passée.",
+  );
+  assert.equal(
+    cancelOccurrenceCopy({ kind: "seance", registrants: 3, tickets: 2, past: true }).body,
+    "Les 3 inscrits sont désinscrits et prévenus par email. 2 tickets sont rendus, même si cette séance est déjà passée.",
+  );
+  assert.equal(
+    cancelOccurrenceCopy({ kind: "seance", registrants: 1, tickets: 1, past: true }).body,
+    "La personne inscrite est désinscrite, son ticket est rendu et elle est prévenue par email. Cette séance est déjà passée : le ticket est rendu quand même.",
+  );
+  // never more tickets than people
+  assert.equal(
+    cancelOccurrenceCopy({ kind: "seance", registrants: 1, tickets: 5, past: false }).body,
+    "La personne inscrite est désinscrite, son ticket est rendu et elle est prévenue par email.",
+  );
+});
+
 test("cancelOccurrenceCopy: a rendez-vous", () => {
-  assert.deepEqual(cancelOccurrenceCopy({ kind: "rdv", registrants: 1, past: false }), {
-    title: "Annuler ce rendez-vous ?",
+  const head = { title: "Annuler ce rendez-vous ?", confirm: "Annuler le rendez-vous" };
+  assert.deepEqual(cancelOccurrenceCopy({ kind: "rdv", registrants: 1, tickets: 1, past: false }), {
+    ...head,
     body: "Le client est prévenu par email et son ticket lui est rendu.",
-    confirm: "Annuler le rendez-vous",
   });
+  // paid, free or guest: no ticket to give back
+  assert.deepEqual(cancelOccurrenceCopy({ kind: "rdv", registrants: 1, tickets: 0, past: false }), {
+    ...head,
+    body: "Le client est prévenu par email.",
+  });
+  // nobody left but a lapsed hold: nobody is told
+  assert.equal(
+    cancelOccurrenceCopy({ kind: "rdv", registrants: 0, tickets: 0, past: false }).body,
+    "Aucun client n'est concerné : le rendez-vous est simplement annulé.",
+  );
 });
 
 test("the single-line texts are exact", () => {
@@ -218,7 +268,7 @@ test("deleteEventDoneNotice: from the first séance to come, or from a later dat
 const RDV_NOTE = "Un rendez-vous compte avec ses marges avant et après.";
 
 test("timeOffConflictCopy: séances only, plural and singular", () => {
-  assert.deepEqual(timeOffConflictCopy({ seances: 2, rdvs: 0 }), {
+  assert.deepEqual(timeOffConflictCopy({ seances: 2, rdvs: 0, tickets: 2 }), {
     title: "Des séances ont des inscrits",
     intro: "Cette indisponibilité chevauche 2 séances avec des inscrits :",
     cancelLabel: "Annuler ces 2 séances (tickets rendus, clients prévenus)",
@@ -227,7 +277,7 @@ test("timeOffConflictCopy: séances only, plural and singular", () => {
       "Gardées, elles restent pour leurs inscrits mais ne sont plus réservables en ligne. Vous pouvez encore y inscrire quelqu'un.",
     rdvNote: RDV_NOTE,
   });
-  assert.deepEqual(timeOffConflictCopy({ seances: 1, rdvs: 0 }), {
+  assert.deepEqual(timeOffConflictCopy({ seances: 1, rdvs: 0, tickets: 3 }), {
     title: "Des séances ont des inscrits",
     intro: "Cette indisponibilité chevauche 1 séance avec des inscrits :",
     cancelLabel: "Annuler cette séance (tickets rendus, clients prévenus)",
@@ -239,7 +289,7 @@ test("timeOffConflictCopy: séances only, plural and singular", () => {
 });
 
 test("timeOffConflictCopy: rendez-vous only never says séance nor inscrit", () => {
-  assert.deepEqual(timeOffConflictCopy({ seances: 0, rdvs: 1 }), {
+  assert.deepEqual(timeOffConflictCopy({ seances: 0, rdvs: 1, tickets: 1 }), {
     title: "Un rendez-vous est réservé",
     intro: "Cette indisponibilité chevauche 1 rendez-vous réservé :",
     cancelLabel: "Annuler ce rendez-vous (ticket rendu, client prévenu)",
@@ -247,7 +297,7 @@ test("timeOffConflictCopy: rendez-vous only never says séance nor inscrit", () 
     keepNote: "Gardé, il reste pour son client mais le créneau n'est plus réservable en ligne.",
     rdvNote: RDV_NOTE,
   });
-  assert.deepEqual(timeOffConflictCopy({ seances: 0, rdvs: 2 }), {
+  assert.deepEqual(timeOffConflictCopy({ seances: 0, rdvs: 2, tickets: 2 }), {
     title: "Des rendez-vous sont réservés",
     intro: "Cette indisponibilité chevauche 2 rendez-vous réservés :",
     cancelLabel: "Annuler ces 2 rendez-vous (tickets rendus, clients prévenus)",
@@ -258,7 +308,7 @@ test("timeOffConflictCopy: rendez-vous only never says séance nor inscrit", () 
 });
 
 test("timeOffConflictCopy: séances and rendez-vous together", () => {
-  assert.deepEqual(timeOffConflictCopy({ seances: 2, rdvs: 1 }), {
+  assert.deepEqual(timeOffConflictCopy({ seances: 2, rdvs: 1, tickets: 3 }), {
     title: "Des séances et des rendez-vous sont réservés",
     intro: "Cette indisponibilité chevauche 2 séances avec des inscrits et 1 rendez-vous réservé :",
     cancelLabel: "Annuler ces 3 séances et rendez-vous (tickets rendus, clients prévenus)",
@@ -267,12 +317,38 @@ test("timeOffConflictCopy: séances and rendez-vous together", () => {
       "Gardés, ils restent pour leurs inscrits et leurs clients mais ne sont plus réservables en ligne. Vous pouvez encore inscrire quelqu'un à une séance.",
     rdvNote: RDV_NOTE,
   });
-  const oneEach = timeOffConflictCopy({ seances: 1, rdvs: 1 });
+  const oneEach = timeOffConflictCopy({ seances: 1, rdvs: 1, tickets: 2 });
   assert.equal(oneEach.intro, "Cette indisponibilité chevauche 1 séance avec des inscrits et 1 rendez-vous réservé :");
   assert.equal(oneEach.cancelLabel, "Annuler ces 2 séances et rendez-vous (tickets rendus, clients prévenus)");
   assert.equal(
-    timeOffConflictCopy({ seances: 1, rdvs: 3 }).intro,
+    timeOffConflictCopy({ seances: 1, rdvs: 3, tickets: 4 }).intro,
     "Cette indisponibilité chevauche 1 séance avec des inscrits et 3 rendez-vous réservés :",
+  );
+});
+
+test("timeOffConflictCopy: tickets are promised back only when the bookings hold some (final review UI-7, COV-4)", () => {
+  // nobody holds a ticket: the button says who is told, not what is given back
+  assert.equal(timeOffConflictCopy({ seances: 2, rdvs: 0, tickets: 0 }).cancelLabel, "Annuler ces 2 séances (clients prévenus)");
+  assert.equal(timeOffConflictCopy({ seances: 1, rdvs: 0, tickets: 0 }).cancelLabel, "Annuler cette séance (clients prévenus)");
+  assert.equal(timeOffConflictCopy({ seances: 0, rdvs: 1, tickets: 0 }).cancelLabel, "Annuler ce rendez-vous (client prévenu)");
+  assert.equal(timeOffConflictCopy({ seances: 0, rdvs: 3, tickets: 0 }).cancelLabel, "Annuler ces 3 rendez-vous (clients prévenus)");
+  assert.equal(
+    timeOffConflictCopy({ seances: 2, rdvs: 1, tickets: 0 }).cancelLabel,
+    "Annuler ces 3 séances et rendez-vous (clients prévenus)",
+  );
+  // one ticket in all: singular
+  assert.equal(
+    timeOffConflictCopy({ seances: 2, rdvs: 0, tickets: 1 }).cancelLabel,
+    "Annuler ces 2 séances (ticket rendu, clients prévenus)",
+  );
+  assert.equal(
+    timeOffConflictCopy({ seances: 0, rdvs: 3, tickets: 1 }).cancelLabel,
+    "Annuler ces 3 rendez-vous (ticket rendu, clients prévenus)",
+  );
+  // the rest of the dialog does not depend on the tickets
+  assert.deepEqual(
+    { ...timeOffConflictCopy({ seances: 2, rdvs: 1, tickets: 0 }), cancelLabel: "" },
+    { ...timeOffConflictCopy({ seances: 2, rdvs: 1, tickets: 5 }), cancelLabel: "" },
   );
 });
 
@@ -298,8 +374,10 @@ test("every text is non-empty for 0, 1 and 2 and carries no dash", () => {
   for (const n of [0, 1, 2]) {
     const names = Array.from({ length: n }, (_, i) => `Client ${i + 1}`);
     copies.push(
-      cancelOccurrenceCopy({ kind: "seance", registrants: n, past: n === 2 }),
-      cancelOccurrenceCopy({ kind: "rdv", registrants: n, past: false }),
+      cancelOccurrenceCopy({ kind: "seance", registrants: n, tickets: n, past: n === 2 }),
+      cancelOccurrenceCopy({ kind: "seance", registrants: n, tickets: 0, past: n === 2 }),
+      cancelOccurrenceCopy({ kind: "rdv", registrants: n, tickets: n, past: false }),
+      cancelOccurrenceCopy({ kind: "rdv", registrants: n, tickets: 0, past: false }),
       unenrollCopy({ names, ticketCount: n, pendingCount: n }),
       closeTicketsCopy({ count: n, reasonLabel: "Abandonné" }),
       retireTicketsCopy({ count: n }),
@@ -308,7 +386,7 @@ test("every text is non-empty for 0, 1 and 2 and carries no dash", () => {
       event({ fromLabel: n === 0 ? null : "lun. 12/10", deletedSeances: n, cancelledSeances: n, registrants: n, ticketsReturned: n }),
     );
     for (const [seances, rdvs] of [[n, 0], [0, n], [n, n]] as const) {
-      const conflict = timeOffConflictCopy({ seances, rdvs });
+      const conflict = timeOffConflictCopy({ seances, rdvs, tickets: n });
       copies.push({
         title: conflict.title,
         body: `${conflict.intro} ${conflict.keepNote} ${conflict.rdvNote}`,

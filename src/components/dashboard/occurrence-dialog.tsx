@@ -248,8 +248,10 @@ function OccurrenceDialogBody({
   const copy = (() => {
     if (!confirm) return null;
     if (confirm.kind === "cancel") {
-      const registrants = item.attendees.filter((a) => !a.holdLapsed).length;
-      return cancelOccurrenceCopy({ kind: item.kind, registrants, past: item.past });
+      const live = item.attendees.filter((a) => !a.holdLapsed);
+      // only a booking that holds a ticket gets it back (a free, guest or paid place has none)
+      const tickets = live.filter((a) => a.coverage === "ticket" && a.status === "confirmed").length;
+      return cancelOccurrenceCopy({ kind: item.kind, registrants: live.length, tickets, past: item.past });
     }
     if (confirm.kind === "restore") return restoreOccurrenceCopy();
     const people = peopleOf(confirm.ids);

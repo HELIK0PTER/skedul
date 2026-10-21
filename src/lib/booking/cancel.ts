@@ -348,7 +348,15 @@ export async function restoreOccurrence(
 
 /* ───────────────────────── E6c: time off ───────────────────────── */
 
-export type TimeOffConflict = { occurrenceId: string; startsAt: Date; endsAt: Date; title: string; activeBookings: number };
+export type TimeOffConflict = {
+  occurrenceId: string;
+  startsAt: Date;
+  endsAt: Date;
+  title: string;
+  activeBookings: number;
+  /** how many of those bookings hold a ticket (cancelling them gives it back) */
+  ticketBookings: number;
+};
 
 /** Block range of a scheduled occurrence overlaps [startAt, endAt). */
 function overlapsRange(startAt: Date, endAt: Date) {
@@ -378,6 +386,9 @@ export async function previewTimeOffConflicts(
       activeBookings: sql<number>`(select count(*)::int from booking b where b.occurrence_id = ${occurrence.id} and b.status in ('pending', 'confirmed'))`.mapWith(
         Number,
       ),
+      ticketBookings: sql<number>`(select count(*)::int from booking b where b.occurrence_id = ${occurrence.id} and b.status in ('pending', 'confirmed') and b.coverage = 'ticket')`.mapWith(
+        Number,
+      ),
     })
     .from(occurrence)
     .leftJoin(event, eq(event.id, occurrence.eventId))
@@ -398,6 +409,7 @@ export async function previewTimeOffConflicts(
     endsAt: r.endsAt,
     title: r.eventTitle ?? r.typeName ?? "",
     activeBookings: r.activeBookings,
+    ticketBookings: r.ticketBookings,
   }));
 }
 

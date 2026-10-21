@@ -7,26 +7,48 @@ import { plural } from "@/lib/back-office/format";
 
 export type ConfirmCopy = { title: string; body: string; confirm: string };
 
-/** « Annuler cette séance ? » / « Annuler ce rendez-vous ? ». A rendez-vous ignores `past`. */
-export function cancelOccurrenceCopy(a: { kind: "seance" | "rdv"; registrants: number; past: boolean }): ConfirmCopy {
+/**
+ * « Annuler cette séance ? » / « Annuler ce rendez-vous ? ». `registrants`: the live bookings (a lapsed hold is not one),
+ * who are told by email; `tickets`: how many of them hold a ticket, the only ones whose ticket is given back (a free,
+ * guest or paid place has none). The text promises tickets back only for those. A rendez-vous ignores `past`.
+ */
+export function cancelOccurrenceCopy(a: {
+  kind: "seance" | "rdv";
+  registrants: number;
+  tickets: number;
+  past: boolean;
+}): ConfirmCopy {
+  const registrants = Math.max(a.registrants, 0);
+  const tickets = Math.min(Math.max(a.tickets, 0), registrants);
   if (a.kind === "rdv") {
     return {
       title: "Annuler ce rendez-vous ?",
-      body: "Le client est prévenu par email et son ticket lui est rendu.",
+      body:
+        registrants === 0
+          ? "Aucun client n'est concerné : le rendez-vous est simplement annulé."
+          : tickets > 0
+            ? "Le client est prévenu par email et son ticket lui est rendu."
+            : "Le client est prévenu par email.",
       confirm: "Annuler le rendez-vous",
     };
   }
-  const lead =
-    a.registrants <= 0
-      ? "Personne n'est inscrit : la séance est simplement annulée."
-      : a.registrants === 1
-        ? "La personne inscrite est désinscrite, son ticket est rendu et elle est prévenue par email."
-        : `Les ${a.registrants} inscrits sont désinscrits, leurs tickets sont rendus et ils sont prévenus par email.`;
-  return {
-    title: "Annuler cette séance ?",
-    body: a.past ? `${lead} Cette séance est déjà passée : les tickets sont rendus quand même.` : lead,
-    confirm: "Annuler la séance",
-  };
+  const one = registrants === 1;
+  const people = one ? "La personne inscrite est désinscrite" : `Les ${registrants} inscrits sont désinscrits`;
+  let body: string;
+  if (registrants === 0) {
+    body = "Personne n'est inscrit : la séance est simplement annulée.";
+  } else if (tickets === 0) {
+    body = `${people} et ${one ? "prévenue" : "prévenus"} par email.`;
+  } else if (tickets === registrants) {
+    body = `${people}, ${one ? "son ticket est rendu" : "leurs tickets sont rendus"} et ${one ? "elle est" : "ils sont"} ${one ? "prévenue" : "prévenus"} par email.`;
+    if (a.past) body += ` Cette séance est déjà passée : ${one ? "le ticket est rendu" : "les tickets sont rendus"} quand même.`;
+  } else {
+    // some of the people hold a ticket, the others do not: say how many come back
+    body = `${people} et prévenus par email. ${plural(tickets, "ticket est rendu", "tickets sont rendus")}${
+      a.past ? ", même si cette séance est déjà passée" : ""
+    }.`;
+  }
+  return { title: "Annuler cette séance ?", body, confirm: "Annuler la séance" };
 }
 
 export function restoreOccurrenceCopy(): ConfirmCopy {
@@ -188,10 +210,10 @@ export function deleteTimeOffCopy(): ConfirmCopy {
 /**
  * The dialog opened when a time off overlaps séances with registrants and/or booked rendez-vous. The wording follows
  * what is listed: séances only (« inscrits »), rendez-vous only (« client », « réservé »), or both. One item takes the
- * singular. The tickets of a séance or of a rendez-vous are given back whichever way they were paid, as the other
- * cancellation texts say; a free booking simply has none to give back.
+ * singular. `tickets`: how many of the bookings in the list hold a ticket (a free, guest or paid place has none to
+ * give back); the buttons promise tickets back only when there are some.
  */
-export function timeOffConflictCopy(a: { seances: number; rdvs: number }): {
+export function timeOffConflictCopy(a: { seances: number; rdvs: number; tickets: number }): {
   title: string;
   intro: string;
   cancelLabel: string;
@@ -200,7 +222,9 @@ export function timeOffConflictCopy(a: { seances: number; rdvs: number }): {
   rdvNote: string;
 } {
   const rdvNote = "Un rendez-vous compte avec ses marges avant et après.";
-  const prevented = "(tickets rendus, clients prévenus)";
+  const returned = a.tickets <= 0 ? "" : a.tickets === 1 ? "ticket rendu, " : "tickets rendus, ";
+  const prevented = `(${returned}clients prévenus)`;
+  const preventedOne = `(${returned}client prévenu)`;
   if (a.rdvs > 0 && a.seances > 0) {
     return {
       title: "Des séances et des rendez-vous sont réservés",
@@ -218,7 +242,7 @@ export function timeOffConflictCopy(a: { seances: number; rdvs: number }): {
       title: single ? "Un rendez-vous est réservé" : "Des rendez-vous sont réservés",
       intro: `Cette indisponibilité chevauche ${plural(a.rdvs, "rendez-vous réservé", "rendez-vous réservés")} :`,
       cancelLabel: single
-        ? "Annuler ce rendez-vous (ticket rendu, client prévenu)"
+        ? `Annuler ce rendez-vous ${preventedOne}`
         : `Annuler ces ${plural(a.rdvs, "rendez-vous", "rendez-vous")} ${prevented}`,
       keepLabel: single ? "Le garder" : "Les garder",
       keepNote: single

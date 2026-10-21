@@ -35,7 +35,11 @@ export function TimeOffConflictDialog({
   onClose: () => void;
 }) {
   const rdvs = conflicts.filter((c) => c.kind === "rdv").length;
-  const copy = timeOffConflictCopy({ seances: conflicts.length - rdvs, rdvs });
+  const copy = timeOffConflictCopy({
+    seances: conflicts.length - rdvs,
+    rdvs,
+    tickets: conflicts.reduce((sum, c) => sum + c.ticketBookings, 0),
+  });
   const bodyId = useId();
   const errorBox = useRef<HTMLParagraphElement>(null);
   const keepButton = useRef<HTMLButtonElement>(null);
