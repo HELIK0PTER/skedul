@@ -24,7 +24,7 @@ export function weekStartFromParam(
   return startOfDayKey(mondayKeyOf(key), tz);
 }
 
-/** [Monday 00:00, next Monday 00:00) in local time — 167 h or 169 h on DST weeks. */
+/** [Monday 00:00, next Monday 00:00) in local time (167 h or 169 h on DST weeks). */
 export function weekBounds(weekStart: Date, tz: string): { start: Date; end: Date } {
   const monday = dayKeyInTz(weekStart, tz);
   return { start: weekStart, end: startOfDayKey(addDaysToKey(monday, 7), tz) };
