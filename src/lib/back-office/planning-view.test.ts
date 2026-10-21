@@ -11,6 +11,7 @@ import {
   gridHours,
   hhmm,
   hiddenByTimeOff,
+  horizonNotice,
   minimumSeatsMessage,
   minuteFromOffset,
   previewTitle,
@@ -534,7 +535,7 @@ test("a lapsed hold is not a registrant: the block, its name, the list and the d
   const [vm] = toPlanningVM([item("s", at(MONDAY, 600), 60, LAPSED)], [], PARIS, NOW);
   assert.equal(seatsText(vm), "2 inscrits sur 10");
   assert.equal(seatsRatio(vm), "2/10");
-  assert.equal(seatsSummary(vm), "2 inscrits sur 10 \u00b7 8 places en ligne");
+  assert.equal(seatsSummary(vm), "2 inscrits sur 10 · 8 places en ligne");
   assert.match(blockLabel(vm, PARIS), /, 2 inscrits sur 10$/);
   // The registrants and the places on offer add up to the capacity, which the raw seatsTaken never did (3 + 8).
   assert.equal(vm.liveSeats + vm.seatsShown, vm.capacity);
@@ -545,15 +546,29 @@ test("seatsText, seatsRatio and seatsSummary: singular, zero and a full séance"
   assert.equal(seatsText(vm(0, 12)), "0 inscrit sur 12");
   assert.equal(seatsText(vm(1, 11)), "1 inscrit sur 12");
   assert.equal(seatsRatio(vm(0, 12)), "0/12");
-  assert.equal(seatsSummary(vm(1, 11)), "1 inscrit sur 12 \u00b7 11 places en ligne");
-  assert.equal(seatsSummary(vm(11, 1)), "11 inscrits sur 12 \u00b7 1 place en ligne");
-  assert.equal(seatsSummary(vm(12, 0)), "12 inscrits sur 12 \u00b7 0 place en ligne");
+  assert.equal(seatsSummary(vm(1, 11)), "1 inscrit sur 12 · 11 places en ligne");
+  assert.equal(seatsSummary(vm(11, 1)), "11 inscrits sur 12 · 1 place en ligne");
+  assert.equal(seatsSummary(vm(12, 0)), "12 inscrits sur 12 · 0 place en ligne");
   for (const text of [seatsText(vm(2, 10)), seatsRatio(vm(2, 10)), seatsSummary(vm(2, 10))]) assert.doesNotMatch(text, NO_DASH);
 });
 
 test("minimumSeatsMessage: the capacity floor speaks of seats taken, not of registrants (a lapsed hold still holds one)", () => {
   assert.equal(minimumSeatsMessage(0), "Minimum 1 place.");
-  assert.equal(minimumSeatsMessage(1), "Minimum 1 : 1 place est d\u00e9j\u00e0 prise.");
-  assert.equal(minimumSeatsMessage(3), "Minimum 3 : 3 places sont d\u00e9j\u00e0 prises.");
+  assert.equal(minimumSeatsMessage(1), "Minimum 1 : 1 place est déjà prise.");
+  assert.equal(minimumSeatsMessage(3), "Minimum 3 : 3 places sont déjà prises.");
   for (const n of [0, 1, 3]) assert.doesNotMatch(minimumSeatsMessage(n), NO_DASH);
+});
+
+// R10: the engine materialises the recurring séances 400 days ahead. A week beyond that looks empty although the series
+// go on: the page says until when they are shown.
+test("horizonNotice: a week that reaches past the last generated date says until when the recurring séances are shown", () => {
+  const days = week(MONDAY); // 12 to 18 October 2026
+  assert.equal(horizonNotice(days, null), null, "no series that can still produce dates");
+  assert.equal(horizonNotice(days, "2027-11-20"), null, "generated far beyond the week");
+  assert.equal(horizonNotice(days, "2026-10-18"), null, "generated up to the last day of the week");
+  assert.equal(horizonNotice(days, "2026-10-14"), "Les séances récurrentes sont affichées jusqu'au 14/10/2026.", "the week is cut by the horizon");
+  const far = week("2027-12-06");
+  assert.equal(horizonNotice(far, "2027-11-20"), "Les séances récurrentes sont affichées jusqu'au 20/11/2027.", "the whole week is past it");
+  assert.equal(horizonNotice([], "2026-10-14"), null);
+  assert.doesNotMatch(horizonNotice(far, "2027-11-20") ?? "", NO_DASH);
 });

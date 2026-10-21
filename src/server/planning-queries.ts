@@ -3,6 +3,7 @@ import "server-only";
 import { getPlanningRange } from "@/lib/back-office/planning-reads";
 import {
   gridHours,
+  horizonNotice,
   timeOffSegments,
   toPlanningVM,
   weekTitle,
@@ -26,6 +27,8 @@ export type PlanningPageData = {
   endHour: number;
   nowIso: string;
   needsHorizon: boolean;
+  /** « Les séances récurrentes sont affichées jusqu'au JJ/MM/AAAA. » when the week reaches past what is generated, else null */
+  horizonNotice: string | null;
 };
 
 /** A well-formed date between 2000 and 2100, else undefined (the page then shows this week). */
@@ -71,5 +74,6 @@ export async function getPlanningPage(
     ...gridHours(vms),
     nowIso: now.toISOString(),
     needsHorizon: needsHorizon(generatedUntil, now, tz),
+    horizonNotice: horizonNotice(days, generatedUntil),
   };
 }

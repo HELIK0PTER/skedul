@@ -38,6 +38,7 @@ export default async function PlanningPage({
   return (
     <>
       <PageHeader title="Planning" description="Vos séances, rendez-vous et indisponibilités de la semaine." />
+      {data.horizonNotice && <p className="mb-3 text-sm text-zinc-600">{data.horizonNotice}</p>}
       <PlanningCalendar
         tz={data.tz}
         days={data.days}

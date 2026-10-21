@@ -9,7 +9,7 @@
  * that their copy is covered by the pure suite and the dash scan.
  * No server import: only `import type` from the reads module.
  */
-import { addDays, parseKey, type DateKey } from "@/lib/civil-date";
+import { addDays, compareKeys, formatDayMonthYear, parseKey, type DateKey } from "@/lib/civil-date";
 import { dayKeyInTz, dayOrdinal, formatTime, frenchFirst, startOfDayKey, wallClockMinutes } from "@/lib/datetime";
 import { expiryLabel, formatWhen, plural } from "@/lib/back-office/format";
 import type { PlanningAttendee, PlanningItem, PlanningQuestion, PlanningTimeOff } from "@/lib/back-office/planning-reads";
@@ -352,6 +352,17 @@ export function blockLabel(
   const client = item.kind === "rdv" ? item.attendees[0]?.name : undefined;
   const detail = client ?? seatsText(item);
   return `${item.title}, ${when}, ${detail}${item.status === "cancelled" ? ", annulée" : ""}`;
+}
+
+/**
+ * The recurring séances exist only up to the last date the engine generated (400 days ahead). A displayed week that
+ * reaches past `minGeneratedUntil` would look empty or half empty for the series that go on, so it says until when
+ * they are shown. Null when every series is generated beyond the week, or when none can still produce dates.
+ */
+export function horizonNotice(days: readonly DateKey[], minGeneratedUntil: DateKey | null): string | null {
+  if (minGeneratedUntil === null || days.length === 0) return null;
+  if (compareKeys(days[days.length - 1], minGeneratedUntil) <= 0) return null;
+  return `Les séances récurrentes sont affichées jusqu'au ${formatDayMonthYear(minGeneratedUntil)}.`;
 }
 
 /**
