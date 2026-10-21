@@ -122,3 +122,17 @@ export function proErrorMessage(fail: { code: EngineErrorCode; message?: string 
  * the confirmation stays as it was. One text for every back-office form and dialog.
  */
 export const REQUEST_FAILED = "La demande n'a pas abouti. Vérifiez votre connexion et réessayez.";
+
+/**
+ * A Server Action call that never throws: when the call itself fails (network, no answer, a deploy in between) the
+ * answer is the REQUEST_FAILED refusal, so a form keeps its typed values and shows the message in its error box
+ * instead of the exception reaching React and replacing the page with the error boundary. The answer of an action
+ * that did run (done or refused) is returned as it is.
+ */
+export async function callOrFail<R extends { ok: boolean }>(call: () => Promise<R>): Promise<R | { ok: false; error: string }> {
+  try {
+    return await call();
+  } catch {
+    return { ok: false, error: REQUEST_FAILED };
+  }
+}

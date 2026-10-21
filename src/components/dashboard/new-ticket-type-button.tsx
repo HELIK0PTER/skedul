@@ -9,6 +9,7 @@ import { FormField } from "@/components/dashboard/form-field";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { callOrFail } from "@/lib/pro-messages";
 import { DEFAULT_COLOR } from "@/lib/tickets-vocab";
 import { createTicketTypeAction } from "@/server/pro-catalog";
 
@@ -46,7 +47,7 @@ export function NewTicketTypeButton({ label = "Nouveau type de ticket" }: { labe
     if (pending) return;
     setError(null);
     startTransition(async () => {
-      const res = await createTicketTypeAction({ name, color });
+      const res = await callOrFail(() => createTicketTypeAction({ name, color }));
       if (!res.ok) {
         setError(res.error);
         return;

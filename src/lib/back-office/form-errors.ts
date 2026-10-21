@@ -5,6 +5,8 @@
  * everything again. Keys are the dotted paths of `parseFr` (`rule.startDate`,
  * `questions.0.label`).
  */
+import type { OfferField, OfferFormValues } from "./offer-form";
+import type { RdvField, RdvFormValues } from "./rdv-form";
 import type { RecurrenceFormValue } from "./recurrence-form";
 
 /** `errors` without the messages whose dotted key is, or sits under, one of `prefixes`; the same object when nothing goes. */
@@ -41,4 +43,36 @@ export const RECURRENCE_ERROR_KEYS: Record<keyof RecurrenceFormValue, readonly s
   endMode: ["rule.endMode", "rule.untilDate", "rule.occurrenceCount"],
   untilDate: ["rule.untilDate"],
   occurrenceCount: ["rule.occurrenceCount"],
+};
+
+/** The one message of a form that shows it under a field (`field`) or above the buttons (null). */
+export type FieldError<F extends string> = { field: F | null; message: string };
+
+/**
+ * The message left after an edit that resolves `fixed`: dropped when it was shown under one of those fields (its
+ * `aria-invalid` goes with it), kept otherwise. A general message (no field) stays until the next submit.
+ */
+export function errorAfterEdit<F extends string>(error: FieldError<F> | null, fixed: readonly F[]): FieldError<F> | null {
+  if (error === null || error.field === null) return error;
+  return fixed.includes(error.field) ? null : error;
+}
+
+/** The offer form fields whose message editing each value resolves. A field added to OfferFormValues must be listed here. */
+export const OFFER_ERROR_FIELDS: Record<keyof OfferFormValues, readonly OfferField[]> = {
+  quantity: ["quantity"],
+  price: ["price"],
+  label: ["label"],
+  validity: ["validity"],
+  validityCount: ["validity"],
+  isActive: [],
+};
+
+/** Same for the « RDV libre » form: switching RDV off hides the three number fields, so their messages go too. */
+export const RDV_ERROR_FIELDS: Record<keyof RdvFormValues, readonly RdvField[]> = {
+  enabled: ["duration", "before", "after"],
+  free: [],
+  duration: ["duration"],
+  before: ["before"],
+  after: ["after"],
+  overrides: [],
 };

@@ -5,11 +5,13 @@ import { Loader2 } from "lucide-react";
 
 import { updateProfile } from "@/server/pro";
 import { FormError } from "@/components/dashboard/form-error";
+import { SavedStatus } from "@/components/dashboard/saved-status";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { callOrFail } from "@/lib/pro-messages";
 import { PRO_TIMEZONES, timeZoneLabel } from "@/lib/timezones";
 
 export interface ProfileValues {
@@ -37,13 +39,15 @@ export function ProfileForm({ values, timezoneLocked }: { values: ProfileValues;
     setSaved(false);
     setError(null);
     startTransition(async () => {
-      const res = await updateProfile({
-        businessName: String(f.get("businessName") ?? ""),
-        headline: String(f.get("headline") ?? ""),
-        bio: String(f.get("bio") ?? ""),
-        // a disabled select is not part of the form data: keep the current zone
-        timezone: String(f.get("timezone") ?? values.timezone),
-      });
+      const res = await callOrFail(() =>
+        updateProfile({
+          businessName: String(f.get("businessName") ?? ""),
+          headline: String(f.get("headline") ?? ""),
+          bio: String(f.get("bio") ?? ""),
+          // a disabled select is not part of the form data: keep the current zone
+          timezone: String(f.get("timezone") ?? values.timezone),
+        }),
+      );
       if (res.ok) setSaved(true);
       else setError(res.error);
     });
@@ -92,11 +96,7 @@ export function ProfileForm({ values, timezoneLocked }: { values: ProfileValues;
           {pending && <Loader2 className="size-4 animate-spin" />}
           Enregistrer
         </Button>
-        {saved && (
-          <span role="status" className="text-sm text-success">
-            Enregistré
-          </span>
-        )}
+        <SavedStatus saved={saved} />
       </div>
     </form>
   );

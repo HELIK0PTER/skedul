@@ -1,16 +1,19 @@
 "use client";
 
 import { useId, useState, useTransition } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 import { FormError } from "@/components/dashboard/form-error";
 import { FormField } from "@/components/dashboard/form-field";
 import { QuestionsEditor, draftsFromRows, inputsFromDrafts, type QuestionDraft } from "@/components/dashboard/questions-editor";
+import { SavedStatus } from "@/components/dashboard/saved-status";
 import { Switch } from "@/components/dashboard/switch";
+import { useRefusalFocus } from "@/components/dashboard/use-refusal-focus";
 import { WindowOverrideFields } from "@/components/dashboard/window-override-fields";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { errorAfterEdit, RDV_ERROR_FIELDS } from "@/lib/back-office/form-errors";
 import {
   freeLockedHelp,
   isFreeSalesRefusal,
@@ -22,6 +25,7 @@ import {
 } from "@/lib/back-office/rdv-form";
 import type { QuestionRow } from "@/lib/booking/answers";
 import type { BookingWindow } from "@/lib/booking-window";
+import { callOrFail } from "@/lib/pro-messages";
 import type { WindowOverrides } from "@/lib/tickets";
 import { BOUNDS } from "@/lib/tickets-vocab";
 import { setTypeQuestionsAction, updateTicketTypeAction } from "@/server/pro-catalog";
@@ -44,13 +48,16 @@ export function TicketTypeInfoForm({
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [pending, startTransition] = useTransition();
+  const { root, errorBox, refused } = useRefusalFocus();
 
   const under = (prefix: string): string | null => (error !== null && error.startsWith(prefix) ? error : null);
   const general = error !== null && !INFO_FIELD_PREFIXES.some((p) => error.startsWith(p)) ? error : null;
 
-  function edit<T>(set: (value: T) => void, value: T) {
+  /** An edit drops the message shown under that field (its `aria-invalid` goes with it); a general message stays. */
+  function edit<T>(set: (value: T) => void, value: T, prefix: (typeof INFO_FIELD_PREFIXES)[number]) {
     set(value);
     setSaved(false);
+    setError((current) => (current !== null && current.startsWith(prefix) ? null : current));
   }
 
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -60,12 +67,15 @@ export function TicketTypeInfoForm({
     setSaved(false);
     startTransition(async () => {
       const trimmed = description.trim();
-      const res = await updateTicketTypeAction({
-        ticketTypeId,
-        patch: { name, description: trimmed === "" ? null : trimmed, color },
-      });
+      const res = await callOrFail(() =>
+        updateTicketTypeAction({
+          ticketTypeId,
+          patch: { name, description: trimmed === "" ? null : trimmed, color },
+        }),
+      );
       if (!res.ok) {
         setError(res.error);
+        refused();
         return;
       }
       setSaved(true);
@@ -73,12 +83,12 @@ export function TicketTypeInfoForm({
   }
 
   return (
-    <form onSubmit={onSubmit} noValidate className="space-y-4">
+    <form ref={root} onSubmit={onSubmit} noValidate className="space-y-4">
       <FormField label="Nom" htmlFor={`${uid}-name`} error={under("Nom :")}>
         <Input
           id={`${uid}-name`}
           value={name}
-          onChange={(e) => edit(setName, e.target.value)}
+          onChange={(e) => edit(setName, e.target.value, "Nom :")}
           maxLength={80}
           autoComplete="off"
         />
@@ -87,7 +97,7 @@ export function TicketTypeInfoForm({
         <Textarea
           id={`${uid}-description`}
           value={description}
-          onChange={(e) => edit(setDescription, e.target.value)}
+          onChange={(e) => edit(setDescription, e.target.value, "Description :")}
           maxLength={2000}
           rows={3}
         />
@@ -97,22 +107,17 @@ export function TicketTypeInfoForm({
           id={`${uid}-color`}
           type="color"
           value={color}
-          onChange={(e) => edit(setColor, e.target.value)}
+          onChange={(e) => edit(setColor, e.target.value, "Couleur :")}
           className="block h-10 w-16 cursor-pointer rounded-xl border border-input bg-card p-1"
         />
       </FormField>
-      <FormError message={general} />
+      <FormError message={general} ref={errorBox} tabIndex={-1} />
       <div className="flex items-center gap-3">
         <Button type="submit" disabled={pending}>
           {pending && <Loader2 className="animate-spin" />}
           Enregistrer
         </Button>
-        {saved && (
-          <span role="status" className="flex items-center gap-1.5 text-sm text-green-700">
-            <Check className="size-4" />
-            Enregistré
-          </span>
-        )}
+        <SavedStatus saved={saved} />
       </div>
     </form>
   );
@@ -156,12 +161,15 @@ export function RdvSettingsForm({
   const [error, setError] = useState<{ field: RdvField | null; message: string } | null>(null);
   const [saved, setSaved] = useState(false);
   const [pending, startTransition] = useTransition();
+  const { root, errorBox, refused } = useRefusalFocus();
   // The rules block starts open when the type already overrides something.
   const [rulesOpen] = useState(() => Object.values(initial.rdvOverrides).some((v) => v !== null));
 
   const set = <K extends keyof RdvFormValues>(key: K, value: RdvFormValues[K]) => {
     setValues((current) => ({ ...current, [key]: value }));
     setSaved(false);
+    // The field that was edited no longer shows its message (and loses its aria-invalid); the next submit checks it again.
+    setError((current) => errorAfterEdit(current, RDV_ERROR_FIELDS[key]));
   };
   const under = (field: RdvField): string | null => (error !== null && error.field === field ? error.message : null);
   const general = error !== null && error.field === null ? error.message : null;
@@ -173,14 +181,16 @@ export function RdvSettingsForm({
     const built = rdvPatchFromForm(values);
     if (!built.ok) {
       setError({ field: built.field, message: built.error });
+      refused();
       return;
     }
     setError(null);
     setSaved(false);
     startTransition(async () => {
-      const res = await updateTicketTypeAction({ ticketTypeId, patch: built.patch });
+      const res = await callOrFail(() => updateTicketTypeAction({ ticketTypeId, patch: built.patch }));
       if (!res.ok) {
         setError({ field: rdvErrorField(res.error), message: res.error });
+        refused();
         // A fact appeared since the page was read (a checkout started, a ticket booked): the saved state is still « not free ».
         if (isFreeSalesRefusal(res.error)) setValues((current) => ({ ...current, free: false }));
         return;
@@ -190,7 +200,7 @@ export function RdvSettingsForm({
   }
 
   return (
-    <form onSubmit={onSubmit} noValidate className="space-y-5">
+    <form ref={root} onSubmit={onSubmit} noValidate className="space-y-5">
       <Switch
         id={`${uid}-enabled`}
         checked={values.enabled}
@@ -260,18 +270,13 @@ export function RdvSettingsForm({
         </>
       )}
 
-      <FormError message={general} />
+      <FormError message={general} ref={errorBox} tabIndex={-1} />
       <div className="flex items-center gap-3">
         <Button type="submit" disabled={pending}>
           {pending && <Loader2 className="animate-spin" />}
           Enregistrer le RDV libre
         </Button>
-        {saved && (
-          <span role="status" className="flex items-center gap-1.5 text-sm text-green-700">
-            <Check className="size-4" />
-            Enregistré
-          </span>
-        )}
+        <SavedStatus saved={saved} />
       </div>
     </form>
   );
@@ -286,6 +291,7 @@ export function TypeQuestionsForm({ ticketTypeId, questions }: { ticketTypeId: s
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [pending, startTransition] = useTransition();
+  const { root, errorBox, refused } = useRefusalFocus();
 
   // After a save the page re-reads the questions (new ids for the new ones): follow the server then, never on an unrelated refresh.
   if (signature !== seenSignature) {
@@ -299,9 +305,10 @@ export function TypeQuestionsForm({ ticketTypeId, questions }: { ticketTypeId: s
     setError(null);
     setSaved(false);
     startTransition(async () => {
-      const res = await setTypeQuestionsAction({ ticketTypeId, questions: inputsFromDrafts(drafts) });
+      const res = await callOrFail(() => setTypeQuestionsAction({ ticketTypeId, questions: inputsFromDrafts(drafts) }));
       if (!res.ok) {
         setError(res.error);
+        refused();
         return;
       }
       setSaved(true);
@@ -309,7 +316,7 @@ export function TypeQuestionsForm({ ticketTypeId, questions }: { ticketTypeId: s
   }
 
   return (
-    <form onSubmit={onSubmit} noValidate className="space-y-4">
+    <form ref={root} onSubmit={onSubmit} noValidate className="space-y-4">
       <p className="text-sm text-muted-foreground">{QUESTIONS_HELP}</p>
       <QuestionsEditor
         idPrefix={`${uid}-questions`}
@@ -320,18 +327,13 @@ export function TypeQuestionsForm({ ticketTypeId, questions }: { ticketTypeId: s
         }}
         disabled={pending}
       />
-      <FormError message={error} />
+      <FormError message={error} ref={errorBox} tabIndex={-1} />
       <div className="flex items-center gap-3">
         <Button type="submit" disabled={pending}>
           {pending && <Loader2 className="animate-spin" />}
           Enregistrer les questions
         </Button>
-        {saved && (
-          <span role="status" className="flex items-center gap-1.5 text-sm text-green-700">
-            <Check className="size-4" />
-            Enregistré
-          </span>
-        )}
+        <SavedStatus saved={saved} />
       </div>
     </form>
   );

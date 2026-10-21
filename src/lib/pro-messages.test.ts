@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { ENGINE_ERROR_CODES, ENGINE_ERROR_MESSAGES, isEngineErrorCode } from "./tickets-vocab";
 import {
+  callOrFail,
   PRO_CONTEXT_MESSAGES,
   PRO_ERROR_MESSAGES,
   proErrorMessage,
@@ -132,4 +133,21 @@ test("every code resolves to a message in every context", () => {
 test("REQUEST_FAILED is the French transport failure text, without a dash", () => {
   assert.equal(REQUEST_FAILED, "La demande n'a pas abouti. Vérifiez votre connexion et réessayez.");
   assert.ok(!DASH.test(REQUEST_FAILED));
+});
+
+test("callOrFail hands the answer of the Server Action over untouched (final review UI-4)", async () => {
+  const refusal = { ok: false as const, error: "Nom : indiquez un nom." };
+  assert.deepEqual(await callOrFail(async () => ({ ok: true as const, id: "t1" })), { ok: true, id: "t1" });
+  assert.equal(await callOrFail(async () => refusal), refusal);
+});
+
+test("callOrFail turns a call that threw into the REQUEST_FAILED refusal, never into an exception (final review UI-4)", async () => {
+  const failed = await callOrFail<{ ok: true } | { ok: false; error: string }>(async () => {
+    throw new Error("fetch failed");
+  });
+  assert.deepEqual(failed, { ok: false, error: REQUEST_FAILED });
+  const sync = await callOrFail<{ ok: true }>(() => {
+    throw new TypeError("not even a promise");
+  });
+  assert.deepEqual(sync, { ok: false, error: REQUEST_FAILED });
 });

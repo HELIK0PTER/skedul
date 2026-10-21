@@ -8,6 +8,7 @@ import { ConfirmDialog } from "@/components/dashboard/confirm-dialog";
 import { FormError } from "@/components/dashboard/form-error";
 import { Button } from "@/components/ui/button";
 import { archiveTypeCopy, deleteTypeCopy } from "@/lib/back-office/confirm-copy";
+import { callOrFail } from "@/lib/pro-messages";
 import { deleteTicketTypeAction, setTicketTypeArchivedAction } from "@/server/pro-catalog";
 
 const EXPLANATION = "Archiver retire le type de votre page sans rien perdre. Supprimer l'efface, ou l'archive s'il a déjà servi.";
@@ -42,7 +43,7 @@ export function TypeDangerZone({
     setError(null);
     setNotice(null);
     startTransition(async () => {
-      const res = await setTicketTypeArchivedAction({ ticketTypeId, archived: next });
+      const res = await callOrFail(() => setTicketTypeArchivedAction({ ticketTypeId, archived: next }));
       if (!res.ok) {
         setError(res.error);
         return;
@@ -54,7 +55,7 @@ export function TypeDangerZone({
   function remove() {
     setError(null);
     startTransition(async () => {
-      const res = await deleteTicketTypeAction({ ticketTypeId });
+      const res = await callOrFail(() => deleteTicketTypeAction({ ticketTypeId }));
       if (!res.ok) {
         setError(res.error);
         return;
@@ -96,11 +97,10 @@ export function TypeDangerZone({
         </Button>
       </div>
       <FormError message={dialog === null ? error : null} />
-      {notice !== null && (
-        <p role="status" className="rounded-lg bg-muted px-3 py-2 text-sm">
-          {notice}
-        </p>
-      )}
+      {/* Always mounted, so a screen reader announces the notice when it appears. */}
+      <p role="status" className={notice !== null ? "rounded-lg bg-muted px-3 py-2 text-sm" : "sr-only"}>
+        {notice}
+      </p>
 
       <ConfirmDialog
         open={dialog === "archive"}

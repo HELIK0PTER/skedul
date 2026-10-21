@@ -7,12 +7,14 @@ import { ConfirmDialog } from "@/components/dashboard/confirm-dialog";
 import { FormError } from "@/components/dashboard/form-error";
 import { FormField } from "@/components/dashboard/form-field";
 import { Switch } from "@/components/dashboard/switch";
+import { useRefusalFocus } from "@/components/dashboard/use-refusal-focus";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import type { OfferView } from "@/lib/back-office/catalog-reads";
 import { deleteOfferCopy, deleteOfferDoneNotice } from "@/lib/back-office/confirm-copy";
+import { errorAfterEdit, OFFER_ERROR_FIELDS } from "@/lib/back-office/form-errors";
 import { currencySymbol, plural } from "@/lib/back-office/format";
 import {
   EMPTY_OFFER_FORM,
@@ -23,6 +25,7 @@ import {
   type OfferFormValues,
   type ValidityChoice,
 } from "@/lib/back-office/offer-form";
+import { callOrFail } from "@/lib/pro-messages";
 import { formatMoney } from "@/lib/utils";
 import { createOfferAction, deleteOfferAction, setOfferActiveAction, updateOfferAction } from "@/server/pro-catalog";
 
@@ -72,7 +75,7 @@ export function OfferList({
     setNotice(null);
     startToggle(async () => {
       applyToggle({ offerId, isActive });
-      const res = await setOfferActiveAction({ offerId, isActive });
+      const res = await callOrFail(() => setOfferActiveAction({ offerId, isActive }));
       if (!res.ok) setToggleError(res.error);
     });
   }
@@ -80,7 +83,7 @@ export function OfferList({
   function onConfirmDelete(offerId: string) {
     setDeleteError(null);
     startDelete(async () => {
-      const res = await deleteOfferAction({ offerId });
+      const res = await callOrFail(() => deleteOfferAction({ offerId }));
       if (!res.ok) {
         setDeleteError(res.error);
         return;
@@ -154,11 +157,10 @@ export function OfferList({
 
       {typeArchived && <p className="text-sm text-muted-foreground">Type archivé : ses offres ne sont pas proposées.</p>}
       <FormError message={toggleError} />
-      {notice !== null && (
-        <p role="status" className="rounded-lg bg-muted px-3 py-2 text-sm">
-          {notice}
-        </p>
-      )}
+      {/* Always mounted, so a screen reader announces the notice when it appears. */}
+      <p role="status" className={notice !== null ? "rounded-lg bg-muted px-3 py-2 text-sm" : "sr-only"}>
+        {notice}
+      </p>
 
       {!rdvFree && (
         <Button variant="secondary" disabled={typeArchived} onClick={() => setEditing({ kind: "new" })}>
@@ -304,9 +306,13 @@ function OfferDialog({
   const [values, setValues] = useState<OfferFormValues>(initial);
   const [error, setError] = useState<{ field: OfferField | null; message: string } | null>(null);
   const [pending, startTransition] = useTransition();
+  const { root, errorBox, refused } = useRefusalFocus();
 
-  const set = <K extends keyof OfferFormValues>(key: K, value: OfferFormValues[K]) =>
+  const set = <K extends keyof OfferFormValues>(key: K, value: OfferFormValues[K]) => {
     setValues((current) => ({ ...current, [key]: value }));
+    // The field that was edited no longer shows its message (and loses its aria-invalid); the next submit checks it again.
+    setError((current) => errorAfterEdit(current, OFFER_ERROR_FIELDS[key]));
+  };
   const under = (field: OfferField): string | null => (error !== null && error.field === field ? error.message : null);
   const general = error !== null && error.field === null ? error.message : null;
 
@@ -316,13 +322,17 @@ function OfferDialog({
     const built = offerInputFromForm(ticketTypeId, values);
     if (!built.ok) {
       setError({ field: built.field, message: built.error });
+      refused();
       return;
     }
     setError(null);
     startTransition(async () => {
-      const res = offerId === null ? await createOfferAction(built.input) : await updateOfferAction({ offerId, offer: built.input });
+      const res = await callOrFail(() =>
+        offerId === null ? createOfferAction(built.input) : updateOfferAction({ offerId, offer: built.input }),
+      );
       if (!res.ok) {
         setError({ field: offerErrorField(res.error), message: res.error });
+        refused();
         return;
       }
       onClose();
@@ -331,7 +341,7 @@ function OfferDialog({
 
   return (
     <Dialog open onClose={() => (pending ? undefined : onClose())} title={offerId === null ? "Nouvelle offre" : "Modifier l'offre"}>
-      <form onSubmit={onSubmit} noValidate className="space-y-4">
+      <form ref={root} onSubmit={onSubmit} noValidate className="space-y-4">
         {/* FormField wires aria-describedby (helper, then error) and aria-invalid into each control. */}
         <FormField label="Quantité" htmlFor={`${uid}-quantity`} help={QUANTITY_HELP} error={under("quantity")}>
           <Input
@@ -380,7 +390,7 @@ function OfferDialog({
           description={rdvFree ? "Un rendez-vous gratuit ne se vend pas." : undefined}
           disabled={rdvFree && !initial.isActive}
         />
-        <FormError message={general} />
+        <FormError message={general} ref={errorBox} tabIndex={-1} />
         <div className="flex justify-end gap-2 pt-1">
           <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
             Retour

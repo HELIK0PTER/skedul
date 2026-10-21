@@ -2,13 +2,15 @@
 
 import Link from "next/link";
 import { useState, useTransition } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 import { FormError } from "@/components/dashboard/form-error";
+import { SavedStatus } from "@/components/dashboard/saved-status";
 import { Switch } from "@/components/dashboard/switch";
 import { WeeklyHoursEditor, byDayFromRules, rulesFromByDay, type ByDay } from "@/components/dashboard/weekly-hours-editor";
 import { Button } from "@/components/ui/button";
 import { mergeAvailabilityRules } from "@/lib/back-office/week-hours";
+import { callOrFail } from "@/lib/pro-messages";
 import type { AvailabilityRuleInput } from "@/lib/tickets";
 import { setTypeHoursAction } from "@/server/pro-catalog";
 
@@ -38,7 +40,7 @@ export function TypeHoursEditor({
     setSaved(false);
     setRunning(kind);
     startTransition(async () => {
-      const res = await setTypeHoursAction({ ticketTypeId, rules });
+      const res = await callOrFail(() => setTypeHoursAction({ ticketTypeId, rules }));
       if (!res.ok) {
         setError(res.error);
         return;
@@ -104,12 +106,7 @@ export function TypeHoursEditor({
               {pending && running === "save" && <Loader2 className="animate-spin" />}
               Enregistrer les horaires
             </Button>
-            {saved && (
-              <span role="status" className="flex items-center gap-1.5 text-sm text-green-700">
-                <Check className="size-4" />
-                Enregistré
-              </span>
-            )}
+            <SavedStatus saved={saved} />
           </div>
         </>
       ) : (

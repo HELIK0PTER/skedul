@@ -75,7 +75,7 @@ export function SlugEditor({ appUrl, slug }: { appUrl: string; slug: string }) {
         >
           <Pencil /> Modifier
         </Button>
-        {saved && <span className="text-success">Adresse mise à jour ✓</span>}
+        {saved && <span className="text-green-700">Adresse mise à jour ✓</span>}
       </div>
     );
   }

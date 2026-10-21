@@ -565,7 +565,9 @@ export function BrandingForm({
         >
           Annuler
         </Button>
-        {saved && !dirty && <span className="text-sm text-success">Enregistré ✓</span>}
+        <span role="status" className="text-sm text-green-700">
+          {saved && !dirty ? "Enregistré ✓" : null}
+        </span>
       </div>
     </div>
   );

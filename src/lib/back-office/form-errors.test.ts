@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { changedKeys, RECURRENCE_ERROR_KEYS, withoutErrorsUnder } from "./form-errors";
+import { changedKeys, errorAfterEdit, OFFER_ERROR_FIELDS, RDV_ERROR_FIELDS, RECURRENCE_ERROR_KEYS, withoutErrorsUnder } from "./form-errors";
 import { defaultRecurrenceForm } from "./recurrence-form";
 
 test("withoutErrorsUnder removes the key and its dotted children, and keeps the unrelated keys", () => {
@@ -54,4 +54,32 @@ test("RECURRENCE_ERROR_KEYS has an entry for every key of a recurrence form valu
     assert.ok(entry !== undefined && entry.length > 0, `${key} lists the error keys that editing it resolves`);
   }
   assert.deepEqual(Object.keys(RECURRENCE_ERROR_KEYS).sort(), Object.keys(value).sort(), "no entry for a field the form no longer has");
+});
+
+test("errorAfterEdit drops the message shown under the field that was edited, and only that one (final review UI-5)", () => {
+  const under = { field: "price" as const, message: "Prix invalide." };
+  assert.equal(errorAfterEdit(under, ["price"]), null, "the field was edited: its message goes");
+  assert.equal(errorAfterEdit(under, ["quantity"]), under, "another field was edited: the message stays");
+  assert.equal(errorAfterEdit(under, []), under, "an edit that resolves nothing keeps it");
+  const general = { field: null, message: "La demande n'a pas abouti." };
+  assert.equal(errorAfterEdit(general, ["price", "quantity"]), general, "a general message stays until the next submit");
+  assert.equal(errorAfterEdit(null, ["price"]), null);
+});
+
+test("OFFER_ERROR_FIELDS: each offer form value resolves the message of its own field (final review UI-5)", () => {
+  assert.deepEqual(OFFER_ERROR_FIELDS.quantity, ["quantity"]);
+  assert.deepEqual(OFFER_ERROR_FIELDS.price, ["price"]);
+  assert.deepEqual(OFFER_ERROR_FIELDS.label, ["label"]);
+  assert.deepEqual(OFFER_ERROR_FIELDS.validity, ["validity"]);
+  assert.deepEqual(OFFER_ERROR_FIELDS.validityCount, ["validity"], "the count and the unit share one message");
+  assert.deepEqual(OFFER_ERROR_FIELDS.isActive, [], "the switch has no message of its own");
+});
+
+test("RDV_ERROR_FIELDS: the duration, the margins, and switching RDV off clear their own messages (final review UI-5)", () => {
+  assert.deepEqual(RDV_ERROR_FIELDS.duration, ["duration"]);
+  assert.deepEqual(RDV_ERROR_FIELDS.before, ["before"]);
+  assert.deepEqual(RDV_ERROR_FIELDS.after, ["after"]);
+  assert.deepEqual([...RDV_ERROR_FIELDS.enabled].sort(), ["after", "before", "duration"], "the fields are hidden when RDV is off");
+  assert.deepEqual(RDV_ERROR_FIELDS.free, []);
+  assert.deepEqual(RDV_ERROR_FIELDS.overrides, []);
 });

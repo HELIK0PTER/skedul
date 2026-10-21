@@ -41,6 +41,76 @@ test("the branding preview shows the tickets vocabulary, not the v1 pack button 
   assert.match(form, />\s*Acheter des tickets\s*</, "the preview's second button speaks of tickets");
 });
 
+test("catalog forms call their Server Actions through callOrFail, so a failed call shows a message (final review UI-4)", () => {
+  const dir = "src/components/dashboard";
+  const files = [
+    "ticket-type-editor.tsx",
+    "offer-list.tsx",
+    "type-danger-zone.tsx",
+    "new-ticket-type-button.tsx",
+    "type-hours-editor.tsx",
+    "profile-form.tsx",
+  ];
+  for (const file of files) {
+    const text = source(`${dir}/${file}`);
+    const imported = /import \{([^}]*)\} from "@\/server\/[\w-]+";/.exec(text);
+    assert.ok(imported, `${file} imports its Server Actions`);
+    const names = imported[1]
+      .split(",")
+      .map((n) => n.trim())
+      .filter((n) => /^[a-z]\w+$/.test(n));
+    assert.ok(names.length > 0, `${file}: some actions`);
+    for (const name of names) {
+      let seen = 0;
+      for (let at = text.indexOf(`${name}(`); at !== -1; at = text.indexOf(`${name}(`, at + 1)) {
+        const line = text.slice(text.lastIndexOf("\n", at) + 1, text.indexOf("\n", at));
+        seen += 1;
+        assert.match(text.slice(Math.max(0, at - 120), at), /callOrFail\(/, `${file}: ${name} outside callOrFail: ${line.trim()}`);
+      }
+      assert.ok(seen > 0, `${file} calls ${name}`);
+    }
+    assert.match(text, /callOrFail/, `${file} uses callOrFail`);
+  }
+});
+
+test("the offer and RDV forms drop a field's message when it is edited and focus the problem after a refusal (final review UI-5)", () => {
+  const dir = "src/components/dashboard";
+  const offers = source(`${dir}/offer-list.tsx`);
+  assert.match(offers, /errorAfterEdit\(current, OFFER_ERROR_FIELDS\[key\]\)/, "an offer edit clears its field's message");
+  assert.match(offers, /useRefusalFocus\(\)/, "the offer dialog moves the focus after a refusal");
+  assert.match(offers, /ref=\{errorBox\}/, "the general message can take the focus");
+  const types = source(`${dir}/ticket-type-editor.tsx`);
+  assert.match(types, /errorAfterEdit\(current, RDV_ERROR_FIELDS\[key\]\)/, "an RDV edit clears its field's message");
+  assert.equal(types.match(/useRefusalFocus\(\)/g)?.length, 3, "the three forms of the type editor");
+  assert.equal(types.match(/\brefused\(\);/g)?.length, 4, "every refusal (1 client side, 3 server side) moves the focus");
+});
+
+test("success lines live in an always-mounted status region, in green-700 (final review UI-3, UI-6)", () => {
+  const dir = "src/components/dashboard";
+  for (const file of ["profile-form.tsx", "ticket-type-editor.tsx", "type-hours-editor.tsx"]) {
+    const text = source(`${dir}/${file}`);
+    assert.match(text, /<SavedStatus\b/, `${file} uses the shared region`);
+    assert.doesNotMatch(text, /\{saved && \(\s*<span role="status"/, `${file} no longer mounts its region with the text`);
+  }
+  assert.equal(source(`${dir}/ticket-type-editor.tsx`).match(/<SavedStatus\b/g)?.length, 3, "the three forms of the type editor");
+  // the notices: the region is always there, only its content changes
+  for (const file of ["offer-list.tsx", "type-danger-zone.tsx"]) {
+    const text = source(`${dir}/${file}`);
+    assert.doesNotMatch(text, /\{notice !== null && \(\s*<p role="status"/, `${file}: the notice region is not mounted with its text`);
+    assert.match(text, /<p role="status" className=\{notice/, `${file}: an always-mounted notice region`);
+  }
+  // small success text is green-700: the success token (3.3:1 on white) is for fills and icons
+  for (const file of readdirSync(dir).filter((f) => f.endsWith(".tsx"))) {
+    source(`${dir}/${file}`)
+      .split("\n")
+      .forEach((line, i) => {
+        if (/(?<![-\w])text-success(?![-\w])/.test(line) && !/\bsize-\d+ shrink-0 text-success\b/.test(line)) {
+          assert.fail(`${file}:${i + 1} writes text in text-success: ${line.trim()}`);
+        }
+      });
+  }
+});
+
 test("no dashboard text uses the raw brand colour, and the shared inline link is underlined (final review UI-2)", () => {
   const dir = "src/components/dashboard";
   for (const file of readdirSync(dir).filter((f) => f.endsWith(".tsx"))) {
