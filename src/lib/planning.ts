@@ -1,3 +1,4 @@
+import { BOUNDS } from "@/lib/tickets-vocab";
 import {
   addDaysToKey,
   dayKeyInTz,
@@ -27,6 +28,17 @@ export function weekStartFromParam(
 export function weekBounds(weekStart: Date, tz: string): { start: Date; end: Date } {
   const monday = dayKeyInTz(weekStart, tz);
   return { start: weekStart, end: startOfDayKey(addDaysToKey(monday, 7), tz) };
+}
+
+/**
+ * The starts_at window of the occurrences that overlap [start, end): `starts_at > after AND starts_at < before`.
+ * An occurrence overlaps when it starts before `end` and ends after `start`; none lasts more than the longest séance
+ * (event_duration_chk, 720 minutes; an RDV is shorter), so one that overlaps cannot have started before `start`
+ * minus that. The lower bound lets occurrence_pro_starts_idx (professional_id, starts_at) skip the pro's history,
+ * `ends_at > start` stays the exact test (starts_at/ends_at do not include the RDV buffers).
+ */
+export function occurrenceStartWindow(range: { start: Date; end: Date }): { after: Date; before: Date } {
+  return { after: new Date(range.start.getTime() - BOUNDS.eventDurationMin.max * 60_000), before: range.end };
 }
 
 export function paramForWeek(weekStart: Date, tz: string): string {

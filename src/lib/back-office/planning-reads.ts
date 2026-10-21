@@ -24,6 +24,7 @@ import {
   ticketType,
   timeOff,
 } from "@/lib/db/schema";
+import { occurrenceStartWindow } from "@/lib/planning";
 import {
   DEFAULT_COLOR,
   type Actor,
@@ -361,8 +362,9 @@ async function loadItems(db: Db, professionalId: string, rows: readonly Occurren
 }
 
 /**
- * Occurrences overlapping [start, end) (starts_at < end AND ends_at > start),
- * cancelled RDVs and phantom RDVs (only a lapsed hold left, see isPhantomRdv)
+ * Occurrences overlapping [start, end) (starts_at < end AND ends_at > start, with
+ * starts_at also bounded from below, see occurrenceStartWindow, so that the read
+ * never walks the pro's whole history), cancelled RDVs and phantom RDVs (only a lapsed hold left, see isPhantomRdv)
  * excluded, cancelled séances kept; attendees, answers, ticket and accepted
  * types loaded in bulk; the time off overlapping the same range. Never hides
  * anything else (planning-view does).
@@ -373,12 +375,14 @@ export async function getPlanningRange(
   range: { start: Date; end: Date },
   now: Date,
 ): Promise<{ items: PlanningItem[]; timeOff: PlanningTimeOff[] }> {
+  const startWindow = occurrenceStartWindow(range);
   const [rows, offRows] = await Promise.all([
     selectOccurrences(
       db,
       and(
         eq(occurrence.professionalId, professionalId),
-        lt(occurrence.startsAt, range.end),
+        gt(occurrence.startsAt, startWindow.after),
+        lt(occurrence.startsAt, startWindow.before),
         gt(occurrence.endsAt, range.start),
         or(isNotNull(occurrence.eventId), ne(occurrence.status, "cancelled")),
       ),

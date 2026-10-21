@@ -128,6 +128,24 @@ dbTest("range: séances and RDVs kept, cancelled RDV dropped, cancelled séance 
   }
 });
 
+// R7: the start of the occurrence is bounded from below (the longest séance lasts 720 minutes): the bound must not
+// drop a séance that overlaps the range by a minute, nor keep one that ends where the range starts.
+dbTest("range: a 720 minute séance that starts 719 minutes before the range is read, one that ends at its start is not", async ({ db, pro }) => {
+  const now = new Date();
+  const range = { start: addMinutes(now, 3 * 24 * 60), end: addMinutes(now, 4 * 24 * 60) };
+  const longSeance = async (startsAt: Date) => {
+    const id = await rowSeance(db, pro, await rowEvent(db, pro), { startsAt });
+    await db.execute(sql`update occurrence set ends_at = starts_at + interval '720 minutes', block_end = starts_at + interval '720 minutes' where id = ${id}`);
+    return id;
+  };
+  const overlapping = await longSeance(addMinutes(range.start, -719)); // ends one minute into the range
+  const touching = await longSeance(addMinutes(range.start, -720)); // ends exactly at the start
+  const inside = await longSeance(addMinutes(range.start, 600));
+  const { items } = await getPlanningRange(db, pro.proId, range, now);
+  assert.deepEqual(items.map((i) => i.id), [overlapping, inside]);
+  assert.ok(!items.some((i) => i.id === touching));
+});
+
 dbTest("range: the time off overlapping the range, this pro's only", async ({ db, pro }) => {
   const now = new Date();
   const day = dayIn(pro, 3);
