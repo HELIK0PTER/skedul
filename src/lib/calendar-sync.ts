@@ -1,7 +1,7 @@
 import "server-only";
 
 import { auth } from "@/lib/auth";
-import { syncOccurrenceWith } from "@/lib/calendar-sync-core";
+import { syncOccurrenceWith, type SyncOutcome } from "@/lib/calendar-sync-core";
 import { loadOccurrenceForSync, saveGoogleEventId } from "@/lib/calendar-sync-load";
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
@@ -11,11 +11,12 @@ import { logSafeMessage } from "@/lib/log-safe";
 /**
  * Best-effort Google sync of one occurrence, with the real dependencies. It
  * never throws: the pro's action is already committed, so a Google failure is
- * only logged (the next change of the occurrence reconciles it).
+ * only logged (the next change of the occurrence reconciles it) and answered
+ * « failed » (the connection backfill counts them).
  */
-export async function syncOccurrence(occurrenceId: string): Promise<void> {
+export async function syncOccurrence(occurrenceId: string): Promise<SyncOutcome | "failed"> {
   try {
-    await syncOccurrenceWith(occurrenceId, {
+    return await syncOccurrenceWith(occurrenceId, {
       enabled: env.GOOGLE_CALENDAR_ENABLED,
       loadOccurrence: (id) => loadOccurrenceForSync(db, id),
       getAccessToken: async (userId) => {
@@ -30,5 +31,6 @@ export async function syncOccurrence(occurrenceId: string): Promise<void> {
   } catch (err) {
     // Google's error body can echo an attendee address: only the formatted message is logged.
     console.error(`[calendar-sync] occurrence ${occurrenceId} failed: ${logSafeMessage(err)}`);
+    return "failed";
   }
 }

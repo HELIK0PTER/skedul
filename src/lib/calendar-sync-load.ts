@@ -5,7 +5,7 @@
  * comes from the engine (an effect), never from user input; the pro, the user
  * and the calendar are always read from the occurrence's own professional.
  */
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, gt, inArray } from "drizzle-orm";
 
 import type { LoadedOccurrence } from "@/lib/calendar-sync-core";
 import type { Db } from "@/lib/db/atomic";
@@ -77,6 +77,46 @@ export async function loadOccurrenceForSync(db: Db, occurrenceId: string): Promi
   };
 }
 
+/**
+ * Backfill (final review COV-2): the ids, soonest first, of the pro's future
+ * scheduled occurrences that the calendar must hold (spec § 13.7): at least
+ * one confirmed booking, séance or RDV (a pending hold, live or lapsed, is not
+ * a booking, nor is a cancelled one). A marker already stored does not exclude
+ * an occurrence: the sync is idempotent, and a marker left by a run that
+ * started before a disconnect would otherwise hide it from the new calendar.
+ * The pro comes from the session, never from input; both the occurrence and
+ * the booking rows are scoped to it. The booking filter is an uncorrelated
+ * sub-select, so no outer column is interpolated into it (drizzle would
+ * render it unqualified).
+ */
+export async function listOccurrenceIdsToBackfill(
+  db: Db,
+  professionalId: string,
+  now: Date,
+  limit: number,
+): Promise<string[]> {
+  const rows = await db
+    .select({ id: occurrence.id })
+    .from(occurrence)
+    .where(
+      and(
+        eq(occurrence.professionalId, professionalId),
+        eq(occurrence.status, "scheduled"),
+        gt(occurrence.startsAt, now),
+        inArray(
+          occurrence.id,
+          db
+            .select({ id: booking.occurrenceId })
+            .from(booking)
+            .where(and(eq(booking.professionalId, professionalId), eq(booking.status, "confirmed"))),
+        ),
+      ),
+    )
+    .orderBy(asc(occurrence.startsAt), asc(occurrence.id))
+    .limit(limit);
+  return rows.map((row) => row.id);
+}
+
 /** Stores (or clears) the Google marker of one occurrence. */
 export async function saveGoogleEventId(db: Db, occurrenceId: string, eventId: string | null): Promise<void> {
   await db.update(occurrence).set({ googleEventId: eventId }).where(eq(occurrence.id, occurrenceId));
@@ -84,8 +124,8 @@ export async function saveGoogleEventId(db: Db, occurrenceId: string, eventId: s
 
 /**
  * Disconnect (Q33): one batch clears the pro's calendar id and every Google
- * marker of the pro. Nothing is backfilled when the pro connects again: only
- * occurrences that change afterwards are synced.
+ * marker of the pro. Nothing is synced here: a later connection backfills the
+ * booked future occurrences itself (listOccurrenceIdsToBackfill, COV-2).
  */
 export async function clearGoogleLink(db: Db, professionalId: string): Promise<void> {
   await db.batch([

@@ -26,6 +26,7 @@ import {
   type ProfileInput,
 } from "@/lib/back-office/settings-actions";
 import { isValidTimeZone } from "@/lib/timezones";
+import { scheduleGoogleBackfill } from "@/server/google-backfill";
 import { runProAction } from "@/server/pro-context";
 import type { AvailabilityRuleInput, BookingSettings } from "@/lib/tickets";
 import { checkSlug } from "@/lib/slug";
@@ -242,11 +243,14 @@ export async function finalizeGoogleConnection(): Promise<{
       .update(professional)
       .set({ googleCalendarId: calendarId })
       .where(eq(professional.id, pro.id));
-    return { ok: true };
   } catch (err) {
     console.error("[google] finalize connection failed:", err);
     return { ok: false, error: "Connexion à Google impossible." };
   }
+  // Final review COV-2: the séances and RDV already booked reach the new calendar (bounded and
+  // paced, after the response). Outside the try: a scheduling problem never fails the connection.
+  scheduleGoogleBackfill(pro.id);
+  return { ok: true };
 }
 
 /**
