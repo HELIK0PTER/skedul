@@ -213,6 +213,55 @@ dbTest("rdvFree also waits for a payment in progress and for a booked ticket", a
   assert.equal((await detailOf(db, pro, withBooked, now)).rdvFree, false, "the refusal changed nothing");
 });
 
+dbTest("rdvFree counts only the facts that can still matter: a past séance and a lapsed checkout do not block it", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const makeFree = (ticketTypeId: string, at = now) =>
+    updateTicketTypeCore(db, ctx, { ticketTypeId, patch: { rdvFree: true } }, at);
+
+  // A ticket booked on a séance that is over stays 'booked' for ever (the wallet derives « Utilisé le » at display time):
+  // it can never come back through a client cancellation, so it must not lock the type.
+  const past = await makeType(db, pro, { rdvEnabled: true, rdvDurationMin: 15 });
+  const {
+    occurrences: [occ],
+  } = await makeEvent(db, pro, { ticketTypeIds: [past] });
+  const customerId = await makeCustomer(db, pro);
+  await giveTickets(db, pro, customerId, past, 1);
+  const booked = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: null });
+  assert.ok(booked.ok, `bookWithHeldTicket: ${JSON.stringify(booked)}`);
+  const upcoming = await detailOf(db, pro, past, now);
+  assert.deepEqual([upcoming.usableTickets, upcoming.upcomingBooked, upcoming.livePurchases], [0, 1, 0], "the page sees the future booking");
+  refused(await makeFree(past), RDV_FREE_HAS_SALES, "the séance is still to come");
+  // The séance (3 days ahead) moves 10 days back: it is over.
+  await db.execute(
+    sql`update occurrence set starts_at = starts_at - interval '10 days', ends_at = ends_at - interval '10 days', block_start = block_start - interval '10 days', block_end = block_end - interval '10 days' where id = ${occ.id}`,
+  );
+  assert.deepEqual((await detailOf(db, pro, past, now)).upcomingBooked, 0, "once the séance is over the ticket is no longer a booking to come");
+  must(await makeFree(past), "a ticket booked on a past séance does not block « Gratuit »");
+  assert.equal((await detailOf(db, pro, past, now)).rdvFree, true);
+
+  // A shop checkout stays open 24 h; once its window has closed it is no longer live, but a payment being processed still is.
+  const lapsed = await makeType(db, pro, { rdvEnabled: true, rdvDurationMin: 15 });
+  const lapsedOffer = await makeOffer(db, pro, lapsed);
+  const startedLapsed = await startPurchase(db, { professionalId: pro.proId, offerId: lapsedOffer, customerId: await makeCustomer(db, pro) });
+  if (!startedLapsed.ok) assert.fail(`startPurchase: ${JSON.stringify(startedLapsed)}`);
+  must(await setOfferActiveCore(db, ctx, { offerId: lapsedOffer, isActive: false }, now), "offer off");
+  refused(await makeFree(lapsed), RDV_FREE_HAS_SALES, "a live checkout");
+  assert.deepEqual((await detailOf(db, pro, lapsed, now)).livePurchases, 1);
+  const later = addDaysMs(now, 2);
+  assert.deepEqual((await detailOf(db, pro, lapsed, later)).livePurchases, 0, "a lapsed checkout is not live");
+  must(await makeFree(lapsed, later), "a checkout that lapsed does not block « Gratuit »");
+
+  const processing = await makeType(db, pro, { rdvEnabled: true, rdvDurationMin: 15 });
+  const processingOffer = await makeOffer(db, pro, processing);
+  const startedProcessing = await startPurchase(db, { professionalId: pro.proId, offerId: processingOffer, customerId: await makeCustomer(db, pro) });
+  if (!startedProcessing.ok) assert.fail(`startPurchase: ${JSON.stringify(startedProcessing)}`);
+  must(await setOfferActiveCore(db, ctx, { offerId: processingOffer, isActive: false }, now), "offer off");
+  await db.execute(sql`update ticket_purchase set processing_at = now() where id = ${startedProcessing.purchaseId}`);
+  refused(await makeFree(processing, later), RDV_FREE_HAS_SALES, "a payment being processed is live whatever the checkout window says");
+  assert.deepEqual((await detailOf(db, pro, processing, later)).livePurchases, 1);
+});
+
 dbTest("updateTicketTypeCore refuses a notice longer than the effective horizon", async ({ db, pro }) => {
   const ctx = proCtx(pro);
   const now = new Date();

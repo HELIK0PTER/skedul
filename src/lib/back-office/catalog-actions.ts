@@ -7,7 +7,7 @@
  * professionalId always comes from ctx. No server-only and no next/*: the
  * "use server" wrappers live in src/server/pro-catalog.ts.
  */
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 
 import {
@@ -22,7 +22,7 @@ import {
   updateTicketType,
 } from "@/lib/booking/catalog";
 import { effectiveWindow } from "@/lib/booking-window";
-import { ts, type Db } from "@/lib/db/atomic";
+import type { Db } from "@/lib/db/atomic";
 import { ticketOffer, ticketType } from "@/lib/db/schema";
 import {
   availabilityRuleInputSchema,
@@ -38,7 +38,7 @@ import {
 } from "@/lib/tickets";
 import { parseFr } from "@/lib/zod-fr";
 
-import { readProWindow } from "./catalog-reads";
+import { readFreeBlockers, readProWindow } from "./catalog-reads";
 import { NOTICE_TOO_LONG, noticeExceedsHorizon } from "./notice";
 import { actionFail, fromEngine, type ActionFail, type CoreResult, type ProCtx } from "./result";
 
@@ -48,7 +48,7 @@ export const RDV_FREE_NO_OFFER = "Un rendez-vous gratuit ne se vend pas : retire
 /** Shown when an existing offer would be (or stay) en vente on a free type: it has to stay « Pas en vente ». */
 export const RDV_FREE_OFFER_STAYS_OFF = "Un rendez-vous gratuit ne se vend pas : cette offre doit rester hors vente.";
 export const RDV_FREE_HAS_SALES =
-  "Ce type a des offres en vente, un paiement en cours ou des tickets valides : il ne peut pas devenir gratuit.";
+  "Ce type a des offres en vente, un paiement en cours, des tickets valides ou des réservations à venir : il ne peut pas devenir gratuit.";
 
 /** Hours of one type: at most 24 ranges a day. */
 const MAX_HOURS_RULES = 7 * 24;
@@ -123,20 +123,12 @@ async function readOffer(db: Db, professionalId: string, offerId: string) {
 }
 
 /**
- * True while an offer is en vente, a checkout is in progress (it can still be paid after the offer
- * went off: fulfilment does not re-check the offer), or a ticket of the type is usable at `now`
- * (available and unexpired) or booked (it comes back available when its booking is cancelled).
+ * True while one of the facts of readFreeBlockers holds at `now`: an offer en vente, a checkout that can still be
+ * paid, a usable ticket, or a ticket booked on an occurrence to come. The page reads the same facts (canBecomeFree).
  */
 async function hasSalesOrTickets(db: Db, professionalId: string, ticketTypeId: string, now: Date): Promise<boolean> {
-  const res = await db.execute<{ blocked: boolean }>(sql`select (
-    exists (select 1 from ticket_offer where ticket_type_id = ${ticketTypeId} and professional_id = ${professionalId}
-      and is_active and archived_at is null)
-    or exists (select 1 from ticket_purchase where ticket_type_id = ${ticketTypeId} and professional_id = ${professionalId}
-      and status = 'pending')
-    or exists (select 1 from ticket where ticket_type_id = ${ticketTypeId} and professional_id = ${professionalId}
-      and (status = 'booked' or (status = 'available' and (expires_at is null or expires_at > ${ts(now)}))))
-  ) as blocked`);
-  return res.rows[0]?.blocked === true;
+  const f = await readFreeBlockers(db, professionalId, ticketTypeId, now);
+  return f.offersOnSale + f.livePurchases + f.usableTickets + f.upcomingBooked > 0;
 }
 
 /** NOTICE_TOO_LONG when an RDV type's effective notice is longer than its effective horizon. */
@@ -181,8 +173,9 @@ export async function createTicketTypeCore(
 
 /**
  * Reads the type (pro), merges the patch over its current values, parseFr the
- * full type, refuses rdvFree false → true while an offer en vente, a checkout in
- * progress, a usable ticket or a booked ticket exists (RDV_FREE_HAS_SALES), refuses an effective notice longer than
+ * full type, refuses rdvFree false → true while an offer en vente, a live checkout, a usable ticket or a ticket
+ * booked on an occurrence to come exists (RDV_FREE_HAS_SALES; tickets booked on over séances do not count, see
+ * readFreeBlockers), refuses an effective notice longer than
  * the horizon (NOTICE_TOO_LONG) when the patch carries rdvEnabled or rdvOverrides,
  * then updateTicketType.
  */

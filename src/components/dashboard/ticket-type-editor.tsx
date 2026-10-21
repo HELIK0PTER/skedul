@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  freeLockedHelp,
   isFreeSalesRefusal,
   rdvErrorField,
   rdvFormFromType,
@@ -26,7 +27,6 @@ import { BOUNDS } from "@/lib/tickets-vocab";
 import { setTypeQuestionsAction, updateTicketTypeAction } from "@/server/pro-catalog";
 
 const INFO_FIELD_PREFIXES = ["Nom :", "Description :", "Couleur :"] as const;
-const FREE_LOCKED_HELP = "Retirez d'abord ses offres en vente et ses tickets valides.";
 const QUESTIONS_HELP = "Posées au client quand il réserve un rendez-vous de ce type. Vous n'êtes jamais obligé d'y répondre.";
 
 /** « Informations »: name, description and colour of the type. A failed save keeps the form filled. */
@@ -136,7 +136,7 @@ export function RdvSettingsForm({
   ticketTypeId,
   initial,
   proWindow,
-  canBecomeFree,
+  freeLockReasons,
 }: {
   ticketTypeId: string;
   initial: {
@@ -148,7 +148,8 @@ export function RdvSettingsForm({
     rdvOverrides: WindowOverrides;
   };
   proWindow: BookingWindow;
-  canBecomeFree: boolean;
+  /** What blocks « Gratuit » right now (freeLockReasons of the page): empty when the switch is open. */
+  freeLockReasons: readonly string[];
 }) {
   const uid = useId();
   const [values, setValues] = useState<RdvFormValues>(() => rdvFormFromType(initial));
@@ -164,7 +165,7 @@ export function RdvSettingsForm({
   };
   const under = (field: RdvField): string | null => (error !== null && error.field === field ? error.message : null);
   const general = error !== null && error.field === null ? error.message : null;
-  const freeLocked = !canBecomeFree && !initial.rdvFree;
+  const freeLocked = freeLockReasons.length > 0 && !initial.rdvFree;
 
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -180,7 +181,7 @@ export function RdvSettingsForm({
       const res = await updateTicketTypeAction({ ticketTypeId, patch: built.patch });
       if (!res.ok) {
         setError({ field: rdvErrorField(res.error), message: res.error });
-        // The page could not see a checkout in progress or a booked ticket: the saved state is still « not free ».
+        // A fact appeared since the page was read (a checkout started, a ticket booked): the saved state is still « not free ».
         if (isFreeSalesRefusal(res.error)) setValues((current) => ({ ...current, free: false }));
         return;
       }
@@ -240,7 +241,7 @@ export function RdvSettingsForm({
               description="Sans ticket ni paiement, par exemple un appel découverte."
               disabled={freeLocked}
             />
-            {freeLocked && <p className="text-xs text-muted-foreground">{FREE_LOCKED_HELP}</p>}
+            {freeLocked && <p className="text-xs text-muted-foreground">{freeLockedHelp(freeLockReasons)}</p>}
           </div>
 
           <details open={rulesOpen} className="rounded-xl border border-border">

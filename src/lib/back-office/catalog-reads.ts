@@ -13,7 +13,7 @@ import { and, asc, eq, gt, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { loadQuestions, type QuestionRow } from "@/lib/booking/answers";
 import { loadTypeFacts } from "@/lib/booking/wallet";
 import type { BookingWindow } from "@/lib/booking-window";
-import type { Db } from "@/lib/db/atomic";
+import { ts, type Db } from "@/lib/db/atomic";
 import { availabilityRule, professional, ticket, ticketOffer, ticketType } from "@/lib/db/schema";
 import type { AvailabilityRuleInput, WindowOverrides } from "@/lib/tickets";
 import { offerLabel, validityLabel, type ValidityUnit } from "@/lib/tickets-vocab";
@@ -70,6 +70,10 @@ export type TicketTypeDetail = TicketTypeSummary & {
   /** any > 0 means « Supprimer » archives instead of deleting */
   usage: { tickets: number; purchases: number; rdvs: number };
   proWindow: BookingWindow;
+  /** pending purchases that can still be paid at now (see FreeBlockers) */
+  livePurchases: number;
+  /** tickets booked on a confirmed booking of a scheduled séance or RDV that has not started (see FreeBlockers) */
+  upcomingBooked: number;
 };
 
 export type TypeOption = { id: string; name: string; color: string; rdvFree: boolean };
@@ -181,6 +185,53 @@ async function readUsableCounts(db: Db, professionalId: string, now: Date, ticke
   return new Map(rows.map((r) => [r.ticketTypeId, Number(r.n)]));
 }
 
+/** What still stands in the way of the « Gratuit » switch of a type (RDV_FREE_HAS_SALES), counted at `now`. */
+export type FreeBlockers = {
+  /** offers en vente (active, not archived) */
+  offersOnSale: number;
+  /** pending purchases that can still be paid: checkout window open, or an asynchronous payment being processed */
+  livePurchases: number;
+  /** available and unexpired tickets */
+  usableTickets: number;
+  /** tickets booked on a confirmed booking (or a live pending hold) of a scheduled occurrence that has not started */
+  upcomingBooked: number;
+};
+
+/**
+ * The facts that can still change the type's tickets once it is free (spec § 2, rdv_free): an offer en vente, a
+ * checkout that can still be paid (fulfilment does not re-check the offer), a usable ticket, and a ticket booked on
+ * an occurrence to come (a client cancellation, E5, hands it back as available).
+ *
+ * Booked tickets of OVER séances are not counted: nothing in the engine ever moves a ticket out of 'booked' after its
+ * séance (« Utilisé le JJ/MM » is derived at display time), and a client cannot cancel a started séance, so such a
+ * ticket can never come back by itself. The pro can still cancel a past booking by hand (E6a) or move an attendee: the
+ * ticket then returns available on a free type, which the Q16 alert shows (a free type is not RDV-enabled for tickets).
+ * A pending purchase whose checkout window is closed is not live either (expireStalePurchases settles it).
+ * Raw SQL, outer columns written literally (no single-table select, no unqualified interpolated column).
+ */
+export async function readFreeBlockers(db: Db, professionalId: string, ticketTypeId: string, now: Date): Promise<FreeBlockers> {
+  const res = await db.execute<{ offers: number; purchases: number; usable: number; booked: number }>(sql`select
+    (select count(*)::int from ticket_offer where ticket_type_id = ${ticketTypeId} and professional_id = ${professionalId}
+      and is_active and archived_at is null) as offers,
+    (select count(*)::int from ticket_purchase where ticket_type_id = ${ticketTypeId} and professional_id = ${professionalId}
+      and status = 'pending' and (checkout_expires_at > ${ts(now)} or processing_at is not null)) as purchases,
+    (select count(*)::int from ticket where ticket_type_id = ${ticketTypeId} and professional_id = ${professionalId}
+      and status = 'available' and (expires_at is null or expires_at > ${ts(now)})) as usable,
+    (select count(*)::int from ticket t
+      join booking b on b.id = t.booking_id and b.professional_id = ${professionalId}
+      join occurrence o on o.id = b.occurrence_id and o.professional_id = ${professionalId}
+      where t.ticket_type_id = ${ticketTypeId} and t.professional_id = ${professionalId} and t.status = 'booked'
+        and (b.status = 'confirmed' or (b.status = 'pending' and b.hold_expires_at > ${ts(now)}))
+        and o.status = 'scheduled' and o.starts_at > ${ts(now)}) as booked`);
+  const row = res.rows[0];
+  return {
+    offersOnSale: Number(row?.offers ?? 0),
+    livePurchases: Number(row?.purchases ?? 0),
+    usableTickets: Number(row?.usable ?? 0),
+    upcomingBooked: Number(row?.booked ?? 0),
+  };
+}
+
 /**
  * What blocks a DELETE of the type (the NO ACTION foreign keys): tickets (also
  * those converted away: their movement still names the type), purchases and RDV
@@ -274,7 +325,7 @@ export async function getTicketTypeDetail(
 ): Promise<TicketTypeDetail | null> {
   const [one] = await loadSummaries(db, professionalId, now, ticketTypeId);
   if (!one) return null;
-  const [questions, rules, archivedOffers, usage, proWindow] = await Promise.all([
+  const [questions, rules, archivedOffers, usage, proWindow, blockers] = await Promise.all([
     loadQuestions(db, { ticketTypeId }),
     db
       .select({
@@ -294,6 +345,7 @@ export async function getTicketTypeDetail(
     readOffers(db, professionalId, { ticketTypeId, archived: true }),
     readUsage(db, professionalId, ticketTypeId),
     readProWindow(db, professionalId),
+    readFreeBlockers(db, professionalId, ticketTypeId, now),
   ]);
   if (!proWindow) return null;
   const hours = (own: boolean): AvailabilityRuleInput[] =>
@@ -316,6 +368,8 @@ export async function getTicketTypeDetail(
     archivedOffers,
     usage,
     proWindow,
+    livePurchases: blockers.livePurchases,
+    upcomingBooked: blockers.upcomingBooked,
   };
 }
 

@@ -11,7 +11,7 @@ import { TypeHoursEditor } from "@/components/dashboard/type-hours-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { canBecomeFree } from "@/lib/back-office/rdv-form";
+import { freeLockReasons } from "@/lib/back-office/rdv-form";
 import { getTicketTypePage } from "@/server/catalog-queries";
 import { requireProfessional } from "@/server/pro-context";
 
@@ -122,7 +122,7 @@ export default async function TicketTypePage({ params }: { params: Promise<{ id:
                 rdvOverrides: type.rdvOverrides,
               }}
               proWindow={type.proWindow}
-              canBecomeFree={canBecomeFree(type)}
+              freeLockReasons={freeLockReasons(type)}
             />
             {type.rdvEnabled && (
               <>

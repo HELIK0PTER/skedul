@@ -4,6 +4,7 @@
  * unit-tested; the bounds and every business rule stay with the server.
  */
 import type { TicketTypePatch } from "@/lib/back-office/catalog-actions";
+import { plural } from "@/lib/back-office/format";
 import type { WindowOverrides } from "@/lib/tickets";
 import { BOUNDS } from "@/lib/tickets-vocab";
 
@@ -80,11 +81,35 @@ export function isFreeSalesRefusal(error: string): boolean {
   return error.startsWith("Ce type a des offres en vente");
 }
 
+/** The facts of the type page that can block « Gratuit » (the same ones as readFreeBlockers, on the server). */
+export type FreeFacts = {
+  offers: readonly { isActive: boolean }[];
+  usableTickets: number;
+  livePurchases: number;
+  upcomingBooked: number;
+};
+
 /**
- * « Gratuit » can be switched on only with no offer en vente and no usable ticket. This is the form's hint: the
- * server stays the judge and also refuses for a checkout in progress or a booked ticket (RDV_FREE_HAS_SALES), which
- * the page does not carry; that refusal is shown in the form's error box.
+ * What stands in the way of « Gratuit », each with its count (« 2 offres en vente »), in a fixed order. The server
+ * stays the judge: it re-reads the same facts at the time of the save (RDV_FREE_HAS_SALES).
  */
-export function canBecomeFree(t: { offers: readonly { isActive: boolean }[]; usableTickets: number }): boolean {
-  return t.usableTickets === 0 && t.offers.every((o) => !o.isActive);
+export function freeLockReasons(t: FreeFacts): string[] {
+  const onSale = t.offers.filter((o) => o.isActive).length;
+  const reasons: string[] = [];
+  if (onSale > 0) reasons.push(plural(onSale, "offre en vente", "offres en vente"));
+  if (t.livePurchases > 0) reasons.push(plural(t.livePurchases, "paiement en cours", "paiements en cours"));
+  if (t.usableTickets > 0) reasons.push(plural(t.usableTickets, "ticket valide", "tickets valides"));
+  if (t.upcomingBooked > 0) reasons.push(plural(t.upcomingBooked, "réservation à venir", "réservations à venir"));
+  return reasons;
+}
+
+/** « Gratuit » can be switched on only when nothing in freeLockReasons remains. */
+export function canBecomeFree(t: FreeFacts): boolean {
+  return freeLockReasons(t).length === 0;
+}
+
+/** The help under the disabled « Gratuit » switch: « Pas encore possible : ce type a 2 offres en vente et 1 ticket valide. » */
+export function freeLockedHelp(reasons: readonly string[]): string {
+  const list = reasons.length > 1 ? `${reasons.slice(0, -1).join(", ")} et ${reasons[reasons.length - 1]}` : (reasons[0] ?? "");
+  return `Pas encore possible : ce type a ${list}.`;
 }

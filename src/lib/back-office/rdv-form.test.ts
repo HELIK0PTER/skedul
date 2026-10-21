@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { RDV_FREE_HAS_SALES } from "./catalog-actions";
 import { NOTICE_TOO_LONG } from "./notice";
-import { canBecomeFree, isFreeSalesRefusal, rdvErrorField, rdvFormFromType, rdvPatchFromForm, type RdvFormValues } from "./rdv-form";
+import { canBecomeFree, freeLockedHelp, freeLockReasons, isFreeSalesRefusal, rdvErrorField, rdvFormFromType, rdvPatchFromForm, type RdvFormValues } from "./rdv-form";
 
 const NO_OVERRIDES = { bookingHorizonDays: null, minNoticeMinutes: null, cancelDeadlineHours: null };
 
@@ -76,17 +76,36 @@ test("rdvErrorField: the field a French server message belongs to", () => {
   assert.equal(rdvErrorField("Marge avant : maximum 240."), "before");
   assert.equal(rdvErrorField("Marge après : maximum 240."), "after");
   assert.equal(rdvErrorField("Le délai minimum dépasse l'horizon de réservation : réduisez-le ou allongez l'horizon."), null);
-  assert.equal(
-    rdvErrorField("Ce type a des offres en vente, un paiement en cours ou des tickets valides : il ne peut pas devenir gratuit."),
-    null,
-  );
+  assert.equal(rdvErrorField(RDV_FREE_HAS_SALES), null);
 });
 
-test("canBecomeFree: no offer en vente and no usable ticket", () => {
-  assert.equal(canBecomeFree({ offers: [], usableTickets: 0 }), true);
-  assert.equal(canBecomeFree({ offers: [{ isActive: false }], usableTickets: 0 }), true, "an offer taken off sale");
-  assert.equal(canBecomeFree({ offers: [{ isActive: false }, { isActive: true }], usableTickets: 0 }), false);
-  assert.equal(canBecomeFree({ offers: [], usableTickets: 2 }), false);
+const NO_FACTS = { offers: [], usableTickets: 0, livePurchases: 0, upcomingBooked: 0 };
+
+test("canBecomeFree: no offer en vente, no live payment, no usable ticket, no booking to come", () => {
+  assert.equal(canBecomeFree(NO_FACTS), true);
+  assert.equal(canBecomeFree({ ...NO_FACTS, offers: [{ isActive: false }] }), true, "an offer taken off sale");
+  assert.equal(canBecomeFree({ ...NO_FACTS, offers: [{ isActive: false }, { isActive: true }] }), false);
+  assert.equal(canBecomeFree({ ...NO_FACTS, usableTickets: 2 }), false);
+  assert.equal(canBecomeFree({ ...NO_FACTS, livePurchases: 1 }), false, "a checkout that can still be paid");
+  assert.equal(canBecomeFree({ ...NO_FACTS, upcomingBooked: 1 }), false, "a ticket booked on a séance to come comes back on a cancellation");
+});
+
+test("freeLockReasons and freeLockedHelp name the facts that really block « Gratuit », with their counts", () => {
+  assert.deepEqual(freeLockReasons(NO_FACTS), []);
+  assert.deepEqual(
+    freeLockReasons({ offers: [{ isActive: true }, { isActive: false }, { isActive: true }], usableTickets: 1, livePurchases: 2, upcomingBooked: 1 }),
+    ["2 offres en vente", "2 paiements en cours", "1 ticket valide", "1 réservation à venir"],
+  );
+  assert.equal(freeLockedHelp(["1 ticket valide"]), "Pas encore possible : ce type a 1 ticket valide.");
+  assert.equal(
+    freeLockedHelp(["2 offres en vente", "1 réservation à venir"]),
+    "Pas encore possible : ce type a 2 offres en vente et 1 réservation à venir.",
+  );
+  assert.equal(
+    freeLockedHelp(["2 offres en vente", "1 paiement en cours", "3 tickets valides"]),
+    "Pas encore possible : ce type a 2 offres en vente, 1 paiement en cours et 3 tickets valides.",
+  );
+  assert.doesNotMatch(freeLockedHelp(["1 ticket valide"]), /[\u2013\u2014]/);
 });
 
 test("isFreeSalesRefusal: recognises the server's refusal of « Gratuit » (its real text), and nothing else", () => {
