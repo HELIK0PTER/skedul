@@ -28,7 +28,7 @@ export function SuspensionBadge({
   banExpires: Date | null;
 }) {
   if (!isSuspended({ banned, banExpires })) {
-    return <span className="text-sm text-muted-foreground">Actif</span>;
+    return <span className="whitespace-nowrap text-sm text-muted-foreground">Actif</span>;
   }
   return (
     <Badge variant="warning">

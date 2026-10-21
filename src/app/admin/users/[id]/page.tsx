@@ -59,11 +59,11 @@ export default async function AdminUserPage({
 
       <div className="mb-6 flex flex-wrap items-center gap-4">
         <Avatar name={u.name} src={u.image} className="size-12 text-base" />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-56">
           <h1 className="truncate text-2xl font-bold tracking-tight">{u.name}</h1>
           <p className="truncate text-sm text-muted-foreground">{u.email}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <RoleBadge role={u.role} />
           <SuspensionBadge banned={u.banned} banExpires={u.banExpires} />
         </div>

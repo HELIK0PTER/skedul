@@ -1,4 +1,5 @@
 import { ADMIN_TZ } from "@/lib/analytics";
+import { plural } from "@/lib/back-office/format";
 import { dayKeyInTz, formatDateShort, instantFromWallClock } from "@/lib/datetime";
 
 export type DailyPoint = { day: string; value: number };
@@ -64,6 +65,16 @@ export function mergeMoney(
     .filter(([, cents]) => cents > 0)
     .map(([currency, cents]) => ({ currency, cents }))
     .sort((a, b) => b.cents - a.cents);
+}
+
+/** Hint of the « Pros » tile: « 1 actif sur 30 jours », « 12 actifs sur 30 jours » (0 and 1 are singular). */
+export function activeProsHint(n: number): string {
+  return `${plural(n, "actif", "actifs")} sur 30 jours`;
+}
+
+/** Detail line of a day of the visitors chart: « 1 page vue », « 12 pages vues ». */
+export function pageViewsDetail(n: number): string {
+  return plural(n, "page vue", "pages vues");
 }
 
 export function stripeMode(

@@ -99,7 +99,7 @@ export function UserActions({
         type="button"
         size="sm"
         variant={variant}
-        className="w-full justify-start"
+        className="h-auto min-h-8 w-full justify-start whitespace-normal py-1.5 text-left leading-snug"
         disabled={pending}
         onClick={() => setConfirming(id)}
       >

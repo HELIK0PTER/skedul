@@ -9,9 +9,11 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireAdmin } from "@/lib/admin";
 import {
+  activeProsHint,
   dayLabel,
   fillDailySeries,
   lastDayKeys,
+  pageViewsDetail,
   startOfDayKey,
 } from "@/lib/admin-metrics";
 import { formatMoney } from "@/lib/utils";
@@ -77,7 +79,7 @@ export default async function AdminOverviewPage() {
           icon={Store}
           label="Pros"
           value={fmt(stats.pros)}
-          hint={`${fmt(stats.activePros30d)} actifs sur 30 jours`}
+          hint={activeProsHint(stats.activePros30d)}
         />
         <StatCard
           icon={CalendarCheck}
@@ -132,7 +134,7 @@ export default async function AdminOverviewPage() {
                 key: d.day,
                 label: dayLabel(d.day),
                 value: d.value,
-                detail: `${fmt(views[i].value)} pages vues`,
+                detail: pageViewsDetail(views[i].value),
               }))}
             />
           </CardContent>
