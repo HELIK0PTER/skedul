@@ -41,7 +41,7 @@ test("revenueDisplay: the other currencies come after, biggest first; rows of on
 
 test("kpiTiles: the four tiles, exact labels, values, hints and links", () => {
   assert.deepEqual(kpiTiles(kpi()), [
-    { key: "seances", label: "Séances à venir (7 j)", value: "4", hint: "dont 9 inscrits", href: "/dashboard/planning" },
+    { key: "seances", label: "Séances et rendez-vous (7 j)", value: "4", hint: "dont 9 inscrits", href: "/dashboard/planning" },
     { key: "tickets", label: "Tickets en circulation", value: "37", hint: null, href: "/dashboard/clients?filter=tickets" },
     { key: "clients", label: "Clients", value: "12", hint: null, href: "/dashboard/clients" },
     { key: "revenue", label: "Encaissé", value: formatMoney(47500, "eur"), hint: null, href: "/dashboard/payments" },

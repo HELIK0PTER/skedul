@@ -8,6 +8,7 @@ import type { AlertTone } from "@/lib/back-office/labels";
 import { formatMoney } from "@/lib/utils";
 
 export type KpiInput = {
+  /** the event séances of the next 7 days and the booked RDVs: the first tile says both */
   upcomingSeances7d: number;
   upcomingRegistrants7d: number;
   ticketsInCirculation: number;
@@ -48,7 +49,7 @@ export function kpiTiles(input: KpiInput): KpiTile[] {
   return [
     {
       key: "seances",
-      label: "Séances à venir (7 j)",
+      label: "Séances et rendez-vous (7 j)",
       value: formatCount(input.upcomingSeances7d),
       hint: `dont ${plural(input.upcomingRegistrants7d, "inscrit", "inscrits")}`,
       href: "/dashboard/planning",
