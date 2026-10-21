@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { BOOKING_MODES, QUESTION_TYPES, VALIDITY_UNITS } from "@/lib/tickets-vocab";
+import { BOOKING_MODES, QUESTION_TYPES } from "@/lib/tickets-vocab";
 
 import {
   ALERT_GROUP_NOTES,
@@ -11,7 +11,6 @@ import {
   MODE_SHORT_LABELS,
   ORIGIN_LABELS,
   QUESTION_TYPE_LABELS,
-  VALIDITY_UNIT_LABELS,
   WEEKDAY_LETTERS,
   WEEKDAY_NAMES,
   WEEK_ORDER,
@@ -30,11 +29,9 @@ test("booking modes have a short label and a help text, exactly", () => {
   assert.deepEqual(Object.keys(MODE_HELP).sort(), [...BOOKING_MODES].sort());
 });
 
-test("question types and validity units are labelled for every value of the vocabulary", () => {
+test("question types are labelled for every value of the vocabulary", () => {
   assert.deepEqual(QUESTION_TYPE_LABELS, { text: "Texte libre", choice: "Choix dans une liste", boolean: "Oui ou non" });
-  assert.deepEqual(VALIDITY_UNIT_LABELS, { day: "jours", month: "mois" });
   assert.deepEqual(Object.keys(QUESTION_TYPE_LABELS).sort(), [...QUESTION_TYPES].sort());
-  assert.deepEqual(Object.keys(VALIDITY_UNIT_LABELS).sort(), [...VALIDITY_UNITS].sort());
 });
 
 test("the week starts on Monday and every weekday is named", () => {
@@ -72,7 +69,6 @@ test("no label carries a dash", () => {
     ...Object.values(MODE_SHORT_LABELS),
     ...Object.values(MODE_HELP),
     ...Object.values(QUESTION_TYPE_LABELS),
-    ...Object.values(VALIDITY_UNIT_LABELS),
     ...Object.values(WEEKDAY_NAMES),
     ...Object.values(ALERT_LABELS),
     ...Object.values(ALERT_SHORT_LABELS),

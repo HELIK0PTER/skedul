@@ -1,15 +1,5 @@
 import { TZDate } from "@date-fns/tz";
 
-export const DAYS_FR = [
-  "Dimanche",
-  "Lundi",
-  "Mardi",
-  "Mercredi",
-  "Jeudi",
-  "Vendredi",
-  "Samedi",
-];
-
 /** A day of the month in French: the first takes the ordinal (« 1er »), every other day keeps its number. */
 export function dayOrdinal(day: number): string {
   return day === 1 ? "1er" : String(day);

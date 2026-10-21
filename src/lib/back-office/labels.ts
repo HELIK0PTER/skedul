@@ -3,7 +3,7 @@
  * tones, ticket origins). Pure; imports types from the vocabulary only. Labels
  * that also reach the public pages or the e-mails live in tickets-vocab.ts.
  */
-import type { BookingMode, QuestionType, ValidityUnit } from "@/lib/tickets-vocab";
+import type { BookingMode, QuestionType } from "@/lib/tickets-vocab";
 
 export const MODE_SHORT_LABELS: Record<BookingMode, string> = {
   tickets: "Sur tickets",
@@ -21,11 +21,6 @@ export const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
   text: "Texte libre",
   choice: "Choix dans une liste",
   boolean: "Oui ou non",
-};
-
-export const VALIDITY_UNIT_LABELS: Record<ValidityUnit, string> = {
-  day: "jours",
-  month: "mois",
 };
 
 /** Monday first (day-of-week 0 is Sunday, as in availability_rule and recurrence). */

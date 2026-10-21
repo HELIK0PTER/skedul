@@ -8,7 +8,7 @@ import { updateOccurrence } from "@/lib/booking/series";
 import { moveAttendee } from "@/lib/booking/wallet";
 import { addDays, dayOfWeek, instantAt } from "@/lib/civil-date";
 import type { Db } from "@/lib/db/atomic";
-import { event, question, timeOff } from "@/lib/db/schema";
+import { event, occurrence, question, timeOff } from "@/lib/db/schema";
 import { addMinutes, createTestPro, dbTest, deleteTestUser, type TestPro } from "@/test/db";
 import { dayIn, giveTickets, makeCustomer, makeEvent, makeType } from "@/test/fixtures";
 import {
@@ -25,9 +25,23 @@ import {
   rowType,
 } from "@/test/rows";
 
-import { getPlanningItem, getPlanningRange, moveTargets, registerOptions, searchCustomers } from "./planning-reads";
+import { getPlanningRange, moveTargets, registerOptions, searchCustomers, type PlanningItem } from "./planning-reads";
 
 const DAY = 86_400_000;
+
+/**
+ * One planning item by id, through the range read the app uses (the range is the occurrence's own): null when the
+ * occurrence is unknown or the read leaves it out (another pro's, a cancelled RDV, a phantom RDV).
+ */
+async function planningItem(db: Db, proId: string, occurrenceId: string, now: Date): Promise<PlanningItem | null> {
+  const [o] = await db
+    .select({ startsAt: occurrence.startsAt, endsAt: occurrence.endsAt })
+    .from(occurrence)
+    .where(eq(occurrence.id, occurrenceId));
+  if (!o) return null;
+  const { items } = await getPlanningRange(db, proId, { start: o.startsAt, end: o.endsAt }, now);
+  return items.find((i) => i.id === occurrenceId) ?? null;
+}
 
 /**
  * A pending booking (ticket coverage) backed by a purchase of `typeId` through `offerId`, as « buy and book » leaves
@@ -105,10 +119,10 @@ dbTest("range: séances and RDVs kept, cancelled RDV dropped, cancelled séance 
 
     // Tenancy: the other pro's séance is neither in the range nor readable by id.
     assert.ok(!items.some((i) => i.id === theirs.id));
-    assert.equal(await getPlanningItem(db, pro.proId, theirs.id, now), null);
-    assert.equal((await getPlanningItem(db, other.proId, theirs.id, now))?.id, theirs.id);
-    assert.equal(await getPlanningItem(db, pro.proId, "inconnu", now), null);
-    assert.equal((await getPlanningItem(db, pro.proId, seance.id, now))?.title, "Altinha débutants");
+    assert.equal(await planningItem(db, pro.proId, theirs.id, now), null);
+    assert.equal((await planningItem(db, other.proId, theirs.id, now))?.id, theirs.id);
+    assert.equal(await planningItem(db, pro.proId, "inconnu", now), null);
+    assert.equal((await planningItem(db, pro.proId, seance.id, now))?.title, "Altinha débutants");
   } finally {
     await deleteTestUser(db, other.userId);
   }
@@ -200,7 +214,7 @@ dbTest("attendees: pending and confirmed with answers and ticket, cancelled ones
   );
   assert.ok(left.ok, JSON.stringify(left));
 
-  const found = await getPlanningItem(db, pro.proId, occ.id, now);
+  const found = await planningItem(db, pro.proId, occ.id, now);
   assert.ok(found);
   assert.equal(found.seatsTaken, 2);
   assert.deepEqual(
@@ -232,7 +246,7 @@ dbTest("attendee ticket: purchased is true when the ticket comes from a purchase
   const bookingId = await rowBooking(db, pro, { occurrenceId: occId, customerId, coverage: "ticket" });
   const ticketId = await rowTicket(db, pro, { customerId, ticketTypeId: typeId, status: "booked", bookingId, purchaseId });
 
-  const found = await getPlanningItem(db, pro.proId, occId, now);
+  const found = await planningItem(db, pro.proId, occId, now);
   assert.deepEqual(found?.attendees[0].ticket, { id: ticketId, typeName: "Cours collectif", expiresAt: null, purchased: true });
 });
 
@@ -255,14 +269,14 @@ dbTest("seatsShown counts an elapsed hold as a free seat; the pending attendee i
     holdExpiresAt: addMinutes(now, 30),
   });
 
-  const live = await getPlanningItem(db, pro.proId, occId, now);
+  const live = await planningItem(db, pro.proId, occId, now);
   assert.ok(live);
   assert.deepEqual([live.seatsTaken, live.elapsedHolds, live.seatsShown, live.capacity], [2, 0, 1, 3]);
   const pending = live.attendees.find((a) => a.bookingId === pendingId);
   assert.deepEqual([pending?.status, pending?.coverage, pending?.ticket], ["pending", "ticket", null]);
   assert.deepEqual(pending?.holdExpiresAt, addMinutes(now, 30));
 
-  const lapsed = await getPlanningItem(db, pro.proId, occId, addMinutes(now, 60));
+  const lapsed = await planningItem(db, pro.proId, occId, addMinutes(now, 60));
   assert.deepEqual([lapsed?.seatsTaken, lapsed?.elapsedHolds, lapsed?.seatsShown], [2, 1, 2]);
   assert.equal(lapsed?.attendees.length, 2, "the lapsed hold is still a row until it is released");
 });
@@ -314,7 +328,7 @@ dbTest("elapsed holds are counted per séance, in the range read and in the move
   );
 
   // The same four séances as « Déplacer » targets of a guest booking (every target is accepted).
-  const [sourceBooking] = (await getPlanningItem(db, pro.proId, source, now))?.attendees ?? [];
+  const [sourceBooking] = (await planningItem(db, pro.proId, source, now))?.attendees ?? [];
   assert.ok(sourceBooking);
   const res = await moveTargets(db, pro.proId, sourceBooking.bookingId, now);
   assert.deepEqual(
@@ -361,18 +375,18 @@ dbTest("phantom RDV: a lapsed hold alone leaves nothing on the planning; a live 
       [seance, "seance", 1, 1, 3],
     ],
   );
-  assert.equal(await getPlanningItem(db, pro.proId, abandoned, now), null, "the abandoned RDV is not readable by id either");
+  assert.equal(await planningItem(db, pro.proId, abandoned, now), null, "the abandoned RDV is not readable by id either");
   assert.deepEqual(
-    (await getPlanningItem(db, pro.proId, holding, now))?.attendees.map((a) => a.status),
+    (await planningItem(db, pro.proId, holding, now))?.attendees.map((a) => a.status),
     ["pending"],
   );
-  assert.equal((await getPlanningItem(db, pro.proId, confirmed, now))?.kind, "rdv");
-  assert.equal((await getPlanningItem(db, pro.proId, seance, now))?.attendees.length, 1);
+  assert.equal((await planningItem(db, pro.proId, confirmed, now))?.kind, "rdv");
+  assert.equal((await planningItem(db, pro.proId, seance, now))?.attendees.length, 1);
 
   // The hold is read against the given now: ten minutes earlier the abandoned RDV was still waiting for its payment,
   // and the live hold of the other one lapses an hour later.
-  assert.equal((await getPlanningItem(db, pro.proId, abandoned, addMinutes(now, -30)))?.kind, "rdv");
-  assert.equal(await getPlanningItem(db, pro.proId, holding, addMinutes(now, 60)), null);
+  assert.equal((await planningItem(db, pro.proId, abandoned, addMinutes(now, -30)))?.kind, "rdv");
+  assert.equal(await planningItem(db, pro.proId, holding, addMinutes(now, 60)), null);
 });
 
 dbTest("attendees: the customer join is scoped to the pro too", async ({ db, pro }) => {
@@ -384,7 +398,7 @@ dbTest("attendees: the customer join is scoped to the pro too", async ({ db, pro
   const foreign = await rowCustomer(db, other, { name: "Client de l'autre" });
   const stray = await rowBooking(db, pro, { occurrenceId: occId, customerId: foreign });
   try {
-    const found = await getPlanningItem(db, pro.proId, occId, now);
+    const found = await planningItem(db, pro.proId, occId, now);
     assert.deepEqual(found?.attendees.map((a) => a.name), ["Marina Costa"]);
   } finally {
     // booking.customer_id has no cascade: the stray row has to go before the other pro does.
@@ -419,8 +433,8 @@ dbTest("item facts: location, accepted types, questions, recurring and canRestor
     { id: nanoid(), professionalId: pro.proId, eventId, label: "Niveau", type: "choice", options: ["Débutant", "Confirmé"], required: false, position: 0 },
   ]);
 
-  const first = await getPlanningItem(db, pro.proId, occurrences[0].id, now);
-  const second = await getPlanningItem(db, pro.proId, occurrences[1].id, now);
+  const first = await planningItem(db, pro.proId, occurrences[0].id, now);
+  const second = await planningItem(db, pro.proId, occurrences[1].id, now);
   assert.ok(first && second);
   assert.deepEqual([first.location, first.eventLocation, first.locationOverride], ["Salle A", "Salle A", null]);
   assert.deepEqual([second.location, second.eventLocation, second.locationOverride], ["Salle B", "Salle A", "Salle B"]);
@@ -438,20 +452,19 @@ dbTest("item facts: location, accepted types, questions, recurring and canRestor
     const res = await cancelOccurrence(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: o.id }, now);
     assert.ok(res.ok, JSON.stringify(res));
   }
-  assert.equal((await getPlanningItem(db, pro.proId, occurrences[0].id, now))?.canRestore, true);
-  assert.equal((await getPlanningItem(db, pro.proId, occurrences[1].id, now))?.canRestore, false, "past the until_date");
+  assert.equal((await planningItem(db, pro.proId, occurrences[0].id, now))?.canRestore, true);
+  assert.equal((await planningItem(db, pro.proId, occurrences[1].id, now))?.canRestore, false, "past the until_date");
 
   const archivedEvent = await rowEvent(db, pro, { archivedAt: now });
   const archivedSeance = await rowSeance(db, pro, archivedEvent, { status: "cancelled" });
-  assert.equal((await getPlanningItem(db, pro.proId, archivedSeance, now))?.canRestore, false, "archived segment");
+  assert.equal((await planningItem(db, pro.proId, archivedSeance, now))?.canRestore, false, "archived segment");
   const liveEvent = await rowEvent(db, pro);
   const pastSeance = await rowSeance(db, pro, liveEvent, { status: "cancelled", startsAt: new Date(now.getTime() - 2 * DAY) });
-  assert.equal((await getPlanningItem(db, pro.proId, pastSeance, now))?.canRestore, false, "past séance");
+  assert.equal((await planningItem(db, pro.proId, pastSeance, now))?.canRestore, false, "past séance");
 
   const rdvType = await rowRdvType(db, pro, { name: "Cours particulier" });
   const gone = await rowRdv(db, pro, rdvType, { status: "cancelled", seatsTaken: 0 });
-  const rdv = await getPlanningItem(db, pro.proId, gone, now);
-  assert.deepEqual([rdv?.kind, rdv?.status, rdv?.canRestore, rdv?.title], ["rdv", "cancelled", false, "Cours particulier"]);
+  assert.equal(await planningItem(db, pro.proId, gone, now), null, "a cancelled RDV is not on the planning");
 });
 
 dbTest("timeDetached: a séance moved alone reads true, a normal séance and an RDV read false", async ({ db, pro }) => {
@@ -485,7 +498,7 @@ dbTest("timeDetached: a séance moved alone reads true, a normal séance and an 
   const rdv = await rowRdv(db, pro, rdvType, { startsAt: instantAt(dayIn(pro, 2), 840, pro.tz) });
   await rowBooking(db, pro, { occurrenceId: rdv, customerId: await rowCustomer(db, pro) });
 
-  const read = async (id: string) => (await getPlanningItem(db, pro.proId, id, now))?.timeDetached;
+  const read = async (id: string) => (await planningItem(db, pro.proId, id, now))?.timeDetached;
   assert.deepEqual(
     [await read(first.id), await read(second.id), await read(third.id), await read(rdv)],
     [false, true, false, false],

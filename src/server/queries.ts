@@ -12,9 +12,11 @@ import { getDashboardData } from "@/lib/back-office/dashboard-reads";
 import type { BookingSettings } from "@/lib/tickets";
 
 /*
- * Tickets & événements, P2: the readers of the dropped booking tables
- * (dashboard, clients, payments, planning, prestations, packs, public booking)
- * are gone. P3 rebuilds the pro readers, P4 the public ones.
+ * Server-side readers of the pro back-office: thin wrappers that bind the db and
+ * the clock to the testable cores in src/lib/back-office (dashboard, payments),
+ * plus the few reads that have no core of their own. The planning, clients,
+ * catalogue and events pages read through src/server/*-queries.ts. The public
+ * pages' readers are P4's.
  */
 
 export type AvailabilityRow = { dayOfWeek: number; startMinute: number; endMinute: number };

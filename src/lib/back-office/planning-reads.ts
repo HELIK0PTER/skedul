@@ -1,7 +1,7 @@
 /**
  * Planning reads (spec § 7, § 13.2): the week's occurrences with their
- * attendees, one occurrence, the customer search and the two « Inscrire » /
- * « Déplacer » option reads. Testable core: takes `db`, imports neither
+ * attendees, the customer search and the two « Inscrire » / « Déplacer »
+ * option reads. Testable core: takes `db`, imports neither
  * server-only, next/* nor the db index. Every query filters on professional_id
  * and every id that comes from the caller is checked against it.
  */
@@ -380,18 +380,6 @@ export async function getPlanningRange(
       .orderBy(asc(timeOff.startAt), asc(timeOff.id)),
   ]);
   return { items: await loadItems(db, professionalId, rows, now), timeOff: offRows };
-}
-
-/** One occurrence of the pro (null otherwise, or for a phantom RDV), cancelled or not. */
-export async function getPlanningItem(
-  db: Db,
-  professionalId: string,
-  occurrenceId: string,
-  now: Date,
-): Promise<PlanningItem | null> {
-  const rows = await selectOccurrences(db, and(eq(occurrence.id, occurrenceId), eq(occurrence.professionalId, professionalId)));
-  const [item] = await loadItems(db, professionalId, rows, now);
-  return item ?? null;
 }
 
 /* ───────────────────────── Customers ───────────────────────── */
