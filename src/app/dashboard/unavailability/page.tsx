@@ -8,6 +8,7 @@ import {
 import { formatTimeRange } from "@/lib/back-office/format";
 import { todayKey } from "@/lib/civil-date";
 import { dayKeyInTz, formatDateLong } from "@/lib/datetime";
+import { timeZoneLabel } from "@/lib/timezones";
 import { coveredDayKeys } from "@/lib/timeoff";
 import { requireProfessional } from "@/server/pro-context";
 import { getProTimeOff } from "@/server/queries";
@@ -43,7 +44,7 @@ export default async function UnavailabilityPage() {
     <>
       <PageHeader
         title="Indisponibilités"
-        description={`Bloquez des journées ou des plages horaires (fuseau ${tz}). Ces créneaux n'apparaîtront pas pour vos clients.`}
+        description={`Bloquez des journées ou des plages horaires (fuseau : ${timeZoneLabel(tz)}). Ces créneaux n'apparaîtront pas pour vos clients.`}
       />
       <UnavailabilityManager
         markedDays={markedDays}

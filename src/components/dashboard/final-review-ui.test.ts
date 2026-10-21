@@ -26,3 +26,9 @@ test("the mobile day chips name their séances and rendez-vous apart (final revi
   assert.match(calendar, /dayCountText\(/, "the chip's name uses the counted words");
   assert.doesNotMatch(calendar, /plural\(count, "séance", "séances"\)/, "a rendez-vous is no longer counted as a séance");
 });
+
+test("« Indisponibilités » shows the pro's zone by its label, like « Disponibilités » (final review UI-15)", () => {
+  const page = source("src/app/dashboard/unavailability/page.tsx");
+  assert.match(page, /\(fuseau : \$\{timeZoneLabel\(tz\)\}\)/, "the zone label, not the raw IANA id");
+  assert.doesNotMatch(page, /\(fuseau \$\{tz\}\)/, "no raw zone id in the description");
+});
