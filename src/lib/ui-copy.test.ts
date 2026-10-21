@@ -87,6 +87,12 @@ const OPTIONAL = [
   "src/server/pro.ts",
   "src/server/pro-context.ts",
   "src/server/pro-clients.ts",
+  "src/server/client-queries.ts",
+  "src/server/notify.ts",
+  "src/lib/auth.ts",
+  "src/components/auth/forgot-password-form.tsx",
+  // the shared P4 test helper (Task 5 creates it, Task 7 extends it)
+  "src/test/public.ts",
 ];
 
 /** 1-based numbers of the lines holding a dash (LF or CRLF). */
@@ -137,6 +143,7 @@ test("the scan covers the existing files P4 turns into client copy (COV-I13)", (
   for (const file of [
     "src/lib/auth-messages.ts",
     "src/lib/auth-options.ts",
+    "src/lib/auth.ts",
     "src/lib/entry.ts",
     "src/lib/env.ts",
     "src/lib/email.ts",
@@ -150,11 +157,14 @@ test("the scan covers the existing files P4 turns into client copy (COV-I13)", (
     "src/lib/booking/nightly.ts",
     "src/lib/booking/release.ts",
     "src/lib/booking/wallet.ts",
+    "src/server/client-queries.ts",
     "src/server/entry.ts",
+    "src/server/notify.ts",
     "src/server/pro.ts",
     "src/server/pro-clients.ts",
     "src/server/pro-context.ts",
     "src/components/auth/auth-form.tsx",
+    "src/components/auth/forgot-password-form.tsx",
     "src/components/auth/link-google-form.tsx",
     "src/components/ui/dialog.tsx",
     "src/app/(auth)/sign-in/page.tsx",
@@ -166,6 +176,8 @@ test("the scan covers the existing files P4 turns into client copy (COV-I13)", (
   ]) {
     assert.ok(scanned.has(file), `${file} is not scanned`);
   }
+  // Not created yet (Task 5 creates it): listed ahead of time, so it is scanned the moment it exists.
+  assert.ok(OPTIONAL.includes("src/test/public.ts"), "src/test/public.ts is not listed in OPTIONAL");
 });
 
 test("OPTIONAL lists no path twice and no path the always-walked directories already hold", () => {
