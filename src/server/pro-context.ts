@@ -7,6 +7,7 @@ import { after } from "next/server";
 import {
   UNEXPECTED_ERROR,
   actionFail,
+  impersonationLogLine,
   revalidationTargets,
   withoutEffects,
   type ActionResult,
@@ -55,6 +56,7 @@ export async function requireProContext(): Promise<ProCtx> {
     timezone: pro.timezone,
     currency: pro.currency,
     slug: pro.slug,
+    impersonatedBy: session.session.impersonatedBy ?? null,
   };
 }
 
@@ -65,7 +67,9 @@ export async function requireProContext(): Promise<ProCtx> {
  * with UNEXPECTED_ERROR. On success: the dashboard layout is revalidated (and
  * every public page under /[slug] when `publicPage`), the effects run after the response
  * (after()), and the browser receives the result without them. A failure is
- * returned as it is: no revalidation, no effect.
+ * returned as it is: no revalidation, no effect. While an admin impersonates the
+ * pro, each successful action logs « [pro] <name> by admin <id> for pro <id> »
+ * (ids only).
  */
 export async function runProAction<T extends object>(
   name: string,
@@ -82,6 +86,8 @@ export async function runProAction<T extends object>(
     return actionFail(UNEXPECTED_ERROR);
   }
   if (!res.ok) return res;
+  const impersonation = impersonationLogLine(name, ctx);
+  if (impersonation) console.info(impersonation);
   for (const target of revalidationTargets(opts.publicPage === true)) revalidatePath(target.path, target.type);
   const effects = res.effects;
   if (effects.length > 0) after(() => runEffects(effects));

@@ -8,14 +8,31 @@ import type { Effect, EngineFail } from "@/lib/booking/types";
 import { proErrorMessage, type ProErrorContext } from "@/lib/pro-messages";
 import type { EngineErrorCode } from "@/lib/tickets-vocab";
 
-/** Who acts: always built by requireProContext() from the session, never from input. */
+/**
+ * Who acts: always built by requireProContext() from the session, never from
+ * input. `impersonatedBy` is the admin user id while an admin impersonates the
+ * pro (decision 10: the actions stay allowed, `actorUserId` is the pro's user),
+ * absent or null otherwise.
+ */
 export type ProCtx = {
   professionalId: string;
   actorUserId: string;
   timezone: string;
   currency: string;
   slug: string;
+  impersonatedBy?: string | null;
 };
+
+/**
+ * The server-log line of a successful action made while an admin impersonates
+ * the pro (final review SEC-6: the pro's own user id is the actor, so without
+ * it nothing says an admin did it). Ids only, no name or address; null when
+ * nobody impersonates.
+ */
+export function impersonationLogLine(name: string, ctx: ProCtx): string | null {
+  if (!ctx.impersonatedBy) return null;
+  return `[pro] ${name} by admin ${ctx.impersonatedBy} for pro ${ctx.professionalId}`;
+}
 
 export type ActionFail = { ok: false; error: string; code?: EngineErrorCode };
 export type ActionResult<T extends object = object> = ({ ok: true } & T) | ActionFail;

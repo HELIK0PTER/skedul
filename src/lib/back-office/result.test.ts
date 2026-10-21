@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { proCtx } from "../../test/pro-ctx";
-import { UNEXPECTED_ERROR, actionFail, fromEngine, revalidationTargets, withoutEffects, type CoreResult } from "./result";
+import {
+  UNEXPECTED_ERROR,
+  actionFail,
+  fromEngine,
+  impersonationLogLine,
+  revalidationTargets,
+  withoutEffects,
+  type CoreResult,
+} from "./result";
 
 test("actionFail omits the code unless one is given", () => {
   assert.deepEqual(actionFail("Impossible."), { ok: false, error: "Impossible." });
@@ -80,4 +88,13 @@ test("proCtx maps a test pro to the context requireProContext builds", () => {
     proCtx({ userId: "u1", proId: "p1", slug: "t-abc", tz: "America/Los_Angeles", currency: "eur" }),
     { professionalId: "p1", actorUserId: "u1", timezone: "America/Los_Angeles", currency: "eur", slug: "t-abc" },
   );
+});
+
+test("impersonationLogLine: one line with ids only while an admin impersonates, nothing otherwise (SEC-6)", () => {
+  const pro = { userId: "user_pro", proId: "pro_1", tz: "Europe/Paris", currency: "eur", slug: "alice" };
+  assert.equal(impersonationLogLine("registerAttendee", proCtx(pro)), null);
+  assert.equal(impersonationLogLine("registerAttendee", { ...proCtx(pro), impersonatedBy: null }), null);
+  const line = impersonationLogLine("registerAttendee", { ...proCtx(pro), impersonatedBy: "user_admin" });
+  assert.equal(line, "[pro] registerAttendee by admin user_admin for pro pro_1");
+  assert.ok(line !== null && !line.includes("@") && !line.includes("\n"));
 });

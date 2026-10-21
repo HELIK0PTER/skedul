@@ -25,3 +25,11 @@ test("requireProContext reads the session fresh and refuses a suspended user lik
   assert.match(body, /actingSession\(/, "a suspended user is refused");
   assert.match(body, /redirect\("\/sign-in"\)/, "with the redirect of no session");
 });
+
+test("requireProContext carries the impersonating admin in the context, runProAction logs each successful action of one (SEC-6)", () => {
+  assert.match(bodyOf("requireProContext"), /impersonatedBy: session\.session\.impersonatedBy \?\? null/);
+  const run = bodyOf("runProAction");
+  assert.match(run, /impersonationLogLine\(name, ctx\)/);
+  // After the failure return: a refused or failed action leaves no « done » line.
+  assert.ok(run.indexOf("if (!res.ok) return res;") < run.indexOf("impersonationLogLine"), "logged on success only");
+});
