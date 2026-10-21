@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { BOUNDS } from "@/lib/tickets-vocab";
 
-import { NOTICE_PRESETS, NOTICE_TOO_LONG, noticeExceedsHorizon, noticeLabel } from "./notice";
+import { NOTICE_PRESETS, NOTICE_TOO_LONG, noticeExceedsHorizon, noticeLabel, settingsWouldClose } from "./notice";
 
 test("the presets are the twelve of Q13, in order", () => {
   assert.deepEqual(NOTICE_PRESETS, [
@@ -54,4 +54,16 @@ test("noticeExceedsHorizon is true only when the notice is longer than the horiz
 
 test("NOTICE_TOO_LONG is the exact French sentence", () => {
   assert.equal(NOTICE_TOO_LONG, "Le délai minimum dépasse l'horizon de réservation : réduisez-le ou allongez l'horizon.");
+});
+
+test("settingsWouldClose names the type or the event whose booking window the new settings would close", () => {
+  assert.equal(
+    settingsWouldClose("type", "Cours particulier"),
+    "Ces réglages fermeraient les réservations en ligne du type « Cours particulier » : son délai minimum dépasserait son horizon. Modifiez d'abord ses règles de réservation.",
+  );
+  assert.equal(
+    settingsWouldClose("event", "Roda du samedi"),
+    "Ces réglages fermeraient les réservations en ligne de l'événement « Roda du samedi » : son délai minimum dépasserait son horizon. Modifiez d'abord ses règles de réservation.",
+  );
+  assert.doesNotMatch(settingsWouldClose("type", "X") + settingsWouldClose("event", "Y"), /[\u2013\u2014]/);
 });

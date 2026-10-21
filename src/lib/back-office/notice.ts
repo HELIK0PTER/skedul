@@ -41,3 +41,9 @@ export function noticeExceedsHorizon(minNoticeMinutes: number, bookingHorizonDay
 
 export const NOTICE_TOO_LONG =
   "Le délai minimum dépasse l'horizon de réservation : réduisez-le ou allongez l'horizon.";
+
+/** The refusal of new global booking settings that would make the online booking of a type or an event never open. */
+export function settingsWouldClose(kind: "type" | "event", name: string): string {
+  const who = kind === "type" ? `du type « ${name} »` : `de l'événement « ${name} »`;
+  return `Ces réglages fermeraient les réservations en ligne ${who} : son délai minimum dépasserait son horizon. Modifiez d'abord ses règles de réservation.`;
+}

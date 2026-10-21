@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 
 import { createTestPro, dbTest, deleteTestUser, type Db } from "../../test/db";
-import { makeType } from "../../test/fixtures";
+import { makeEvent, makeType } from "../../test/fixtures";
 import { proCtx } from "../../test/pro-ctx";
 import { setAvailabilityRules } from "../booking/catalog";
 import { availabilityRule, professional } from "../db/schema";
-import { NOTICE_TOO_LONG } from "./notice";
+import { NOTICE_TOO_LONG, settingsWouldClose } from "./notice";
 import { saveAvailabilityCore, updateBookingSettingsCore } from "./settings-actions";
 
 const OK = { ok: true, effects: [] } as const;
@@ -77,6 +77,88 @@ dbTest("a notice longer than the horizon is refused with NOTICE_TOO_LONG and not
     { ok: false, error: NOTICE_TOO_LONG },
   );
   assert.deepEqual(await settingsOf(db, pro.proId), before);
+});
+
+dbTest("settings that would close the online booking of a type with an override are refused, naming the type", async ({ db, pro }) => {
+  const now = new Date();
+  const set = (over: Partial<typeof DEFAULT_SETTINGS>) => updateBookingSettingsCore(db, proCtx(pro), { ...DEFAULT_SETTINGS, ...over }, now);
+  // 7 days of notice: fine under the pro's 60 day horizon, closed under a 3 day one.
+  await makeType(db, pro, {
+    name: "Cours particulier",
+    rdvEnabled: true,
+    rdvDurationMin: 60,
+    rdvOverrides: { bookingHorizonDays: null, minNoticeMinutes: 10080, cancelDeadlineHours: null },
+  });
+  // 2 days of horizon: fine under the pro's 60 minutes of notice, closed under a 3 day one.
+  await makeType(db, pro, {
+    name: "Appel court",
+    rdvEnabled: true,
+    rdvDurationMin: 15,
+    rdvOverrides: { bookingHorizonDays: 2, minNoticeMinutes: null, cancelDeadlineHours: null },
+  });
+  // Not considered: an archived type, a type with RDV off, a type whose two overrides do not depend on the pro.
+  const archived = await makeType(db, pro, {
+    name: "Ancien",
+    rdvEnabled: true,
+    rdvDurationMin: 15,
+    rdvOverrides: { bookingHorizonDays: null, minNoticeMinutes: 10080, cancelDeadlineHours: null },
+  });
+  await db.execute(sql`update ticket_type set archived_at = now() where id = ${archived}`);
+  await makeType(db, pro, { name: "Sans RDV", rdvOverrides: { bookingHorizonDays: null, minNoticeMinutes: 10080, cancelDeadlineHours: null } });
+  await makeType(db, pro, {
+    name: "Indépendant",
+    rdvEnabled: true,
+    rdvDurationMin: 15,
+    rdvOverrides: { bookingHorizonDays: 30, minNoticeMinutes: 60, cancelDeadlineHours: null },
+  });
+  const before = await settingsOf(db, pro.proId);
+
+  assert.deepEqual(await set({ bookingHorizonDays: 3 }), { ok: false, error: settingsWouldClose("type", "Cours particulier") });
+  assert.deepEqual(await set({ minNoticeMinutes: 4320 }), { ok: false, error: settingsWouldClose("type", "Appel court") });
+  assert.deepEqual(await settingsOf(db, pro.proId), before, "nothing was written");
+
+  // The boundary is allowed: a 7 day notice fits a 7 day horizon; 2 days of horizon fit a 2 day notice.
+  assert.deepEqual(await set({ bookingHorizonDays: 7, minNoticeMinutes: 1440 }), OK);
+  assert.deepEqual(await set({ cancelDeadlineHours: 12 }), OK, "an unrelated setting");
+});
+
+dbTest("settings that would close an event's online booking are refused, naming the event; finished or closed events do not count", async ({ db, pro }) => {
+  const now = new Date();
+  const set = (over: Partial<typeof DEFAULT_SETTINGS>) => updateBookingSettingsCore(db, proCtx(pro), { ...DEFAULT_SETTINGS, ...over }, now);
+  const withOverride = async (title: string, minNotice: number, extra = sql``) => {
+    const { eventId } = await makeEvent(db, pro, { title });
+    await db.execute(sql`update event set min_notice_minutes = ${minNotice} ${extra} where id = ${eventId}`);
+    return eventId;
+  };
+  await withOverride("Roda du samedi", 10080);
+  // Not considered: archived, no online booking, nothing left to come.
+  const archived = await withOverride("Archivé", 10080);
+  await db.execute(sql`update event set archived_at = now() where id = ${archived}`);
+  await withOverride("Sans réservation", 10080, sql`, booking_mode = 'none'`);
+  const over = await withOverride("Terminé", 10080);
+  await db.execute(sql`update occurrence set status = 'cancelled', cancelled_at = now() where event_id = ${over}`);
+  const before = await settingsOf(db, pro.proId);
+
+  assert.deepEqual(await set({ bookingHorizonDays: 3 }), { ok: false, error: settingsWouldClose("event", "Roda du samedi") });
+  assert.deepEqual(await settingsOf(db, pro.proId), before, "nothing was written");
+  assert.deepEqual(await set({ bookingHorizonDays: 7 }), OK, "the boundary is allowed");
+});
+
+dbTest("a window the old settings already closed does not block an unrelated change", async ({ db, pro }) => {
+  const now = new Date();
+  await makeType(db, pro, {
+    name: "Déjà fermé",
+    rdvEnabled: true,
+    rdvDurationMin: 60,
+    rdvOverrides: { bookingHorizonDays: null, minNoticeMinutes: 10080, cancelDeadlineHours: null },
+  });
+  // Closed before the change (a horizon lowered when no check existed): the pro can still edit other settings.
+  await db.execute(sql`update professional set booking_horizon_days = 3 where id = ${pro.proId}`);
+  assert.deepEqual(
+    await updateBookingSettingsCore(db, proCtx(pro), { bookingHorizonDays: 3, minNoticeMinutes: 60, cancelDeadlineHours: 12 }, now),
+    OK,
+  );
+  assert.deepEqual((await settingsOf(db, pro.proId)).cancelDeadlineHours, 12);
 });
 
 dbTest("booking settings out of bounds speak French and write nothing", async ({ db, pro }) => {

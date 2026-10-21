@@ -7,11 +7,13 @@
 import { eq, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 
-import { NOTICE_TOO_LONG, noticeExceedsHorizon } from "@/lib/back-office/notice";
+import { readProWindow } from "@/lib/back-office/catalog-reads";
+import { NOTICE_TOO_LONG, noticeExceedsHorizon, settingsWouldClose } from "@/lib/back-office/notice";
 import { actionFail, fromEngine, type CoreResult, type ProCtx } from "@/lib/back-office/result";
 import { mergeAvailabilityRules } from "@/lib/back-office/week-hours";
 import { setAvailabilityRules, updateBookingSettings } from "@/lib/booking/catalog";
 import { failOf } from "@/lib/booking/types";
+import { effectiveWindow, type BookingWindow } from "@/lib/booking-window";
 import { G, lockRows, tryAtomic, ts, type Db } from "@/lib/db/atomic";
 import { professional } from "@/lib/db/schema";
 import {
@@ -88,10 +90,58 @@ export async function updateProfileCore(db: Db, ctx: ProCtx, input: ProfileInput
 /* ───────────── Réservations and global RDV hours (Task 29) ───────────── */
 
 /**
+ * The first RDV type or event (in that order, by position then creation) whose effective window the NEW
+ * settings would close (notice longer than horizon, Decision 28), among the ones the CURRENT settings leave
+ * open: a window that was already closed does not block an unrelated change. Considered: non-archived RDV types
+ * (RDV libre on) and non-archived events with online booking and a séance to come, each carrying an override of
+ * the horizon or of the notice (the ones with neither follow the pro's settings and are checked by the pro's own
+ * rule). Null when nothing would close. Raw SQL with aliases: the outer columns are written out.
+ */
+async function windowClosedBy(
+  db: Db,
+  professionalId: string,
+  current: BookingWindow,
+  next: BookingSettings,
+  now: Date,
+): Promise<string | null> {
+  const closes = (overrides: { bookingHorizonDays: number | null; minNoticeMinutes: number | null }): boolean => {
+    const was = effectiveWindow(current, overrides);
+    const will = effectiveWindow({ ...current, ...next }, overrides);
+    return (
+      !noticeExceedsHorizon(was.minNoticeMinutes, was.bookingHorizonDays) &&
+      noticeExceedsHorizon(will.minNoticeMinutes, will.bookingHorizonDays)
+    );
+  };
+  const types = await db.execute<{ name: string; horizon: number | null; notice: number | null }>(sql`
+    select t.name, t.rdv_booking_horizon_days as horizon, t.rdv_min_notice_minutes as notice
+    from ticket_type t
+    where t.professional_id = ${professionalId} and t.archived_at is null and t.rdv_enabled
+      and (t.rdv_booking_horizon_days is not null or t.rdv_min_notice_minutes is not null)
+    order by t.position, t.created_at, t.id`);
+  for (const t of types.rows) {
+    if (closes({ bookingHorizonDays: t.horizon, minNoticeMinutes: t.notice })) return settingsWouldClose("type", t.name);
+  }
+  const events = await db.execute<{ title: string; horizon: number | null; notice: number | null }>(sql`
+    select e.title, e.booking_horizon_days as horizon, e.min_notice_minutes as notice
+    from event e
+    where e.professional_id = ${professionalId} and e.archived_at is null and e.booking_mode <> 'none'
+      and (e.booking_horizon_days is not null or e.min_notice_minutes is not null)
+      and exists (select 1 from occurrence o
+        where o.event_id = e.id and o.professional_id = ${professionalId} and o.status = 'scheduled' and o.starts_at > ${ts(now)})
+    order by e.start_date, e.created_at, e.id`);
+  for (const e of events.rows) {
+    if (closes({ bookingHorizonDays: e.horizon, minNoticeMinutes: e.notice })) return settingsWouldClose("event", e.title);
+  }
+  return null;
+}
+
+/**
  * Booking window and client cancellation deadline (spec § 7). parseFr first, so the
  * bounds speak French (« Réservable jusqu'à : maximum 365. »), then a notice longer
- * than the horizon is refused: online booking would never open (OUT L106).
- * Context "settings". The pro is the one of the context, never one of the input.
+ * than the horizon is refused: online booking would never open (OUT L106). Settings that would close
+ * the online booking of a type or an event that overrides the horizon or the notice are refused too,
+ * naming the first one (windowClosedBy). Context "settings".
+ * The pro is the one of the context, never one of the input.
  */
 export async function updateBookingSettingsCore(
   db: Db,
@@ -104,6 +154,11 @@ export async function updateBookingSettingsCore(
   const settings = parsed.data;
   if (noticeExceedsHorizon(settings.minNoticeMinutes, settings.bookingHorizonDays)) {
     return actionFail(NOTICE_TOO_LONG);
+  }
+  const current = await readProWindow(db, ctx.professionalId);
+  if (current) {
+    const closed = await windowClosedBy(db, ctx.professionalId, current, settings, now);
+    if (closed !== null) return actionFail(closed);
   }
   const res = await updateBookingSettings(db, { professionalId: ctx.professionalId, settings }, now);
   if (!res.ok) return fromEngine(res, "settings");
