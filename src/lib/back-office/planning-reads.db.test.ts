@@ -543,6 +543,30 @@ dbTest("searchCustomers: name or email, wildcards escaped, 2 characters minimum,
   }
 });
 
+// R4: the database collation (C.UTF-8 on the test branch) sorts every accented initial after « Z »; the limit of 8 must
+// cut the French order, not that one.
+dbTest("searchCustomers: French alphabetical order before the limit, accented initials included", async ({ db, pro }) => {
+  const zoe = await makeCustomer(db, pro, { name: "Zoé Dupont" });
+  const elodie = await makeCustomer(db, pro, { name: "Élodie Dupont" });
+  const eric = await makeCustomer(db, pro, { name: "Éric Dupont" });
+  const abel = await makeCustomer(db, pro, { name: "Abel Dupont" });
+  const eve = await makeCustomer(db, pro, { name: "Eve Dupont" });
+  const ids = async (q: string, limit?: number) => (await searchCustomers(db, pro.proId, q, limit)).map((c) => c.id);
+  assert.deepEqual(await ids("dupont"), [abel, elodie, eric, eve, zoe], "accents and case ignored: Élodie, Éric and Eve sort with the E's");
+  assert.deepEqual(await ids("dupont", 4), [abel, elodie, eric, eve], "the limit cuts that order: Zoé is the one left out");
+  assert.deepEqual(await ids("dupont", 2), [abel, elodie]);
+
+  // A long list does not push the accented name out of the candidates: 60 names that sort after « Quux É… » in French.
+  const tag = nanoid(6).toLowerCase().replace(/[^a-z0-9]/g, "x");
+  await db.execute(sql`
+    insert into customer (id, professional_id, email, name, created_at, updated_at)
+    select ${tag} || '-c' || i, ${pro.proId}, ${tag} || '-' || i || '@skedul.test', 'Quux Zeta ' || lpad(i::text, 2, '0'), now(), now()
+    from generate_series(1, 60) as i`);
+  const eloi = await makeCustomer(db, pro, { name: "Quux Éloi" });
+  assert.deepEqual((await ids("quux", 3))[0], eloi, "Quux Éloi comes before Quux Zeta 01");
+  assert.equal((await searchCustomers(db, pro.proId, "quux", 8)).length, 8);
+});
+
 dbTest("registerOptions: usable tickets in consumption order, alreadyBooked, tenancy", async ({ db, pro }) => {
   const now = new Date();
   const typeId = await makeType(db, pro, { name: "Cours collectif" });

@@ -401,17 +401,37 @@ function likePattern(q: string): string {
   return `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 }
 
-/** q trimmed, < 2 chars → []; ILIKE on name or email with %, _ and \ escaped; by name; at most `limit` (default 8). */
+/**
+ * French alphabetical order, accents and case ignored (« Élodie » sorts with the E's), then the id: the order of the
+ * clients list. Done here, not by the database: its collation (C.UTF-8 on the test branch) puts every accented initial
+ * after « Z ».
+ */
+const NAME_COLLATOR = new Intl.Collator("fr", { sensitivity: "base" });
+
+/** The matches read before the French sort and the cut to `limit`: far more than the 50 a call can ask for. */
+const SEARCH_CANDIDATES = 200;
+
+/**
+ * SQL approximation of the French order: the lowercase name with its accented Latin letters turned into the base
+ * letter. It only decides which candidates are read (ORDER BY … LIMIT SEARCH_CANDIDATES), so that an accented name is
+ * not pushed past the cut by the database collation; the final order is the collator's.
+ */
+const ACCENTED = "àáâãäåçèéêëìíîïñòóôõöùúûüýÿÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜÝ";
+const BASE_LETTERS = "aaaaaaceeeeiiiinooooouuuuyyaaaaaaceeeeiiiinooooouuuuy";
+
+/** q trimmed, < 2 chars → []; ILIKE on name or email with %, _ and \ escaped; in French alphabetical order of the name; at most `limit` (default 8). */
 export async function searchCustomers(db: Db, professionalId: string, q: string, limit = 8): Promise<CustomerHit[]> {
   const term = q.trim();
   if (term.length < 2) return [];
   const pattern = likePattern(term);
-  return db
+  const rows = await db
     .select({ id: customer.id, name: customer.name, email: customer.email, phone: customer.phone })
     .from(customer)
     .where(and(eq(customer.professionalId, professionalId), or(ilike(customer.name, pattern), ilike(customer.email, pattern))))
-    .orderBy(asc(customer.name), asc(customer.id))
-    .limit(Math.min(50, Math.max(1, Math.trunc(limit))));
+    .orderBy(asc(sql`translate(lower(${customer.name}), ${ACCENTED}, ${BASE_LETTERS})`), asc(customer.id))
+    .limit(SEARCH_CANDIDATES);
+  rows.sort((a, b) => NAME_COLLATOR.compare(a.name, b.name) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return rows.slice(0, Math.min(50, Math.max(1, Math.trunc(limit))));
 }
 
 /* ───────────────────────── « Inscrire » options ───────────────────────── */
