@@ -114,7 +114,7 @@ export type NightlyReport = {
   errors: string[];
 };
 
-/** Steps 1–7 in order, each isolated; step 7 stores the violation count in `health:invariant_violations`. */
+/** Steps 1 to 7 in order, each isolated; step 7 stores the violation count in `health:invariant_violations`. */
 export async function runNightly(db: Db, now: Date = new Date()): Promise<NightlyReport> {
   const report: NightlyReport = {
     expiredBookings: 0,
