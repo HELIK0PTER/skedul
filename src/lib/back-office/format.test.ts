@@ -14,6 +14,8 @@ import {
   formatWhenShort,
   moneyInputValue,
   parseMoneyInput,
+  pastCutNote,
+  pastHeading,
   planningHref,
   plural,
   pluralWord,
@@ -236,6 +238,22 @@ test("currencySymbol uses the narrow symbol of the currency", () => {
   assert.equal(currencySymbol("eur"), "€");
   assert.equal(currencySymbol("EUR"), "€");
   assert.equal(currencySymbol("zz"), "ZZ");
+});
+
+test("pastHeading counts every booking of an ended séance, fr-FR thousands", () => {
+  assert.equal(pastHeading(1), "Passées (1)");
+  assert.equal(pastHeading(52), "Passées (52)");
+  assert.equal(pastHeading(1234), `Passées (${(1234).toLocaleString("fr-FR")})`);
+});
+
+test("pastCutNote says the list was cut, only when it was", () => {
+  assert.equal(pastCutNote(50, 50), null);
+  assert.equal(pastCutNote(3, 3), null);
+  assert.equal(pastCutNote(0, 0), null);
+  assert.equal(pastCutNote(50, 63), "Les 50 plus récentes sur 63.");
+  assert.equal(pastCutNote(50, 1234), `Les 50 plus récentes sur ${(1234).toLocaleString("fr-FR")}.`);
+  assert.equal(pastCutNote(1, 3), "La plus récente sur 3.");
+  assert.doesNotMatch(pastCutNote(50, 63) ?? "", DASH);
 });
 
 test("no output contains an em or en dash", () => {

@@ -115,6 +115,17 @@ export function plural(n: number, one: string, many: string): string {
   return `${formatCount(n)} ${pluralWord(n, one, many)}`;
 }
 
+/** « Passées (52) »: the heading of a client's ended séances counts all of them, not only the ones listed. */
+export function pastHeading(total: number): string {
+  return `Passées (${formatCount(total)})`;
+}
+
+/** « Les 50 plus récentes sur 63. » when the list shows fewer rows than there are (`shown` < `total`), else null. */
+export function pastCutNote(shown: number, total: number): string | null {
+  if (total <= shown) return null;
+  return shown <= 1 ? `La plus récente sur ${formatCount(total)}.` : `Les ${formatCount(shown)} plus récentes sur ${formatCount(total)}.`;
+}
+
 /** /dashboard/planning?semaine=<Monday DateKey of the séance, tz>&seance=<id> (Q20). */
 export function planningHref(args: { occurrenceId: string; startsAt: Date | string; tz: string }): string {
   const monday = mondayOf(todayKey(new Date(args.startsAt), args.tz));

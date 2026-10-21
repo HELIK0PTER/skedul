@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ClientBookingRow } from "@/lib/back-office/client-reads";
 import { unenrollCopy } from "@/lib/back-office/confirm-copy";
-import { formatCount } from "@/lib/back-office/format";
+import { pastCutNote, pastHeading } from "@/lib/back-office/format";
 import { unenrolledMessage } from "@/lib/back-office/planning-view";
 import { REQUEST_FAILED } from "@/lib/pro-messages";
 import { unenrollAction } from "@/server/pro-planning";
@@ -82,15 +82,23 @@ function BookingList({
   );
 }
 
-/** « Inscriptions »: what the client is signed up to, to come then past, with « Voir dans le planning », « Déplacer » and « Désinscrire ». */
+/**
+ * « Inscriptions »: what the client is signed up to, to come, then the cancelled or expired ones of séances still to
+ * come, then the past ones (a séance that has ended), with « Voir dans le planning », « Déplacer » and « Désinscrire ».
+ */
 export function ClientBookings({
   customerName,
   upcoming,
+  cancelled,
   past,
+  pastTotal,
 }: {
   customerName: string;
   upcoming: ClientBookingRow[];
+  cancelled: ClientBookingRow[];
   past: ClientBookingRow[];
+  /** every booking of an ended séance, past.length or more when the list was cut */
+  pastTotal: number;
 }) {
   // The dialogs hold a booking id and look the row up on every render: after an action the page brings new rows,
   // and a dialog never shows a stale one. Only one of the two is open at a time.
@@ -105,13 +113,13 @@ export function ClientBookings({
   const rescueArmed = useRef(false);
   const noticeBox = useRef<HTMLDivElement>(null);
 
-  const all = [...upcoming, ...past];
+  const all = [...upcoming, ...cancelled, ...past];
   const moving = moveId === null ? null : (all.find((r) => r.bookingId === moveId) ?? null);
   const unenrolling = unenrollId === null ? null : (all.find((r) => r.bookingId === unenrollId) ?? null);
   const rowsKey = all.map((r) => `${r.bookingId}:${r.status}`).join();
 
   // The dialog hands the focus back to the button that opened it. After a success that button may be gone (a cancelled
-  // registration moves to « Passées », which has neither action): the focus fell on the page, it goes to the line that
+  // registration moves to « Annulées ou expirées », which has neither action): the focus fell on the page, it goes to the line that
   // says what happened, once. The check runs again when the rows change while armed, as the new page may arrive after
   // the dialog closed; opening a dialog again disarms it.
   useEffect(() => {
@@ -195,11 +203,22 @@ export function ClientBookings({
                 <BookingList rows={upcoming} onMove={openMove} onUnenroll={openUnenroll} />
               )}
             </section>
+            {cancelled.length > 0 && (
+              <details>
+                <summary className="cursor-pointer rounded text-sm font-medium text-zinc-600 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  {`Annulées ou expirées (${cancelled.length})`}
+                </summary>
+                <BookingList rows={cancelled} onMove={openMove} onUnenroll={openUnenroll} />
+              </details>
+            )}
             {past.length > 0 && (
               <details>
                 <summary className="cursor-pointer rounded text-sm font-medium text-zinc-600 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                  {`Passées (${formatCount(past.length)})`}
+                  {pastHeading(pastTotal)}
                 </summary>
+                {pastCutNote(past.length, pastTotal) && (
+                  <p className="mt-1 text-xs text-zinc-600">{pastCutNote(past.length, pastTotal)}</p>
+                )}
                 <BookingList rows={past} onMove={openMove} onUnenroll={openUnenroll} />
               </details>
             )}

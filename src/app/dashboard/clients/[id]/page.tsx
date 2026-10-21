@@ -82,7 +82,9 @@ export default async function ClientRecordPage({
           <ClientBookings
             customerName={customer.name}
             upcoming={record.bookings.upcoming}
+            cancelled={record.bookings.cancelled}
             past={record.bookings.past}
+            pastTotal={record.bookings.pastTotal}
           />
         </div>
         <div className="lg:col-start-3 lg:row-span-3 lg:row-start-2">

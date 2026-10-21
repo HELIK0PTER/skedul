@@ -6,7 +6,7 @@
  * raw SQL; everything that returns an instant goes through the query builder
  * (the neon-http driver returns raw timestamps as strings).
  */
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, lte, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 import { listActiveTypeOptions, type TypeOption } from "@/lib/back-office/catalog-reads";
@@ -38,9 +38,9 @@ import { classifyTypes, customerAlerts, type TypeClass } from "@/lib/wallet-rule
 
 /** Decision 30: the list shows at most this many clients. */
 export const CLIENT_LIST_LIMIT = 500;
-/** The record reads the newest bookings only (every upcoming one is among them). */
+/** The record reads this many bookings of séances still to come (the soonest ones), live or not. */
 export const RECORD_BOOKINGS_MAX = 300;
-/** « Passées »: at most this many past bookings on a record. */
+/** « Passées »: at most this many past bookings on a record (the most recent ones). */
 export const PAST_BOOKINGS_MAX = 50;
 /** The record reads the newest ledger movements only (whole actions: see wholeActions). */
 export const HISTORY_MAX_MOVEMENTS = 3000;
@@ -281,8 +281,16 @@ export type ClientRecordData = {
   customer: { id: string; name: string; email: string; phone: string | null; linkedAccount: boolean; createdAt: Date };
   wallet: WalletGroup[];
   typeOptions: TypeOption[];
-  /** upcoming = live and not ended, by start asc; past = the rest, by start desc, at most PAST_BOOKINGS_MAX */
-  bookings: { upcoming: ClientBookingRow[]; past: ClientBookingRow[] };
+  bookings: {
+    /** live (confirmed, or pending with a hold that has not lapsed) on a séance that has not ended, by start asc */
+    upcoming: ClientBookingRow[];
+    /** cancelled or expired (a lapsed hold) on a séance that has not ended, by start asc: not « Passées », the séance is still to come */
+    cancelled: ClientBookingRow[];
+    /** every booking, whatever its status, of a séance that has ended, by start desc, at most PAST_BOOKINGS_MAX */
+    past: ClientBookingRow[];
+    /** how many bookings of séances that have ended there are in all: past.length when nothing was cut */
+    pastTotal: number;
+  };
   /** by created_at desc */
   purchases: ClientPurchaseRow[];
   /** whole actions only: never a line counting part of an action (see wholeActions) */
@@ -419,7 +427,32 @@ export async function getClientRecord(
   const heldType = alias(ticketType, "held_type");
   const movementRdvType = alias(ticketType, "movement_rdv_type");
   const historyMax = opts.historyMaxMovements ?? HISTORY_MAX_MOVEMENTS;
-  const [tickets, types, typeFacts, bookingRows, purchases, newestMovements, typeOptions] = await Promise.all([
+  // The bookings of this customer with their séance, event, RDV type and held ticket: one shape for the two lists.
+  const selectBookings = () =>
+    db
+      .select({
+        bookingId: booking.id,
+        occurrenceId: occurrence.id,
+        status: booking.status,
+        coverage: booking.coverage,
+        holdExpiresAt: booking.holdExpiresAt,
+        movedAt: booking.movedAt,
+        startsAt: occurrence.startsAt,
+        endsAt: occurrence.endsAt,
+        occurrenceStatus: occurrence.status,
+        eventId: occurrence.eventId,
+        eventTitle: event.title,
+        rdvTypeName: rdvType.name,
+        heldTicketId: ticket.id,
+        heldTypeName: heldType.name,
+      })
+      .from(booking)
+      .innerJoin(occurrence, and(eq(occurrence.id, booking.occurrenceId), eq(occurrence.professionalId, p)))
+      .leftJoin(event, and(eq(event.id, occurrence.eventId), eq(event.professionalId, p)))
+      .leftJoin(rdvType, and(eq(rdvType.id, occurrence.ticketTypeId), eq(rdvType.professionalId, p)))
+      .leftJoin(ticket, and(eq(ticket.bookingId, booking.id), eq(ticket.professionalId, p)))
+      .leftJoin(heldType, and(eq(heldType.id, ticket.ticketTypeId), eq(heldType.professionalId, p)));
+  const [tickets, types, typeFacts, ahead, endedRows, [{ endedTotal }], purchases, newestMovements, typeOptions] = await Promise.all([
     db
       .select({
         id: ticket.id,
@@ -443,32 +476,21 @@ export async function getClientRecord(
       .where(eq(ticketType.professionalId, p))
       .orderBy(asc(ticketType.position), asc(ticketType.createdAt), asc(ticketType.id)),
     loadTypeFacts(db, p, now),
+    // The séances that have not ended (a running one included), soonest first: live ones, then cancelled and expired ones.
+    selectBookings()
+      .where(and(eq(booking.professionalId, p), eq(booking.customerId, customerId), gt(occurrence.endsAt, now)))
+      .orderBy(asc(occurrence.startsAt), asc(booking.id))
+      .limit(RECORD_BOOKINGS_MAX),
+    // The séances that have ended, the most recent first; their true number is counted apart, before the cut.
+    selectBookings()
+      .where(and(eq(booking.professionalId, p), eq(booking.customerId, customerId), lte(occurrence.endsAt, now)))
+      .orderBy(desc(occurrence.startsAt), desc(booking.id))
+      .limit(PAST_BOOKINGS_MAX),
     db
-      .select({
-        bookingId: booking.id,
-        occurrenceId: occurrence.id,
-        status: booking.status,
-        coverage: booking.coverage,
-        holdExpiresAt: booking.holdExpiresAt,
-        movedAt: booking.movedAt,
-        startsAt: occurrence.startsAt,
-        endsAt: occurrence.endsAt,
-        occurrenceStatus: occurrence.status,
-        eventId: occurrence.eventId,
-        eventTitle: event.title,
-        rdvTypeName: rdvType.name,
-        heldTicketId: ticket.id,
-        heldTypeName: heldType.name,
-      })
+      .select({ endedTotal: count() })
       .from(booking)
       .innerJoin(occurrence, and(eq(occurrence.id, booking.occurrenceId), eq(occurrence.professionalId, p)))
-      .leftJoin(event, and(eq(event.id, occurrence.eventId), eq(event.professionalId, p)))
-      .leftJoin(rdvType, and(eq(rdvType.id, occurrence.ticketTypeId), eq(rdvType.professionalId, p)))
-      .leftJoin(ticket, and(eq(ticket.bookingId, booking.id), eq(ticket.professionalId, p)))
-      .leftJoin(heldType, and(eq(heldType.id, ticket.ticketTypeId), eq(heldType.professionalId, p)))
-      .where(and(eq(booking.professionalId, p), eq(booking.customerId, customerId)))
-      .orderBy(desc(occurrence.startsAt), desc(booking.id))
-      .limit(RECORD_BOOKINGS_MAX),
+      .where(and(eq(booking.professionalId, p), eq(booking.customerId, customerId), lte(occurrence.endsAt, now))),
     db
       .select({
         id: ticketPurchase.id,
@@ -522,13 +544,13 @@ export async function getClientRecord(
   const wallet = groupWallet(tickets, walletTypes, classifyTypes(typeFacts), now, tz);
 
   const upcoming: ClientBookingRow[] = [];
-  const past: ClientBookingRow[] = [];
-  for (const r of bookingRows) {
+  const cancelled: ClientBookingRow[] = [];
+  for (const r of ahead) {
     const row = bookingRow(r, now, tz);
     const live = row.status === "pending" || row.status === "confirmed"; // a lapsed hold reads « expired »
-    (live && r.endsAt.getTime() > now.getTime() ? upcoming : past).push(row);
+    (live ? upcoming : cancelled).push(row);
   }
-  upcoming.reverse(); // the query is newest first: upcoming reads soonest first
+  const past = endedRows.map((r) => bookingRow(r, now, tz));
 
   const movements = await wholeActions(
     db,
@@ -566,7 +588,7 @@ export async function getClientRecord(
     },
     wallet,
     typeOptions,
-    bookings: { upcoming, past: past.slice(0, PAST_BOOKINGS_MAX) },
+    bookings: { upcoming, cancelled, past, pastTotal: Number(endedTotal) },
     purchases: purchases.map(({ checkoutExpiresAt, processingAt, ...row }) => ({
       ...row,
       status: purchaseStatusAt({ status: row.status, checkoutExpiresAt, processingAt }, now),

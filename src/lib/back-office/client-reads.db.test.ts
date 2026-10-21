@@ -483,7 +483,7 @@ dbTest("client reads never cross the tenant boundary", async (h) => {
     assert.equal(empty.customer.name, "Chez moi");
     assert.equal(empty.customer.linkedAccount, false);
     assert.deepEqual(empty.wallet, []);
-    assert.deepEqual(empty.bookings, { upcoming: [], past: [] });
+    assert.deepEqual(empty.bookings, { upcoming: [], cancelled: [], past: [], pastTotal: 0 });
     assert.deepEqual(empty.purchases, []);
     assert.deepEqual(empty.history, []);
     assert.deepEqual(empty.typeOptions, []);
@@ -491,7 +491,7 @@ dbTest("client reads never cross the tenant boundary", async (h) => {
     // the twin sees none of the other side's tickets, bookings or movements
     const twin = await getClientRecord(h.db, h.pro.proId, twinMine, now);
     assert.ok(twin);
-    assert.deepEqual([twin.wallet, twin.bookings, twin.purchases, twin.history], [[], { upcoming: [], past: [] }, [], []]);
+    assert.deepEqual([twin.wallet, twin.bookings, twin.purchases, twin.history], [[], { upcoming: [], cancelled: [], past: [], pastTotal: 0 }, [], []]);
 
     assert.deepEqual(await checkInvariants(h.db, { proId: other.proId }), []);
   } finally {
@@ -621,7 +621,7 @@ dbTest(
     assert.equal(gPriv.alert, "orange"); // linked to no event
     assert.equal(gPriv.ids.closePaid.length, 1);
 
-    // bookings: the future one is active, the cancelled one and the past one are history, newest first
+    // bookings: the future one is active, the cancelled one (next week) has its own group, the past one is history
     assert.equal(record.bookings.upcoming.length, 1);
     const [up] = record.bookings.upcoming;
     const upOccurrence = future.occurrences[0];
@@ -639,12 +639,14 @@ dbTest(
     assert.deepEqual([up.canMove, up.canUnenroll, up.moved, up.hasTicket, up.pending], [true, true, false, true, false]);
     assert.equal(up.planningHref, planningHref({ occurrenceId: upOccurrence.id, startsAt: upOccurrence.startsAt, tz }));
     assert.deepEqual(
-      record.bookings.past.map((b) => [b.bookingId, b.title, b.status, b.canMove, b.canUnenroll, b.hasTicket, b.ticketTypeName]),
-      [
-        [secondBooking.bookingId, "Roda libre", "cancelled", false, false, false, null],
-        [pastBooking.bookingId, "Atelier technique", "confirmed", false, true, true, "Cours collectif"],
-      ],
+      record.bookings.cancelled.map((b) => [b.bookingId, b.title, b.status, b.canMove, b.canUnenroll, b.hasTicket, b.ticketTypeName]),
+      [[secondBooking.bookingId, "Roda libre", "cancelled", false, false, false, null]],
     );
+    assert.deepEqual(
+      record.bookings.past.map((b) => [b.bookingId, b.title, b.status, b.canMove, b.canUnenroll, b.hasTicket, b.ticketTypeName]),
+      [[pastBooking.bookingId, "Atelier technique", "confirmed", false, true, true, "Cours collectif"]],
+    );
+    assert.equal(record.bookings.pastTotal, 1);
 
     // purchases, newest first
     assert.deepEqual(
@@ -726,18 +728,25 @@ dbTest("getClientRecord: RDV, live and lapsed holds, cancelled and past bookings
   assert.deepEqual(flags(record.bookings.upcoming[1]), [false, true, false, false, true]);
   assert.equal(record.bookings.upcoming[0].planningHref, planningHref({ occurrenceId: futureRdv, startsAt: record.bookings.upcoming[0].startsAt, tz }));
 
-  // past = the rest, newest first; a lapsed hold reads « expired » (the seat is already free), with no action
+  // R2: a cancelled booking and a lapsed hold (« expired », the seat is already free) on séances still to come are not
+  // « Passées »: they have their own group, soonest first, with no action.
   assert.deepEqual(
-    record.bookings.past.map((b) => [b.bookingId, b.title, b.status, b.occurrenceStatus]),
+    record.bookings.cancelled.map((b) => [b.bookingId, b.title, b.status, b.occurrenceStatus]),
     [
-      [cancelledBooking, "Roda libre", "cancelled", "scheduled"],
       [lapsedHold, "Roda libre", "expired", "scheduled"],
-      [pastRdvBooking, "Cours particulier", "confirmed", "scheduled"],
+      [cancelledBooking, "Roda libre", "cancelled", "scheduled"],
     ],
   );
-  assert.deepEqual(flags(record.bookings.past[0]), [false, false, false, false, false]);
-  assert.deepEqual(flags(record.bookings.past[1]), [false, false, false, false, false]);
-  assert.deepEqual(flags(record.bookings.past[2]), [false, true, false, false, false]); // E6a: a past registration can still be removed
+  assert.deepEqual(flags(record.bookings.cancelled[0]), [false, false, false, false, false]);
+  assert.deepEqual(flags(record.bookings.cancelled[1]), [false, false, false, false, false]);
+
+  // past = the séances that have ended, newest first, and only those: neither future row is in it nor in its count
+  assert.deepEqual(
+    record.bookings.past.map((b) => [b.bookingId, b.title, b.status, b.occurrenceStatus]),
+    [[pastRdvBooking, "Cours particulier", "confirmed", "scheduled"]],
+  );
+  assert.deepEqual(flags(record.bookings.past[0]), [false, true, false, false, false]); // E6a: a past registration can still be removed
+  assert.equal(record.bookings.pastTotal, 1);
 
   // the list counts the confirmed RDV only: neither hold is a confirmed registration
   const list = await listClients(db, pro.proId, now, { q: "", filter: "a-venir" });
@@ -777,7 +786,7 @@ dbTest("getClientRecord: a pending purchase whose checkout has ended reads expir
   );
 });
 
-dbTest("getClientRecord: the past bookings stop at PAST_BOOKINGS_MAX, newest first", async (h) => {
+dbTest("getClientRecord: the past bookings stop at PAST_BOOKINGS_MAX, newest first, and pastTotal is the true count", async (h) => {
   const { db, pro } = h;
   const now = new Date();
   const tag = nanoid(8);
@@ -797,9 +806,34 @@ dbTest("getClientRecord: the past bookings stop at PAST_BOOKINGS_MAX, newest fir
   const record = await getClientRecord(db, pro.proId, customerId, now);
   assert.ok(record);
   assert.deepEqual(record.bookings.upcoming, []);
+  assert.deepEqual(record.bookings.cancelled, []);
   assert.equal(record.bookings.past.length, PAST_BOOKINGS_MAX);
   assert.equal(record.bookings.past[0].startsAt, addDaysMs(now, -1).toISOString());
   assert.equal(record.bookings.past[PAST_BOOKINGS_MAX - 1].startsAt, addDaysMs(now, -PAST_BOOKINGS_MAX).toISOString());
+  // R2: the count is read before the cut, so the heading can say 52 and the note « les 50 plus récentes »
+  assert.equal(record.bookings.pastTotal, total);
+});
+
+// R2: a séance that has started but not ended is still « à venir » for a live booking, and « Annulées » for a cancelled one.
+dbTest("getClientRecord: a running séance is not past yet; a cancelled booking on it is in the cancelled group", async (h) => {
+  const { db, pro } = h;
+  const now = new Date();
+  const event = await rowEvent(db, pro);
+  const lea = await makeCustomer(db, pro, { name: "Léa Martin" });
+  const running = await rowSeance(db, pro, event, { startsAt: addMinutes(now, -20), seatsTaken: 1 });
+  const ended = await rowSeance(db, pro, await rowEvent(db, pro), { startsAt: addMinutes(now, -180), seatsTaken: 1 });
+  const runningCancelledEvent = await rowEvent(db, pro);
+  const runningCancelled = await rowSeance(db, pro, runningCancelledEvent, { startsAt: addMinutes(now, -10), seatsTaken: 0 });
+  const live = await rowBooking(db, pro, { occurrenceId: running, customerId: lea });
+  const done = await rowBooking(db, pro, { occurrenceId: ended, customerId: lea });
+  const gone = await rowBooking(db, pro, { occurrenceId: runningCancelled, customerId: lea, status: "cancelled" });
+
+  const record = await getClientRecord(db, pro.proId, lea, now);
+  assert.ok(record);
+  assert.deepEqual(record.bookings.upcoming.map((b) => b.bookingId), [live]);
+  assert.deepEqual(record.bookings.cancelled.map((b) => b.bookingId), [gone]);
+  assert.deepEqual(record.bookings.past.map((b) => b.bookingId), [done]);
+  assert.equal(record.bookings.pastTotal, 1);
 });
 
 dbTest("getClientRecord: the history is cut on an action boundary, never inside an action", async (h) => {
