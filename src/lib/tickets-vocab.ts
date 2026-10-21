@@ -239,7 +239,7 @@ export const ENGINE_ERROR_MESSAGES: Record<EngineErrorCode, string> = {
   offer_too_short: "La validité de cette offre ne couvre pas la date de la séance.",
   ticket_expires_before: "Ticket expiré à la date de cette séance. Déplacer quand même ?",
   retire_paid: "Un ticket payé ne peut pas être retiré.",
-  timezone_locked: "Fuseau verrouillé : vous avez des séances planifiées.",
+  timezone_locked: "Fuseau verrouillé : vous avez des séances planifiées, des indisponibilités à venir ou des tickets à durée limitée.",
 };
 
 /* ───────────────────────────── Helpers ───────────────────────────── */

@@ -37,13 +37,17 @@ export const profileInputSchema = z.object({
 export type ProfileInput = z.input<typeof profileInputSchema>;
 
 /**
- * SQL: a non-archived event exists, or a future scheduled occurrence (séance
- * or RDV) does. The time zone cannot change while this holds (spec § 7): the
- * stored instants and the recurrence dates were computed in the old zone.
+ * SQL: something stored as an instant (or a local date) of the OLD zone is still ahead. The time zone cannot change
+ * while this holds (spec § 7): a non-archived event exists, a scheduled occurrence (séance or RDV) starts later, a
+ * time off ends later (an all-day one is a pair of local midnights), or an available ticket has an expiry still
+ * to come (the local midnight after its last day). Tickets with no limit and everything already over do not count.
  */
 function timezoneLockedSql(professionalId: string, now: Date): SQL {
   return sql`(exists (select 1 from event where professional_id = ${professionalId} and archived_at is null)
-    or exists (select 1 from occurrence where professional_id = ${professionalId} and status = 'scheduled' and starts_at > ${ts(now)}))`;
+    or exists (select 1 from occurrence where professional_id = ${professionalId} and status = 'scheduled' and starts_at > ${ts(now)})
+    or exists (select 1 from time_off where professional_id = ${professionalId} and end_at > ${ts(now)})
+    or exists (select 1 from ticket where professional_id = ${professionalId} and status = 'available'
+      and expires_at is not null and expires_at > ${ts(now)}))`;
 }
 
 /** True when the pro's time zone cannot change (see timezoneLockedSql). Only this pro's rows are read. */

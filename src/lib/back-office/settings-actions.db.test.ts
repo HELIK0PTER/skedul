@@ -2,17 +2,17 @@ import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 
 import { addDaysMs, createTestPro, dbTest, deleteTestUser, type Db, type TestPro } from "../../test/db";
-import { makeCustomer, makeEvent } from "../../test/fixtures";
+import { giveTickets, makeCustomer, makeEvent, makeType } from "../../test/fixtures";
 import { proCtx } from "../../test/pro-ctx";
 import { rowBooking, rowEvent, rowRdv, rowRdvType, rowSeance } from "../../test/rows";
-import { occurrence, professional } from "../db/schema";
+import { occurrence, professional, timeOff } from "../db/schema";
 import { isTimezoneLocked, updateProfileCore, type ProfileInput } from "./settings-actions";
 
 const OK = { ok: true, effects: [] } as const;
 const LOCKED = {
   ok: false,
   code: "timezone_locked",
-  error: "Fuseau verrouillé : vous avez des séances planifiées.",
+  error: "Fuseau verrouillé : vous avez des séances planifiées, des indisponibilités à venir ou des tickets à durée limitée.",
 } as const;
 
 const input = (over: Partial<ProfileInput> = {}): ProfileInput => ({
@@ -98,6 +98,52 @@ dbTest("an archived event locks only through a future scheduled séance", async 
   assert.equal(await isTimezoneLocked(db, pro.proId, now), false);
   assert.deepEqual(await updateProfileCore(db, proCtx(pro), input({ timezone: "America/New_York" }), now), OK);
   assert.equal((await rowOf(db, pro.proId)).timezone, "America/New_York");
+});
+
+dbTest("a future time off alone locks the time zone (its instants were computed in the old zone); a past one does not", async ({ db, pro }) => {
+  const now = new Date();
+  const timeOffAt = (startAt: Date, endAt: Date) =>
+    db.insert(timeOff).values({ id: `to-${startAt.getTime()}`, professionalId: pro.proId, startAt, endAt, allDay: true, reason: null });
+
+  await timeOffAt(addDaysMs(now, -5), addDaysMs(now, -3));
+  assert.equal(await isTimezoneLocked(db, pro.proId, now), false, "a past time off");
+  assert.deepEqual(await updateProfileCore(db, proCtx(pro), input({ timezone: "Europe/Zurich" }), now), OK);
+
+  await timeOffAt(addDaysMs(now, 10), addDaysMs(now, 12));
+  assert.equal(await isTimezoneLocked(db, pro.proId, now), true, "a time off to come");
+  assert.deepEqual(await updateProfileCore(db, proCtx(pro), input({ timezone: "Europe/London" }), now), LOCKED);
+  assert.equal((await rowOf(db, pro.proId)).timezone, "Europe/Zurich");
+
+  assert.equal(await isTimezoneLocked(db, pro.proId, addDaysMs(now, 20)), false, "once it is over");
+
+  // A time off in progress (it ends later) is still to come as far as the zone is concerned.
+  await timeOffAt(addDaysMs(now, -1), addDaysMs(now, 1));
+  assert.equal(await isTimezoneLocked(db, pro.proId, now), true);
+});
+
+dbTest("an available ticket with an expiry alone locks the time zone; no expiry, an expired one or another pro's do not", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await makeType(db, pro);
+  const customerId = await makeCustomer(db, pro);
+
+  await giveTickets(db, pro, customerId, typeId, 2);
+  assert.equal(await isTimezoneLocked(db, pro.proId, now), false, "tickets without a limit");
+  await giveTickets(db, pro, customerId, typeId, 1, { now: addDaysMs(now, -10), expiresAt: addDaysMs(now, -2) });
+  assert.equal(await isTimezoneLocked(db, pro.proId, now), false, "an expired ticket");
+  assert.deepEqual(await updateProfileCore(db, proCtx(pro), input({ timezone: "Europe/Zurich" }), now), OK);
+
+  await giveTickets(db, pro, customerId, typeId, 1, { expiresAt: addDaysMs(now, 30) });
+  assert.equal(await isTimezoneLocked(db, pro.proId, now), true, "its expiry is a local midnight of the old zone");
+  assert.deepEqual(await updateProfileCore(db, proCtx(pro), input({ timezone: "Europe/London" }), now), LOCKED);
+  assert.equal((await rowOf(db, pro.proId)).timezone, "Europe/Zurich");
+  assert.equal(await isTimezoneLocked(db, pro.proId, addDaysMs(now, 40)), false, "once it has expired");
+
+  const other = await createTestPro(db);
+  try {
+    assert.equal(await isTimezoneLocked(db, other.proId, now), false, "the ticket of one pro does not lock the other");
+  } finally {
+    await deleteTestUser(db, other.userId);
+  }
 });
 
 dbTest("validation speaks French and writes nothing", async ({ db, pro }) => {

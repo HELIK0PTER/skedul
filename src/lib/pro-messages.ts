@@ -43,7 +43,7 @@ export const PRO_ERROR_MESSAGES: Record<EngineErrorCode, string> = {
   offer_too_short: "La validité de cette offre ne couvre pas la date de la séance.",
   ticket_expires_before: "Ticket expiré à la date de cette séance : déplacer quand même ?",
   retire_paid: "Un ticket payé ne peut pas être retiré : utilisez « Clore ».",
-  timezone_locked: "Fuseau verrouillé : vous avez des séances planifiées.",
+  timezone_locked: "Fuseau verrouillé : vous avez des séances planifiées, des indisponibilités à venir ou des tickets à durée limitée.",
 };
 
 /** Per-context overrides of PRO_ERROR_MESSAGES. */

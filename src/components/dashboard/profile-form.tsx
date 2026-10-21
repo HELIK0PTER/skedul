@@ -19,7 +19,7 @@ export interface ProfileValues {
   timezone: string;
 }
 
-const LOCKED_HELP = "Fuseau verrouillé : vous avez des séances planifiées.";
+const LOCKED_HELP = "Fuseau verrouillé : vous avez des séances planifiées, des indisponibilités à venir ou des tickets à durée limitée.";
 
 export function ProfileForm({ values, timezoneLocked }: { values: ProfileValues; timezoneLocked: boolean }) {
   const [pending, startTransition] = useTransition();

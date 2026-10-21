@@ -66,7 +66,7 @@ test("the general pro messages are the contract table", () => {
     offer_too_short: "La validité de cette offre ne couvre pas la date de la séance.",
     ticket_expires_before: "Ticket expiré à la date de cette séance : déplacer quand même ?",
     retire_paid: "Un ticket payé ne peut pas être retiré : utilisez « Clore ».",
-    timezone_locked: "Fuseau verrouillé : vous avez des séances planifiées.",
+    timezone_locked: "Fuseau verrouillé : vous avez des séances planifiées, des indisponibilités à venir ou des tickets à durée limitée.",
   });
 });
 
@@ -118,7 +118,7 @@ test("a context override beats the general text, other contexts keep the general
   assert.equal(proErrorMessage({ code: "invalid" }, "settings"), "Valeurs hors limites.");
   assert.equal(proErrorMessage({ code: "invalid" }, "event"), "Un type de ticket choisi n'existe plus.");
   assert.equal(proErrorMessage({ code: "stale" }, "timeOff"), "Des inscriptions ont changé pendant la vérification : voici la liste à jour.");
-  assert.equal(proErrorMessage({ code: "timezone_locked" }, "profile"), "Fuseau verrouillé : vous avez des séances planifiées.");
+  assert.equal(proErrorMessage({ code: "timezone_locked" }, "profile"), "Fuseau verrouillé : vous avez des séances planifiées, des indisponibilités à venir ou des tickets à durée limitée.");
 });
 
 test("every code resolves to a message in every context", () => {
