@@ -284,9 +284,9 @@ export function BrandingForm({
                   Réserver
                 </span>
                 <span className="inline-flex h-8 items-center rounded-lg bg-accent px-3 text-xs font-medium text-accent-foreground">
-                  Pack 5 séances
+                  Acheter des tickets
                 </span>
-                <span className="text-xs font-semibold text-primary">En savoir plus</span>
+                <span className="text-xs font-semibold text-accent-foreground">En savoir plus</span>
               </div>
             </div>
           </div>
@@ -540,7 +540,7 @@ export function BrandingForm({
                   className={cn(
                     "flex-1 rounded-xl border px-3 py-2 text-sm capitalize transition-colors",
                     layout === l
-                      ? "border-primary bg-primary-muted text-primary"
+                      ? "border-primary bg-primary-muted font-medium text-foreground"
                       : "border-input hover:bg-muted",
                   )}
                 >

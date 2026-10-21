@@ -32,3 +32,9 @@ test("« Indisponibilités » shows the pro's zone by its label, like « Disponi
   assert.match(page, /\(fuseau : \$\{timeZoneLabel\(tz\)\}\)/, "the zone label, not the raw IANA id");
   assert.doesNotMatch(page, /\(fuseau \$\{tz\}\)/, "no raw zone id in the description");
 });
+
+test("the branding preview shows the tickets vocabulary, not the v1 pack button (final review COV-8)", () => {
+  const form = source("src/components/dashboard/branding-form.tsx");
+  assert.doesNotMatch(form, /Pack 5 séances/, "the v1 « Pack 5 séances » button is gone");
+  assert.match(form, />\s*Acheter des tickets\s*</, "the preview's second button speaks of tickets");
+});
