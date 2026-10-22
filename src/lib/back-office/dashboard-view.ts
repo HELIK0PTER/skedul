@@ -59,9 +59,9 @@ export function kpiTiles(input: KpiInput): KpiTile[] {
       label: "Tickets en circulation",
       value: formatCount(input.ticketsInCirculation),
       hint: null,
-      href: clientsHref("tickets", ""),
+      href: clientsHref("tickets"),
     },
-    { key: "clients", label: "Clients", value: formatCount(input.clients), hint: null, href: clientsHref("tous", "") },
+    { key: "clients", label: "Clients", value: formatCount(input.clients), hint: null, href: clientsHref("tous") },
     {
       key: "revenue",
       label: "Encaissé",
@@ -86,7 +86,7 @@ export function dashboardAlerts(input: {
       key: "red-clients",
       tone: "red",
       text: `${plural(input.redClients, "client a", "clients ont")} des tickets d'un type archivé.`,
-      href: clientsHref("alertes", ""),
+      href: clientsHref("alertes"),
     });
   }
   if (input.orangeClients > 0) {
@@ -94,7 +94,7 @@ export function dashboardAlerts(input: {
       key: "orange-clients",
       tone: "orange",
       text: `${plural(input.orangeClients, "client a", "clients ont")} des tickets d'un type lié à aucun événement à venir.`,
-      href: clientsHref("alertes", ""),
+      href: clientsHref("alertes"),
     });
   }
   for (const e of input.eventsWithoutActiveType) {

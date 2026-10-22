@@ -62,11 +62,11 @@ export function matchesClientFilter(f: ClientFacts, filter: ClientFilter): boole
   }
 }
 
-/** /dashboard/clients?filter=…&q=… (empty parts omitted). */
-export function clientsHref(filter: ClientFilter, q: string): string {
-  const parts: string[] = [];
-  if (filter !== "tous") parts.push(`filter=${filter}`);
-  const query = q.trim();
-  if (query !== "") parts.push(`q=${encodeURIComponent(query)}`);
-  return parts.length === 0 ? "/dashboard/clients" : `/dashboard/clients?${parts.join("&")}`;
+/**
+ * /dashboard/clients or /dashboard/clients?filter=… : the filter only. The pro's search term (a client's name or
+ * e-mail) is never part of a URL: it would reach the address bar, the history and the platform request log
+ * (Decision 73, FR:UI-13). The search runs through searchClientsAction and lives in component state.
+ */
+export function clientsHref(filter: ClientFilter): string {
+  return filter === "tous" ? "/dashboard/clients" : `/dashboard/clients?filter=${filter}`;
 }

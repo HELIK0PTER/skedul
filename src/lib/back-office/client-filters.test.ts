@@ -68,11 +68,12 @@ test("matchesClientFilter: each filter", () => {
   assert.deepEqual([holder, upcoming, red, orange, quiet].map((f) => matchesClientFilter(f, "alertes")), [false, false, true, true, false]);
 });
 
-test("clientsHref: empty parts are omitted, the query is encoded", () => {
-  assert.equal(clientsHref("tous", ""), "/dashboard/clients");
-  assert.equal(clientsHref("tickets", ""), "/dashboard/clients?filter=tickets");
-  assert.equal(clientsHref("tous", "mar"), "/dashboard/clients?q=mar");
-  assert.equal(clientsHref("a-venir", "mar"), "/dashboard/clients?filter=a-venir&q=mar");
-  assert.equal(clientsHref("alertes", "  léa martin "), "/dashboard/clients?filter=alertes&q=l%C3%A9a%20martin");
-  assert.equal(clientsHref("tous", "   "), "/dashboard/clients");
+test("clientsHref: the filter only, never a search term in the URL (Decision 73, FR:UI-13)", () => {
+  assert.equal(clientsHref("tous"), "/dashboard/clients");
+  assert.equal(clientsHref("tickets"), "/dashboard/clients?filter=tickets");
+  assert.equal(clientsHref("a-venir"), "/dashboard/clients?filter=a-venir");
+  assert.equal(clientsHref("alertes"), "/dashboard/clients?filter=alertes");
+  assert.equal(clientsHref.length, 1, "the function has no search parameter");
+  // @ts-expect-error clientsHref takes the filter only: a second argument is a compile error and is ignored at run time
+  assert.equal(clientsHref("tickets", "léa martin"), "/dashboard/clients?filter=tickets");
 });

@@ -10,7 +10,9 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 
-import { actionFail, fromEngine, type CoreResult, type ProCtx } from "@/lib/back-office/result";
+import { CLIENT_FILTERS } from "@/lib/back-office/client-filters";
+import { listClients, type ClientListRow } from "@/lib/back-office/client-reads";
+import { actionFail, fromEngine, type ActionResult, type CoreResult, type ProCtx } from "@/lib/back-office/result";
 import { LAST_CALENDAR_DAY, LAST_DAY_PAST, LAST_DAY_TOO_FAR } from "@/lib/back-office/wallet-form";
 import {
   closeTickets,
@@ -50,6 +52,9 @@ const customerEditSchema = z.object({
 });
 
 const customerIdSchema = z.object({ customerId: idSchema });
+
+/** The client search: strict, so a smuggled key (professionalId, userId) is refused whole instead of ignored. */
+const searchClientsSchema = z.object({ q: z.string().trim().max(100), filter: z.enum(CLIENT_FILTERS) }).strict();
 
 const offerTicketsSchema = z.object({
   customerId: idSchema,
@@ -121,6 +126,24 @@ export async function updateCustomerCore(
   );
   if (!res.ok) return fromEngine(res, "customer");
   return { ok: true, effects: res.effects };
+}
+
+/**
+ * « Rechercher » on /dashboard/clients (Decision 73, FR:UI-13): the term never travels in a URL, so the search is a
+ * read behind a Server Action. parseFr of the strict input first (nothing is read for a malformed one), then
+ * listClients for THIS pro (ctx.professionalId, never input) with the filter and the term. The counts stay the
+ * page's: listClients counts every client whatever `q`.
+ */
+export async function searchClientsCore(
+  db: Db,
+  ctx: ProCtx,
+  input: unknown,
+  now: Date,
+): Promise<ActionResult<{ rows: ClientListRow[] }>> {
+  const parsed = parseFr(searchClientsSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  const { rows } = await listClients(db, ctx.professionalId, now, parsed.data);
+  return { ok: true, rows };
 }
 
 /** « Déconnecter ses liens »: link_version + 1. */

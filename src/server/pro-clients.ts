@@ -8,13 +8,16 @@ import {
   pointTicketsCore,
   retireTicketsCore,
   revokeLinksCore,
+  searchClientsCore,
   unpointTicketsCore,
   updateCustomerCore,
 } from "@/lib/back-office/client-actions";
+import type { ClientFilter } from "@/lib/back-office/client-filters";
+import type { ClientListRow } from "@/lib/back-office/client-reads";
 import type { ActionResult } from "@/lib/back-office/result";
 import type { DateKey } from "@/lib/civil-date";
 import { db } from "@/lib/db";
-import { runProAction } from "@/server/pro-context";
+import { runProAction, runProQuery } from "@/server/pro-context";
 
 // Clients and wallets: every action revalidates the dashboard layout (runProAction); no public page changes.
 
@@ -87,4 +90,15 @@ export async function unpointTicketsAction(input: {
   ticketIds: string[];
 }): Promise<ActionResult<{ count: number }>> {
   return runProAction("unpointTickets", (ctx, now) => unpointTicketsCore(db, ctx, input, now));
+}
+
+/**
+ * « Rechercher » (Task 20a): a read, so runProQuery (fresh session, no revalidation, no effect). The term and the
+ * filter come from the browser only as this input; the pro is the session's.
+ */
+export async function searchClientsAction(input: {
+  q: string;
+  filter: ClientFilter;
+}): Promise<ActionResult<{ rows: ClientListRow[] }>> {
+  return runProQuery("searchClients", (ctx, now) => searchClientsCore(db, ctx, input, now));
 }

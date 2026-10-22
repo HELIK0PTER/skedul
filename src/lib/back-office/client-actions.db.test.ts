@@ -14,10 +14,12 @@ import {
   pointTicketsCore,
   retireTicketsCore,
   revokeLinksCore,
+  searchClientsCore,
   unpointTicketsCore,
   updateCustomerCore,
 } from "@/lib/back-office/client-actions";
-import type { ActionFail, CoreResult } from "@/lib/back-office/result";
+import { listClients, type ClientListRow } from "@/lib/back-office/client-reads";
+import type { ActionFail, ActionResult, CoreResult } from "@/lib/back-office/result";
 import { setTicketTypeArchived } from "@/lib/booking/catalog";
 import { fulfillPurchase, startPurchase } from "@/lib/booking/fulfillment";
 import { checkInvariants } from "@/lib/booking/invariants";
@@ -736,6 +738,89 @@ dbTest("offerTicketsCore: the last valid day ends at local midnight across DST c
   } finally {
     await deleteTestUser(db, la.userId);
   }
+});
+
+/** The rows of a successful search; a failed one fails the assertion with its text. */
+function searchRows(res: ActionResult<{ rows: ClientListRow[] }>): ClientListRow[] {
+  assert.equal(res.ok, true, JSON.stringify(res));
+  return res.ok ? res.rows : [];
+}
+
+/** The French refusal of a failed search. */
+function searchRefusal(res: ActionResult<{ rows: ClientListRow[] }>): string {
+  assert.equal(res.ok, false, JSON.stringify(res));
+  return res.ok ? "" : res.error;
+}
+
+dbTest("searchClientsCore: finds a client by an accented name and by e-mail, inside the filter, with the term trimmed", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const eloise = await makeCustomer(db, pro, { name: "Éloïse Marques", email: "eloise.marques@skedul.test" });
+  const bruno = await makeCustomer(db, pro, { name: "Bruno Pereira", email: "bruno.pereira@skedul.test" });
+  const type = await makeType(db, pro, { name: "Cours collectif" });
+  await giveTickets(db, pro, eloise, type, 2);
+
+  const ids = async (input: unknown) => searchRows(await searchClientsCore(db, ctx, input, now)).map((r) => r.id);
+  assert.deepEqual(await ids({ q: "Éloïse", filter: "tous" }), [eloise], "an accented name, typed as stored");
+  assert.deepEqual(await ids({ q: "  marques  ", filter: "tous" }), [eloise], "the term is trimmed and the case ignored");
+  assert.deepEqual(await ids({ q: "BRUNO.PEREIRA@skedul", filter: "tous" }), [bruno], "an e-mail, case ignored");
+  assert.deepEqual(await ids({ q: "", filter: "tous" }), [bruno, eloise], "no term: every listed client, in French name order");
+  assert.deepEqual(await ids({ q: "marques", filter: "tickets" }), [eloise], "inside the filter: she holds tickets");
+  assert.deepEqual(await ids({ q: "pereira", filter: "tickets" }), [], "inside the filter: he holds none");
+  assert.deepEqual(await ids({ q: "Eloise.Marques@", filter: "tickets" }), [eloise], "an e-mail inside the filter, case ignored");
+  assert.deepEqual(await ids({ q: "bruno.pereira@", filter: "tickets" }), [], "an e-mail outside the filter");
+  assert.deepEqual(await ids({ q: "zzz", filter: "tous" }), []);
+
+  // A thin wrapper of the read the page uses: the same rows.
+  const direct = await listClients(db, pro.proId, now, { q: "marques", filter: "tickets" });
+  assert.deepEqual(searchRows(await searchClientsCore(db, ctx, { q: "marques", filter: "tickets" }, now)), direct.rows);
+});
+
+dbTest("searchClientsCore: never returns another pro's client, by name or by e-mail", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const mine = await makeCustomer(db, pro, { name: "Camille Dupont", email: testEmail("mine") });
+  const other = await createTestPro(db);
+  try {
+    const theirEmail = testEmail("theirs");
+    const theirs = await makeCustomer(db, other, { name: "Camille Secret", email: theirEmail });
+    const byName = searchRows(await searchClientsCore(db, ctx, { q: "Camille", filter: "tous" }, now));
+    assert.deepEqual(byName.map((r) => r.id), [mine], "the other pro's Camille is not listed");
+    assert.deepEqual(searchRows(await searchClientsCore(db, ctx, { q: theirEmail, filter: "tous" }, now)), [], "nor found by e-mail");
+    // A professionalId smuggled in the input is refused whole (strict schema), not honoured.
+    assert.equal(
+      searchRefusal(await searchClientsCore(db, ctx, { q: "Camille", filter: "tous", professionalId: other.proId }, now)),
+      "Champ inattendu.",
+    );
+    // The other pro finds only its own.
+    const theirSearch = searchRows(await searchClientsCore(db, proCtx(other), { q: "Camille", filter: "tous" }, now));
+    assert.deepEqual(theirSearch.map((r) => r.id), [theirs]);
+  } finally {
+    await deleteTestUser(db, other.userId);
+  }
+});
+
+dbTest("searchClientsCore: a malformed input is refused whole, in French, before anything is read", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  // A database that fails on any use: every refusal below must come from the parse, before the first read.
+  const noDb = new Proxy({}, {
+    get() {
+      throw new Error("the database was used");
+    },
+  }) as unknown as Db;
+  const refused = async (input: unknown) => searchRefusal(await searchClientsCore(noDb, ctx, input, now));
+  assert.equal(await refused({ q: "", filter: "tous", extra: 1 }), "Champ inattendu.");
+  assert.equal(await refused({ q: "a".repeat(101), filter: "tous" }), "Recherche : 100 caractères au maximum.");
+  assert.equal(await refused({ q: "", filter: "nope" }), "Choix invalide.");
+  assert.equal(await refused({ q: "" }), "Choix invalide.");
+  assert.equal(await refused({ q: 5, filter: "tous" }), "Recherche : ce champ est obligatoire.");
+  assert.equal(await refused({ q: ["x"], filter: "tous" }), "Recherche : ce champ est obligatoire.");
+  assert.equal(await refused({ filter: "tous" }), "Recherche : ce champ est obligatoire.");
+  assert.equal(await refused(null), "Valeur invalide.");
+  assert.equal(await refused("tous"), "Valeur invalide.");
+  // 100 characters after trimming is fine.
+  searchRows(await searchClientsCore(db, ctx, { q: ` ${"a".repeat(100)} `, filter: "tous" }, now));
 });
 
 dbTest("offerTicketsCore: a last day past the end of the calendar is a refusal, not a crash", async ({ db, pro }) => {
