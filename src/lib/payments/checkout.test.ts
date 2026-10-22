@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import Stripe from "stripe";
+
 import { stripeMode } from "@/lib/admin-metrics";
 import { CHECKOUT_MINUTES } from "@/lib/tickets-vocab";
 
@@ -232,10 +234,29 @@ test("createRequestOptions: the Checkout create is bounded (15 s, one retry) and
   assert.notEqual(createRequestOptions("pur_a").idempotencyKey, createRequestOptions("pur_b").idempotencyKey);
 });
 
-test("the one retry keeps expires_at above Stripe's 30-minute minimum (31 minutes minus two 15 s tries and the back-off)", () => {
-  const worstCaseMs = 2 * CREATE_OPTIONS.timeout + 5_000; // two tries plus a generous back-off
-  const left = CHECKOUT_MINUTES * 60_000 - worstCaseMs;
-  assert.ok(left > 30 * 60_000, `${left} ms left at the retry`);
+test("the create is bounded at 90 s; its retry stays inside the 31-minute margin for a Retry-After up to 45 s, a longer one fails the retry cleanly", () => {
+  // stripe 22.2.2 (node_modules/stripe/cjs/RequestSender.js): before its retry the SDK sleeps the Retry-After of the
+  // answer when it is at most MAX_RETRY_AFTER_WAIT seconds (a longer one is ignored), else its own back-off.
+  const sdk = readFileSync("node_modules/stripe/cjs/RequestSender.js", "utf8");
+  const maxRetryAfterMs = Number(sdk.match(/const MAX_RETRY_AFTER_WAIT = (\d+);/)?.[1]) * 1000;
+  assert.equal(maxRetryAfterMs, 60_000, "the SDK still waits up to 60 s for a Retry-After: re-model the margin if it changed");
+  const backoffMs = new Stripe("sk_test_unit").getMaxNetworkRetryDelay() * 1000;
+  assert.ok(backoffMs < maxRetryAfterMs, "the longest wait is a Retry-After, not the back-off");
+
+  // The retry is SENT at most this long after the create began: the first try answers within its timeout, then the SDK sleeps.
+  const retrySentMs = CREATE_OPTIONS.timeout + maxRetryAfterMs;
+  assert.equal(retrySentMs, 75_000);
+  // Plus the retry's own try: what the visitor can wait for the whole create.
+  assert.equal(retrySentMs + CREATE_OPTIONS.timeout, 90_000);
+
+  // expires_at is stamped CHECKOUT_MINUTES ahead before the call and Stripe wants 30 minutes at least when the retry
+  // arrives: the margin absorbs a retry sent up to 60 s late, i.e. a Retry-After up to 45 s (a back-off retry, at
+  // most timeout + back-off, always fits). A longer Retry-After is not absorbed: Stripe refuses the retry, the
+  // gateway throws and createCheckoutAndAttach releases the hold with COPY.CHECKOUT_FAILED (booking-actions.db.test.ts,
+  // « a gateway failure releases the seat at once »).
+  const marginMs = (CHECKOUT_MINUTES - 30) * 60_000;
+  assert.ok(CREATE_OPTIONS.timeout + backoffMs <= marginMs, "a retry after a network error or a 5xx always fits");
+  assert.equal(marginMs - CREATE_OPTIONS.timeout, 45_000, "the longest Retry-After the margin absorbs");
 });
 
 test("the real gateway creates the session with createRequestOptions(req.purchaseId), never the client defaults (80 s, 2 retries)", () => {

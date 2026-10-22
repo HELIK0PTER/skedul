@@ -5,7 +5,8 @@
  * bundle (plan Global Constraints). Run from the repository root.
  */
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import test from "node:test";
 
@@ -34,7 +35,7 @@ function hasDirective(file: string, directive: string): boolean {
   return new RegExp(`^\\s*["']${directive}["']`).test(text);
 }
 
-/** The specifiers a file loads at run time: every `import` and `export ... from`, `import type` and `export type` excluded. */
+/** The specifiers a file loads at run time: every `import`, `export ... from`, `import("x")` and `require("x")`, `import type` and `export type` excluded. */
 function runtimeSpecifiers(file: string): string[] {
   const code = codeOf(file);
   const out: string[] = [];
@@ -42,6 +43,8 @@ function runtimeSpecifiers(file: string): string[] {
     if (m[1] === undefined) out.push(m[2]);
   }
   for (const m of code.matchAll(/^\s*import\s+["']([^"']+)["']/gm)) out.push(m[1]);
+  // import("x") and require("x") load a module at run time too (a literal specifier; a computed one cannot be followed)
+  for (const m of code.matchAll(/\b(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/g)) out.push(m[1]);
   return out;
 }
 
@@ -75,6 +78,39 @@ function runtimeClosure(entry: string): string[] {
   }
   return [...seen];
 }
+
+test("runtimeSpecifiers collects static imports, re-exports, side-effect imports, import() and require(), and no type-only or commented one", () => {
+  const dir = mkdtempSync(join(tmpdir(), "specifiers-"));
+  try {
+    const file = join(dir, "fixture.ts");
+    writeFileSync(
+      file,
+      [
+        'import { a } from "./static";',
+        'import type { T } from "./typed";',
+        'export type { U } from "./typed-reexport";',
+        'export * from "./reexport";',
+        'import "./side-effect";',
+        'const lazy = () => import("@/lib/payments/checkout");',
+        "const spaced = await import(\n  '@/lib/stripe'\n);",
+        'const legacy = require("../legacy");',
+        "const unresolvable = import(someVariable);",
+        '// import("./in-a-line-comment");',
+        '/* require("./in-a-block-comment"); */',
+      ].join("\n"),
+    );
+    assert.deepEqual(runtimeSpecifiers(file).sort(), [
+      "../legacy",
+      "./reexport",
+      "./side-effect",
+      "./static",
+      "@/lib/payments/checkout",
+      "@/lib/stripe",
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("src/lib/payment-mode.ts has no import at all (a client bundle can load it alone)", () => {
   const code = codeOf("src/lib/payment-mode.ts");

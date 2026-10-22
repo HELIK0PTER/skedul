@@ -99,8 +99,12 @@ export function buybookCheckoutExpiry(nowMs: number): Date {
 /**
  * Stripe request options of the Checkout create (contract § 3.6). A visitor is waiting on a buy + book or a shop
  * purchase, so one 15 s try and one retry (the client defaults, 80 s and 2 retries, would hold the action for
- * minutes and a late retry would reach Stripe with an `expires_at` under its 30-minute minimum, the session being
- * stamped 31 minutes ahead). Two tries plus the back-off stay well inside that minute.
+ * minutes). Before its retry the SDK sleeps the Retry-After of the answer when it is at most 60 s (stripe 22.2.2,
+ * node_modules/stripe/cjs/RequestSender.js MAX_RETRY_AFTER_WAIT; a longer one is ignored, and a network error or a
+ * 5xx without one waits 5 s at most), so the retry is sent at most `timeout + 60 s` after the first try began and
+ * the whole call is bounded at 90 s. The session is stamped 31 minutes ahead and Stripe wants 30 at least when the
+ * retry arrives: that margin of one minute absorbs a Retry-After up to 45 s. A longer one makes Stripe refuse the
+ * retry, which is a clean create error: createCheckoutAndAttach releases the hold and answers CHECKOUT_FAILED.
  */
 export const CREATE_OPTIONS = { timeout: 15_000, maxNetworkRetries: 1 } as const;
 
