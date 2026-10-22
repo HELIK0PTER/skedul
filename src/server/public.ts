@@ -10,6 +10,7 @@ import {
   type HeldTicketInput,
 } from "@/lib/public/booking-actions";
 import { splitActionInput } from "@/lib/public/context";
+import { abandonCheckoutCore, type AbandonOutcome } from "@/lib/public/release-actions";
 import type { PublicResult } from "@/lib/public/result";
 import { startShopPurchaseCore, type ShopPurchaseInput } from "@/lib/public/shop-actions";
 import { publicDeps, runPublicAction } from "@/server/public-context";
@@ -53,5 +54,16 @@ export async function startShopPurchaseAction(
   const { slug, rest } = splitActionInput(input);
   return runPublicAction("startShopPurchase", slug, (pro, visitor, now) =>
     startShopPurchaseCore(db, pro, visitor, rest, publicDeps(), now),
+  );
+}
+
+/** E11 from the payment return page: give a held seat back (abandonCheckoutCore); the purchase id is scoped to the page's pro. */
+export async function abandonCheckoutAction(input: {
+  slug: string;
+  purchaseId: string;
+}): Promise<PublicResult<{ outcome: AbandonOutcome }>> {
+  const { slug, rest } = splitActionInput(input);
+  return runPublicAction("abandonCheckout", slug, (pro, visitor, now) =>
+    abandonCheckoutCore(db, pro, visitor, rest, publicDeps(), now),
   );
 }
