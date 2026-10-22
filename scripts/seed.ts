@@ -146,6 +146,8 @@ async function main() {
   await createUser("Admin Skedul", "admin@skedul.test", "admin");
   const proUserId = await createUser("Altinha Paris", "pro@skedul.app", "pro");
   const beatrizUserId = await createUser("Beatriz Almeida", "beatriz@example.com", "client");
+  // Thomas spends a held ticket below: a client spend is the act of an account holder (OUT:75)
+  const thomasUserId = await createUser("Thomas Leroy", "thomas@example.com", "client");
 
   /* ── 2. Pro page and catalog, as of 8 weeks ago ──────────────── */
   const [pro] = await db
@@ -293,7 +295,7 @@ async function main() {
         occurrenceId: debutantsUpcoming.id,
         customerId: thomas,
         seenStartsAt: debutantsUpcoming.startsAt,
-        actorUserId: null,
+        actorUserId: thomasUserId,
         customerNotes: "Jamais joué, mais super curieux d'essayer !",
       },
       T,

@@ -60,7 +60,10 @@ import { fail, failOf, syncEffects, type Effect, type EngineResult } from "./typ
 type ClientClaimBase = {
   professionalId: string;
   occurrenceId: string;
-  /** from upsertCustomer (or the verified wallet owner) */
+  /**
+   * E1 / E3: from upsertCustomer (identifies the row, authorises nothing). E2 (bookWithHeldTicket): ONLY the
+   * verified wallet owner's customer (requireWalletOwner), never a customer resolved from a typed e-mail (OUT:75).
+   */
   customerId: string;
   /** occurrence.starts_at the client saw: G(starts_at = seen, 'changed') */
   seenStartsAt: Date;
@@ -163,7 +166,9 @@ export type OfferScope =
 
 /**
  * The offer is still on sale with the snapshot the plan read (price,
- * quantity, validity) and still usable in `scope`. Asserted with 'stale'.
+ * quantity, validity) and still usable in `scope`. A type switched to
+ * « Gratuit » (rdv_free) sells nothing in ANY scope (LED:139): this is the
+ * client half of the rdv_free race, inside the batch. Asserted with 'stale'.
  */
 export function offerUnchanged(o: OfferRow, professionalId: string, scope: OfferScope): SQL {
   const link =
@@ -173,14 +178,14 @@ export function offerUnchanged(o: OfferRow, professionalId: string, scope: Offer
       : sql``;
   const rdv =
     scope.kind === "rdv"
-      ? sql`and f.ticket_type_id = ${scope.ticketTypeId} and tt.rdv_enabled and not tt.rdv_free`
+      ? sql`and f.ticket_type_id = ${scope.ticketTypeId} and tt.rdv_enabled`
       : sql``;
   return sql`exists (
     select 1 from ticket_offer f
     join ticket_type tt on tt.id = f.ticket_type_id
     ${link}
     where f.id = ${o.offerId} and f.professional_id = ${professionalId}
-      and f.is_active and f.archived_at is null and tt.archived_at is null
+      and f.is_active and f.archived_at is null and tt.archived_at is null and not tt.rdv_free
       and f.price_cents = ${o.priceCents}::int and f.quantity = ${o.quantity}::int
       and f.validity_count is not distinct from ${o.validityCount}::int
       and f.validity_unit is not distinct from ${o.validityUnit}::validity_unit
@@ -561,14 +566,17 @@ function spentTicketId(results: readonly unknown[], index: number | undefined, b
 }
 
 /**
- * E2 client: spend a held ticket on an event séance in `tickets` mode
- * (requireWalletOwner is the P4 action's job). Batch: lock occurrence, R,
+ * E2 client: spend a held ticket on an event séance in `tickets` mode. The
+ * P4 action passes ONLY the verified wallet owner's customer and user
+ * (requireWalletOwner, OUT:75): never a customer resolved from a typed e-mail,
+ * never a guest cookie. `actorUserId` is that owner's user id, recorded on the
+ * spend movement. Batch: lock occurrence, R,
  * G(not already booked), SEAT(+1), G(ONLINE_OK 'tickets'), G(CHANGED), INSERT
  * booking (confirmed, ticket), spend (SKIP LOCKED pick) + assertSpent, answers.
  */
 export async function bookWithHeldTicket(
   db: Db,
-  input: ClientClaimBase & { actorUserId: string | null },
+  input: ClientClaimBase & { actorUserId: string },
   now: Date = new Date(),
 ): Promise<EngineResult<{ bookingId: string; ticketId: string }>> {
   const planned: { bookingId?: string; spendAt?: number } = {};

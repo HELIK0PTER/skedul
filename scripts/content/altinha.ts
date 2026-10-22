@@ -65,7 +65,7 @@ export const ALTINHA_PROFILE = {
 };
 
 /** Fixed demo client accounts (also deleted by `seed --wipe`). */
-export const SEED_CLIENT_EMAILS = ["beatriz@example.com"] as const;
+export const SEED_CLIENT_EMAILS = ["beatriz@example.com", "thomas@example.com"] as const;
 
 /** Rules for every listed day, `start`–`end` minutes after local midnight. */
 function hours(days: readonly number[], ranges: readonly [number, number][]): AvailabilityRuleInput[] {

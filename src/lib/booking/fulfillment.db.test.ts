@@ -4,7 +4,7 @@ import { nanoid } from "nanoid";
 
 import { setTicketTypeArchived } from "@/lib/booking/catalog";
 import { startBuyAndBook } from "@/lib/booking/claims";
-import { fulfillPurchase, markProcessing, startPurchase, type PaymentFacts } from "@/lib/booking/fulfillment";
+import { fulfillPurchase, markProcessing, recordOrphanPayment, startPurchase, type PaymentFacts } from "@/lib/booking/fulfillment";
 import { throttle, ticketMovement, ticketPurchase } from "@/lib/db/schema";
 import { HEALTH_KEYS, readHealth } from "@/lib/throttle";
 import { ticketExpiry } from "@/lib/ticket-expiry";
@@ -225,6 +225,26 @@ dbTest("E10 orphan payment: no purchase, counted for the admin health card", asy
   assert.deepEqual(done.effects, []);
   const after = (await readHealth(h.db))[HEALTH_KEYS.orphanPayments]?.value ?? 0;
   assert.equal(after, before + 1);
+});
+
+dbTest("recordOrphanPayment counts the payment for the admin card and returns the orphan outcome (the webhook's unresolvable sessions)", async (h) => {
+  const key = HEALTH_KEYS.orphanPayments;
+  const [saved] = await h.db.select().from(throttle).where(eq(throttle.key, key));
+  try {
+    const before = (await readHealth(h.db))[key]?.value ?? 0;
+    const done = await recordOrphanPayment(h.db, payment(true), new Date());
+    assert.deepEqual(done, { ok: true, effects: [], outcome: "orphan", ticketIds: [], bookingConfirmed: false });
+    assert.equal((await readHealth(h.db))[key]?.value, before + 1);
+    // a payment without a session id (the mock checkout shape) is counted the same way
+    await recordOrphanPayment(h.db, { sessionId: null, paymentIntentId: null, livemode: false }, new Date());
+    assert.equal((await readHealth(h.db))[key]?.value, before + 2);
+  } finally {
+    if (saved) {
+      await h.db.update(throttle).set({ hits: saved.hits, windowStart: saved.windowStart }).where(eq(throttle.key, key));
+    } else {
+      await h.db.delete(throttle).where(eq(throttle.key, key));
+    }
+  }
 });
 
 dbTest("markProcessing keeps the first instant and refuses a paid purchase", async (h) => {

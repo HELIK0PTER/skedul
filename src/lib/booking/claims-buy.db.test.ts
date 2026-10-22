@@ -3,6 +3,7 @@ import { eq, sql } from "drizzle-orm";
 
 import { setTicketTypeArchived } from "@/lib/booking/catalog";
 import { activeBookingOf, attachCheckoutSession, startBuyAndBook, type BuyAndBookInput } from "@/lib/booking/claims";
+import { startPurchase } from "@/lib/booking/fulfillment";
 import { bookingAnswer, question, ticketPurchase, timeOff } from "@/lib/db/schema";
 import type { OfferInput } from "@/lib/tickets";
 import { addMinutes, dbTest, inParallel, type DbHarness } from "@/test/db";
@@ -184,6 +185,27 @@ dbTest("E1 maps a moved séance to changed and an edited offer to stale", async 
   });
   assert.equal(codeOf(edited), "stale");
   assert.equal((await getOccurrence(h.db, s2.occ.id)).seatsTaken, 0);
+});
+
+dbTest("E1 and E9 refuse an offer whose type became « Gratuit » after its creation: stale, no purchase, no seat (LED:139)", async (h) => {
+  const s = await setup(h);
+  // The pro switches the type to « Gratuit » (rdv_free): done by SQL here, as the pro half of FR:F9 is not guarded in P4.
+  // The offer is still active and linked, so only the sale's own batch guard can refuse it.
+  await h.db.execute(
+    sql`update ticket_type set rdv_enabled = true, rdv_duration_min = 60, rdv_free = true where id = ${s.typeId}`,
+  );
+  assert.deepEqual(await startBuyAndBook(h.db, buyInput(h, s)), { ok: false, code: "stale" });
+  assert.deepEqual(
+    await startPurchase(h.db, { professionalId: h.pro.proId, offerId: s.offerId, customerId: s.customerId }),
+    { ok: false, code: "stale" },
+  );
+  const purchases = await h.db.select({ id: ticketPurchase.id }).from(ticketPurchase).where(eq(ticketPurchase.professionalId, h.pro.proId));
+  assert.deepEqual(purchases, []);
+  assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 0);
+
+  // another type of the same pro is not affected
+  const control = await setup(h);
+  assert.equal(codeOf(await startBuyAndBook(h.db, buyInput(h, control))), "ok");
 });
 
 dbTest("E1 refuses an offer whose validity ends before the séance", async (h) => {

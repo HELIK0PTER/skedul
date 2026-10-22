@@ -80,7 +80,7 @@ dbTest("T10a: a claim between the preview and the time-off batch makes it stale"
           occurrenceId: occ.id,
           customerId,
           seenStartsAt: occ.startsAt,
-          actorUserId: null,
+          actorUserId: pro.userId,
         });
         must(b, "claim inside afterPlan");
         bookingId = b.bookingId;
@@ -123,7 +123,7 @@ dbTest("T10b: once the time off exists, an online claim is unavailable but the p
     occurrenceId: occ.id,
     customerId,
     seenStartsAt: occ.startsAt,
-    actorUserId: null,
+    actorUserId: pro.userId,
   });
   assert.equal(claim.ok ? "ok" : claim.code, "unavailable");
   must(
@@ -148,7 +148,7 @@ dbTest("E6c: « Annuler ces séances » cancels the booked overlapping séances 
     occurrenceId: booked.id,
     customerId,
     seenStartsAt: booked.startsAt,
-    actorUserId: null,
+    actorUserId: pro.userId,
   });
   must(b, "book");
   const range = { startAt: instantAt(day, 0, pro.tz), endAt: instantAt(addDays(day, 1), 0, pro.tz) };
@@ -186,7 +186,7 @@ dbTest("E6c: « Les garder » keeps the booked séance; a bad range is invalid",
   const customerId = await makeCustomer(db, pro);
   await giveTickets(db, pro, customerId, typeId, 1);
   must(
-    await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: null }),
+    await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: pro.userId }),
     "book",
   );
   const kept = await createTimeOffWithConflicts(db, {
@@ -236,7 +236,7 @@ dbTest("E6c: a séance that already started inside the time-off range is neither
     occurrenceId: started.id,
     customerId: earlyBird,
     seenStartsAt: started.startsAt,
-    actorUserId: null,
+    actorUserId: pro.userId,
   });
   must(bStarted, "book the séance that will have started");
   const bFuture = await bookWithHeldTicket(db, {
@@ -244,7 +244,7 @@ dbTest("E6c: a séance that already started inside the time-off range is neither
     occurrenceId: future.id,
     customerId: lateComer,
     seenStartsAt: future.startsAt,
-    actorUserId: null,
+    actorUserId: pro.userId,
   });
   must(bFuture, "book the future séance");
 
@@ -294,7 +294,7 @@ dbTest("E6c: the preview of an empty or inverted range has no conflict and does 
   const customerId = await makeCustomer(db, pro);
   await giveTickets(db, pro, customerId, typeId, 1);
   must(
-    await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: null }),
+    await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: pro.userId }),
     "book",
   );
   assert.deepEqual(

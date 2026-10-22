@@ -34,7 +34,7 @@ async function seanceWithBookings({ db, pro }: DbHarness, n: number, ticketExpir
   for (let i = 0; i < n; i++) {
     const customerId = await makeCustomer(db, pro);
     await giveTickets(db, pro, customerId, typeId, 1, { expiresAt: ticketExpiresAt });
-    const b = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: null });
+    const b = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: pro.userId });
     must(b, "book");
     bookingIds.push(b.bookingId);
     customerIds.push(customerId);

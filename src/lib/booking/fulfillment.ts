@@ -87,14 +87,15 @@ export async function startPurchase(
 
 export type PaymentFacts = { sessionId: string | null; paymentIntentId: string | null; livemode: boolean };
 export type FulfillOutcome = "fulfilled" | "duplicate" | "orphan";
-type FulfillData = { outcome: FulfillOutcome; ticketIds: string[]; bookingConfirmed: boolean };
+/** What fulfilment and an orphan record return. */
+export type FulfillData = { outcome: FulfillOutcome; ticketIds: string[]; bookingConfirmed: boolean };
 
 function noop(outcome: "duplicate" | "orphan"): EngineOk<FulfillData> {
   return { ok: true, effects: [], outcome, ticketIds: [], bookingConfirmed: false };
 }
 
 /** Money for a purchase that does not exist (pro deleted, session from before the refonte): logged and counted for the admin; refunded by hand in Stripe. */
-async function orphan(db: Db, payment: PaymentFacts, now: Date): Promise<EngineOk<FulfillData>> {
+export async function recordOrphanPayment(db: Db, payment: PaymentFacts, now: Date): Promise<EngineOk<FulfillData>> {
   console.warn(`[stripe] orphan payment ${payment.sessionId ?? "-"}/${payment.paymentIntentId ?? "-"}`);
   await bumpHealth(db, HEALTH_KEYS.orphanPayments, 1, now);
   return noop("orphan");
@@ -157,7 +158,7 @@ export async function fulfillPurchase(
     .from(ticketPurchase)
     .innerJoin(professional, eq(professional.id, ticketPurchase.professionalId))
     .where(eq(ticketPurchase.id, purchaseId));
-  if (!purchase) return orphan(db, payment, now);
+  if (!purchase) return recordOrphanPayment(db, payment, now);
   if (purchase.status === "paid") return noop("duplicate");
 
   const [held] = await db.select({ id: booking.id }).from(booking).where(eq(booking.purchaseId, purchaseId));
@@ -192,7 +193,7 @@ export async function fulfillPurchase(
     if (res.code === "duplicate") {
       // `already_paid` is also how a purchase deleted since the pre-read looks: the guarded UPDATE matches no row.
       const [still] = await db.select({ id: ticketPurchase.id }).from(ticketPurchase).where(eq(ticketPurchase.id, purchaseId));
-      return still ? noop("duplicate") : orphan(db, payment, now);
+      return still ? noop("duplicate") : recordOrphanPayment(db, payment, now);
     }
     throw new Error(`fulfillPurchase ${purchaseId}: unexpected ${res.code}`);
   }

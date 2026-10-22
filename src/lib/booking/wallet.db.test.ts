@@ -58,7 +58,7 @@ dbTest("T9a: convert and spend race for the last ticket: exactly one takes effec
         selection: { ticketTypeId: typeA, quantity: 1 },
         toTicketTypeId: typeB,
       }),
-    () => bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: null }),
+    () => bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: pro.userId }),
   ]);
   const [conv, spend] = settled.map(label);
   assert.ok((conv === "ok" && spend === "no_ticket") || (conv === "no_ticket" && spend === "ok"), `${conv} / ${spend}`);
@@ -309,7 +309,7 @@ dbTest("Déplacer un inscrit: eligibility, expiry (force) and seats on both séa
   } = await makeEvent(db, pro, { ticketTypeIds: [typeB], rule: { startDate: day5, startMinute: 840 } });
   const customerId = await makeCustomer(db, pro);
   await giveTickets(db, pro, customerId, typeA, 1, { expiresAt: instantAt(dayIn(pro, 4), 0, pro.tz) });
-  const b = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: src.id, customerId, seenStartsAt: src.startsAt, actorUserId: null });
+  const b = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: src.id, customerId, seenStartsAt: src.startsAt, actorUserId: pro.userId });
   must(b, "book");
   const move = (targetOccurrenceId: string, force: boolean) =>
     moveAttendee(db, { professionalId: pro.proId, actorUserId: pro.userId, bookingId: b.bookingId, targetOccurrenceId, force });
@@ -355,7 +355,7 @@ dbTest("Déplacer un inscrit: a full target is `full`, a target already booked b
   await giveTickets(db, pro, c1, typeA, 2);
   await giveTickets(db, pro, c2, typeA, 1);
   const book = async (customerId: string, o: { id: string; startsAt: Date }) => {
-    const r = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: o.id, customerId, seenStartsAt: o.startsAt, actorUserId: null });
+    const r = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: o.id, customerId, seenStartsAt: o.startsAt, actorUserId: pro.userId });
     must(r, "book");
     return r.bookingId;
   };
@@ -384,7 +384,7 @@ dbTest("Déplacer un inscrit: a full target the client already holds is `already
   const customerId = await makeCustomer(db, pro);
   await giveTickets(db, pro, customerId, typeA, 2);
   const book = async (o: { id: string; startsAt: Date }) => {
-    const r = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: o.id, customerId, seenStartsAt: o.startsAt, actorUserId: null });
+    const r = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: o.id, customerId, seenStartsAt: o.startsAt, actorUserId: pro.userId });
     must(r, "book");
     return r.bookingId;
   };
@@ -412,7 +412,7 @@ dbTest("Déplacer + convertir (SPE1): the booked ticket takes a type the target 
   } = await makeEvent(db, pro, { ticketTypeIds: [typeB], rule: { startDate: dayIn(pro, 5) } });
   const customerId = await makeCustomer(db, pro);
   const [bookedTicket] = await giveTickets(db, pro, customerId, typeA, 1);
-  const b = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: src.id, customerId, seenStartsAt: src.startsAt, actorUserId: null });
+  const b = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: src.id, customerId, seenStartsAt: src.startsAt, actorUserId: pro.userId });
   must(b, "book");
   const [spare] = await giveTickets(db, pro, customerId, typeA, 1);
   const now = new Date();
@@ -481,7 +481,7 @@ dbTest("Déplacer + convertir (SPE1): a target type archived between the plan an
   } = await makeEvent(db, pro, { ticketTypeIds: [typeB], rule: { startDate: dayIn(pro, 5) } });
   const customerId = await makeCustomer(db, pro);
   const [bookedTicket] = await giveTickets(db, pro, customerId, typeA, 1);
-  const b = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: src.id, customerId, seenStartsAt: src.startsAt, actorUserId: null });
+  const b = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: src.id, customerId, seenStartsAt: src.startsAt, actorUserId: pro.userId });
   must(b, "book");
 
   const res = await moveAttendee(
@@ -540,7 +540,7 @@ dbTest("E5 after « Déplacer »: a moved client may cancel until the start of t
   } = await makeEvent(db, pro, { ticketTypeIds: [typeA], rule: { startDate: dayIn(pro, 5) } });
   const customerId = await makeCustomer(db, pro);
   await giveTickets(db, pro, customerId, typeA, 1);
-  const b = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: src.id, customerId, seenStartsAt: src.startsAt, actorUserId: null });
+  const b = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: src.id, customerId, seenStartsAt: src.startsAt, actorUserId: pro.userId });
   must(b, "book");
   must(
     await moveAttendee(db, { professionalId: pro.proId, actorUserId: pro.userId, bookingId: b.bookingId, targetOccurrenceId: dst.id, force: false }),

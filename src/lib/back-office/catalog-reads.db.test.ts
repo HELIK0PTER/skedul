@@ -250,7 +250,7 @@ dbTest("catalog reads: usableTickets ignores booked, used and closed tickets", a
   assert.equal((await summaryOf(db, pro, typeId, now)).usableTickets, 2, "used and closed tickets no longer count");
 
   must(
-    await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: null }),
+    await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: pro.userId }),
     "book",
   );
   assert.equal((await summaryOf(db, pro, typeId, now)).usableTickets, 1, "a booked ticket no longer counts");

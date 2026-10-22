@@ -20,22 +20,31 @@ const customerExists = (professionalId: string, customerId: string) =>
 
 /**
  * Anonymous identity (E1, E3, E4, E9), ONE statement: insert, or on
- * (professional_id, email) fill only the blanks: phone and user_id are
- * COALESCEd, the name is NEVER overwritten by anonymous input. `userId` only
- * when a verified session carries the same e-mail (the caller checks). The
- * caller validated the input (customerInputSchema); a CHECK error throws.
+ * (professional_id, email) fill only the blanks. The name is NEVER overwritten
+ * by anonymous input. `userId` is kept only when that user is verified and
+ * carries this e-mail, on insert and on conflict (OUT:69): a typed e-mail never
+ * links someone else's account, and anonymous input never fills an existing
+ * client's phone (only that verified user does, SEC-M8; a new row keeps its
+ * typed phone). The row identifies a customer to attach a booking or a purchase
+ * to; it authorises nothing (no wallet, no spend). The caller validated the
+ * input (customerInputSchema); a CHECK error throws.
  */
 export async function upsertCustomer(
   db: Db,
   input: { professionalId: string; email: string; name: string; phone?: string | null; userId?: string | null },
   now: Date = new Date(),
 ): Promise<{ customerId: string }> {
+  const email = normalizeEmail(input.email);
+  const phone = input.phone?.trim() || null;
   const res = await db.execute<{ id: string }>(sql`
+    with u as (
+      select id from "user"
+      where id = ${input.userId ?? null}::text and email_verified and lower(email) = ${email}
+    )
     insert into customer (id, professional_id, email, name, phone, user_id, link_version, created_at, updated_at)
-    values (${nanoid()}, ${input.professionalId}, ${normalizeEmail(input.email)}, ${input.name.trim()},
-      ${input.phone?.trim() || null}, ${input.userId ?? null}, 1, ${ts(now)}, ${ts(now)})
+    values (${nanoid()}, ${input.professionalId}, ${email}, ${input.name.trim()}, ${phone}, (select id from u), 1, ${ts(now)}, ${ts(now)})
     on conflict (professional_id, email) do update set
-      phone = coalesce(customer.phone, excluded.phone),
+      phone = case when customer.phone is null and excluded.user_id is not null then excluded.phone else customer.phone end,
       user_id = coalesce(customer.user_id, excluded.user_id),
       updated_at = excluded.updated_at
     returning id`);

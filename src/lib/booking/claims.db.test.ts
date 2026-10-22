@@ -26,13 +26,14 @@ const codesOf = (settled: PromiseSettledResult<Outcome>[]): string[] =>
   settled.map((s) => (s.status === "fulfilled" ? codeOf(s.value) : `threw: ${String(s.reason)}`));
 const countOf = (codes: string[], code: string): number => codes.filter((c) => c === code).length;
 
+/** The client's user id is any real user: the spend only records it (here the pro's own user stands in for the client). */
 function held(h: DbHarness, occ: OccurrenceRow, customerId: string) {
   return {
     professionalId: h.pro.proId,
     occurrenceId: occ.id,
     customerId,
     seenStartsAt: occ.startsAt,
-    actorUserId: null,
+    actorUserId: h.pro.userId,
   };
 }
 
@@ -375,6 +376,27 @@ dbTest("bookWithHeldTicket and registerPro return the id of the ticket booked on
   assert.equal(guest.ticketId, null);
   assert.deepEqual(await bookedOn(guest.bookingId), []);
 });
+
+dbTest("E2 records the client user on the spend movement (OUT:75)", async (h) => {
+  const typeId = await makeType(h.db, h.pro);
+  const { occurrences: [occ] } = await makeEvent(h.db, h.pro, { ticketTypeIds: [typeId] });
+  const customerId = await makeCustomer(h.db, h.pro);
+  await giveTickets(h.db, h.pro, customerId, typeId, 1);
+  const res = await bookWithHeldTicket(h.db, held(h, occ, customerId));
+  assert.ok(res.ok, JSON.stringify(res));
+  const [spend] = await h.db
+    .select({ actor: ticketMovement.actor, actorUserId: ticketMovement.actorUserId })
+    .from(ticketMovement)
+    .where(and(eq(ticketMovement.ticketId, res.ticketId), eq(ticketMovement.kind, "spend")));
+  assert.deepEqual(spend, { actor: "client", actorUserId: h.pro.userId });
+});
+
+/** Compile-time contract (never called): a client spend always has a user, so `null` is refused by the type. */
+function nullActorIsRefused(h: DbHarness, occ: OccurrenceRow, customerId: string) {
+  // @ts-expect-error actorUserId is a string since P4 (OUT:75), null no longer compiles
+  return bookWithHeldTicket(h.db, { ...held(h, occ, customerId), actorUserId: null });
+}
+void nullActorIsRefused;
 
 dbTest("registerPro: the same client twice for the last seat is already_booked, whatever the coverage", async (h) => {
   const typeId = await makeType(h.db, h.pro);

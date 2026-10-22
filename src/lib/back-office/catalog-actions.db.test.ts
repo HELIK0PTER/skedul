@@ -207,7 +207,7 @@ dbTest("rdvFree also waits for a payment in progress and for a booked ticket", a
   } = await makeEvent(db, pro, { ticketTypeIds: [withBooked] });
   const customerId = await makeCustomer(db, pro);
   await giveTickets(db, pro, customerId, withBooked, 1);
-  const booked = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: null });
+  const booked = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: pro.userId });
   assert.ok(booked.ok, `bookWithHeldTicket: ${JSON.stringify(booked)}`);
   refused(await makeFree(withBooked), RDV_FREE_HAS_SALES, "a booked ticket");
   assert.equal((await detailOf(db, pro, withBooked, now)).rdvFree, false, "the refusal changed nothing");
@@ -227,7 +227,7 @@ dbTest("rdvFree counts only the facts that can still matter: a past séance and 
   } = await makeEvent(db, pro, { ticketTypeIds: [past] });
   const customerId = await makeCustomer(db, pro);
   await giveTickets(db, pro, customerId, past, 1);
-  const booked = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: null });
+  const booked = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: pro.userId });
   assert.ok(booked.ok, `bookWithHeldTicket: ${JSON.stringify(booked)}`);
   const upcoming = await detailOf(db, pro, past, now);
   assert.deepEqual([upcoming.usableTickets, upcoming.upcomingBooked, upcoming.livePurchases], [0, 1, 0], "the page sees the future booking");

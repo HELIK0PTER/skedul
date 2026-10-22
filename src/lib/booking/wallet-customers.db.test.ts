@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import { nanoid } from "nanoid";
 
 import { instantAt } from "@/lib/civil-date";
-import { customer, ticketMovement, ticketOffer } from "@/lib/db/schema";
+import { customer, ticketMovement, ticketOffer, user } from "@/lib/db/schema";
 
 import { addDaysMs, createTestPro, dbTest, deleteTestUser, testEmail } from "../../test/db";
 import {
@@ -28,23 +29,153 @@ async function customerRow(db: Parameters<typeof upsertCustomer>[0], id: string)
   return row;
 }
 
-dbTest("upsertCustomer normalises the e-mail, fills blanks only and never overwrites the name", async ({ db, pro }) => {
-  const email = testEmail();
-  const first = await upsertCustomer(db, { professionalId: pro.proId, email: `  ${email.toUpperCase()} `, name: " Léa " });
-  const again = await upsertCustomer(db, {
-    professionalId: pro.proId,
-    email,
-    name: "Quelqu'un d'autre",
-    phone: " 06 00 00 00 00 ",
-    userId: pro.userId,
-  });
-  assert.equal(again.customerId, first.customerId);
-  let row = await customerRow(db, first.customerId);
-  assert.deepEqual([row.email, row.name, row.phone, row.userId, row.linkVersion], [email, "Léa", "06 00 00 00 00", pro.userId, 1]);
+type TestDb = Parameters<typeof upsertCustomer>[0];
 
-  await upsertCustomer(db, { professionalId: pro.proId, email, name: "Encore", phone: "07 11 11 11 11", userId: null });
-  row = await customerRow(db, first.customerId);
-  assert.deepEqual([row.name, row.phone, row.userId], ["Léa", "06 00 00 00 00", pro.userId], "nothing filled is replaced");
+/** A `client` user row, verified or not, for the account-link cases (the caller deletes it with deleteTestUser). */
+async function insertUser(db: TestDb, opts: { email: string; verified: boolean }): Promise<string> {
+  const id = nanoid();
+  await db.insert(user).values({ id, name: "Client test", email: opts.email, emailVerified: opts.verified, role: "client" });
+  return id;
+}
+
+dbTest("upsertCustomer normalises the e-mail, keeps the typed phone of a new row and never overwrites the name", async ({ db, pro }) => {
+  const email = testEmail();
+  const first = await upsertCustomer(db, {
+    professionalId: pro.proId,
+    email: `  ${email.toUpperCase()} `,
+    name: " Léa ",
+    phone: " 06 00 00 00 00 ",
+  });
+  const again = await upsertCustomer(db, { professionalId: pro.proId, email, name: "Quelqu'un d'autre", phone: "07 11 11 11 11" });
+  assert.equal(again.customerId, first.customerId);
+  const row = await customerRow(db, first.customerId);
+  assert.deepEqual(
+    [row.email, row.name, row.phone, row.userId, row.linkVersion],
+    [email, "Léa", "06 00 00 00 00", null, 1],
+    "a new row keeps its typed phone; nothing typed afterwards replaces the name or the phone",
+  );
+});
+
+dbTest("upsertCustomer links an account only for a verified user of the same e-mail, on insert (OUT:69, S3)", async ({ db, pro }) => {
+  const users: string[] = [];
+  try {
+    const email = testEmail("link");
+    const holder = await insertUser(db, { email, verified: true });
+    const stranger = await insertUser(db, { email: testEmail("stranger"), verified: true });
+    const unverifiedEmail = testEmail("unv");
+    const unverified = await insertUser(db, { email: unverifiedEmail, verified: false });
+    users.push(holder, stranger, unverified);
+
+    // a verified user of the same address, typed with capitals and spaces: linked
+    const mine = await upsertCustomer(db, { professionalId: pro.proId, email: `  ${email.toUpperCase()} `, name: "Léa", userId: holder });
+    assert.equal((await customerRow(db, mine.customerId)).userId, holder);
+
+    // a verified user of ANOTHER address, typed for a new address: not linked
+    const typed = await upsertCustomer(db, { professionalId: pro.proId, email: testEmail("typed"), name: "Inconnu", userId: stranger });
+    assert.equal((await customerRow(db, typed.customerId)).userId, null);
+
+    // an unverified user of the same address: not linked
+    const notYet = await upsertCustomer(db, { professionalId: pro.proId, email: unverifiedEmail, name: "Pas encore", userId: unverified });
+    assert.equal((await customerRow(db, notYet.customerId)).userId, null);
+
+    // a user id that does not exist: no error, no link
+    const ghost = await upsertCustomer(db, { professionalId: pro.proId, email: testEmail("ghost"), name: "Fantôme", userId: nanoid() });
+    assert.equal((await customerRow(db, ghost.customerId)).userId, null);
+  } finally {
+    for (const id of users) await deleteTestUser(db, id);
+  }
+});
+
+dbTest("upsertCustomer on an existing row: links the verified same-address user, never another, never replaces a link, never renames (OUT:69, S3)", async ({ db, pro }) => {
+  const other = await createTestPro(db);
+  const users: string[] = [];
+  try {
+    const email = testEmail("link");
+    const typedEmail = testEmail("typed");
+    const unverifiedEmail = testEmail("unv");
+    const legacyEmail = testEmail("legacy");
+    const holder = await insertUser(db, { email, verified: true });
+    const stranger = await insertUser(db, { email: testEmail("stranger"), verified: true });
+    const unverified = await insertUser(db, { email: unverifiedEmail, verified: false });
+    const legacyHolder = await insertUser(db, { email: legacyEmail, verified: true });
+    users.push(holder, stranger, unverified, legacyHolder);
+
+    // rows first typed by anonymous visitors
+    const row = async (address: string, name: string) => (await upsertCustomer(db, { professionalId: pro.proId, email: address, name })).customerId;
+    const mine = await row(email, "Léa");
+    const typed = await row(typedEmail, "Marc");
+    const notYet = await row(unverifiedEmail, "Zoé");
+    const legacy = await row(legacyEmail, "Hugo");
+    for (const id of [mine, typed, notYet, legacy]) assert.equal((await customerRow(db, id)).userId, null);
+
+    // the verified user of the same address links the row, and the name stays
+    const again = await upsertCustomer(db, { professionalId: pro.proId, email, name: "Autre nom", userId: holder });
+    assert.equal(again.customerId, mine);
+    const linked = await customerRow(db, mine);
+    assert.deepEqual([linked.userId, linked.name], [holder, "Léa"]);
+
+    // a verified user of another address does not link the row; an unverified user of the same address neither
+    await upsertCustomer(db, { professionalId: pro.proId, email: typedEmail, name: "Marc", userId: stranger });
+    assert.equal((await customerRow(db, typed)).userId, null);
+    await upsertCustomer(db, { professionalId: pro.proId, email: unverifiedEmail, name: "Zoé", userId: unverified });
+    assert.equal((await customerRow(db, notYet)).userId, null);
+
+    // a link that is already there is never replaced, even by a verified user of the very same address
+    await db.execute(sql`update customer set user_id = ${stranger} where id = ${legacy}`);
+    await upsertCustomer(db, { professionalId: pro.proId, email: legacyEmail, name: "Hugo", userId: legacyHolder });
+    assert.equal((await customerRow(db, legacy)).userId, stranger);
+    await upsertCustomer(db, { professionalId: pro.proId, email, name: "Léa", userId: stranger });
+    assert.equal((await customerRow(db, mine)).userId, holder);
+
+    // the link is per pro: the same address at another pro is another row, unlinked until that user acts there
+    const elsewhere = await upsertCustomer(db, { professionalId: other.proId, email, name: "Léa ailleurs" });
+    assert.notEqual(elsewhere.customerId, mine);
+    assert.equal((await customerRow(db, elsewhere.customerId)).userId, null);
+  } finally {
+    await deleteTestUser(db, other.userId);
+    for (const id of users) await deleteTestUser(db, id);
+  }
+});
+
+dbTest("upsertCustomer fills a missing phone only for a verified user of the same address (SEC-M8, S46)", async ({ db, pro }) => {
+  const users: string[] = [];
+  try {
+    const email = testEmail("phone");
+    const holder = await insertUser(db, { email, verified: true });
+    const stranger = await insertUser(db, { email: testEmail("stranger"), verified: true });
+    const freshEmail = testEmail("fresh");
+    const freshHolder = await insertUser(db, { email: freshEmail, verified: true });
+    users.push(holder, stranger, freshHolder);
+    const phoneOf = async (id: string) => (await customerRow(db, id)).phone;
+
+    const existing = (await upsertCustomer(db, { professionalId: pro.proId, email, name: "Léa" })).customerId;
+    assert.equal(await phoneOf(existing), null);
+
+    // anonymous input never fills an existing client's empty phone
+    await upsertCustomer(db, { professionalId: pro.proId, email, name: "Léa", phone: "06 99 99 99 99" });
+    assert.equal(await phoneOf(existing), null);
+    // nor does a verified user of ANOTHER address typing this one
+    await upsertCustomer(db, { professionalId: pro.proId, email, name: "Léa", phone: "06 88 88 88 88", userId: stranger });
+    assert.equal(await phoneOf(existing), null);
+    // the verified user of this address without a phone leaves it empty
+    await upsertCustomer(db, { professionalId: pro.proId, email, name: "Léa", userId: holder });
+    assert.equal(await phoneOf(existing), null);
+
+    // the verified user of this address fills it
+    await upsertCustomer(db, { professionalId: pro.proId, email, name: "Léa", phone: " 06 11 22 33 44 ", userId: holder });
+    assert.equal(await phoneOf(existing), "06 11 22 33 44");
+    // and nobody replaces a phone that is there
+    await upsertCustomer(db, { professionalId: pro.proId, email, name: "Léa", phone: "07 00 00 00 00", userId: holder });
+    assert.equal(await phoneOf(existing), "06 11 22 33 44");
+    await upsertCustomer(db, { professionalId: pro.proId, email, name: "Léa", phone: "07 00 00 00 00" });
+    assert.equal(await phoneOf(existing), "06 11 22 33 44");
+
+    // a new row keeps the typed phone, with or without an account
+    const fresh = await upsertCustomer(db, { professionalId: pro.proId, email: freshEmail, name: "Marc", phone: "06 55 55 55 55", userId: freshHolder });
+    assert.equal(await phoneOf(fresh.customerId), "06 55 55 55 55");
+  } finally {
+    for (const id of users) await deleteTestUser(db, id);
+  }
 });
 
 dbTest("createCustomer: the pro's name and phone win; created tells a new row", async ({ db, pro }) => {

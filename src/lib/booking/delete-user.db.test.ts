@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { sql } from "drizzle-orm";
 
-import { addMinutes, createTestPro, dbTest, deleteTestUser, testEmail } from "../../test/db";
+import { addMinutes, createTestPro, dbTest, deleteTestUser } from "../../test/db";
 import { dayIn, giveTickets, makeCustomer, makeEvent, makeOffer, makeType, occurrencesOf } from "../../test/fixtures";
 import { instantAt } from "../civil-date";
 import type { Db } from "../db/atomic";
@@ -115,7 +115,7 @@ dbTest("T11: deleteUser on a fully populated pro removes the whole domain; other
       occurrenceId: s1.id,
       customerId: c1,
       seenStartsAt: s1.startsAt,
-      actorUserId: null,
+      actorUserId: pro.userId,
       answers: [{ questionId: questionRow.id, value: "Oui" }],
     }),
     "book s1",
@@ -125,7 +125,7 @@ dbTest("T11: deleteUser on a fully populated pro removes the whole domain; other
     occurrenceId: s2.id,
     customerId: c1,
     seenStartsAt: s2.startsAt,
-    actorUserId: null,
+    actorUserId: pro.userId,
     answers: [{ questionId: questionRow.id, value: "Non" }],
   });
   must(onS2, "book s2");
@@ -231,12 +231,16 @@ dbTest("T11: deleteUser on a fully populated pro removes the whole domain; other
   // ── the pro (A) is also a client of another pro (B)
   const other = await createTestPro(db);
   try {
+    // pro A's own verified account is linked at pro B through its own address only (OUT:69)
+    const proUser = (await db.execute<{ email: string }>(sql`select email from "user" where id = ${pro.userId}`)).rows[0];
     const { customerId: elsewhere } = await upsertCustomer(db, {
       professionalId: other.proId,
-      email: testEmail("pro-a"),
+      email: proUser.email,
       name: "Pro A",
       userId: pro.userId,
     });
+    const linked = await db.execute<{ user_id: string | null }>(sql`select user_id from customer where id = ${elsewhere}`);
+    assert.equal(linked.rows[0]?.user_id, pro.userId, "linked before the user is deleted");
 
     // fully populated: every table, every status
     const before = await rowCounts(db, p);

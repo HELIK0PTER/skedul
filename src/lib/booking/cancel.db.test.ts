@@ -41,7 +41,7 @@ dbTest("T3: client and pro cancel the same booking at once: one wins, exactly on
     occurrenceId: occ.id,
     customerId,
     seenStartsAt: occ.startsAt,
-    actorUserId: null,
+    actorUserId: pro.userId,
   });
   must(booked, "book");
 
@@ -81,7 +81,7 @@ dbTest("T7: cancelling a séance during 8 parallel claims keeps I5 and returns e
     customers.push({ customerId, ticketId });
   }
   const claim = (customerId: string) => () =>
-    bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: null });
+    bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: pro.userId });
 
   const first = inParallel<Outcome>(customers.slice(0, 4).map((c) => claim(c.customerId)));
   const cancelled = cancelOccurrence(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: occ.id });
@@ -120,7 +120,7 @@ async function bookedSeance(h: DbHarness) {
     occurrenceId: occ.id,
     customerId,
     seenStartsAt: occ.startsAt,
-    actorUserId: null,
+    actorUserId: pro.userId,
   });
   must(booked, "book");
   return { typeId, occ, customerId, ticketId, bookingId: booked.bookingId };
@@ -234,7 +234,7 @@ dbTest("E6a: the pro cancels a confirmed and a pending booking; the open checkou
     occurrenceId: occ.id,
     customerId: c1,
     seenStartsAt: occ.startsAt,
-    actorUserId: null,
+    actorUserId: pro.userId,
   });
   must(confirmed, "held ticket");
   const c2 = await makeCustomer(db, pro);
@@ -321,7 +321,7 @@ dbTest("E6b: cancelling a séance ends every booking, returns the tickets, and i
   for (let i = 0; i < 2; i++) {
     const customerId = await makeCustomer(db, pro);
     await giveTickets(db, pro, customerId, typeId, 1);
-    const r = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: null });
+    const r = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: pro.userId });
     must(r, "book");
     bookingIds.push(r.bookingId);
   }

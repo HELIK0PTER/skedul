@@ -29,6 +29,9 @@ import { failOf, syncEffects, type EngineResult } from "./types";
  * booking's occurrence; booking pending → expired (aid); SEAT(o, 0) (an RDV
  * at 0 is cancelled); purchase pending → expired. A paid purchase is left
  * alone. Effects: google.sync_occurrence when a booking ended. Errors: not_found.
+ * Caller precondition (OUT:74): `purchaseId` is server-derived, or a `?p=`
+ * reference already checked against the page's pro by purchaseByReference and,
+ * when a wallet owner is signed in, against its customer.
  */
 export async function releasePurchase(
   db: Db,
