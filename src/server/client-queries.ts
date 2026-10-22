@@ -13,6 +13,7 @@ import { getCustomerSpace, type CustomerSpace } from "@/lib/back-office/customer
 import type { SpaceIdentity } from "@/lib/back-office/guest-access";
 import { db } from "@/lib/db";
 import { spaceIdentityOf } from "@/lib/public/identity";
+import { getMySpace, type MySpaceCard } from "@/lib/public/my-space";
 import { getPublicProfile } from "@/server/queries";
 import { currentPublicVisitor } from "@/server/visitor";
 
@@ -58,4 +59,9 @@ export async function resolveSpaceCustomer(pro: { id: string; userId: string }):
 /** The read-only espace of one customer of the pro (null when the customer is not this pro's). */
 export function getCustomerSpacePage(professionalId: string, customerId: string): Promise<CustomerSpace | null> {
   return getCustomerSpace(db, professionalId, customerId, new Date());
+}
+
+/** The cards of /mon-espace for a verified session (L1377-1378): one per pro, the rows of the user and of its verified address. The page checks the visitor state first. */
+export function getMySpacePage(s: { userId: string; email: string }): Promise<MySpaceCard[]> {
+  return getMySpace(db, s, new Date());
 }
