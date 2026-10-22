@@ -11,6 +11,7 @@ import {
 } from "@/lib/public/booking-actions";
 import { splitActionInput } from "@/lib/public/context";
 import type { PublicResult } from "@/lib/public/result";
+import { startShopPurchaseCore, type ShopPurchaseInput } from "@/lib/public/shop-actions";
 import { publicDeps, runPublicAction } from "@/server/public-context";
 
 // Public writes (spec § 11). Every export splits the slug off its input, lets runPublicAction resolve the pro
@@ -42,5 +43,15 @@ export async function bookWithHeldTicketAction(
   // account (L1345) after its parseFr and its throttle, and still refuses anyone who is not an Owner of this pro.
   return runPublicAction("bookWithHeldTicket", slug, (pro, visitor, now) =>
     bookWithHeldTicketCore(db, pro, visitor, rest, now),
+  );
+}
+
+/** E9 from the offer page: a pending purchase, then the Checkout URL to send the browser to (startShopPurchaseCore). */
+export async function startShopPurchaseAction(
+  input: { slug: string } & ShopPurchaseInput,
+): Promise<PublicResult<{ purchaseId: string; checkoutUrl: string }>> {
+  const { slug, rest } = splitActionInput(input);
+  return runPublicAction("startShopPurchase", slug, (pro, visitor, now) =>
+    startShopPurchaseCore(db, pro, visitor, rest, publicDeps(), now),
   );
 }
