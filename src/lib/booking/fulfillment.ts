@@ -41,12 +41,14 @@ export type ShopPurchaseData = {
  * E9. Plan: offer of this pro, on sale (active, not archived, type not
  * archived), customer of this pro. Batch: G(offer unchanged, 'stale'), INSERT
  * ticket_purchase (pending, snapshot, checkout_expires_at = now + 24 h). No
- * seat, no lock. Effects: none.
+ * seat, no lock. Effects: none. `opts.afterPlan` is test-only: it runs between
+ * the plan and its batch (deterministic races, like startBuyAndBook's).
  */
 export async function startPurchase(
   db: Db,
   input: { professionalId: string; offerId: string; customerId: string },
   now: Date = new Date(),
+  opts: { afterPlan?: () => Promise<void> } = {},
 ): Promise<EngineResult<ShopPurchaseData>> {
   const planned: { data?: ShopPurchaseData } = {};
   const res = await tryAtomic(db, async () => {
@@ -79,7 +81,7 @@ export async function startPurchase(
         }),
       ];
     };
-  });
+  }, { afterPlan: opts.afterPlan });
   if (!res.ok) return failOf(res);
   if (!planned.data) throw new Error("startPurchase: the plan produced no data");
   return { ok: true, effects: [], ...planned.data };

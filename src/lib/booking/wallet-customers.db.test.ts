@@ -81,6 +81,13 @@ dbTest("upsertCustomer links an account only for a verified user of the same e-m
     // a user id that does not exist: no error, no link
     const ghost = await upsertCustomer(db, { professionalId: pro.proId, email: testEmail("ghost"), name: "Fantôme", userId: nanoid() });
     assert.equal((await customerRow(db, ghost.customerId)).userId, null);
+
+    // a verified user whose STORED e-mail is upper case (the lower(email) side of the match): still linked
+    const shoutedEmail = testEmail("upper");
+    const shouting = await insertUser(db, { email: shoutedEmail.toUpperCase(), verified: true });
+    users.push(shouting);
+    const shouted = await upsertCustomer(db, { professionalId: pro.proId, email: shoutedEmail, name: "Majuscules", userId: shouting });
+    assert.equal((await customerRow(db, shouted.customerId)).userId, shouting);
   } finally {
     for (const id of users) await deleteTestUser(db, id);
   }

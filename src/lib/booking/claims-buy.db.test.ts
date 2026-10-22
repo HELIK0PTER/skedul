@@ -208,6 +208,54 @@ dbTest("E1 and E9 refuse an offer whose type became « Gratuit » after its crea
   assert.equal(codeOf(await startBuyAndBook(h.db, buyInput(h, control))), "ok");
 });
 
+dbTest("E1 and E9 refuse a type switched to « Gratuit » between the plan and the batch: stale, no purchase, no seat (LED:139 race)", async (h) => {
+  const switchToFree = (typeId: string) => async () => {
+    await h.db.execute(
+      sql`update ticket_type set rdv_enabled = true, rdv_duration_min = 60, rdv_free = true where id = ${typeId}`,
+    );
+  };
+
+  // Control: the plan reads a type that is not free, so the plan alone accepts it (an idle hook changes nothing).
+  const control = await setup(h);
+  let idleHookRuns = 0;
+  const idle = async () => {
+    idleHookRuns += 1;
+  };
+  assert.equal(codeOf(await startBuyAndBook(h.db, buyInput(h, control), new Date(), { afterPlan: idle })), "ok");
+  assert.equal(
+    codeOf(await startPurchase(h.db, { professionalId: h.pro.proId, offerId: control.offerId, customerId: control.customerId }, new Date(), { afterPlan: idle })),
+    "ok",
+  );
+  assert.equal(idleHookRuns, 2, "the hook runs once between each plan and its batch");
+
+  // Buy + book: the switch lands after the plan, so only the batch guard (offerUnchanged) can refuse.
+  const buy = await setup(h);
+  assert.deepEqual(await startBuyAndBook(h.db, buyInput(h, buy), new Date(), { afterPlan: switchToFree(buy.typeId) }), {
+    ok: false,
+    code: "stale",
+  });
+  assert.equal((await getOccurrence(h.db, buy.occ.id)).seatsTaken, 0);
+
+  // Shop: same race, same guard.
+  const shop = await setup(h);
+  assert.deepEqual(
+    await startPurchase(h.db, { professionalId: h.pro.proId, offerId: shop.offerId, customerId: shop.customerId }, new Date(), {
+      afterPlan: switchToFree(shop.typeId),
+    }),
+    { ok: false, code: "stale" },
+  );
+
+  // Nothing was written by the two refused batches: only the control's two purchases exist.
+  const purchases = await h.db
+    .select({ id: ticketPurchase.id, customerId: ticketPurchase.customerId })
+    .from(ticketPurchase)
+    .where(eq(ticketPurchase.professionalId, h.pro.proId));
+  assert.deepEqual(
+    purchases.map((p) => p.customerId),
+    [control.customerId, control.customerId],
+  );
+});
+
 dbTest("E1 refuses an offer whose validity ends before the séance", async (h) => {
   const s = await setup(h, { offer: { validityCount: 1, validityUnit: "day" } });
   assert.equal(codeOf(await startBuyAndBook(h.db, buyInput(h, s))), "offer_too_short");
