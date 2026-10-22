@@ -20,6 +20,9 @@ import { expireStalePurchases, sweepHolds } from "./release";
 /** ensureHorizon calls per pro and night (each inserts at most MATERIALIZE_MAX_ROWS rows). */
 const HORIZON_CALLS_PER_PRO = 10;
 
+/** Step 4 stops starting pros this long after it began, so a slow step cannot starve steps 5 to 7 of the 300 s of the cron route (OUT:126). */
+const HORIZON_DEADLINE_MS = 120_000;
+
 /** Step 3, ONE statement: available tickets with expires_at ≤ now → expired, one `expire` movement each (actor system). */
 export async function expireTickets(db: Db, now: Date = new Date()): Promise<{ expired: number }> {
   const aid = nanoid();
@@ -37,26 +40,48 @@ export async function expireTickets(db: Db, now: Date = new Date()): Promise<{ e
   return { expired: res.rowCount ?? 0 };
 }
 
-/** Step 4: ensureHorizon for every pro with a non-archived event, looping while incomplete (≤ HORIZON_CALLS_PER_PRO calls). */
-export async function ensureAllHorizons(db: Db, now: Date = new Date()): Promise<{ pros: number; inserted: number }> {
+/**
+ * Step 4: ensureHorizon for every pro with a non-archived event, looping while incomplete (≤ HORIZON_CALLS_PER_PRO calls).
+ * Each pro runs in its own `try`: a throw or an `ok: false` is reported in `failures` ("pro <id>: <message or code>") and
+ * the next pro still runs. Before every pro after the first, once `deadline` (epoch ms, default now + 120 s) has passed,
+ * it stops starting pros and says so (OUT:126). `opts.ensure` and `opts.deadline` are test-only.
+ */
+export async function ensureAllHorizons(
+  db: Db,
+  now: Date = new Date(),
+  opts: { ensure?: typeof ensureHorizon; deadline?: number } = {},
+): Promise<{ pros: number; inserted: number; failures: string[] }> {
+  const ensure = opts.ensure ?? ensureHorizon;
+  const deadline = opts.deadline ?? Date.now() + HORIZON_DEADLINE_MS;
   const pros = await db
     .selectDistinct({ id: event.professionalId })
     .from(event)
     .where(isNull(event.archivedAt))
     .orderBy(asc(event.professionalId));
   let inserted = 0;
+  let started = 0;
+  const failures: string[] = [];
   for (const { id } of pros) {
-    for (let call = 0; call < HORIZON_CALLS_PER_PRO; call++) {
-      const res = await ensureHorizon(db, id, now);
-      if (!res.ok) {
-        console.error(`[nightly] ensureHorizon failed for pro ${id}: ${res.code}`);
-        break;
+    if (started > 0 && Date.now() > deadline) {
+      failures.push(`deadline reached after ${started} pro(s)`);
+      break;
+    }
+    started += 1;
+    try {
+      for (let call = 0; call < HORIZON_CALLS_PER_PRO; call++) {
+        const res = await ensure(db, id, now);
+        if (!res.ok) {
+          failures.push(`pro ${id}: ${res.code}`);
+          break;
+        }
+        inserted += res.inserted;
+        if (res.complete) break;
       }
-      inserted += res.inserted;
-      if (res.complete) break;
+    } catch (err) {
+      failures.push(`pro ${id}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  return { pros: pros.length, inserted };
+  return { pros: pros.length, inserted, failures };
 }
 
 /**
@@ -115,7 +140,12 @@ export type NightlyReport = {
 };
 
 /** Steps 1 to 7 in order, each isolated; step 7 stores the violation count in `health:invariant_violations`. */
-export async function runNightly(db: Db, now: Date = new Date()): Promise<NightlyReport> {
+export async function runNightly(
+  db: Db,
+  now: Date = new Date(),
+  /** Test-only: an injected `ensure` or `deadline` for step 4 (ensureAllHorizons), so a failure can be provoked without touching other runs' data. */
+  opts: { horizon?: Parameters<typeof ensureAllHorizons>[2] } = {},
+): Promise<NightlyReport> {
   const report: NightlyReport = {
     expiredBookings: 0,
     expiredPurchases: 0,
@@ -143,7 +173,10 @@ export async function runNightly(db: Db, now: Date = new Date()): Promise<Nightl
     report.expiredTickets = (await expireTickets(db, now)).expired;
   });
   await step("ensureAllHorizons", async () => {
-    report.horizon = await ensureAllHorizons(db, now);
+    const res = await ensureAllHorizons(db, now, opts.horizon);
+    report.horizon = { pros: res.pros, inserted: res.inserted };
+    // A failing pro and a deadline stop are errors of the night, not silent skips (OUT:126).
+    for (const failure of res.failures) report.errors.push(`ensureAllHorizons: ${failure}`);
   });
   await step("archiveFinishedEvents", async () => {
     report.archivedEvents = (await archiveFinishedEvents(db, now)).archived;

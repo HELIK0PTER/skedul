@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+import { CRON_SECRET_MIN_LENGTH } from "@/lib/cron-auth";
+import { envBootErrors } from "@/lib/env-checks";
+
 /**
  * Server-side environment validation.
  * Imported by server modules only (db, auth, stripe, email, scripts).
@@ -23,6 +26,8 @@ const schema = z.object({
   SUPPORT_BLOB_READ_WRITE_TOKEN: z.string().optional(),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
+  // bearer secret of the nightly job (Vercel Cron): /api/cron/daily answers 401 without it; 32 characters at least
+  CRON_SECRET: z.string().optional(),
   // Provided automatically by Vercel
   VERCEL_URL: z.string().optional(),
   VERCEL_ENV: z.string().optional(),
@@ -39,6 +44,16 @@ if (!parsed.success) {
 }
 
 const raw = parsed.data;
+
+// Boot refusals (SEC-I5, SEC-M5), thrown at boot and at build, never silent: a Vercel production deployment must run with
+// APP_ENV=production (the mock checkout and the mock mail key off it), and production needs a session secret of 32
+// characters at least. A local build has no VERCEL_ENV.
+const bootErrors = envBootErrors({
+  VERCEL_ENV: process.env.VERCEL_ENV,
+  APP_ENV: raw.APP_ENV,
+  BETTER_AUTH_SECRET: raw.BETTER_AUTH_SECRET,
+});
+if (bootErrors.length > 0) throw new Error(bootErrors[0]);
 
 /** A key is considered "not configured" when it is missing or still a placeholder. */
 function isPlaceholder(value: string | undefined): boolean {
@@ -65,6 +80,8 @@ export const env = {
   STRIPE_ENABLED: !isPlaceholder(raw.STRIPE_SECRET_KEY),
   /** Webhook signing secret present (needed to confirm live Stripe payments). */
   STRIPE_WEBHOOK_CONFIGURED: !isPlaceholder(raw.STRIPE_WEBHOOK_SECRET),
+  /** Nightly-job secret present, not a placeholder and at least CRON_SECRET_MIN_LENGTH characters (SEC-M5): otherwise /api/cron/daily answers 401. */
+  CRON_CONFIGURED: !isPlaceholder(raw.CRON_SECRET) && (raw.CRON_SECRET?.length ?? 0) >= CRON_SECRET_MIN_LENGTH,
   /** Resend logs to the console until a real API key is provided. */
   RESEND_ENABLED: !isPlaceholder(raw.RESEND_API_KEY),
   /** Image uploads use Vercel Blob; disabled (mock) until a token is provided. */

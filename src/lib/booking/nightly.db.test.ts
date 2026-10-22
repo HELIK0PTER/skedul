@@ -2,14 +2,15 @@ import assert from "node:assert/strict";
 import { eq, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
-import { addDaysMs, addMinutes, dbTest } from "../../test/db";
+import { addDaysMs, addMinutes, createTestPro, dbTest, deleteTestUser, type TestPro } from "../../test/db";
 import { dayIn, giveTickets, makeCustomer, makeEvent, makeType, movementsOf, occurrencesOf, ticketsOf } from "../../test/fixtures";
-import { ts } from "../db/atomic";
+import { ts, type Db } from "../db/atomic";
 import { event } from "../db/schema";
 import { HEALTH_KEYS, readHealth } from "../throttle";
 import type { RecurrenceRuleInput } from "../tickets";
+import { checkInvariants } from "./invariants";
 import { archiveFinishedEvents, ensureAllHorizons, expireTickets, purgeThrottle, runNightly } from "./nightly";
-import { horizonEnd } from "./occurrences";
+import { horizonEnd, type ensureHorizon } from "./occurrences";
 
 const weekly = (startDate: string, extra: Partial<RecurrenceRuleInput> = {}): RecurrenceRuleInput => ({
   startDate,
@@ -136,10 +137,106 @@ dbTest("E12 purgeThrottle: rows older than 2 days go; recent rows and health cou
 dbTest("E12 runNightly: every step runs, invariants hold, the count is stored for the health card", async ({ db, pro }) => {
   const typeA = await makeType(db, pro);
   await makeEvent(db, pro, { ticketTypeIds: [typeA] });
+  // A populated state, not an empty pro (OUT:126): a customer with usable tickets and one that already expired.
+  const customerId = await makeCustomer(db, pro);
+  await giveTickets(db, pro, customerId, typeA, 2);
+  await giveTickets(db, pro, customerId, typeA, 1, { now: addDaysMs(new Date(), -30), expiresAt: addDaysMs(new Date(), -1) });
   const now = new Date();
   const report = await runNightly(db, now);
   assert.deepEqual(report.errors, []);
   assert.equal(report.invariantViolations, 0);
+  assert.ok(report.expiredTickets >= 1, "the expired ticket was swept");
   const health = await readHealth(db);
   assert.equal(health[HEALTH_KEYS.invariantViolations]?.value, 0);
+  // I1 to I6 hold on the populated state of THIS pro before the harness cleans it up (OUT:126).
+  assert.deepEqual(await checkInvariants(db, { proId: pro.proId }), []);
+});
+
+type EnsureFn = typeof ensureHorizon;
+const ensureDone: EnsureFn = async () => ({ ok: true, effects: [], inserted: 0, complete: true });
+
+/** The test pro and a second pro, each with a live event, so step 4 sees both. The caller deletes the second one. */
+async function twoProsWithEvents(db: Db, pro: TestPro) {
+  await makeEvent(db, pro, { ticketTypeIds: [await makeType(db, pro)] });
+  const other = await createTestPro(db);
+  await makeEvent(db, other, { ticketTypeIds: [await makeType(db, other)] });
+  return other;
+}
+
+dbTest("E12 ensureAllHorizons: the first pro throwing, or a pro answering not ok, is reported and the next pros still run (OUT:126)", async ({ db, pro }) => {
+  const other = await twoProsWithEvents(db, pro);
+  try {
+    const seen: string[] = [];
+    // The first pro of the night throws, whoever it is (the shared branch may hold other runs' pros); our two pros
+    // answer not ok when they are not that first one; every other pro is done at once.
+    const ensure: EnsureFn = async (_db, proId) => {
+      seen.push(proId);
+      if (seen.length === 1) throw new Error("boom");
+      if (proId === pro.proId || proId === other.proId) return { ok: false, code: "stale" };
+      return { ok: true, effects: [], inserted: 0, complete: true };
+    };
+    const res = await ensureAllHorizons(db, new Date(), { ensure, deadline: Date.now() + 600_000 });
+    const [first] = seen;
+    assert.equal(seen.length, res.pros, "every pro was started once: a throwing pro never stops the night");
+    assert.ok(seen.includes(pro.proId) && seen.includes(other.proId), "both pros were tried, whatever their order");
+    assert.equal(res.failures[0], `pro ${first}: boom`, "the first pro is named with its error");
+    const notFirst = [pro.proId, other.proId].filter((id) => id !== first);
+    assert.ok(notFirst.length >= 1);
+    for (const id of notFirst) assert.ok(res.failures.includes(`pro ${id}: stale`), JSON.stringify(res.failures));
+    assert.equal(res.inserted, 0);
+    assert.ok(res.pros >= 2);
+  } finally {
+    await deleteTestUser(db, other.userId);
+  }
+});
+
+dbTest("E12 ensureAllHorizons: a pro that is never complete gets at most 10 calls and its inserted rows are summed", async ({ db, pro }) => {
+  await makeEvent(db, pro, { ticketTypeIds: [await makeType(db, pro)] });
+  const calls: string[] = [];
+  const ensure: EnsureFn = async (_db, proId) => {
+    calls.push(proId);
+    return proId === pro.proId
+      ? { ok: true, effects: [], inserted: 2, complete: false }
+      : { ok: true, effects: [], inserted: 0, complete: true };
+  };
+  const res = await ensureAllHorizons(db, new Date(), { ensure, deadline: Date.now() + 600_000 });
+  assert.equal(calls.filter((id) => id === pro.proId).length, 10);
+  assert.equal(res.inserted, 20);
+  assert.deepEqual(res.failures, []);
+});
+
+dbTest("E12 ensureAllHorizons: past the deadline it stops starting pros and says so, the first pro always runs (OUT:126)", async ({ db, pro }) => {
+  const other = await twoProsWithEvents(db, pro);
+  try {
+    const seen: string[] = [];
+    const ensure: EnsureFn = async (_db, proId) => {
+      seen.push(proId);
+      return { ok: true, effects: [], inserted: 0, complete: true };
+    };
+    const late = await ensureAllHorizons(db, new Date(), { ensure, deadline: 0 });
+    assert.equal(seen.length, 1, "exactly one pro was started");
+    assert.deepEqual(late.failures, ["deadline reached after 1 pro(s)"]);
+    assert.ok(late.pros >= 2);
+
+    seen.length = 0;
+    const onTime = await ensureAllHorizons(db, new Date(), { ensure, deadline: Date.now() + 600_000 });
+    assert.equal(seen.length, onTime.pros, "every pro was started");
+    assert.deepEqual(onTime.failures, []);
+  } finally {
+    await deleteTestUser(db, other.userId);
+  }
+});
+
+dbTest("E12 runNightly: a failing horizon reaches report.errors as `ensureAllHorizons: pro ...` and the other steps still run (OUT:126)", async ({ db, pro }) => {
+  await makeEvent(db, pro, { ticketTypeIds: [await makeType(db, pro)] });
+  const ensure: EnsureFn = async (_db, proId) => {
+    if (proId === pro.proId) throw new Error("boom");
+    return ensureDone(_db, proId);
+  };
+  const report = await runNightly(db, new Date(), { horizon: { ensure, deadline: Date.now() + 600_000 } });
+  assert.ok(report.errors.includes(`ensureAllHorizons: pro ${pro.proId}: boom`), JSON.stringify(report.errors));
+  assert.ok(report.errors.every((e) => e.startsWith("ensureAllHorizons: ")), "no other step failed");
+  assert.equal(report.invariantViolations, 0, "step 7 still ran");
+  assert.equal(report.horizon.inserted, 0);
+  assert.ok(report.horizon.pros >= 1);
 });
