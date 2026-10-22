@@ -133,11 +133,12 @@ dbTest("updateMyNameCore: French validation, a name with a link, an address or a
   }
 });
 
-dbTest("revokeMyLinksCore: bumps link_version on the rows of the getMySpace predicate, and only those (S27)", async ({ db, pro }) => {
+dbTest("revokeMyLinksCore: bumps link_version on the user's rows (linked to her, or unlinked with her address), and only those (S27)", async ({ db, pro }) => {
   const now = new Date();
   const second = await createTestPro(db);
   const third = await createTestPro(db);
   const fourth = await createTestPro(db);
+  const fifth = await createTestPro(db);
   const suspended = await createTestPro(db);
   const email = testEmail("me");
   const me = await createTestClientUser(db, { email, name: "Beatriz", verified: true });
@@ -150,28 +151,31 @@ dbTest("revokeMyLinksCore: bumps link_version on the rows of the getMySpace pred
     const ofSuspended = await rowCustomer(db, suspended, { email, userId: me.userId });
     // The same address, but linked to another account at the fourth pro: not hers (Decision 5), cross-tenant.
     const linkedToStranger = await rowCustomer(db, fourth, { email, userId: stranger.userId });
+    // Linked to her under ANOTHER address: no card in /mon-espace (Decision 5), but its personal links are cut too (wider on purpose).
+    const otherAddress = await rowCustomer(db, fifth, { email: testEmail("old"), userId: me.userId });
     // Another client of the second pro and of the first one.
     const neighbour = await rowCustomer(db, second, { userId: null });
     const neighbourHere = await rowCustomer(db, pro, { userId: null });
 
     const res = await revokeMyLinksCore(db, sessionOf({ userId: me.userId, email, name: "Beatriz" }, { verified: true }), now);
-    assert.equal(res.ok && res.customers, 3, JSON.stringify(res));
+    assert.equal(res.ok && res.customers, 4, JSON.stringify(res));
     assert.deepEqual(res.effects, []);
 
     assert.equal(await linkVersionOf(db, linked), 2, "linked to her");
     assert.equal(await linkVersionOf(db, unlinked), 2, "her address, no link yet");
     assert.equal(await linkVersionOf(db, ofSuspended), 2, "a suspended pro's row is revoked too");
+    assert.equal(await linkVersionOf(db, otherAddress), 2, "linked to her under another address: no card, still revoked");
     assert.equal(await linkVersionOf(db, linkedToStranger), 1, "linked to another account");
     assert.equal(await linkVersionOf(db, neighbour), 1, "another client of another pro");
     assert.equal(await linkVersionOf(db, neighbourHere), 1, "another client of the same pro");
 
     // A second call cuts the new links again: the count is the same, the versions go one further.
     const again = await revokeMyLinksCore(db, sessionOf({ userId: me.userId, email, name: "Beatriz" }, { verified: true }), now);
-    assert.equal(again.ok && again.customers, 3);
+    assert.equal(again.ok && again.customers, 4);
     assert.equal(await linkVersionOf(db, linked), 3);
     assert.equal(await linkVersionOf(db, linkedToStranger), 1);
   } finally {
-    for (const p of [second, third, fourth, suspended]) await deleteTestUser(db, p.userId);
+    for (const p of [second, third, fourth, fifth, suspended]) await deleteTestUser(db, p.userId);
     await deleteTestUser(db, stranger.userId);
     await deleteTestUser(db, me.userId);
   }

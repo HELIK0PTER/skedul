@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import { eq, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
+import { ownedCustomerId } from "@/lib/back-office/guest-access";
 import { textArray, type Db } from "@/lib/db/atomic";
 import * as schema from "@/lib/db/schema";
+import type { SessionFacts } from "@/lib/public/identity";
 import { MY_SPACE_MAX_PROS, getMySpace } from "@/lib/public/my-space";
 import { addDaysMs, createTestPro, dbTest, deleteTestUser, testEmail, type TestPro } from "@/test/db";
 import { createTestClientUser } from "@/test/public";
@@ -12,6 +14,11 @@ import { rowBooking, rowCustomer, rowEvent, rowSeance, rowTicket, rowType } from
 
 function rename(db: Db, pro: TestPro, businessName: string) {
   return db.update(schema.professional).set({ businessName }).where(eq(schema.professional.id, pro.proId));
+}
+
+/** The facts of a fresh, verified, not impersonated session of `me` typing `email`; `over` turns one of them off. */
+function sessionOf(me: { userId: string }, email: string, over: Partial<SessionFacts> = {}): SessionFacts {
+  return { userId: me.userId, email, name: "Beatriz", emailVerified: true, impersonated: false, impersonatedBy: null, ...over };
 }
 
 /** `count` pros, each with a customer row of `email` linked to `userId`, in three multi-row inserts; returns the pros' user ids for the cleanup. */
@@ -48,7 +55,7 @@ dbTest("getMySpace: the rows linked to the user at two pros give two cards, in F
     const atZen = await rowCustomer(db, pro, { email, name: "Beatriz Almeida", userId: me.userId });
     const atElan = await rowCustomer(db, other, { email, name: "Beatriz Almeida", userId: me.userId });
 
-    const cards = await getMySpace(db, { userId: me.userId, email }, now);
+    const cards = await getMySpace(db, sessionOf(me, email), now);
     // « Élan » sorts before « Zen » with the French collation; a plain string comparison would put it last.
     assert.deepEqual(
       cards.map((c) => [c.slug, c.businessName]),
@@ -80,12 +87,12 @@ dbTest("getMySpace: the unlinked row of the verified address counts, a row linke
     // Another client of the same pro, no link, another address: not hers either.
     await rowCustomer(db, pro, { name: "Autre client", userId: null });
 
-    const cards = await getMySpace(db, { userId: me.userId, email }, now);
+    const cards = await getMySpace(db, sessionOf(me, email), now);
     assert.deepEqual(cards.map((c) => c.slug), [pro.slug]);
     assert.deepEqual(cards.map((c) => c.space.customer.id), [unlinked]);
 
     // The address is matched the way normalizeEmail spells it, whatever the session carries.
-    const spelled = await getMySpace(db, { userId: me.userId, email: `  ${email.toUpperCase()} ` }, now);
+    const spelled = await getMySpace(db, sessionOf(me, `  ${email.toUpperCase()} `), now);
     assert.deepEqual(spelled.map((c) => c.space.customer.id), [unlinked]);
   } finally {
     await deleteTestUser(db, second.userId);
@@ -104,7 +111,7 @@ dbTest("getMySpace: a pro whose user is suspended is offline, a lapsed ban count
     await rename(db, second, "Capoeira Lyon");
     await rowCustomer(db, pro, { email, userId: me.userId });
     await rowCustomer(db, second, { email, userId: me.userId });
-    const slugs = async () => (await getMySpace(db, { userId: me.userId, email }, now)).map((c) => c.slug);
+    const slugs = async () => (await getMySpace(db, sessionOf(me, email), now)).map((c) => c.slug);
     const ban = (banned: boolean, banExpires: Date | null) =>
       db.update(schema.user).set({ banned, banExpires }).where(eq(schema.user.id, second.userId));
 
@@ -139,12 +146,20 @@ dbTest("getMySpace: a card shows that customer's own bookings and tickets, never
     await rowTicket(db, pro, { customerId: mine, ticketTypeId: typeId });
     await rowTicket(db, pro, { customerId: theirs, ticketTypeId: typeId });
     await rowTicket(db, pro, { customerId: theirs, ticketTypeId: typeId });
-    // A client of the second pro (no link, another address) has data too: it makes no card of hers.
-    await rowCustomer(db, second, { name: "Client de l'autre pro" });
+    // A client of the second pro (no link, another address) has a booking and a ticket too: they make no card of hers
+    // and none of it reaches the card of the first pro.
+    const secondEvent = await rowEvent(db, second);
+    await db.update(schema.event).set({ title: "Capoeira roda" }).where(eq(schema.event.id, secondEvent));
+    const secondSeance = await rowSeance(db, second, secondEvent, { startsAt: addDaysMs(now, 4), seatsTaken: 1, seriesDate: "2030-03-02" });
+    const secondType = await rowType(db, second, { name: "Carte de l'autre pro" });
+    const secondClient = await rowCustomer(db, second, { name: "Client de l'autre pro" });
+    await rowBooking(db, second, { occurrenceId: secondSeance, customerId: secondClient });
+    await rowTicket(db, second, { customerId: secondClient, ticketTypeId: secondType });
 
-    const cards = await getMySpace(db, { userId: me.userId, email }, now);
+    const cards = await getMySpace(db, sessionOf(me, email), now);
     assert.equal(cards.length, 1);
     const [card] = cards;
+    assert.equal(card.slug, pro.slug);
     assert.equal(card.space.customer.id, mine);
     assert.deepEqual(card.space.upcoming.map((b) => [b.bookingId, b.title]), [[myBooking, "Altinha débutants"]]);
     assert.deepEqual(card.space.wallet.map((w) => [w.ticketTypeId, w.usable]), [[typeId, 1]]);
@@ -154,18 +169,76 @@ dbTest("getMySpace: a card shows that customer's own bookings and tickets, never
   }
 });
 
-dbTest("getMySpace: one card per pro, the row linked to the user wins over another row of the same pro", async ({ db, pro }) => {
+dbTest("getMySpace: the card of a pro is the row the Owner predicate picks, so a row linked to the user under another address is not a card (Decision 5)", async ({ db, pro }) => {
   const now = new Date();
+  const second = await createTestPro(db);
   const sessionEmail = testEmail("session");
   const me = await createTestClientUser(db, { email: sessionEmail, name: "Beatriz", verified: true });
   try {
-    // The address of the account changed since the first booking: the pro holds two rows that both match.
-    await rowCustomer(db, pro, { email: sessionEmail, name: "Fiche non liée", userId: null });
-    const linked = await rowCustomer(db, pro, { email: testEmail("old"), name: "Fiche liée", userId: me.userId });
+    await rename(db, pro, "Altinha Paris");
+    await rename(db, second, "Capoeira Lyon");
+    // The address of the account is not the one these rows carry (it changed since: the e-mail change is closed today,
+    // so nothing writes this, but the rule must not depend on it). At the first pro the unlinked row of the session's
+    // address is hers, the linked row under the old address is not; at the second pro nothing of hers carries the address.
+    const owned = await rowCustomer(db, pro, { email: sessionEmail, name: "Fiche de l'adresse", userId: null });
+    await rowCustomer(db, pro, { email: testEmail("old"), name: "Fiche liée, ancienne adresse", userId: me.userId });
+    await rowCustomer(db, second, { email: testEmail("older"), name: "Fiche liée seule", userId: me.userId });
 
-    const cards = await getMySpace(db, { userId: me.userId, email: sessionEmail }, now);
-    assert.equal(cards.length, 1, "one card per pro");
-    assert.equal(cards[0].space.customer.id, linked, "the linked row wins");
+    const session = sessionOf(me, sessionEmail);
+    const cards = await getMySpace(db, session, now);
+    assert.deepEqual(cards.map((c) => [c.slug, c.space.customer.id]), [[pro.slug, owned]]);
+    // The same row the wallet Owner is, pro by pro.
+    assert.equal(await ownedCustomerId(db, pro.proId, session), owned);
+    assert.equal(await ownedCustomerId(db, second.proId, session), null);
+  } finally {
+    await deleteTestUser(db, second.userId);
+    await deleteTestUser(db, me.userId);
+  }
+});
+
+dbTest("getMySpace: a card is the row the user owns, linked or not: the same rows as ownedCustomerId", async ({ db, pro }) => {
+  const now = new Date();
+  const second = await createTestPro(db);
+  const email = testEmail("me");
+  const me = await createTestClientUser(db, { email, name: "Beatriz", verified: true });
+  const stranger = await createTestClientUser(db, { email: testEmail("stranger"), name: "Autre compte", verified: true });
+  try {
+    const linked = await rowCustomer(db, pro, { email, name: "Fiche liée", userId: me.userId });
+    const unlinked = await rowCustomer(db, second, { email, name: "Fiche libre", userId: null });
+    const session = sessionOf(me, email);
+    const cards = await getMySpace(db, session, now);
+    assert.deepEqual(new Set(cards.map((c) => c.space.customer.id)), new Set([linked, unlinked]));
+    for (const proRow of [pro, second]) {
+      const card = cards.find((c) => c.slug === proRow.slug);
+      assert.equal(card?.space.customer.id, await ownedCustomerId(db, proRow.proId, session), proRow.slug);
+    }
+    // Linked to another account, the row is nobody's but that account's: no card, no Owner.
+    await db.update(schema.customer).set({ userId: stranger.userId }).where(eq(schema.customer.id, unlinked));
+    assert.deepEqual((await getMySpace(db, session, now)).map((c) => c.space.customer.id), [linked]);
+    assert.equal(await ownedCustomerId(db, second.proId, session), null);
+  } finally {
+    await deleteTestUser(db, second.userId);
+    await deleteTestUser(db, stranger.userId);
+    await deleteTestUser(db, me.userId);
+  }
+});
+
+dbTest("getMySpace: it refuses a session that is not verified, is impersonated or does not exist, whatever the rows", async ({ db, pro }) => {
+  const now = new Date();
+  const email = testEmail("me");
+  const me = await createTestClientUser(db, { email, name: "Beatriz", verified: true });
+  try {
+    await rowCustomer(db, pro, { email, name: "Beatriz", userId: me.userId });
+    assert.equal((await getMySpace(db, sessionOf(me, email), now)).length, 1, "the verified session sees its card");
+    assert.deepEqual(await getMySpace(db, null, now), [], "no session");
+    assert.deepEqual(await getMySpace(db, sessionOf(me, email, { emailVerified: false }), now), [], "unverified: the banner, never the data");
+    assert.deepEqual(
+      await getMySpace(db, sessionOf(me, email, { impersonated: true, impersonatedBy: "admin-1" }), now),
+      [],
+      "an admin impersonating never reads a client's data",
+    );
+    // Fails closed like visitorState: an impersonation flag wins over a verified address.
+    assert.deepEqual(await getMySpace(db, sessionOf(me, email, { impersonated: true }), now), []);
   } finally {
     await deleteTestUser(db, me.userId);
   }
@@ -177,10 +250,10 @@ dbTest("getMySpace: no row gives no card; at most MY_SPACE_MAX_PROS cards come b
   const me = await createTestClientUser(db, { email, name: "Beatriz", verified: true });
   let proUserIds: string[] = [];
   try {
-    assert.deepEqual(await getMySpace(db, { userId: me.userId, email }, now), []);
+    assert.deepEqual(await getMySpace(db, sessionOf(me, email), now), []);
 
     proUserIds = await manyPros(db, MY_SPACE_MAX_PROS + 1, email, me.userId);
-    const cards = await getMySpace(db, { userId: me.userId, email }, now);
+    const cards = await getMySpace(db, sessionOf(me, email), now);
     assert.equal(MY_SPACE_MAX_PROS, 20);
     assert.equal(cards.length, MY_SPACE_MAX_PROS);
     assert.deepEqual(

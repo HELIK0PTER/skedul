@@ -33,7 +33,7 @@ export async function updateMyNameCore(db: Db, s: SessionFacts | null, input: un
   return publicOk({});
 }
 
-/** « Déconnecter mes liens » (L1371): verified, non-impersonated; ONE statement: link_version + 1 on every row of the getMySpace predicate; returns their number. */
+/** « Déconnecter mes liens » (L1371): verified, non-impersonated; ONE statement: link_version + 1 on every row of myCustomerRows (the user's rows, wider than the cards of /mon-espace); returns their number. */
 export async function revokeMyLinksCore(
   db: Db,
   s: SessionFacts | null,

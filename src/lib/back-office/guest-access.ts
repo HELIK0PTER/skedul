@@ -12,7 +12,7 @@
  * request, so a revoked link dies at once, cookie or not, and a customer of
  * pro A is never reachable through pro B's page.
  */
-import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { and, eq, sql, type SQL } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/atomic";
 import { customer, professional, user } from "@/lib/db/schema";
@@ -113,10 +113,20 @@ export async function customerFromGuestCookie(
 }
 
 /**
- * The customer of this pro a verified session owns: its e-mail is normalizeEmail(s.email) (customer_pro_email_uq) AND
- * it is not linked to another account (user_id null or the session user's own). The same predicate as getMySpace (spec
- * L1377-1378) and as the wallet owner (Decision 5). The caller has checked that the session is verified, fresh and not
- * impersonated; null when there is no such row.
+ * The rows a verified session owns, at any pro: the address is normalizeEmail(s.email) (one row per pro at most,
+ * customer_pro_email_uq) AND the row is not linked to another account (user_id null or the session user's own). A row
+ * linked to the user under ANOTHER address is nobody's here: the e-mail change is closed today, so nothing writes
+ * one, but the rule never depends on that. THE rule of the wallet Owner (ownedCustomerId, one pro) and of the cards of
+ * /mon-espace (getMySpace, every pro): the card of a pro is the row the Owner of that pro is (Decision 5, G3a).
+ */
+export function ownedCustomerRows(s: { userId: string; email: string }): SQL {
+  return sql`(${customer.email} = ${normalizeEmail(s.email)} and (${customer.userId} is null or ${customer.userId} = ${s.userId}))`;
+}
+
+/**
+ * The customer of this pro a verified session owns (ownedCustomerRows at one pro; the same rule as the cards of
+ * /mon-espace, Decision 5). The caller has checked that the session is verified, fresh and not impersonated; null when
+ * there is no such row.
  */
 export async function ownedCustomerId(
   db: Db,
@@ -126,13 +136,7 @@ export async function ownedCustomerId(
   const [row] = await db
     .select({ id: customer.id })
     .from(customer)
-    .where(
-      and(
-        eq(customer.professionalId, professionalId),
-        eq(customer.email, normalizeEmail(s.email)),
-        or(isNull(customer.userId), eq(customer.userId, s.userId)),
-      ),
-    );
+    .where(and(eq(customer.professionalId, professionalId), ownedCustomerRows(s)));
   return row?.id ?? null;
 }
 

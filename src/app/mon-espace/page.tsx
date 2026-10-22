@@ -31,8 +31,8 @@ export const metadata: Metadata = { title: "Mon espace", robots: { index: false 
 export default async function MySpacePage() {
   const session = await currentSessionFacts();
   const state = visitorState(session);
-  const cards =
-    state === "verified" && session ? await getMySpacePage({ userId: session.userId, email: session.email }) : [];
+  // The page keeps its own gate; the read refuses a session that is not verified or is impersonated by itself as well.
+  const cards = state === "verified" && session ? await getMySpacePage(session) : [];
   const banner = session && state !== "impersonating" ? { email: session.email, verified: state === "verified" } : null;
 
   return (
