@@ -454,11 +454,15 @@ export async function registerFreeCore(
   );
   if (res.ok) return publicOk({}, res.effects);
   if (res.code === "already_booked" && subject.kind === "email") {
-    const existing = await activeBookingIdOf(db, pro.professionalId, data.occurrenceId, customerId, now);
-    const effects: Effect[] = existing === null ? [] : [{ type: "email.booking_confirmed", bookingId: existing }];
     // The engine tests « already booked » BEFORE the seat (claims.ts: assertNotBooked, then SEAT), so on a full séance a
     // registered address would pass where a fresh one is told « Complet »: that difference alone would say who attends.
-    const left = await seatsLeftOf(db, pro.professionalId, data.occurrenceId, now);
+    // The two reads do not depend on each other and run together: one round trip, so the registered address takes no
+    // longer than a fresh one would (the Decision 64 timing residual).
+    const [existing, left] = await Promise.all([
+      activeBookingIdOf(db, pro.professionalId, data.occurrenceId, customerId, now),
+      seatsLeftOf(db, pro.professionalId, data.occurrenceId, now),
+    ]);
+    const effects: Effect[] = existing === null ? [] : [{ type: "email.booking_confirmed", bookingId: existing }];
     if (left !== null && left < 1) return fromEngineClient(fail("full"), "free", vars, effects);
     return publicOk({}, effects);
   }

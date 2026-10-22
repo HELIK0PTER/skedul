@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { and, eq, like, or } from "drizzle-orm";
@@ -957,6 +958,21 @@ test("the free and held-ticket schemas are strict too", () => {
   }
 });
 
+test("registerFreeCore reads the existing booking and the seats of a typed address together (one round trip, Decision 64 residual)", () => {
+  const source = readFileSync("src/lib/public/booking-actions.ts", "utf8");
+  const start = source.indexOf("export async function registerFreeCore");
+  assert.notEqual(start, -1, "registerFreeCore is declared");
+  const end = source.indexOf("\n/**", start);
+  const body = source.slice(start, end === -1 ? undefined : end);
+  // A fresh address pays only the engine call; the registered one must not also pay two reads in sequence.
+  assert.match(
+    body,
+    /Promise\.all\(\[\s*activeBookingIdOf\([^)]*\),\s*seatsLeftOf\([^)]*\),?\s*\]\)/,
+    "the two reads run through Promise.all",
+  );
+  assert.equal(body.match(/await activeBookingIdOf\(|await seatsLeftOf\(/g), null, "neither read is awaited on its own");
+});
+
 /** A free-mode séance (« Roda libre ») in 3 days; `occurrenceCount` > 1 makes a daily series. */
 async function setupFree(h: DbHarness, over: { capacity?: number; occurrenceCount?: number } = {}) {
   const { eventId, occurrences } = await makeEvent(h.db, h.pro, {
@@ -1667,4 +1683,37 @@ dbTest("activeBookingIdOf names the customer's confirmed booking on this pro's s
   } finally {
     await deleteTestUser(h.db, other.userId);
   }
+});
+
+dbTest("activeBookingIdOf counts a pending booking only while its hold is live", async (h) => {
+  const s = await setup(h);
+  const now = new Date();
+  /** A pending booking of its own customer (and its pending purchase) whose hold ends at `holdExpiresAt`. */
+  async function pendingBooking(label: string, holdExpiresAt: Date) {
+    const customerId = await rowCustomer(h.db, h.pro, { email: testEmail(label) }, now);
+    const purchaseId = await rowPurchase(h.db, h.pro, { customerId, offerId: s.offerId, ticketTypeId: s.typeId }, now);
+    const bookingId = await rowBooking(
+      h.db,
+      h.pro,
+      { occurrenceId: s.occ.id, customerId, status: "pending", coverage: "ticket", purchaseId, holdExpiresAt },
+      now,
+    );
+    return { customerId, bookingId };
+  }
+  const live = await pendingBooking("live", addMinutes(now, 45));
+  const lapsed = await pendingBooking("lapsed", addMinutes(now, -5));
+  const ending = await pendingBooking("ending", now);
+  await h.db.update(occurrenceTable).set({ seatsTaken: 3 }).where(eq(occurrenceTable.id, s.occ.id));
+
+  assert.equal(await activeBookingIdOf(h.db, h.pro.proId, s.occ.id, live.customerId, now), live.bookingId);
+  assert.equal(
+    await activeBookingIdOf(h.db, h.pro.proId, s.occ.id, lapsed.customerId, now),
+    null,
+    "a hold that lapsed is not an active booking: the seat is the next claim's",
+  );
+  assert.equal(
+    await activeBookingIdOf(h.db, h.pro.proId, s.occ.id, ending.customerId, now),
+    null,
+    "a hold that ends exactly now is over (strictly later than now counts)",
+  );
 });
