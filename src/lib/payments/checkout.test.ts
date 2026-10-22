@@ -1,15 +1,19 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { stripeMode } from "@/lib/admin-metrics";
+import { CHECKOUT_MINUTES } from "@/lib/tickets-vocab";
 
 import {
+  CREATE_OPTIONS,
   MOCK_SESSION_PREFIX,
   SESSION_APP,
   buybookCheckoutExpiry,
   cancelPathOf,
   checkoutUrls,
   closeOutcomeOf,
+  createRequestOptions,
   isMockSession,
   mockCheckoutAllowed,
   mockCheckoutUrl,
@@ -216,4 +220,26 @@ test("S15: mockCheckoutAllowed only without Stripe AND outside production by APP
   // APP_ENV defaults to development when unset: a keyless Vercel production must still refuse (SEC-I5)
   assert.equal(mockCheckoutAllowed({ STRIPE_ENABLED: false, APP_ENV: "development", VERCEL_ENV: "production" }), false);
   assert.equal(mockCheckoutAllowed({ STRIPE_ENABLED: false, APP_ENV: "production", VERCEL_ENV: "production" }), false);
+});
+
+test("createRequestOptions: the Checkout create is bounded (15 s, one retry) and idempotent per purchase", () => {
+  assert.deepEqual(CREATE_OPTIONS, { timeout: 15_000, maxNetworkRetries: 1 });
+  assert.deepEqual(createRequestOptions("pur_abc-123"), {
+    idempotencyKey: "checkout:pur_abc-123",
+    timeout: 15_000,
+    maxNetworkRetries: 1,
+  });
+  assert.notEqual(createRequestOptions("pur_a").idempotencyKey, createRequestOptions("pur_b").idempotencyKey);
+});
+
+test("the one retry keeps expires_at above Stripe's 30-minute minimum (31 minutes minus two 15 s tries and the back-off)", () => {
+  const worstCaseMs = 2 * CREATE_OPTIONS.timeout + 5_000; // two tries plus a generous back-off
+  const left = CHECKOUT_MINUTES * 60_000 - worstCaseMs;
+  assert.ok(left > 30 * 60_000, `${left} ms left at the retry`);
+});
+
+test("the real gateway creates the session with createRequestOptions(req.purchaseId), never the client defaults (80 s, 2 retries)", () => {
+  const source = readFileSync("src/lib/stripe.ts", "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  assert.match(source, /sessions\.create\(stripeSessionParams\(req\), createRequestOptions\(req\.purchaseId\)\)/);
+  assert.equal(source.match(/sessions\.create\(/g)?.length, 1, "one create call, with options");
 });

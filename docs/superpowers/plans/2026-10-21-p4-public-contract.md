@@ -9,6 +9,8 @@ Revision 2 (2026-10-21): every Critical and Important finding of the security cr
 `COV-*`) is applied; each Minor is applied or listed in § 10; § 11 maps every finding id to the
 change. Where the two critiques disagreed, the stricter security rule was kept (§ 11 says where).
 
+Revision 3.2 (2026-10-22, G1b sweep between Tasks 8 and 9): seven controller-ordered fixes found by the reviews of Tasks 5 to 8 (the bounded Checkout create, the receipt's booking line, the late-payment wording, an import-free payment-mode module, the wallet owner linked after validation, the espace page's confirmation banner, the throttle interface). § 11 « Revision 3.2 » lists each with its section and its reason.
+
 Revision 3.1 (2026-10-22, plan review): the two pages that hold a plain HTML form whose POST is checked by `sameOrigin` (the simulated checkout page, § 3.13, and the personal-link confirmation page, § 3.19) send `Referrer-Policy: strict-origin`, not `no-referrer`: a `no-referrer` document makes the browser send `Origin: null` on its own form POST (Fetch spec, « append a request Origin header », mode navigate), which `sameOrigin` refuses. Server Actions use `fetch()` (mode cors), so the `referrer: "no-referrer"` metadata of the pages that carry `p` (Decision 49) stays. Task 16 also guards `logResetLink` with `process.env.NODE_ENV !== "production"` in `src/lib/auth.ts` (no reset token in a preview deployment's logs); `booking (purchase_id)` leaves the P6 index list (`booking_purchase_uq` already indexes it); Task 1 checks that this contract is committed at `docs/superpowers/plans/2026-10-21-p4-public-contract.md` instead of copying it. § 11 « Revision 3.1 » lists these and the plan additions the reviews accepted.
 
 Revision 3 (2026-10-21): the contract is re-read against the code at `1954782`, the P3 end commit. Every
@@ -485,7 +487,7 @@ export type CheckoutCreated = { sessionId: string; url: string };
 export type CheckoutCloseOutcome = "expired" | "already_expired" | "paid" | "processing" | "mock" | "failed";
 export interface CheckoutGateway {
   readonly mode: PaymentMode;
-  /** Creates the Checkout session (idempotency key checkout:<purchaseId>); throws on any error. */
+  /** Creates the Checkout session (createRequestOptions: idempotency key checkout:<purchaseId>, 15 s, one retry); throws on any error. */
   create(req: CheckoutRequest): Promise<CheckoutCreated>;
   /** « Libérer ma place » (L1166-1167): retrieve, expire when open. Never throws ("failed"). */
   closeForRelease(sessionId: string): Promise<CheckoutCloseOutcome>;
@@ -507,6 +509,10 @@ export function checkoutUrls(appUrl: string, t: CheckoutTarget): { successUrl: s
 export function buybookCheckoutExpiry(nowMs: number): Date;
 /** The Stripe session params (exact list below). */
 export function stripeSessionParams(req: CheckoutRequest): Stripe.Checkout.SessionCreateParams;
+/** Stripe request options of the Checkout create (Revision 3.2): one 15 s try and one retry, not the client defaults (80 s, 2 retries). */
+export const CREATE_OPTIONS: { readonly timeout: 15_000; readonly maxNetworkRetries: 1 };
+/** CREATE_OPTIONS plus `idempotencyKey: \`checkout:${purchaseId}\``, which makes the one retry safe (no second session). */
+export function createRequestOptions(purchaseId: string): { idempotencyKey: string; timeout: number; maxNetworkRetries: number };
 /** open → "open"; expired → "already_expired"; complete + paid → "paid"; anything else, no_payment_required included → "processing" (never release on doubt, COV-M2). */
 export function closeOutcomeOf(session: { status: string | null; payment_status: string | null }): "open" | "already_expired" | "paid" | "processing";
 /** "mock" when disabled or without key; "live" for sk_live_ / rk_live_; else "test". The ONE mode rule: src/lib/admin-metrics.ts re-exports it as stripeMode (COV-M8; IntegrationMode = PaymentMode). */
@@ -529,7 +535,7 @@ export const checkoutGateway: CheckoutGateway;
 /** Signature and results unchanged for src/server/admin.ts (DELETION_STRIPE_OPTIONS) and src/server/notify.ts; grep its callers before and after (COV-I8). */
 export async function expireCheckoutSession(checkoutSessionId: string, options?: { timeout?: number; maxNetworkRetries?: number }): Promise<"expired" | "not_open" | "mock" | "failed">; // + isMockSession(id) → "mock"
 ```
-- Stripe `create`: `stripe.checkout.sessions.create(stripeSessionParams(req), { idempotencyKey: \`checkout:${req.purchaseId}\` })`; `url` null → throw. `closeForRelease`: `isMockSession` → "mock"; `sessions.retrieve(id, undefined, { timeout: 10_000, maxNetworkRetries: 1 })` → `closeOutcomeOf`; "open" → `sessions.expire(id)` → "expired"; any error → `console.error("[stripe] close failed: " + logSafeMessage(err))` → "failed". `expire`: `await expireCheckoutSession(id)`.
+- Stripe `create`: `stripe.checkout.sessions.create(stripeSessionParams(req), createRequestOptions(req.purchaseId))` = `{ idempotencyKey: \`checkout:${req.purchaseId}\`, timeout: 15_000, maxNetworkRetries: 1 }` (Revision 3.2: a hung Stripe held a buy + book or shop action for minutes with the client defaults, and a late SDK retry reached Stripe with an `expires_at` under its 30-minute minimum; the idempotency key makes the one retry safe; two 15 s tries and the back-off stay well inside the minute `CHECKOUT_MINUTES` = 31 leaves; pinned by `checkout.test.ts`, which reads the source of `stripe.ts` because the gateway itself is private and `server-only`); `url` null → throw. `closeForRelease`: `isMockSession` → "mock"; `sessions.retrieve(id, undefined, { timeout: 10_000, maxNetworkRetries: 1 })` → `closeOutcomeOf`; "open" → `sessions.expire(id)` → "expired"; any error → `console.error("[stripe] close failed: " + logSafeMessage(err))` → "failed". `expire`: `await expireCheckoutSession(id)`.
 - Deleted: `CheckoutKind` (old), `CheckoutParams`, `createCheckoutUrl`, `isStripeLive` (no importer left; grep proves it).
 - `expireCheckoutSession`'s `"not_open"` stands for a complete session (possibly paid) as well as an expired one (LED:429, P3 outcome carry): no P4 code releases a seat or decides an outcome on it. The release path decides through `closeForRelease` only (retrieve, `closeOutcomeOf`: `paid` / `processing` / `already_expired`); the two best-effort callers (`src/server/admin.ts` deletion with `DELETION_STRIPE_OPTIONS`, the `stripe.expire_session` effect of a pro cancellation) count `not_open` as « can no longer be paid » and never touch a booking on it; a payment that landed anyway reaches the webhook, which fulfils it (a late payment when the seat was released) or records it as an orphan when its purchase was deleted with its pro (§ 3.12 rule 5).
 
@@ -1788,4 +1794,10 @@ Revision 2 quoted the engine and P3 at `983fa65` and the Task 41 brief, while P3
 | § 10, Task 31 | `booking (purchase_id)` dropped from the P6 index list | the unique constraint `booking_purchase_uq` already indexes it |
 | Task 1 | checks `git ls-files --error-unmatch docs/superpowers/plans/2026-10-21-p4-public-contract.md` instead of copying the contract | the controller commits the contract with the plan |
 | plan additions accepted | `createCheckoutAndAttach` (Tasks 9, 11); `isReferenceId` (Task 12); `spaceIdentityOf` (Task 5); extra guards in `linkCustomerUser` and `planLatePayment`; `mockCancelPath`; `GUEST_LINK_PAGE_HEADERS`; `src/lib/public/space-view.ts`, `space-status.tsx`, `occurrence-form.ts`, `seance-copy.ts`, `buy-and-book-form.ts`; `src/app/mon-espace/layout.tsx`; `src/app/[slug]/layout.tsx` (a real 404 before the loading boundary); `next.config.ts` `redirects()` for book/pack; `ClientSearch` props `limit` and `children`; a demo client account for Thomas in the seed | each is stricter or additive and tested; listed again in the Task 31 outcome for the owner |
+
+### Revision 3.2 (2026-10-22): G1b sweep after Task 8
+
+| Where | Change | Why |
+|---|---|---|
+| § 3.6 (Task 6) | `src/lib/payments/checkout.ts` gains `CREATE_OPTIONS = { timeout: 15_000, maxNetworkRetries: 1 }` and `createRequestOptions(purchaseId)` (= `{ idempotencyKey: \`checkout:${purchaseId}\`, ...CREATE_OPTIONS }`); the Stripe gateway's `create` passes it, pinned by `checkout.test.ts` | the client defaults (80 s, 2 retries) held a buy + book or shop action for minutes on a hung Stripe, and a late SDK retry reached Stripe with an `expires_at` below its 30-minute minimum; the idempotency key (already there) makes the one retry safe |
 

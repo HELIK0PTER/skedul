@@ -36,7 +36,7 @@ export type CheckoutCloseOutcome = "expired" | "already_expired" | "paid" | "pro
 
 export interface CheckoutGateway {
   readonly mode: PaymentMode;
-  /** Creates the Checkout session (idempotency key checkout:<purchaseId>); throws on any error. */
+  /** Creates the Checkout session (createRequestOptions: idempotency key checkout:<purchaseId>, 15 s, one retry); throws on any error. */
   create(req: CheckoutRequest): Promise<CheckoutCreated>;
   /** « Libérer ma place » (L1166-1167): retrieve, expire when open. Never throws ("failed"). */
   closeForRelease(sessionId: string): Promise<CheckoutCloseOutcome>;
@@ -92,6 +92,23 @@ export function checkoutUrls(appUrl: string, t: CheckoutTarget): { successUrl: s
 /** nowMs + CHECKOUT_MINUTES minutes, computed right before the Stripe call (L808). */
 export function buybookCheckoutExpiry(nowMs: number): Date {
   return new Date(nowMs + CHECKOUT_MINUTES * 60_000);
+}
+
+/**
+ * Stripe request options of the Checkout create (contract § 3.6). A visitor is waiting on a buy + book or a shop
+ * purchase, so one 15 s try and one retry (the client defaults, 80 s and 2 retries, would hold the action for
+ * minutes and a late retry would reach Stripe with an `expires_at` under its 30-minute minimum, the session being
+ * stamped 31 minutes ahead). Two tries plus the back-off stay well inside that minute.
+ */
+export const CREATE_OPTIONS = { timeout: 15_000, maxNetworkRetries: 1 } as const;
+
+/** CREATE_OPTIONS plus the idempotency key `checkout:<purchaseId>`, which makes the one retry safe (no second session). */
+export function createRequestOptions(purchaseId: string): {
+  idempotencyKey: string;
+  timeout: number;
+  maxNetworkRetries: number;
+} {
+  return { idempotencyKey: `checkout:${purchaseId}`, ...CREATE_OPTIONS };
 }
 
 /**

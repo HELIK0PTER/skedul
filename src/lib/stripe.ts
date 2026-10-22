@@ -5,6 +5,7 @@ import { env } from "@/lib/env";
 import { logSafeMessage } from "@/lib/log-safe";
 import {
   closeOutcomeOf,
+  createRequestOptions,
   isMockSession,
   mockCheckoutAllowed,
   mockCheckoutUrl,
@@ -47,9 +48,7 @@ function stripeGateway(client: Stripe, mode: PaymentMode): CheckoutGateway {
   return {
     mode,
     async create(req) {
-      const session = await client.checkout.sessions.create(stripeSessionParams(req), {
-        idempotencyKey: `checkout:${req.purchaseId}`,
-      });
+      const session = await client.checkout.sessions.create(stripeSessionParams(req), createRequestOptions(req.purchaseId));
       if (!session.url) throw new Error("Stripe returned a Checkout session without a URL");
       return { sessionId: session.id, url: session.url };
     },
