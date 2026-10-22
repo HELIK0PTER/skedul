@@ -15,6 +15,7 @@ import {
 } from "@/lib/db/schema";
 import { env } from "@/lib/env";
 import { createSkedulCalendar } from "@/lib/google-calendar";
+import { logSafeMessage } from "@/lib/log-safe";
 import { getCurrentProfessional, getCurrentUser } from "@/lib/session";
 import { isHexColor, presetColor } from "@/lib/color";
 import type { ActionResult } from "@/lib/back-office/result";
@@ -32,7 +33,7 @@ import { checkSlug, uniqueSlugWith } from "@/lib/slug";
 
 async function requirePro() {
   const pro = await getCurrentProfessional();
-  if (!pro) redirect("/onboarding");
+  if (!pro) redirect("/mon-espace");
   return pro;
 }
 
@@ -235,7 +236,7 @@ export async function finalizeGoogleConnection(): Promise<{
       .set({ googleCalendarId: calendarId })
       .where(eq(professional.id, pro.id));
   } catch (err) {
-    console.error("[google] finalize connection failed:", err);
+    console.error(`[google] finalize connection failed: ${logSafeMessage(err)}`);
     return { ok: false, error: "Connexion à Google impossible." };
   }
   // Final review COV-2: the séances and RDV already booked reach the new calendar (bounded and
@@ -258,7 +259,7 @@ export async function disconnectGoogleCalendar(): Promise<{ ok: boolean }> {
       headers: await headers(),
     });
   } catch (err) {
-    console.error("[google] unlink failed:", err);
+    console.error(`[google] unlink failed: ${logSafeMessage(err)}`);
   }
   await clearGoogleLink(db, pro.id);
   return { ok: true };

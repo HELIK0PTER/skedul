@@ -20,11 +20,16 @@ export function entryPath(choice: EntryChoice): "/admin" | "/dashboard" {
   return choice === "admin" ? "/admin" : "/dashboard";
 }
 
-/** Destination right after sign-in, or "choose" to show the chooser. */
+/**
+ * Destination right after sign-in (L1394-1395), or "choose" to show the chooser: an admin chooses (or gets the
+ * remembered choice); anyone else goes to the pro back-office when they own a page, else to their client space.
+ * Only the sign-up funnel lands on the pro onboarding (L1397).
+ */
 export function resolveEntry(input: {
   isAdmin: boolean;
+  hasProfessional: boolean;
   remembered: EntryChoice | null;
-}): "/admin" | "/dashboard" | "choose" {
-  if (!input.isAdmin) return "/dashboard";
+}): "/admin" | "/dashboard" | "/mon-espace" | "choose" {
+  if (!input.isAdmin) return input.hasProfessional ? "/dashboard" : "/mon-espace";
   return input.remembered ? entryPath(input.remembered) : "choose";
 }

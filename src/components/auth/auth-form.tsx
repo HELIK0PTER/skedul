@@ -7,6 +7,7 @@ import { Loader2 } from "lucide-react";
 
 import { signIn, signUp } from "@/lib/auth-client";
 import { authFormErrorMessage } from "@/lib/auth-messages";
+import { authFormGoogleCallbacks } from "@/lib/public/sign-in-flow";
 import { resolvePostSignIn, type PostSignIn } from "@/server/entry";
 import { EntryChooser } from "@/components/auth/entry-chooser";
 import { GoogleLogo } from "@/components/auth/google-logo";
@@ -44,14 +45,14 @@ export function AuthForm({
   async function onGoogle() {
     setError(null);
     // Better Auth redirects the browser to Google. On return, /sign-in sends
-    // the user to `next` or routes them (admins get the entry chooser);
-    // brand-new users go to `next` or onboarding.
+    // the user to `next` or routes them (admins get the entry chooser, a client
+    // lands on /mon-espace). A brand-new user goes to `next` or the pro
+    // onboarding when signing up, and back through /sign-in when signing in:
+    // a sign-in never creates a pro page (COV-I3).
     await redirect(() =>
       signIn.social({
         provider: "google",
-        callbackURL: `/sign-in${nextQuery}`,
-        newUserCallbackURL: next ?? "/onboarding",
-        errorCallbackURL: isSignUp ? `/sign-up${nextQuery}` : `/sign-in${nextQuery}`,
+        ...authFormGoogleCallbacks(isSignUp ? "sign-up" : "sign-in", next),
       }),
     );
   }
@@ -89,7 +90,7 @@ export function AuthForm({
       return;
     }
 
-    // Admins pick Admin vs Client (unless remembered); everyone else → /dashboard.
+    // Admins pick Admin vs Client (unless remembered); a pro → /dashboard, anyone else → /mon-espace.
     let target: PostSignIn;
     try {
       target = await resolvePostSignIn();

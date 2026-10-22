@@ -4,6 +4,7 @@ import { ImpersonationBanner } from "@/components/dashboard/impersonation-banner
 import { DashboardSidebar } from "@/components/dashboard/sidebar";
 import { VerifyEmailBanner } from "@/components/dashboard/verify-email-banner";
 import { brandThemeVars } from "@/lib/color";
+import { logSafeMessage } from "@/lib/log-safe";
 import { getCurrentProfessional, getSession } from "@/lib/session";
 import { hasUnreadSupport } from "@/server/support-queries";
 
@@ -16,10 +17,10 @@ export default async function DashboardLayout({
   if (!session) redirect("/sign-in");
 
   const pro = await getCurrentProfessional();
-  if (!pro) redirect("/onboarding");
+  if (!pro) redirect("/mon-espace");
 
   const supportUnread = await hasUnreadSupport(session.user.id).catch((err) => {
-    console.error("[dashboard] support badge lookup failed", err);
+    console.error(`[dashboard] support badge lookup failed: ${logSafeMessage(err)}`);
     return false;
   });
 

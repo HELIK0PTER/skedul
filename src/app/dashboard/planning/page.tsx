@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { PlanningCalendar } from "@/components/dashboard/planning-calendar";
 import { ensureHorizon } from "@/lib/booking/occurrences";
 import { db } from "@/lib/db";
+import { logSafeMessage } from "@/lib/log-safe";
 import { requireProfessional } from "@/server/pro-context";
 import { getPlanningPage } from "@/server/planning-queries";
 
@@ -30,7 +31,7 @@ export default async function PlanningPage({
       try {
         await ensureHorizon(db, pro.id);
       } catch (err) {
-        console.error("[planning] ensureHorizon failed", err);
+        console.error(`[planning] ensureHorizon failed: ${logSafeMessage(err)}`);
       }
     });
   }

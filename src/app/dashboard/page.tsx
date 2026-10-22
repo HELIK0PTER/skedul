@@ -15,6 +15,7 @@ import { dashboardAlerts, gettingStartedSteps, kpiTiles } from "@/lib/back-offic
 import { ensureHorizon } from "@/lib/booking/occurrences";
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
+import { logSafeMessage } from "@/lib/log-safe";
 import { getPlanningPage } from "@/server/planning-queries";
 import { requireProfessional } from "@/server/pro-context";
 import { getDashboardPage } from "@/server/queries";
@@ -30,7 +31,7 @@ export default async function DashboardPage() {
       try {
         await ensureHorizon(db, pro.id);
       } catch (err) {
-        console.error("[dashboard] ensureHorizon failed", err);
+        console.error(`[dashboard] ensureHorizon failed: ${logSafeMessage(err)}`);
       }
     });
   }

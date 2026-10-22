@@ -24,19 +24,19 @@ import { runEffects } from "@/server/notify";
  * cannot rely on the dashboard layout to guard it (layout and page render in
  * parallel, and a layout does not render again on a client navigation), so
  * each page checks itself: no session sends to /sign-in, no professional
- * profile to /onboarding.
+ * profile to /mon-espace (a client of some pro, or an account with no page yet).
  */
 export async function requireProfessional(): Promise<NonNullable<Awaited<ReturnType<typeof getCurrentProfessional>>>> {
   const session = await getSession();
   if (!session) redirect("/sign-in");
   const pro = await getCurrentProfessional();
-  if (!pro) redirect("/onboarding");
+  if (!pro) redirect("/mon-espace");
   return pro;
 }
 
 /**
  * The acting pro, from the session only (never from input). No session sends
- * to /sign-in, no professional profile to /onboarding. While an admin
+ * to /sign-in, no professional profile to /mon-espace. While an admin
  * impersonates, the session is the pro's own: actions stay allowed and
  * `actorUserId` is the impersonated user (decision 10).
  * Final review SEC-2: every action and query reads the session WITHOUT the
@@ -49,7 +49,7 @@ export async function requireProContext(): Promise<ProCtx> {
   const session = actingSession(await getFreshSession());
   if (!session) redirect("/sign-in");
   const pro = await getCurrentProfessional();
-  if (!pro) redirect("/onboarding");
+  if (!pro) redirect("/mon-espace");
   return {
     professionalId: pro.id,
     actorUserId: session.user.id,
