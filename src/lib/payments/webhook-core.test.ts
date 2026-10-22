@@ -4,6 +4,8 @@ import test from "node:test";
 
 import Stripe from "stripe";
 
+import { rawErrorLogs } from "@/test/source-guards";
+
 import { SESSION_APP } from "./checkout";
 import {
   HANDLED_EVENTS,
@@ -172,7 +174,7 @@ const ROUTE = readFileSync("src/app/api/stripe/webhook/route.ts", "utf8");
 test("the webhook route runs its effects with the budget none and logs no raw error (Decision 74, LED:87, S31, S49)", () => {
   assert.match(ROUTE, /runEffects\(effects, "none"\)/, "fulfilment mails are the client's due, never cut by a pro's budget");
   assert.doesNotMatch(ROUTE, /runEffects\([^)]*"pro"/);
-  assert.doesNotMatch(ROUTE, /,\s*err\s*\)/, "no console call receives the raw error object");
+  assert.deepEqual(rawErrorLogs(ROUTE), [], "no console call receives a raw error object");
   assert.match(ROUTE, /logSafeMessage\(err\)/);
 });
 

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { COPY } from "@/lib/public/messages";
+import { rawErrorLogs } from "@/test/source-guards";
 
 import { mockCancelPath, mockCheckoutHtml, type MockCheckoutView } from "./mock-checkout";
 
@@ -102,7 +103,7 @@ function bodyOf(verb: "GET" | "POST"): string {
 test("the mock route runs its effects with the budget none and logs no raw error (Decision 74, S49, S31)", () => {
   assert.match(ROUTE, /runEffects\(effects, "none"\)/);
   assert.doesNotMatch(ROUTE, /runEffects\([^)]*"pro"/);
-  assert.doesNotMatch(ROUTE, /,\s*err\s*\)/, "no console call receives the raw error object");
+  assert.deepEqual(rawErrorLogs(ROUTE), [], "no console call receives a raw error object");
 });
 
 test("the mock route: both verbs answer 404 unless the simulation is enabled, the GET writes nothing and takes no redirect parameter (S15)", () => {

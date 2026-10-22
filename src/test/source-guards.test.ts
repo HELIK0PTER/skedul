@@ -1,0 +1,135 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { codeView, rawErrorLogs, sourceFilesUnder } from "./source-guards";
+
+/** The calls rawErrorLogs reports for a one-statement source. */
+const hits = (source: string): number => rawErrorLogs(source).length;
+
+test("rawErrorLogs: a raw error handed to a console call is reported, whatever its name or shape", () => {
+  const raw = [
+    'console.error("[x] failed", err);',
+    'console.error("[x] failed", error);',
+    'console.warn("[x] failed", e);',
+    'console.log("[x] failed", cause);',
+    'console.info("[x] failed", reason);',
+    "console.error(err);",
+    'console.error("[x] failed:", err.message);',
+    "console.error(err.stack);",
+    'console.error("[x]", new Error("boom").stack);',
+    'console.error("[x] failed: " + String(err));',
+    'console.error("[x] failed: " + err);',
+    "console.error(`[x] failed: ${err}`);",
+    "console.error(`[x] failed: ${err.message}`);",
+    "console.error(`[x] failed: ${String(error)}`);",
+    "console.error(`[x] ${format(`${err}`)}`);",
+    'console.warn(\n  "[x] failed",\n  err,\n);',
+    'console.error("[x] failed", { err });',
+    'console.error("[x] failed", cond ? err : null);',
+  ];
+  for (const source of raw) assert.equal(hits(source), 1, source);
+});
+
+test("rawErrorLogs: a catch binding of the same source counts as a caught error, whatever its name", () => {
+  assert.equal(hits('try { run(); } catch (failure) { console.error("[x] failed", failure); }'), 1);
+  assert.equal(hits('run().catch((boom) => console.error("[x] failed", boom));'), 1);
+  assert.equal(hits('run().catch(boom => console.error(boom));'), 1);
+  assert.equal(hits('try { run(); } catch (failure) { console.error("[x] failed"); }'), 0, "bound but not logged");
+  assert.equal(hits('console.error("[x] failed", failure);'), 0, "no catch binds it here");
+});
+
+test("rawErrorLogs: logSafeMessage scrubs the error, so an identifier that only appears inside it is not reported", () => {
+  const safe = [
+    "console.error(`[x] failed: ${logSafeMessage(err)}`);",
+    'console.error("[x] failed: " + logSafeMessage(err));',
+    'console.error("[x] failed:", logSafeMessage(error));',
+    "console.error(`[cron] ${logSafeMessage({ message: error })}`);",
+    "console.error(`[x] ${logSafeMessage(new Error(String(cause)))}`);",
+    'console.warn(\n  "[x] failed:",\n  logSafeMessage(err),\n);',
+  ];
+  for (const source of safe) assert.equal(hits(source), 0, source);
+  // ... but a second, unscrubbed use in the same call is.
+  assert.equal(hits("console.error(`[x] ${logSafeMessage(err)} ${err}`);"), 1);
+  assert.equal(hits('console.error(logSafeMessage(err), err.stack);'), 1);
+});
+
+test("rawErrorLogs: words in strings, properties, object keys and other names are not errors", () => {
+  const clean = [
+    'console.error("[x] error while reading the e-mail: the cause is unknown");',
+    "console.warn(`[stripe] signature rejected: ${verified.reason}`);",
+    'console.error("[x] failed", { error: 1 });',
+    'console.error("[x] failed", { reason: "closed", cause: 2 });',
+    'console.error("[x] failed", errors.length);',
+    'console.error("[x] failed", errorCount);',
+    "console.info(impersonation);",
+    'console.log("[x] done");',
+    'console.error("[x] failed", report.errors);',
+    'logger.error("[x] failed", err);',
+    'process.stderr.write(err);',
+    'console.error("[x] failed" /* err */);',
+    "console.error(`[x] ${count} rows`);",
+  ];
+  for (const source of clean) assert.equal(hits(source), 0, source);
+});
+
+test("rawErrorLogs: a console call inside a comment or a string is not a call, and the text around it is not read as code", () => {
+  assert.equal(hits('// console.error("x", err);'), 0);
+  assert.equal(hits('/* console.error("x", err); */'), 0);
+  assert.equal(hits('/**\n * console.error("x", err);\n */'), 0);
+  assert.equal(hits('const doc = "console.error(\'x\', err)";'), 0);
+  assert.equal(hits("const doc = `console.error('x', err)`;"), 0);
+  // A regular expression that holds a quote, a comment marker or a backtick does not derail the scan that follows it.
+  assert.equal(hits('const re = /"/; console.error("x", err);'), 1);
+  assert.equal(hits('const re = /\\/\\*/g; console.error("x", err);'), 1);
+  assert.equal(hits("const re = /`/; console.error('x', err);"), 1);
+  assert.equal(hits("const ratio = a / b; console.error('x', err); const half = c / 2;"), 1);
+  assert.equal(hits("const a = b / 2; const s = 'it is c / d'; console.log('x', s);"), 0);
+});
+
+test("rawErrorLogs: every offending call is returned, as its source text, and only the offending ones", () => {
+  const source = [
+    "export async function POST() {",
+    "  try {",
+    "    await run();",
+    "  } catch (err) {",
+    '    console.error("[a] failed", err);',
+    "    console.error(`[b] failed: ${logSafeMessage(err)}`);",
+    '    console.warn("[c] failed:", err.stack);',
+    "  }",
+    "}",
+  ].join("\n");
+  assert.deepEqual(rawErrorLogs(source), ['console.error("[a] failed", err)', 'console.warn("[c] failed:", err.stack)']);
+});
+
+test("rawErrorLogs: an unclosed call is read to the end of the source, not skipped", () => {
+  assert.equal(hits('console.error("x", err'), 1);
+});
+
+test("rawErrorLogs sees what the narrow /,\\s*err\\s*\\)/ guard missed", () => {
+  const narrow = /,\s*err\s*\)/;
+  for (const source of ['console.error("x", error);', 'console.error("x", err, extra);', "console.error(`x ${err}`);", "console.error(err.stack);"]) {
+    assert.equal(narrow.test(source), false, `the narrow regex lets ${source} through`);
+    assert.equal(hits(source), 1, source);
+  }
+});
+
+test("codeView: same length, same lines, comments and strings blanked, template expressions kept", () => {
+  const source = 'const a = "str-literal"; // line-note\nconst b = `tpl-text ${f(err)} tail-text`; /* block\nnote */ const r = /re"gex/;\n';
+  const view = codeView(source);
+  assert.equal(view.length, source.length);
+  assert.equal(view.split("\n").length, source.split("\n").length);
+  for (const gone of ["str-literal", "line-note", "tpl-text", "tail-text", "block", 're"gex']) assert.ok(!view.includes(gone), gone);
+  assert.ok(view.includes("f(err)"), "the expression of a template literal is code");
+  assert.ok(view.includes("const a =") && view.includes("const r ="));
+});
+
+test("sourceFilesUnder: the .ts and .tsx files under a directory, test files excluded, forward slashes", () => {
+  const files = sourceFilesUnder("src/test");
+  assert.ok(files.includes("src/test/source-guards.ts"), "this helper is a source file");
+  assert.ok(files.includes("src/test/db.ts"));
+  assert.ok(files.every((f) => /^src\/test\/[^\\]+\.tsx?$/.test(f)), JSON.stringify(files));
+  assert.ok(files.every((f) => !/\.test\.tsx?$/.test(f)), "no test file");
+  const all = sourceFilesUnder("src");
+  assert.ok(all.length > 200, `the whole tree is walked (${all.length})`);
+  assert.ok(all.includes("src/server/visitor.ts") && all.includes("src/lib/booking/claims.ts"));
+});

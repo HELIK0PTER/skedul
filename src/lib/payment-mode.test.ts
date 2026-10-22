@@ -5,28 +5,20 @@
  * bundle (plan Global Constraints). Run from the repository root.
  */
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import test from "node:test";
 
 import { stripeMode } from "@/lib/admin-metrics";
 import * as checkout from "@/lib/payments/checkout";
+import { sourceFilesUnder } from "@/test/source-guards";
 
 import { paymentModeOf } from "./payment-mode";
 
 /** The source without comments: a sentence in a doc comment is never counted as an import. */
 function codeOf(file: string): string {
   return readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-}
-
-/** Every .ts and .tsx source file under `dir`, test files excluded, with forward slashes. */
-function sourceFiles(dir: string): string[] {
-  return readdirSync(dir).flatMap((name) => {
-    const path = join(dir, name);
-    if (statSync(path).isDirectory()) return sourceFiles(path);
-    return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [path.replace(/\\/g, "/")] : [];
-  });
 }
 
 /** True when the file opens with the given directive ("use client" or "use server"). */
@@ -134,7 +126,7 @@ test("the admin bar chart reaches admin-metrics (niceCeil) and the import-free p
 });
 
 test("no client component loads a payments module or the Stripe client at run time (plan Global Constraints, client boundary)", () => {
-  const clients = sourceFiles("src").filter((f) => hasDirective(f, "use client"));
+  const clients = sourceFilesUnder("src").filter((f) => hasDirective(f, "use client"));
   assert.ok(clients.length > 20, `the scan found the client components (${clients.length})`);
   const offenders = clients.flatMap((client) =>
     runtimeClosure(client)

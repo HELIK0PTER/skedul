@@ -5,8 +5,10 @@
  * src/server/pro-context.test.ts. Run from the repository root.
  */
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+
+import { sourceFilesUnder } from "@/test/source-guards";
 
 const SOURCE = readFileSync("src/server/visitor.ts", "utf8");
 
@@ -56,15 +58,6 @@ test("the file declares no writer of the wallet Owner: the Owner is linked by it
   assert.doesNotMatch(SOURCE, /linkCustomerUser/, "visitor.ts never writes customer.user_id");
   assert.doesNotMatch(SOURCE, /WalletOwner/, "no helper returns an Owner: it is the owner field of the visitor");
 });
-
-/** Every .ts and .tsx file under `dir`, test files excluded, with forward slashes. */
-function sourceFilesUnder(dir: string): string[] {
-  return readdirSync(dir).flatMap((name) => {
-    const path = `${dir}/${name}`;
-    if (statSync(path).isDirectory()) return sourceFilesUnder(path);
-    return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [path] : [];
-  });
-}
 
 test("no file under src outside the test files names requireWalletOwner (a writer that wrappers could call before their core parses and throttles)", () => {
   const files = sourceFilesUnder("src");

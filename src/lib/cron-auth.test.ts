@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { rawErrorLogs } from "@/test/source-guards";
+
 import { CRON_SECRET_MIN_LENGTH, cronAuthorized } from "./cron-auth";
 
 /** 32 characters. */
@@ -98,6 +100,6 @@ test("the cron route answers counts only, 500 when the night had errors, and log
   }
   assert.match(ROUTE, /status: ok \? 200 : 500/);
   assert.match(ROUTE, /logSafeMessage\(\{ message: error \}\)/, "each entry goes through the masking of logSafeMessage");
-  assert.doesNotMatch(ROUTE, /,\s*err\s*\)/, "no console call receives a raw error object");
+  assert.deepEqual(rawErrorLogs(ROUTE), [], "no console call receives a raw error object");
   assert.doesNotMatch(ROUTE, /runEffects/, "the nightly job sends nothing (OUT:118), so no mail budget is ever chosen here");
 });
