@@ -10,7 +10,7 @@ import { z } from "zod";
 
 import { attachCheckoutSession, bookWithHeldTicket, registerFree, startBuyAndBook } from "@/lib/booking/claims";
 import { releasePurchase } from "@/lib/booking/release";
-import { fail } from "@/lib/booking/types";
+import { fail, type Effect } from "@/lib/booking/types";
 import { upsertCustomer } from "@/lib/booking/wallet";
 import { ts, type Db } from "@/lib/db/atomic";
 import { booking, event, occurrence } from "@/lib/db/schema";
@@ -322,7 +322,27 @@ export async function activeBookingIdOf(
   return row?.id ?? null;
 }
 
-/** E3 (L860-865): shape, honeypot, throttle "free", upsertCustomer, registerFree; for a typed address `already_booked` answers like a success (Decision 64). */
+/**
+ * Seats a NEW claim would find on this pro's séance, the way the engine's batch counts them: capacity minus seats_taken,
+ * the elapsed pending holds counting as free because R(o) releases them before SEAT. A refused batch rolls back, so after
+ * `already_booked` those holds are still in seats_taken. null when this pro has no such séance.
+ */
+async function seatsLeftOf(db: Db, professionalId: string, occurrenceId: string, now: Date): Promise<number | null> {
+  const res = await db.execute<{ seats_left: number }>(sql`
+    select (o.capacity - o.seats_taken
+      + (select count(*)::int from booking b
+          where b.occurrence_id = o.id and b.professional_id = o.professional_id
+            and b.status = 'pending' and b.hold_expires_at < ${ts(now)}))::int as seats_left
+    from occurrence o
+    where o.id = ${occurrenceId} and o.professional_id = ${professionalId}`);
+  const row = res.rows[0];
+  return row ? Number(row.seats_left) : null;
+}
+
+/**
+ * E3 (L860-865): shape, honeypot, throttle "free", upsertCustomer, registerFree. For a typed address `already_booked` is
+ * answered as a NEW address would be on this séance, a success or « Complet » when no seat is left (Decision 64).
+ */
 export async function registerFreeCore(
   db: Db,
   pro: PublicPro,
@@ -370,8 +390,9 @@ export async function registerFreeCore(
     now,
   );
 
-  // 6. The engine. For a typed address an existing registration looks exactly like a fresh one to the browser
-  // (Decision 64); only the inbox owner gets the confirmation of the EXISTING booking again.
+  // 6. The engine. For a typed address an existing registration looks exactly like what a NEW address would get on
+  // this séance (Decision 64); only the inbox owner gets the confirmation of the EXISTING booking again.
+  const vars = { businessName: pro.businessName };
   const res = await registerFree(
     db,
     {
@@ -386,9 +407,14 @@ export async function registerFreeCore(
   if (res.ok) return publicOk({}, res.effects);
   if (res.code === "already_booked" && subject.kind === "email") {
     const existing = await activeBookingIdOf(db, pro.professionalId, data.occurrenceId, customerId, now);
-    return publicOk({}, existing === null ? [] : [{ type: "email.booking_confirmed", bookingId: existing }]);
+    const effects: Effect[] = existing === null ? [] : [{ type: "email.booking_confirmed", bookingId: existing }];
+    // The engine tests « already booked » BEFORE the seat (claims.ts: assertNotBooked, then SEAT), so on a full séance a
+    // registered address would pass where a fresh one is told « Complet »: that difference alone would say who attends.
+    const left = await seatsLeftOf(db, pro.professionalId, data.occurrenceId, now);
+    if (left !== null && left < 1) return fromEngineClient(fail("full"), "free", vars, effects);
+    return publicOk({}, effects);
   }
-  return fromEngineClient(res, "free", { businessName: pro.businessName });
+  return fromEngineClient(res, "free", vars);
 }
 
 /**

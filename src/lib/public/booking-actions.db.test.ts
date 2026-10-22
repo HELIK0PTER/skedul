@@ -1016,6 +1016,72 @@ dbTest("free: a typed address already registered gets the success answer and its
   assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 1);
 });
 
+dbTest("free: on a full séance a registered address and a fresh one get the same « Complet » answer (S34, Decision 64)", async (h) => {
+  const s = await setupFree(h, { capacity: 1 });
+  const registered = testEmail("registered");
+  const first = await runFree(h, freeInput(s.occ, { identity: { name: "Beatriz Almeida", email: registered } }));
+  assert.ok(first.res.ok, JSON.stringify(first.res));
+  const [created] = await bookingsOf(h, s.occ.id);
+
+  const again = await runFree(h, freeInput(s.occ, { identity: { name: "Beatriz Almeida", email: registered } }));
+  const fresh = await runFree(h, freeInput(s.occ, { identity: { name: "Camille Durand", email: testEmail("fresh") } }));
+  assert.ok(!fresh.res.ok, JSON.stringify(fresh.res));
+  assert.equal(fresh.res.error, "Complet : il ne reste plus de place sur cette séance.");
+  assert.equal(fresh.res.code, "full");
+  assert.ok(!again.res.ok, "the registered address must not learn it is registered: the séance is full for everyone");
+  assert.deepEqual(
+    withoutPublicEffects(again.res),
+    withoutPublicEffects(fresh.res),
+    "the browser cannot tell a registered address from a fresh one on a full séance",
+  );
+
+  // Only the inbox owner can tell: the confirmation of her EXISTING booking goes to her address again.
+  assert.deepEqual(fresh.res.effects, []);
+  assert.deepEqual(again.res.effects, [{ type: "email.booking_confirmed", bookingId: created.id }]);
+  assert.equal((await bookingsOf(h, s.occ.id)).length, 1);
+  assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 1);
+});
+
+dbTest("free: a stale hold the engine would release does not make a registered address look full (S34, Decision 64)", async (h) => {
+  // Capacity 2: the registered address holds one seat, a stale hold of another customer still counts in seats_taken
+  // until the next engine action releases it. A fresh address would get that seat back (R(o) before SEAT), so the
+  // registered one must be answered as a success too: counting the stale hold would make her « Complet » alone.
+  const s = await setupFree(h, { capacity: 2 });
+  const typeId = await makeType(h.db, h.pro, { name: "Altinha" });
+  const offerId = await makeOffer(h.db, h.pro, typeId, { quantity: 4, priceCents: 8500 });
+  const now = new Date();
+  const registered = testEmail("registered");
+  const first = await runFree(h, freeInput(s.occ, { identity: { name: "Beatriz Almeida", email: registered } }), { now });
+  assert.ok(first.res.ok, JSON.stringify(first.res));
+  const [created] = await bookingsOf(h, s.occ.id);
+
+  const holder = await rowCustomer(h.db, h.pro, {}, now);
+  const purchaseId = await rowPurchase(h.db, h.pro, { customerId: holder, offerId, ticketTypeId: typeId }, now);
+  await rowBooking(
+    h.db,
+    h.pro,
+    {
+      occurrenceId: s.occ.id,
+      customerId: holder,
+      status: "pending",
+      coverage: "ticket",
+      purchaseId,
+      holdExpiresAt: addMinutes(now, -5),
+    },
+    now,
+  );
+  await h.db.update(occurrenceTable).set({ seatsTaken: 2 }).where(eq(occurrenceTable.id, s.occ.id));
+
+  const again = await runFree(h, freeInput(s.occ, { identity: { name: "Beatriz Almeida", email: registered } }), { now });
+  assert.ok(again.res.ok, JSON.stringify(again.res));
+  assert.deepEqual(again.res.effects, [{ type: "email.booking_confirmed", bookingId: created.id }]);
+
+  const fresh = await runFree(h, freeInput(s.occ, { identity: { name: "Camille Durand", email: testEmail("fresh") } }), { now });
+  assert.ok(fresh.res.ok, JSON.stringify(fresh.res));
+  assert.deepEqual(withoutPublicEffects(again.res), withoutPublicEffects(fresh.res));
+  assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 2, "the stale hold went, the fresh address took its seat");
+});
+
 dbTest("free: a verified identity already registered keeps the engine sentence, it is her own state", async (h) => {
   const s = await setupFree(h);
   const email = testEmail("verified");
