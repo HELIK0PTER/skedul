@@ -3,7 +3,7 @@ import { eq, inArray } from "drizzle-orm";
 
 import { addDaysMs, addMinutes, createTestPro, dbTest, deleteTestUser, testEmail, type Db, type TestPro } from "../test/db";
 import { dayIn, getOccurrence, giveTickets, makeCustomer, makeEvent, makeOffer, makeType } from "../test/fixtures";
-import { rowBooking, rowPurchase } from "../test/rows";
+import { rowBooking, rowPurchase, rowTicket } from "../test/rows";
 import { expiryLabel, formatWhen, planningHref } from "./back-office/format";
 import { googleCalendarUrl, outlookCalendarUrl } from "./calendar-links";
 import { cancelByClient, cancelBookingsByPro, cancelOccurrence } from "./booking/cancel";
@@ -14,7 +14,7 @@ import { releasePurchase } from "./booking/release";
 import { updateOccurrence } from "./booking/series";
 import type { Effect } from "./booking/types";
 import { moveAttendee, offerTickets } from "./booking/wallet";
-import { booking, professional, ticketPurchase, user } from "./db/schema";
+import { booking, professional, ticket, ticketPurchase, user } from "./db/schema";
 import { escapeHtml } from "./email-layout";
 import { formatDayMonthYear, instantAt, todayKey } from "./civil-date";
 import { guestLinkKey, personalLinkUrl } from "./guest-link";
@@ -1068,32 +1068,66 @@ dbTest("the receipt, the late payment and the pro notices plan nothing for a pur
   assert.equal(emailsOf(await planEffect(db, { type: "email.pro_booking_cancelled", bookingId: hold.bookingId }, deps), pro.proId).length, 1);
 });
 
-dbTest("S6: a purchase whose customer or type belongs to another pro plans no receipt, and a booking of another pro plans no late payment", async ({ db, pro }) => {
+dbTest("S6: a purchase whose customer or type belongs to another pro plans no receipt, and a booking of another pro or another customer plans no late payment", async ({ db, pro }) => {
   const now = new Date();
   const deps = depsAt(now);
   const typeId = await makeType(db, pro, { name: "Cours collectif" });
   const offerId = await makeOffer(db, pro, typeId);
+  const { occurrences: [occ] } = await makeEvent(db, pro, { title: "Altinha du soir", ticketTypeIds: [typeId] });
   const ownEmail = testEmail("own");
   const own = await makeCustomer(db, pro, { name: "Beatriz Almeida", email: ownEmail });
   const other = await createTestPro(db);
   const purchases: string[] = [];
   const bookings: string[] = [];
+  const tickets: string[] = [];
   try {
     const stranger = await makeCustomer(db, other, { name: "Mallory", email: testEmail("mallory") });
     const foreignTypeId = await makeType(db, other, { name: "Type d'un autre" });
     const { occurrences: [foreignOcc] } = await makeEvent(db, other, { title: "Séance d'un autre" });
     // Built by hand on purpose: ticket_purchase.customer_id, ticket_purchase.ticket_type_id and booking.purchase_id have no
-    // composite FK to the pro, so only the plans' own joins keep a foreign row out of an e-mail.
-    const foreignCustomer = await rowPurchase(db, pro, { customerId: stranger, offerId, ticketTypeId: typeId, status: "paid" }, now);
-    const foreignType = await rowPurchase(db, pro, { customerId: own, offerId, ticketTypeId: foreignTypeId, status: "paid" }, now);
-    const crossed = await rowPurchase(db, pro, { customerId: own, offerId, ticketTypeId: typeId, status: "paid" }, now);
-    purchases.push(foreignCustomer, foreignType, crossed);
-    bookings.push(await rowBooking(db, other, { occurrenceId: foreignOcc.id, customerId: stranger, status: "expired", purchaseId: crossed }, now));
+    // composite FK to the pro, so only the plans' own joins and guards keep a foreign row out of an e-mail.
+    const paidPurchase = async (customerId: string, ticketTypeId: string): Promise<string> => {
+      const id = await rowPurchase(db, pro, { customerId, offerId, ticketTypeId, status: "paid" }, now);
+      purchases.push(id);
+      return id;
+    };
+    // A lapsed booking (the only kind the late payment looks at; a confirmed one is filtered by its status before any guard).
+    const lapsed = async (proOf: TestPro, occurrenceId: string, customerId: string, purchaseId: string): Promise<void> => {
+      bookings.push(await rowBooking(db, proOf, { occurrenceId, customerId, status: "expired", purchaseId }, now));
+    };
+    // The late payment counts the purchase's tickets: with one, only a guard can stop the mail.
+    const withTicket = async (purchaseId: string): Promise<void> => {
+      tickets.push(await rowTicket(db, pro, { customerId: own, ticketTypeId: typeId, purchaseId, movements: false }, now));
+    };
+
+    const lateControl = await paidPurchase(own, typeId);
+    await withTicket(lateControl);
+    await lapsed(pro, occ.id, own, lateControl);
+    const foreignCustomer = await paidPurchase(stranger, typeId);
+    await withTicket(foreignCustomer);
+    await lapsed(pro, occ.id, own, foreignCustomer); // the booking is a customer of this pro, the purchase's customer is not
+    const foreignType = await paidPurchase(own, foreignTypeId);
+    await lapsed(pro, occ.id, own, foreignType); // no ticket stands for a type of another pro: nothing to announce
+    const foreignBooking = await paidPurchase(stranger, typeId);
+    await withTicket(foreignBooking);
+    await lapsed(other, foreignOcc.id, stranger, foreignBooking); // same customer as the purchase, but a booking of another pro
+    const crossed = await paidPurchase(own, typeId);
+    await lapsed(other, foreignOcc.id, stranger, crossed);
+
+    // the control: own customer, own tickets, own lapsed booking, so the guards below are the only thing in the way
+    const [late] = emailsOf(await planEffect(db, { type: "email.late_payment", purchaseId: lateControl }, deps), pro.proId);
+    assert.equal(late.to, ownEmail);
+    assert.ok(late.html.includes(esc("Altinha du soir")));
 
     for (const purchaseId of [foreignCustomer, foreignType]) {
       assert.deepEqual(await planEffect(db, { type: "email.purchase_receipt", purchaseId }, deps), NONE, purchaseId);
       assert.deepEqual(await planEffect(db, { type: "email.late_payment", purchaseId }, deps), NONE, purchaseId);
     }
+    assert.deepEqual(
+      await planEffect(db, { type: "email.late_payment", purchaseId: foreignBooking }, deps),
+      NONE,
+      "the purchase's customer owns the booking, but the booking belongs to another pro",
+    );
     // the control: the same purchase, own customer and own type, still gets its receipt; its crossed booking gets no late payment
     const [receipt] = emailsOf(await planEffect(db, { type: "email.purchase_receipt", purchaseId: crossed }, deps), pro.proId);
     assert.equal(receipt.to, ownEmail);
@@ -1101,6 +1135,57 @@ dbTest("S6: a purchase whose customer or type belongs to another pro plans no re
     assert.deepEqual(await planEffect(db, { type: "email.late_payment", purchaseId: crossed }, deps), NONE, "the booking belongs to another pro");
   } finally {
     // The hand-built rows go first: the foreign keys inside the domain are NO ACTION.
+    if (bookings.length > 0) await db.delete(booking).where(inArray(booking.id, bookings));
+    if (tickets.length > 0) await db.delete(ticket).where(inArray(ticket.id, tickets));
+    if (purchases.length > 0) await db.delete(ticketPurchase).where(inArray(ticketPurchase.id, purchases));
+    await deleteTestUser(db, other.userId);
+  }
+});
+
+dbTest("S6: the receipt names a booking only when it is the purchase's own customer's, at the purchase's own pro", async ({ db, pro }) => {
+  const now = new Date();
+  const deps = depsAt(now);
+  const typeId = await makeType(db, pro, { name: "Cours collectif" });
+  const offerId = await makeOffer(db, pro, typeId);
+  const { occurrences: [occ] } = await makeEvent(db, pro, { title: "Altinha du soir", ticketTypeIds: [typeId] });
+  const ownEmail = testEmail("own");
+  const own = await makeCustomer(db, pro, { name: "Beatriz Almeida", email: ownEmail });
+  const neighbour = await makeCustomer(db, pro, { name: "Camille Dupont", email: testEmail("neighbour") });
+  const other = await createTestPro(db);
+  const purchases: string[] = [];
+  const bookings: string[] = [];
+  try {
+    const stranger = await makeCustomer(db, other, { name: "Mallory", email: testEmail("mallory") });
+    const { occurrences: [foreignOcc] } = await makeEvent(db, other, { title: "Séance d'un autre" });
+    // Built by hand on purpose: booking.purchase_id has no composite FK to the purchase's pro or customer, so only the
+    // receipt's own guard keeps another customer's booking out of it. Every booking here is CONFIRMED (the receipt's
+    // booking line only reads those) and every purchase is the same customer's.
+    const attached = async (proOf: TestPro, occurrenceId: string, customerId: string): Promise<string> => {
+      const purchaseId = await rowPurchase(db, pro, { customerId: own, offerId, ticketTypeId: typeId, status: "paid" }, now);
+      purchases.push(purchaseId);
+      bookings.push(await rowBooking(db, proOf, { occurrenceId, customerId, status: "confirmed", purchaseId }, now));
+      return purchaseId;
+    };
+    const ownBooking = await attached(pro, occ.id, own);
+    const neighbours = await attached(pro, occ.id, neighbour);
+    const foreignPro = await attached(other, foreignOcc.id, stranger);
+
+    // the control: the purchase's own booking at its own pro is named
+    const [named] = emailsOf(await planEffect(db, { type: "email.purchase_receipt", purchaseId: ownBooking }, deps), pro.proId);
+    assert.equal(named.to, ownEmail);
+    assert.ok(named.html.includes("Un des tickets a servi pour votre inscription"), "the booking line");
+    assert.ok(named.html.includes(esc("Altinha du soir")));
+
+    // another customer's booking at the same pro, and another pro's booking: the receipt is still sent, without a booking line
+    for (const [purchaseId, title] of [[neighbours, "Altinha du soir"], [foreignPro, "Séance d'un autre"]] as const) {
+      const [receipt] = emailsOf(await planEffect(db, { type: "email.purchase_receipt", purchaseId }, deps), pro.proId);
+      assert.equal(receipt.to, ownEmail, "the receipt goes to the purchase's own customer");
+      assert.equal(receipt.html.includes("Un des tickets a servi"), false, `no booking line for ${title}`);
+      assert.equal(receipt.html.includes(esc(title)), false, `${title} is not named`);
+      assert.equal(receipt.html.includes("Camille") || receipt.html.includes("Mallory"), false, "no other customer is named");
+    }
+  } finally {
+    // The hand-built rows go first: the foreign keys inside the domain are NO ACTION, and a confirmed one would break I1.
     if (bookings.length > 0) await db.delete(booking).where(inArray(booking.id, bookings));
     if (purchases.length > 0) await db.delete(ticketPurchase).where(inArray(ticketPurchase.id, purchases));
     await deleteTestUser(db, other.userId);

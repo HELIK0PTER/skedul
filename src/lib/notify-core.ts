@@ -442,8 +442,10 @@ function planningUrlOf(b: Pick<BookingFacts, "occurrenceId" | "startsAt" | "tz">
 
 /**
  * The receipt of a PAID purchase, to its customer. The customer, the pro and the ticket type are read through the
- * purchase's own professional_id: a purchase that crosses two pros plans nothing. `walletCount` is the purchase's
- * tickets still available (the ticket a buy + book spent is not counted); `expiryText` says « valables » for several.
+ * purchase's own professional_id: a purchase that crosses two pros plans nothing. Its booking line names the
+ * purchase's confirmed booking only when that booking is the same pro's and the same customer's. `walletCount` is
+ * the purchase's tickets still available (the ticket a buy + book spent is not counted); `expiryText` says
+ * « valables » for several.
  */
 async function planPurchaseReceipt(db: Db, purchaseId: string, deps: NotifyDeps): Promise<EffectPlan> {
   const [p] = await db
@@ -485,8 +487,10 @@ async function planPurchaseReceipt(db: Db, purchaseId: string, deps: NotifyDeps)
     .from(ticket)
     .where(and(eq(ticket.purchaseId, p.purchaseId), eq(ticket.professionalId, p.professionalId)));
   const [held] = await readBookings(db, and(eq(booking.purchaseId, p.purchaseId), eq(booking.status, "confirmed")));
+  // The booking is named only when it is this customer's own at this pro (the rule of planLatePayment): a purchase
+  // reference never stands for its customer, so another customer's booking attached to it is never read out.
   const bookingLine =
-    held && held.professionalId === p.professionalId
+    held && held.professionalId === p.professionalId && held.customerId === p.customerId
       ? `Un des tickets a servi pour votre inscription à « ${held.title} » (${whenOf(held)}).`
       : null;
 
