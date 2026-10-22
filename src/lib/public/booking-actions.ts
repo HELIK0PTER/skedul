@@ -155,10 +155,41 @@ async function seanceTitleOf(db: Db, professionalId: string, occurrenceId: strin
 }
 
 /**
+ * Best effort once a purchase exists (a pending purchase, and its held seat for a buy + book) and a later step THREW:
+ * close the Checkout session when Stripe has one, then release the purchase, each in its own try so one failure never
+ * hides the other. It never throws: the caller rethrows the ORIGINAL error, which runPublicActionWith answers as
+ * PUBLIC_UNEXPECTED. Without this the seat stays held until the hold lapses, and the same typed address then gets
+ * COPY.BUYBOOK_NOT_POSSIBLE. The sync effect a release returns is dropped (nothing can run it after a throw): the
+ * next calendar sync heals it. Logs carry no address and no session id (logSafeMessage).
+ */
+async function abandonPurchase(
+  db: Db,
+  deps: PublicDeps,
+  purchaseId: string,
+  sessionId: string | null,
+  now: Date,
+): Promise<void> {
+  if (sessionId !== null) {
+    try {
+      await deps.checkout.expire(sessionId);
+    } catch (err) {
+      console.error("[public] checkout expire failed: " + logSafeMessage(err));
+    }
+  }
+  try {
+    await releasePurchase(db, purchaseId, now);
+  } catch (err) {
+    console.error("[public] purchase release failed: " + logSafeMessage(err));
+  }
+}
+
+/**
  * Steps 10 and 11 of E1 and E9: the Checkout session, then its attachment to the purchase. A throw from the
  * gateway releases the purchase at once (COPY.CHECKOUT_FAILED, L814); a refused attachment (the purchase is no
  * longer pending) expires the session, releases the purchase and answers « stale ». The seat of a buy + book
  * comes back in both cases and its sync effect is returned with the failure. Logs carry no address or session id.
+ * Anything else that THROWS here (the attach UPDATE, a release) closes the session that exists and releases the
+ * purchase best effort (abandonPurchase), then rethrows.
  */
 export async function createCheckoutAndAttach(
   db: Db,
@@ -168,32 +199,41 @@ export async function createCheckoutAndAttach(
   businessName: string,
   now: Date,
 ): Promise<PublicCoreResult<{ purchaseId: string; checkoutUrl: string }>> {
-  let created: CheckoutCreated;
+  // The session Stripe handed out, until the code below has closed it itself: what a throw must close.
+  let openSessionId: string | null = null;
   try {
-    created = await deps.checkout.create(request);
-  } catch (err) {
-    console.error("[public] checkout create failed: " + logSafeMessage(err));
-    const rel = await releasePurchase(db, request.purchaseId, now);
-    return publicFail(COPY.CHECKOUT_FAILED, { effects: rel.ok ? rel.effects : [] });
-  }
-  const attached = await attachCheckoutSession(
-    db,
-    { purchaseId: request.purchaseId, checkoutSessionId: created.sessionId, checkoutUrl: created.url },
-    now,
-  );
-  if (!attached.ok) {
+    let created: CheckoutCreated;
     try {
-      await deps.checkout.expire(created.sessionId);
+      created = await deps.checkout.create(request);
     } catch (err) {
-      console.error("[public] checkout expire failed: " + logSafeMessage(err));
+      console.error("[public] checkout create failed: " + logSafeMessage(err));
+      const rel = await releasePurchase(db, request.purchaseId, now);
+      return publicFail(COPY.CHECKOUT_FAILED, { effects: rel.ok ? rel.effects : [] });
     }
-    const rel = await releasePurchase(db, request.purchaseId, now);
-    return fromEngineClient(fail("stale"), context, { businessName }, rel.ok ? rel.effects : []);
+    openSessionId = created.sessionId;
+    const attached = await attachCheckoutSession(
+      db,
+      { purchaseId: request.purchaseId, checkoutSessionId: created.sessionId, checkoutUrl: created.url },
+      now,
+    );
+    if (!attached.ok) {
+      openSessionId = null;
+      try {
+        await deps.checkout.expire(created.sessionId);
+      } catch (err) {
+        console.error("[public] checkout expire failed: " + logSafeMessage(err));
+      }
+      const rel = await releasePurchase(db, request.purchaseId, now);
+      return fromEngineClient(fail("stale"), context, { businessName }, rel.ok ? rel.effects : []);
+    }
+    return publicOk({ purchaseId: request.purchaseId, checkoutUrl: created.url });
+  } catch (err) {
+    await abandonPurchase(db, deps, request.purchaseId, openSessionId, now);
+    throw err;
   }
-  return publicOk({ purchaseId: request.purchaseId, checkoutUrl: created.url });
 }
 
-/** E1 (L778-823): shape, honeypot, payment availability, throttle "buybook", seat pressure, upsertCustomer, startBuyAndBook, Checkout session, attachCheckoutSession; a Stripe failure or a refused attach releases the seat at once. */
+/** E1 (L778-823): shape, honeypot, payment availability, throttle "buybook", seat pressure, upsertCustomer, startBuyAndBook, Checkout session, attachCheckoutSession; a Stripe failure or a refused attach releases the seat at once, and so does a throw once the seat is held (rethrown after the release). */
 export async function startBuyAndBookCore(
   db: Db,
   pro: PublicPro,
@@ -274,27 +314,35 @@ export async function startBuyAndBookCore(
     return fromEngineClient(res, "buybook", vars);
   }
 
-  // 9. The product name shown on the Checkout page.
-  const title = await seanceTitleOf(db, pro.professionalId, data.occurrenceId);
-  const productName = title === null ? res.label : `${title} · ${res.label}`;
-
-  // 10 and 11. The Checkout session (31 minutes, computed right before the call, L808), then its attachment.
-  const request: CheckoutRequest = {
-    kind: "buybook",
-    purchaseId: res.purchaseId,
-    amountCents: res.amountCents,
-    currency: res.currency,
-    productName,
-    customerEmail: identity.email,
-    env: deps.env,
-    ...checkoutUrls(deps.appUrl, {
+  // 9 and 10. The product name shown on the Checkout page, then the request (31 minutes, computed right before the
+  // call, L808). The seat is held from here on: a throw before the Checkout session exists releases it (a throw
+  // later is createCheckoutAndAttach's to clean up).
+  let request: CheckoutRequest;
+  try {
+    const title = await seanceTitleOf(db, pro.professionalId, data.occurrenceId);
+    const productName = title === null ? res.label : `${title} · ${res.label}`;
+    request = {
       kind: "buybook",
-      slug: pro.slug,
       purchaseId: res.purchaseId,
-      occurrenceId: data.occurrenceId,
-    }),
-    expiresAt: buybookCheckoutExpiry(Date.now()),
-  };
+      amountCents: res.amountCents,
+      currency: res.currency,
+      productName,
+      customerEmail: identity.email,
+      env: deps.env,
+      ...checkoutUrls(deps.appUrl, {
+        kind: "buybook",
+        slug: pro.slug,
+        purchaseId: res.purchaseId,
+        occurrenceId: data.occurrenceId,
+      }),
+      expiresAt: buybookCheckoutExpiry(Date.now()),
+    };
+  } catch (err) {
+    await abandonPurchase(db, deps, res.purchaseId, null, now);
+    throw err;
+  }
+
+  // 11. The Checkout session, then its attachment.
   return createCheckoutAndAttach(db, deps, request, "buybook", pro.businessName, now);
 }
 

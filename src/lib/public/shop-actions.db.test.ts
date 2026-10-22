@@ -30,7 +30,7 @@ import {
   testIpHash,
   type FakeCheckout,
 } from "@/test/public";
-import { rowCustomer } from "@/test/rows";
+import { rowCustomer, rowPurchase } from "@/test/rows";
 
 test("the shop schema normalises the identity and refuses any extra key", () => {
   const valid = {
@@ -250,6 +250,33 @@ dbTest("shop purchase: a refused attachment expires the session and says the off
   const [purchase] = await purchasesOf(h);
   assert.equal(purchase.status, "expired");
   assert.equal(purchase.checkoutSessionId, null);
+});
+
+/** What the thrown attach UPDATE looks like to the caller (the driver error wraps the unique violation). */
+const ATTACH_FAILURE = /Failed query: update "ticket_purchase" set "checkout_session_id"/;
+
+dbTest("shop purchase: a throw after the session was created closes the session, expires the purchase and rethrows", async (h) => {
+  const s = await setup(h);
+  const fake = fakeCheckout("test");
+  // The session id the gateway is about to hand out is already attached to another purchase
+  // (ticket_purchase_checkout_session_uq): the attach UPDATE THROWS instead of answering « stale ».
+  fake.onCreate = async (req) => {
+    const otherCustomer = await rowCustomer(h.db, h.pro, {});
+    const other = await rowPurchase(h.db, h.pro, { customerId: otherCustomer, offerId: s.offerId, ticketTypeId: s.typeId });
+    await h.db
+      .update(ticketPurchase)
+      .set({ checkoutSessionId: `cs_test_fake_${req.purchaseId}` })
+      .where(eq(ticketPurchase.id, other));
+  };
+
+  await assert.rejects(run(h, shopInput(s), { fake }), ATTACH_FAILURE);
+
+  const purchaseId = fake.created[0].purchaseId;
+  assert.deepEqual(fake.expired, [`cs_test_fake_${purchaseId}`], "the open session is closed, once");
+  const mine = (await purchasesOf(h)).find((p) => p.id === purchaseId);
+  assert.equal(mine?.status, "expired");
+  assert.equal(mine?.checkoutSessionId, null);
+  assert.deepEqual(await bookingsOfPro(h), [], "a shop purchase holds no seat");
 });
 
 dbTest("shop purchase: the 7th request of one address at this pro is throttled before any write (S19)", async (h) => {

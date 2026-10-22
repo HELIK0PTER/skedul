@@ -34,7 +34,7 @@ import { withoutPublicEffects } from "@/lib/public/result";
 import { checkActionThrottle } from "@/lib/throttle";
 import { normalizeEmail } from "@/lib/tickets";
 import { parseFr } from "@/lib/zod-fr";
-import { addMinutes, createTestPro, dbTest, deleteTestUser, testEmail, type DbHarness } from "@/test/db";
+import { addMinutes, createTestPro, dbTest, deleteTestUser, testEmail, type Db, type DbHarness } from "@/test/db";
 import { getBooking, getOccurrence, giveTickets, makeEvent, makeOffer, makeType, ticketsOf } from "@/test/fixtures";
 import {
   actionVisitorOf,
@@ -180,15 +180,39 @@ function buyInput(
 async function run(
   h: DbHarness,
   input: unknown,
-  opts: { visitor?: ActionVisitor; fake?: FakeCheckout; mockAllowed?: boolean; now?: Date } = {},
+  opts: { visitor?: ActionVisitor; fake?: FakeCheckout; mockAllowed?: boolean; now?: Date; db?: Db } = {},
 ) {
   const pro = await publicProOf(h.db, h.pro);
   const visitor = opts.visitor ?? actionVisitorOf();
   const fake = opts.fake ?? fakeCheckout("test");
   const now = opts.now ?? new Date();
   const deps = publicDepsOf(fake, { mockAllowed: opts.mockAllowed ?? false });
-  const res = await startBuyAndBookCore(h.db, pro, visitor, input, deps, now);
+  const res = await startBuyAndBookCore(opts.db ?? h.db, pro, visitor, input, deps, now);
   return { res, fake, visitor, now };
+}
+
+/**
+ * The test database with one kind of read that throws: the `db.select(fields)` whose field names, joined by commas,
+ * are `fields` (the Checkout product name is `title`; the first read of releasePurchase is `id,occurrenceId`),
+ * while `armed()` is true; `times` limits how many throws (default: every one).
+ */
+function dbFailingSelect(db: Db, fields: string, message: string, armed: () => boolean = () => true, times = Infinity): Db {
+  let thrown = 0;
+  return new Proxy(db, {
+    get(target, prop, receiver) {
+      if (prop === "select") {
+        return (selected?: Record<string, unknown>) => {
+          if (selected !== undefined && Object.keys(selected).join() === fields && thrown < times && armed()) {
+            thrown += 1;
+            throw new Error(message);
+          }
+          return Reflect.apply(target.select, target, [selected]);
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 const purchasesOf = (h: DbHarness) =>
@@ -377,6 +401,131 @@ dbTest("a gateway that throws while expiring the session still lets the seat go,
   const { res } = await run(h, buyInput(s, { identity: { name: "Beatriz Almeida", email } }), { fake });
   assert.ok(!res.ok);
   assert.equal(res.code, "stale");
+  const [held] = await bookingsOf(h, s.occ.id);
+  assert.equal(held.status, "expired");
+  assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 0);
+  assert.deepEqual(lines, ["[public] checkout expire failed: stripe down for [email]"]);
+});
+
+/** What the thrown attach UPDATE looks like to the caller (the driver error wraps the unique violation). */
+const ATTACH_FAILURE = /Failed query: update "ticket_purchase" set "checkout_session_id"/;
+
+/** Makes the attach UPDATE of THIS purchase THROW: the session id the gateway is about to hand out is already attached to another purchase (ticket_purchase_checkout_session_uq). */
+function attachWillThrow(h: DbHarness, s: Setup, fake: FakeCheckout): void {
+  fake.onCreate = async (req) => {
+    const otherCustomer = await rowCustomer(h.db, h.pro, {});
+    const other = await rowPurchase(h.db, h.pro, {
+      customerId: otherCustomer,
+      offerId: s.offerId,
+      ticketTypeId: s.typeId,
+    });
+    await h.db
+      .update(ticketPurchase)
+      .set({ checkoutSessionId: `cs_test_fake_${req.purchaseId}` })
+      .where(eq(ticketPurchase.id, other));
+  };
+}
+
+dbTest("a throw after the session was created (the attach step) closes the session, frees the seat and rethrows", async (h, t) => {
+  const s = await setup(h);
+  const lines: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  });
+  const email = testEmail("attachthrow");
+  const fake = fakeCheckout("test");
+  attachWillThrow(h, s, fake);
+
+  await assert.rejects(
+    run(h, buyInput(s, { identity: { name: "Beatriz Almeida", email } }), { fake }),
+    ATTACH_FAILURE,
+  );
+
+  assert.equal(fake.created.length, 1);
+  const purchaseId = fake.created[0].purchaseId;
+  assert.deepEqual(fake.expired, [`cs_test_fake_${purchaseId}`], "the open session is closed, once");
+  const mine = (await purchasesOf(h)).find((p) => p.id === purchaseId);
+  assert.equal(mine?.status, "expired");
+  assert.equal(mine?.checkoutSessionId, null);
+  const [held] = await bookingsOf(h, s.occ.id);
+  assert.equal(held.status, "expired");
+  assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 0);
+  assert.deepEqual(lines, [], "nothing to log when the clean-up itself succeeds");
+});
+
+dbTest("a throw before any session exists (the product-name read) releases the held seat and rethrows", async (h) => {
+  const s = await setup(h);
+  const fake = fakeCheckout("test");
+  const email = testEmail("titlethrow");
+
+  await assert.rejects(
+    run(h, buyInput(s, { identity: { name: "Beatriz Almeida", email } }), {
+      fake,
+      db: dbFailingSelect(h.db, "title", "neon: connection reset"),
+    }),
+    /connection reset/,
+  );
+
+  assert.equal(fake.created.length, 0, "Stripe was never asked for a session");
+  assert.deepEqual(fake.expired, []);
+  const [purchase] = await purchasesOf(h);
+  assert.equal(purchase.status, "expired");
+  const [held] = await bookingsOf(h, s.occ.id);
+  assert.equal(held.status, "expired");
+  assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 0);
+});
+
+dbTest("a release that throws after a failed Checkout create is tried again before the original failure surfaces", async (h, t) => {
+  const s = await setup(h);
+  const lines: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  });
+  const email = testEmail("releasethrow");
+  const fake = fakeCheckout("test");
+  let stripeAnswered = false;
+  fake.create = async (req) => {
+    fake.created.push(req);
+    stripeAnswered = true;
+    throw new Error("fake checkout: create failed");
+  };
+  // The first read of the release made right after the gateway failure throws once (a dropped connection).
+  const db = dbFailingSelect(h.db, "id,occurrenceId", "neon: connection reset", () => stripeAnswered, 1);
+
+  await assert.rejects(run(h, buyInput(s, { identity: { name: "Beatriz Almeida", email } }), { fake, db }), /connection reset/);
+
+  assert.deepEqual(fake.expired, []);
+  const [purchase] = await purchasesOf(h);
+  assert.equal(purchase.status, "expired");
+  const [held] = await bookingsOf(h, s.occ.id);
+  assert.equal(held.status, "expired");
+  assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 0);
+  assert.equal(lines.length, 1, "only the create failure is logged: the second release worked");
+  assert.ok(lines[0].startsWith("[public] checkout create failed: "), lines[0]);
+});
+
+dbTest("the clean-up after a throw is best effort: a failing expire never keeps the seat, and its log carries no address", async (h, t) => {
+  const s = await setup(h);
+  const lines: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  });
+  const email = testEmail("cleanup");
+  const fake = fakeCheckout("test");
+  attachWillThrow(h, s, fake);
+  fake.expire = async () => {
+    throw new Error(`stripe down for ${email}`);
+  };
+
+  await assert.rejects(
+    run(h, buyInput(s, { identity: { name: "Beatriz Almeida", email } }), { fake }),
+    ATTACH_FAILURE,
+    "the caller sees the ORIGINAL failure, not the clean-up's",
+  );
+
+  const purchaseId = fake.created[0].purchaseId;
+  const mine = (await purchasesOf(h)).find((p) => p.id === purchaseId);
+  assert.equal(mine?.status, "expired");
   const [held] = await bookingsOf(h, s.occ.id);
   assert.equal(held.status, "expired");
   assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 0);
