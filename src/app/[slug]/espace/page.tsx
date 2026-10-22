@@ -58,8 +58,11 @@ export default async function EspacePage({ params, searchParams }: Props) {
       ) : identity.kind === "unverified" ? (
         <div className="space-y-6">
           <VerifyEmailBanner email={identity.email} verified={false} />
-          <p className="text-sm text-zinc-600">{COPY.CONFIRM_EMAIL_FIRST}</p>
-          {space && <CustomerSpaceView businessName={pro.businessName} slug={slug} space={space} />}
+          {space ? (
+            <CustomerSpaceView businessName={pro.businessName} slug={slug} space={space} />
+          ) : (
+            <p className="text-sm text-zinc-600">{COPY.CONFIRM_EMAIL_FIRST}</p>
+          )}
         </div>
       ) : space ? (
         <CustomerSpaceView businessName={pro.businessName} slug={slug} space={space} />
