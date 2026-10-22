@@ -191,7 +191,13 @@ async function main() {
   const newCustomer = async (name: string, email: string, now: Date): Promise<string> =>
     expectOk(`client ${email}`, await createCustomer(db, { professionalId, name, email }, now)).customerId;
   const rafael = await newCustomer("Rafael Souza", "rafael@example.com", at(-120, 590));
-  const thomas = await newCustomer("Thomas Leroy", "thomas@example.com", at(-53, 590));
+  // Thomas has a verified client account (above), so his row is linked through it like Beatriz's (the Task 4 rule of
+  // upsertCustomer: same address, verified): the pro's client record shows « Compte client lié » for him too.
+  const { customerId: thomas } = await upsertCustomer(
+    db,
+    { professionalId, email: "thomas@example.com", name: "Thomas Leroy", userId: thomasUserId },
+    at(-53, 590),
+  );
   const lea = await newCustomer("Léa Martin", "lea@example.com", at(-51, 590));
   const marina = await newCustomer("Marina Costa", "marina@example.com", T);
 
