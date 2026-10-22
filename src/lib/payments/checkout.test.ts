@@ -234,7 +234,12 @@ test("createRequestOptions: the Checkout create is bounded (15 s, one retry) and
   assert.notEqual(createRequestOptions("pur_a").idempotencyKey, createRequestOptions("pur_b").idempotencyKey);
 });
 
-test("the create is bounded at 90 s; its retry stays inside the 31-minute margin for a Retry-After up to 45 s, a longer one fails the retry cleanly", () => {
+test("the stalled worst case of the create is 90 s (the timeout is an idle timeout, not a wall-clock cap); its retry stays inside the 31-minute margin for a Retry-After up to 45 s, a longer one fails the retry cleanly", () => {
+  // stripe 22.2.2: `timeout` is a socket idle timeout (req.setTimeout), so 90 s is what a visitor waits when EACH try
+  // stalls in silence; a response that keeps trickling bytes is not cut by it. If the SDK ever makes it a wall-clock
+  // cap, or stops using the socket timeout, the model below has to be looked at again.
+  const http = readFileSync("node_modules/stripe/cjs/net/NodeHttpClient.js", "utf8");
+  assert.match(http, /req\.setTimeout\(timeout,/, "the SDK timeout is a socket idle timeout");
   // stripe 22.2.2 (node_modules/stripe/cjs/RequestSender.js): before its retry the SDK sleeps the Retry-After of the
   // answer when it is at most MAX_RETRY_AFTER_WAIT seconds (a longer one is ignored), else its own back-off.
   const sdk = readFileSync("node_modules/stripe/cjs/RequestSender.js", "utf8");
@@ -243,10 +248,11 @@ test("the create is bounded at 90 s; its retry stays inside the 31-minute margin
   const backoffMs = new Stripe("sk_test_unit").getMaxNetworkRetryDelay() * 1000;
   assert.ok(backoffMs < maxRetryAfterMs, "the longest wait is a Retry-After, not the back-off");
 
-  // The retry is SENT at most this long after the create began: the first try answers within its timeout, then the SDK sleeps.
+  // With a stalled first try, the retry is SENT this long after the create began: the first try is cut after its idle
+  // timeout, then the SDK sleeps.
   const retrySentMs = CREATE_OPTIONS.timeout + maxRetryAfterMs;
   assert.equal(retrySentMs, 75_000);
-  // Plus the retry's own try: what the visitor can wait for the whole create.
+  // Plus the retry's own stalled try: the worst case a visitor waits for the whole create (not a hard cap).
   assert.equal(retrySentMs + CREATE_OPTIONS.timeout, 90_000);
 
   // expires_at is stamped CHECKOUT_MINUTES ahead before the call and Stripe wants 30 minutes at least when the retry

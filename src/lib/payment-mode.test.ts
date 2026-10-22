@@ -35,8 +35,11 @@ function runtimeSpecifiers(file: string): string[] {
     if (m[1] === undefined) out.push(m[2]);
   }
   for (const m of code.matchAll(/^\s*import\s+["']([^"']+)["']/gm)) out.push(m[1]);
-  // import("x") and require("x") load a module at run time too (a literal specifier; a computed one cannot be followed)
-  for (const m of code.matchAll(/\b(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/g)) out.push(m[1]);
+  // import("x") and require("x") load a module at run time too (a literal specifier, a backtick one without `${` included;
+  // a computed one cannot be followed)
+  for (const m of code.matchAll(/\b(?:import|require)\s*\(\s*(?:["']([^"']+)["']|`((?:[^`$]|\$(?!\{))+)`)\s*\)/g)) {
+    out.push(m[1] ?? m[2]);
+  }
   return out;
 }
 
@@ -71,7 +74,7 @@ function runtimeClosure(entry: string): string[] {
   return [...seen];
 }
 
-test("runtimeSpecifiers collects static imports, re-exports, side-effect imports, import() and require(), and no type-only or commented one", () => {
+test("runtimeSpecifiers collects static imports, re-exports, side-effect imports, import() and require() (a backtick specifier without ${} included), and no type-only, computed or commented one", () => {
   const dir = mkdtempSync(join(tmpdir(), "specifiers-"));
   try {
     const file = join(dir, "fixture.ts");
@@ -86,6 +89,8 @@ test("runtimeSpecifiers collects static imports, re-exports, side-effect imports
         'const lazy = () => import("@/lib/payments/checkout");',
         "const spaced = await import(\n  '@/lib/stripe'\n);",
         'const legacy = require("../legacy");',
+        "const backtick = import(`@/lib/payments/webhook-core`);",
+        "const computed = import(`./dir/${name}`);",
         "const unresolvable = import(someVariable);",
         '// import("./in-a-line-comment");',
         '/* require("./in-a-block-comment"); */',
@@ -97,6 +102,7 @@ test("runtimeSpecifiers collects static imports, re-exports, side-effect imports
       "./side-effect",
       "./static",
       "@/lib/payments/checkout",
+      "@/lib/payments/webhook-core",
       "@/lib/stripe",
     ]);
   } finally {

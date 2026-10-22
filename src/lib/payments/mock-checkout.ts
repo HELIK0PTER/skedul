@@ -109,7 +109,10 @@ export async function mockPay(db: Db, purchaseId: string, now: Date): Promise<Mo
   const p = await simulatedPurchase(db, purchaseId);
   if (!p) return { kind: "not_found" };
   const res = await fulfillPurchase(db, p.purchaseId, { sessionId: null, paymentIntentId: null, livemode: false }, now);
-  // The purchase vanished between the read and the batch: nothing to pay, and no orphan to count for a simulation.
+  // The purchase vanished between this read and the engine's own read (its pro was deleted in that instant): nothing
+  // was paid, so the answer is not found. The engine has already done what it does for any payment on a missing
+  // purchase: logged « [stripe] orphan payment -/- » (no ids) and counted it in the admin orphan counter. Only an id that
+  // is not there at the first read (above) leaves that counter alone.
   if (res.outcome === "orphan") return { kind: "not_found" };
   return { kind: "paid", merciPath: merciPathOf(p.slug, p.purchaseId), effects: res.effects };
 }

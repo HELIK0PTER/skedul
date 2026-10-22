@@ -101,10 +101,13 @@ export function buybookCheckoutExpiry(nowMs: number): Date {
  * purchase, so one 15 s try and one retry (the client defaults, 80 s and 2 retries, would hold the action for
  * minutes). Before its retry the SDK sleeps the Retry-After of the answer when it is at most 60 s (stripe 22.2.2,
  * node_modules/stripe/cjs/RequestSender.js MAX_RETRY_AFTER_WAIT; a longer one is ignored, and a network error or a
- * 5xx without one waits 5 s at most), so the retry is sent at most `timeout + 60 s` after the first try began and
- * the whole call is bounded at 90 s. The session is stamped 31 minutes ahead and Stripe wants 30 at least when the
- * retry arrives: that margin of one minute absorbs a Retry-After up to 45 s. A longer one makes Stripe refuse the
- * retry, which is a clean create error: createCheckoutAndAttach releases the hold and answers CHECKOUT_FAILED.
+ * 5xx without one waits 5 s at most). `timeout` is the SDK's socket IDLE timeout (`req.setTimeout` in
+ * node_modules/stripe/cjs/net/NodeHttpClient.js), not a wall-clock cap: a try that falls silent is cut after 15 s, but an
+ * answer that keeps trickling bytes keeps its try alive. So 90 s (the retry is sent `timeout + 60 s` after the first try
+ * began, then it has its own 15 s) is the WORST CASE when each try stalls, not a hard bound. The session is stamped 31
+ * minutes ahead and Stripe wants 30 at least when the retry arrives: that margin of one minute absorbs a Retry-After up
+ * to 45 s. A longer one makes Stripe refuse the retry, which is a clean create error: createCheckoutAndAttach releases
+ * the hold and answers CHECKOUT_FAILED.
  */
 export const CREATE_OPTIONS = { timeout: 15_000, maxNetworkRetries: 1 } as const;
 
