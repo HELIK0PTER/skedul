@@ -5,7 +5,6 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 
-import { isReservedSegment } from "@/lib/analytics";
 import { auth } from "@/lib/auth";
 import { clearGoogleLink } from "@/lib/calendar-sync-load";
 import { db } from "@/lib/db";
@@ -29,8 +28,7 @@ import { isValidTimeZone } from "@/lib/timezones";
 import { scheduleGoogleBackfill } from "@/server/google-backfill";
 import { runProAction } from "@/server/pro-context";
 import type { AvailabilityRuleInput, BookingSettings } from "@/lib/tickets";
-import { checkSlug } from "@/lib/slug";
-import { slugify } from "@/lib/utils";
+import { checkSlug, uniqueSlugWith } from "@/lib/slug";
 
 async function requirePro() {
   const pro = await getCurrentProfessional();
@@ -38,23 +36,16 @@ async function requirePro() {
   return pro;
 }
 
-async function uniqueSlug(base: string): Promise<string> {
-  const root = slugify(base) || "pro";
-  let candidate = root;
-  let n = 1;
-  // ensure global uniqueness of professional slug; an app route ("admin",
-  // "dashboard"…) counts as taken so a pro page never shadows it
-  while (true) {
-    if (!isReservedSegment(candidate)) {
-      const existing = await db
-        .select({ id: professional.id })
-        .from(professional)
-        .where(eq(professional.slug, candidate))
-        .limit(1);
-      if (existing.length === 0) return candidate;
-    }
-    candidate = `${root}-${++n}`;
-  }
+/** Global uniqueness of the professional slug; the rules (app routes, 60 characters at most) are uniqueSlugWith's. */
+function uniqueSlug(base: string): Promise<string> {
+  return uniqueSlugWith(base, async (candidate) => {
+    const existing = await db
+      .select({ id: professional.id })
+      .from(professional)
+      .where(eq(professional.slug, candidate))
+      .limit(1);
+    return existing.length > 0;
+  });
 }
 
 /* ─────────────────────── Onboarding / profile ──────────────────── */

@@ -23,6 +23,27 @@ export function checkSlug(input: string): SlugCheck {
   return { ok: true, slug };
 }
 
+/** « root-2 », « root-3 »…: the name is shortened so the numbered address still fits SLUG_MAX_LENGTH, without a hyphen left dangling by the cut. */
+function numberedSlug(root: string, n: number): string {
+  const suffix = `-${n}`;
+  return `${root.slice(0, SLUG_MAX_LENGTH - suffix.length).replace(/-+$/, "")}${suffix}`;
+}
+
+/**
+ * The address given to a new pro: the slugified name when it is free, else « name-2 », « name-3 »… (always within
+ * SLUG_MAX_LENGTH, so every address stays one the public actions accept, SLUG_PARAM_RE). An app route counts as
+ * taken without asking `isTaken`, so a pro page never shadows it. Global uniqueness is `isTaken`'s to answer.
+ */
+export async function uniqueSlugWith(base: string, isTaken: (slug: string) => Promise<boolean>): Promise<string> {
+  const root = slugify(base) || "pro";
+  let candidate = root;
+  let n = 1;
+  while (true) {
+    if (!isReservedSegment(candidate) && !(await isTaken(candidate))) return candidate;
+    candidate = numberedSlug(root, ++n);
+  }
+}
+
 /** Live clean-up while typing: same alphabet, but a trailing hyphen is kept. */
 export function typingSlug(input: string): string {
   return input
