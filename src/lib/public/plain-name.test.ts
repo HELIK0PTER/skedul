@@ -29,6 +29,7 @@ test("isPlainName accepts real names", () => {
     "Jean P. Dupont",
     "Dr. Martin",
     "Ali\u200cakbar Rezaei", // a zero-width non-joiner is part of Persian names
+    "\u0645\u0647\u0631\u200c\u0646\u0648\u0634", // the same joiner inside a name written in Persian script (Mehrnoush)
   ]) {
     assert.equal(isPlainName(name), true, name);
   }
@@ -79,6 +80,11 @@ test("isPlainName refuses links, domains, addresses and phone numbers however th
     // invisible characters cutting the run or the domain
     "06\u200b12\u200b34\u200b56\u200b78",
     "bit\u200b.ly",
+    // default-ignorable letters (not \p{C}): the Hangul fillers are blank to the eye and fold to U+1160
+    "06\u316412\u316434\u316456\u316478", // hangul filler
+    "06\uffa012\uffa034\uffa056\uffa078", // halfwidth hangul filler
+    "06\u115f12\u115f34\u115f56\u115f78", // hangul choseong filler
+    "06\u116012\u116034\u116056\u116078", // hangul jungseong filler
   ]) {
     assert.equal(isPlainName(name), false, name);
   }

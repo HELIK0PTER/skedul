@@ -4,7 +4,9 @@
  * phone number would turn those mails into a phishing channel. Pure and client-importable.
  *
  * The rule is on what a mail client or a reader acts on, not on how it is spelled: the check runs on
- * the NFKC-folded text without invisible characters, and a number counts however it is spaced.
+ * the NFKC-folded text without invisible characters (the control and format ones, and the default-ignorable
+ * letters such as the Hangul fillers, blank to the eye), and a number counts however it is spaced. Only the
+ * copy the check reads is stripped: the stored name is never changed.
  * Accepted residual (Task 31 outcome): a number or an address spelled out in words cannot be caught
  * by a pure rule.
  */
@@ -23,11 +25,12 @@ const LONG_NUMBER = /\p{Nd}{5,}/u;
 /** False for a name with a link (« / », « www. » or a domain such as « bit.ly »), an address (« @ ») or a phone number (5 digits or more, spaced or not), checked after NFKC folding (SEC-M9: no phishing text relayed into Skedul mails). */
 export function isPlainName(name: string): boolean {
   // NFKC folds the full-width digits, at sign, slash and dot into the ASCII a mail client acts on; the
-  // invisible characters (zero-width space, soft hyphen, bidi marks) are dropped; the ideographic full
-  // stop reads as a dot.
+  // invisible characters are dropped (zero-width space, soft hyphen, bidi marks, and the default-ignorable
+  // letters: the Hangul fillers U+115F, U+1160, U+3164 and U+FFA0 are letters, so they would split a digit
+  // run while staying blank); the ideographic full stop reads as a dot.
   const text = name
     .normalize("NFKC")
-    .replace(/\p{C}/gu, "")
+    .replace(/[\p{C}\p{Default_Ignorable_Code_Point}]/gu, "")
     .replace(/\u3002/g, ".")
     .toLowerCase();
   if (text.includes("/") || text.includes("@") || text.includes("www.") || DOMAIN_SHAPE.test(text)) return false;
