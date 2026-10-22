@@ -10,9 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { authClient } from "@/lib/auth-client";
-import { SEND_FAILED, sendCodeFailure, VERIFY_FAILED, verifyCodeFailure } from "@/lib/auth-messages";
+import { CODE_SENT, SEND_FAILED, sendCodeFailure, VERIFY_FAILED, verifyCodeFailure } from "@/lib/auth-messages";
 
-const SENT = "Si l'adresse est valide, un code a été envoyé.";
 const CODE_FORMAT = "Saisissez les 6 chiffres du code.";
 const CONFIRMED = "Adresse confirmée.";
 
@@ -174,7 +173,7 @@ export function VerifyEmailBanner({ email, verified }: { email: string; verified
                   {`Confirmez votre adresse ${email} pour sécuriser votre compte.`}
                 </p>
                 <div role="status">
-                  {sent && !bannerError && <p className="mt-1 text-green-700">{SENT}</p>}
+                  {sent && !bannerError && <p className="mt-1 text-green-700">{CODE_SENT}</p>}
                 </div>
                 <div role="alert">
                   {bannerError && (
@@ -214,7 +213,7 @@ export function VerifyEmailBanner({ email, verified }: { email: string; verified
                   {`Saisissez le code à 6 chiffres envoyé à ${email}.`}
                 </p>
                 <div role="status">
-                  {dialogSent && <p className="mt-1 text-sm text-green-700">{SENT}</p>}
+                  {dialogSent && <p className="mt-1 text-sm text-green-700">{CODE_SENT}</p>}
                 </div>
               </div>
               <FormField

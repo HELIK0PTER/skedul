@@ -14,7 +14,8 @@ const options = buildAuthOptions({
   google: env.GOOGLE_CALENDAR_ENABLED
     ? { clientId: env.GOOGLE_CLIENT_ID!, clientSecret: env.GOOGLE_CLIENT_SECRET! }
     : null,
-  logResetLink: !env.RESEND_ENABLED,
+  // A production build (a preview deployment without Resend included) never prints the single-use reset token.
+  logResetLink: !env.RESEND_ENABLED && process.env.NODE_ENV !== "production",
 });
 
 // nextCookies() must stay the last plugin so it can set cookies in actions.

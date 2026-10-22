@@ -84,7 +84,7 @@ export function LinkGoogleForm({
           {`Vous êtes connecté avec ${signedInEmail}. Choisissez sur Google le compte qui utilise cette adresse.`}
         </p>
         {error && (
-          <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {error}
           </p>
         )}
@@ -149,7 +149,7 @@ export function LinkGoogleForm({
       </div>
 
       {error && (
-        <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
         </p>
       )}

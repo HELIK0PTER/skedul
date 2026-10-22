@@ -5,9 +5,9 @@
  */
 import type { BetterAuthOptions } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { createAuthMiddleware } from "better-auth/api";
+import { createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { emailOTP } from "better-auth/plugins";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { ADMIN_HTTP_ENDPOINTS, adminPlugin } from "@/lib/auth-admin";
@@ -17,8 +17,9 @@ import { loginCodeEmail } from "@/lib/emails/login-code";
 import { passwordDisabledEmail } from "@/lib/emails/password-disabled";
 import { passwordResetEmail } from "@/lib/emails/password-reset";
 import { verifyEmailCodeEmail } from "@/lib/emails/verify-email-code";
+import { logSafeMessage } from "@/lib/log-safe";
 import { consumeThrottle, otpThrottleKey, resetThrottleKey } from "@/lib/throttle";
-import { normalizeEmail, OTP_EMAIL_LIMIT } from "@/lib/tickets";
+import { OTP_EMAIL_LIMIT } from "@/lib/tickets";
 
 export type AuthMail = { to: string; subject: string; html: string };
 
@@ -256,7 +257,7 @@ export function buildAuthOptions(deps: AuthDeps) {
         try {
           await db.update(schema.user).set({ emailVerified: true }).where(eq(schema.user.id, user.id));
         } catch (err) {
-          console.error("[auth] could not mark the email verified after reset", err);
+          console.error(`[auth] could not mark the email verified after reset: ${logSafeMessage(err)}`);
         }
       },
     },
@@ -285,8 +286,13 @@ export function buildAuthOptions(deps: AuthDeps) {
       // answer like a send BEFORE the endpoint runs: no new code is generated,
       // the live one stays valid. (The reset-mail cap is in sendResetPassword.)
       // Only a request the route will mail counts: one it rejects (otpCapEmail)
-      // or a confirmation code for an address without an account (the route
-      // answers 200 and mails nothing) would silently lock the address out.
+      // would silently lock the address out. A confirmation code is mailed only
+      // to the address of the signed-in session (OUT:129): any other request gets
+      // the usual answer before anything is read or counted, so a stranger can
+      // neither learn whether an address has an account (no lookup, no timing
+      // difference) nor push a confirmation mail to it. Sign-up's own code is
+      // sent in process by core emailVerification.sendOnSignUp and never comes
+      // through this path.
       before: createAuthMiddleware(async (ctx) => {
         if (ctx.path !== OTP_SEND_PATH) return;
         const body = ctx.body as { email?: unknown; type?: unknown } | undefined;
@@ -295,8 +301,8 @@ export function buildAuthOptions(deps: AuthDeps) {
         const email = otpCapEmail(body);
         if (email === null) return;
         if (body?.type === "email-verification") {
-          const found = await db.execute<{ found: boolean }>(sql`select exists (select 1 from "user" where email = ${email}) as found`);
-          if (found.rows[0]?.found !== true) return;
+          const session = await getSessionFromCtx(ctx);
+          if (!session || session.user.email.toLowerCase() !== email) return ctx.json({ success: true });
         }
         const allowed = await consumeThrottle(db, otpThrottleKey(email), OTP_EMAIL_LIMIT, now());
         if (!allowed) return ctx.json({ success: true });
@@ -310,9 +316,11 @@ export function buildAuthOptions(deps: AuthDeps) {
           // (dropSessionWithoutPassword): if a code sign-in purged it meanwhile,
           // the session is deleted and the request fails (closed; a failing
           // check fails it too). Then "Dernière connexion" (real
-          // sign-ins only, not impersonation), then best-effort link of this
-          // verified address's customer rows, all pros. Two separate best-effort
-          // steps: a failed stamp must not skip the link.
+          // sign-ins only, not impersonation), best-effort. No customer row is
+          // linked here (Decision 72, FR:SEC-5): a row gets its user_id only from
+          // that user's own act at that pro (upsertCustomer, linkCustomerUser), so
+          // the "linked account" badge of a pro's client record never tells the
+          // pro that a typed address belongs to a Skedul user.
           after: async (session, ctx) => {
             if (
               ctx?.path !== undefined &&
@@ -325,21 +333,7 @@ export function buildAuthOptions(deps: AuthDeps) {
             try {
               await db.update(schema.user).set({ lastLoginAt: new Date() }).where(eq(schema.user.id, session.userId));
             } catch (err) {
-              console.error("[auth] could not stamp last_login_at", err);
-            }
-            try {
-              const [u] = await db
-                .select({ email: schema.user.email, emailVerified: schema.user.emailVerified })
-                .from(schema.user)
-                .where(eq(schema.user.id, session.userId));
-              if (u?.emailVerified) {
-                await db
-                  .update(schema.customer)
-                  .set({ userId: session.userId })
-                  .where(and(eq(schema.customer.email, normalizeEmail(u.email)), isNull(schema.customer.userId)));
-              }
-            } catch (err) {
-              console.error("[auth] could not link the customer rows to the user", err);
+              console.error(`[auth] could not stamp last_login_at: ${logSafeMessage(err)}`);
             }
           },
         },
@@ -366,7 +360,7 @@ export function buildAuthOptions(deps: AuthDeps) {
             try {
               await deps.sendEmail({ to: email, ...passwordDisabledEmail({ forgotPasswordUrl: `${deps.baseURL}/forgot-password` }) });
             } catch (err) {
-              console.error("[auth] could not send the password-disabled e-mail", err);
+              console.error(`[auth] could not send the password-disabled e-mail: ${logSafeMessage(err)}`);
             }
           },
         },

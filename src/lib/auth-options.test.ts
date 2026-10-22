@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { SQL } from "drizzle-orm";
+import { readFileSync } from "node:fs";
+import { getTableName, type SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
+
+import { rawErrorLogs } from "@/test/source-guards";
 
 import { ADMIN_HTTP_ENDPOINTS } from "./auth-admin";
 import {
@@ -410,24 +413,44 @@ test("a code request the route will reject is not counted", async () => {
   assert.equal(queries.length, 0);
 });
 
-test("a confirmation code request counts only for an address that has an account", async () => {
-  const known = stubDb([{ found: true, hits: 6 }]);
-  assert.deepEqual(
-    await runBefore(build(known.db).options, ctxOf(OTP_SEND_PATH, { email: "Lea@Example.com", type: "email-verification" })),
-    { success: true },
-  );
-  assert.equal(known.queries.length, 2);
-  assert.match(known.queries[0].sql, /from "user" where email = \$1/);
-  assert.deepEqual(known.queries[0].params, ["lea@example.com"]);
-  assert.ok(known.queries[1].params.includes(otpThrottleKey("lea@example.com")));
+/** The context of a code request made by a browser whose session e-mail is `sessionEmail` (null: no session cookie at all). */
+function otpCtx(body: Record<string, unknown>, sessionEmail: string | null): HookCtx {
+  return {
+    path: OTP_SEND_PATH,
+    body,
+    // getSessionFromCtx returns ctx.context.session as it is; without one it reads the cookie and resolves to null.
+    context: sessionEmail === null ? {} : { session: { session: { id: "s1" }, user: { id: "u1", email: sessionEmail } } },
+  };
+}
 
-  // No account: the route answers 200 and mails nothing, so nothing is counted.
-  const unknown = stubDb([{ found: false, hits: 6 }]);
+test("a confirmation code is mailed and counted only for the address of the signed-in session (OUT:129)", async () => {
+  // Its own session, however the address is spelled: the request goes on, the counter is the only query (no account lookup).
+  const own = stubDb([{ hits: 1 }]);
   assert.equal(
-    await runBefore(build(unknown.db).options, ctxOf(OTP_SEND_PATH, { email: "lea@example.com", type: "email-verification" })),
+    await runBefore(build(own.db).options, otpCtx({ email: "Lea@Example.com", type: "email-verification" }, "lea@example.com")),
     undefined,
   );
-  assert.equal(unknown.queries.length, 1);
+  assert.equal(own.queries.length, 1);
+  assert.ok(own.queries[0].params.includes(otpThrottleKey("lea@example.com")));
+
+  // Its own session past the hourly cap: the usual answer, no new code.
+  const capped = stubDb([{ hits: 6 }]);
+  assert.deepEqual(
+    await runBefore(build(capped.db).options, otpCtx({ email: "lea@example.com", type: "email-verification" }, "lea@example.com")),
+    { success: true },
+  );
+  assert.equal(capped.queries.length, 1);
+
+  // The session of another address, and no session at all: the usual answer before anything is read or counted.
+  for (const sessionEmail of ["someone@else.com", null]) {
+    const stranger = stubDb([{ found: true, hits: 1 }]);
+    const answer = await runBefore(
+      build(stranger.db).options,
+      otpCtx({ email: "lea@example.com", type: "email-verification" }, sessionEmail),
+    );
+    assert.deepEqual(answer, { success: true }, String(sessionEmail));
+    assert.equal(stranger.queries.length, 0, `${sessionEmail}: no lookup, no counter`);
+  }
 });
 
 test("only sign-in and email-verification codes are mailed, with their own template", async () => {
@@ -448,4 +471,57 @@ test("only sign-in and email-verification codes are mailed, with their own templ
       ["a@b.com", "444444 est votre code de confirmation Skedul"],
     ],
   );
+});
+
+const sessionRow = { id: "s1", userId: "u1", token: "t", expiresAt: new Date(), createdAt: new Date(), updatedAt: new Date() };
+
+test("a session creation stamps the last sign-in and links no customer row (Decision 72, FR:SEC-5)", async () => {
+  const updated: string[] = [];
+  const db = {
+    update: (table: unknown) => {
+      updated.push(getTableName(table as never));
+      return { set: () => ({ where: async () => undefined }) };
+    },
+    select: () => {
+      throw new Error("a sign-in reads no customer row");
+    },
+  } as unknown as Db;
+  const { options } = build(db);
+  const logged = await captureConsole(() =>
+    options.databaseHooks.session.create.after(sessionRow as never, { path: OTP_SIGN_IN_PATH } as never),
+  );
+  assert.deepEqual(updated, ["user"], "only the user row is written: no customer row is linked");
+  assert.equal(logged.error.length, 0, "nothing else was attempted, so nothing failed");
+});
+
+test("the best-effort auth logs carry the step and a scrubbed message, never the raw error or an address", async () => {
+  const failing = {
+    update: () => {
+      throw new Error("connection to lea@example.com lost");
+    },
+  } as unknown as Db;
+  const { options } = build(failing);
+
+  const stamp = await captureConsole(() =>
+    options.databaseHooks.session.create.after(sessionRow as never, { path: OTP_SIGN_IN_PATH } as never),
+  );
+  assert.deepEqual(stamp.error, [["[auth] could not stamp last_login_at: connection to [email] lost"]]);
+
+  const reset = await captureConsole(() => options.emailAndPassword.onPasswordReset({ user: { id: "u1" } } as never));
+  assert.deepEqual(reset.error, [["[auth] could not mark the email verified after reset: connection to [email] lost"]]);
+
+  const mailFails = build(stubDb([{ purged: 1 }]).db, async () => {
+    throw new Error("resend refused lea@example.com");
+  });
+  const disabled = await captureConsole(() =>
+    mailFails.options.databaseHooks.user.update.before(
+      { emailVerified: true },
+      { path: OTP_SIGN_IN_PATH, body: { email: "lea@example.com" } } as never,
+    ),
+  );
+  assert.deepEqual(disabled.error, [["[auth] could not send the password-disabled e-mail: resend refused [email]"]]);
+});
+
+test("no console call of the auth options receives a raw error object (shared guard, whatever the binding)", () => {
+  assert.deepEqual(rawErrorLogs(readFileSync("src/lib/auth-options.ts", "utf8")), []);
 });

@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 
 import {
   ACCOUNT_EXISTS,
+  ACCOUNT_SUSPENDED,
   authFormErrorMessage,
+  CODE_SENT,
   GENERIC_ERROR,
   RATE_LIMITED,
   SEND_FAILED,
@@ -74,6 +76,8 @@ test("every sentence ends with a full stop and carries no em or en dash", () => 
     VERIFY_FAILED,
     WRONG_CODE,
     TOO_MANY_ATTEMPTS,
+    CODE_SENT,
+    ACCOUNT_SUSPENDED,
   ];
   // Code points, not the characters: the source stays free of the dashes it forbids.
   const dashes = [0x2013, 0x2014].map((code) => String.fromCharCode(code));
@@ -81,4 +85,27 @@ test("every sentence ends with a full stop and carries no em or en dash", () => 
     for (const dash of dashes) assert.ok(!sentence.includes(dash), sentence);
     assert.ok(sentence.endsWith("."), sentence);
   }
+});
+
+test("the neutral code-sent sentence and the suspended-account sentence are the exact ones (L1247)", () => {
+  assert.equal(CODE_SENT, "Si l'adresse est valide, un code a été envoyé.");
+  assert.equal(ACCOUNT_SUSPENDED, oauthErrorMessage("BANNED_USER"));
+  assert.equal(ACCOUNT_SUSPENDED, "Ce compte est suspendu. Contactez le support si vous pensez qu'il s'agit d'une erreur.");
+});
+
+test("checking a code: a suspended account reads the suspension sentence, not « code incorrect » (H2)", () => {
+  assert.equal(verifyCodeFailure({ status: 403, code: "BANNED_USER" }), ACCOUNT_SUSPENDED);
+  assert.equal(verifyCodeFailure({ code: "BANNED_USER" }), ACCOUNT_SUSPENDED);
+  // A rate limit and a server failure still win, and any other code is still « incorrect ou expiré ».
+  assert.equal(verifyCodeFailure({ status: 429, code: "BANNED_USER" }), RATE_LIMITED);
+  assert.equal(verifyCodeFailure({ status: 500, code: "BANNED_USER" }), VERIFY_FAILED);
+  assert.equal(verifyCodeFailure({ status: 403, code: "SOMETHING_ELSE" }), WRONG_CODE);
+});
+
+test("sending a code: a 200 and a 400 answer keep the neutral sentence, so the answer never depends on the address (S22)", () => {
+  assert.equal(sendCodeFailure({ status: 200 }), null);
+  assert.equal(sendCodeFailure({ status: 400 }), null);
+  assert.equal(sendCodeFailure({ status: 400, code: "INVALID_EMAIL" }), null);
+  assert.equal(sendCodeFailure({ status: 429 }), RATE_LIMITED);
+  assert.equal(sendCodeFailure({ status: 500 }), SEND_FAILED);
 });

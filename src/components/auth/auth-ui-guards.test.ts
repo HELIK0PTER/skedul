@@ -1,0 +1,33 @@
+/**
+ * Wiring guards for the two auth components Task 16 edits (the P3 pattern of
+ * src/components/dashboard/final-review-ui.test.ts): the components are client
+ * components, which the node:test runner cannot render.
+ */
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+const source = (path: string): string => readFileSync(path, "utf8");
+
+test("both error lines of the Google link form are alert regions (LED:405)", () => {
+  const form = source("src/components/auth/link-google-form.tsx");
+  const errorTags = form.match(/<p\b[^>]*bg-destructive\/10[^>]*>/g) ?? [];
+  assert.equal(errorTags.length, 2, "the Google step and the password step");
+  for (const tag of errorTags) assert.match(tag, /role="alert"/, tag);
+  // The French mapping of P3 444f102 stays: never the English message of Better Auth.
+  assert.match(form, /authFormErrorMessage\(result\.error\)/);
+});
+
+test("the confirmation banner takes the neutral sentence from auth-messages, one source (CODE_SENT)", () => {
+  const banner = source("src/components/dashboard/verify-email-banner.tsx");
+  assert.match(banner, /import \{[^}]*\bCODE_SENT\b[^}]*\} from "@\/lib\/auth-messages";/);
+  assert.doesNotMatch(banner, /const SENT\b/, "the private copy is gone");
+  assert.doesNotMatch(banner, /Si l'adresse est valide/, "the sentence is spelled once, in auth-messages.ts");
+  assert.equal((banner.match(/\{CODE_SENT\}/g) ?? []).length, 2, "the banner line and the dialog line");
+});
+
+test("the reset link is logged only by a dev build without Resend, never by a production build (no token in logs)", () => {
+  const auth = source("src/lib/auth.ts");
+  assert.match(auth, /logResetLink: !env\.RESEND_ENABLED && process\.env\.NODE_ENV !== "production",/);
+  assert.doesNotMatch(auth, /logResetLink: !env\.RESEND_ENABLED,/, "the unguarded form is gone");
+});

@@ -15,6 +15,10 @@ export const SEND_FAILED = "L'envoi a échoué. Réessayez dans un instant.";
 export const VERIFY_FAILED = "La vérification a échoué. Réessayez dans un instant.";
 export const WRONG_CODE = "Code incorrect ou expiré.";
 export const TOO_MANY_ATTEMPTS = "Trop d'essais. Demandez un nouveau code.";
+/** The neutral answer to every code request (spec L1247): it never says whether the address has an account. */
+export const CODE_SENT = "Si l'adresse est valide, un code a été envoyé.";
+/** A suspended account cannot open a session (Better Auth admin plugin, code BANNED_USER). */
+export const ACCOUNT_SUSPENDED = oauthErrorMessage("BANNED_USER") ?? GENERIC_ERROR;
 
 function isServerError(error: AuthClientError): boolean {
   return typeof error?.status === "number" && error.status >= 500;
@@ -31,7 +35,7 @@ export function authFormErrorMessage(error: AuthClientError): string {
       return WRONG_CREDENTIALS;
     // Admin plugin: a suspended user cannot open a session.
     case "BANNED_USER":
-      return oauthErrorMessage("BANNED_USER") ?? GENERIC_ERROR;
+      return ACCOUNT_SUSPENDED;
     default:
       return GENERIC_ERROR;
   }
@@ -50,11 +54,14 @@ export function sendCodeFailure(error: AuthClientError): string | null {
 
 /**
  * After « Confirmer »: the sentence of a refused code. Better Auth answers 400 INVALID_OTP or OTP_EXPIRED, then
- * 403 TOO_MANY_ATTEMPTS once the 3 attempts of a code are used (the way out is a new code).
+ * 403 TOO_MANY_ATTEMPTS once the 3 attempts of a code are used (the way out is a new code). A suspended account
+ * (403 BANNED_USER, raised when the sign-in tries to open its session) reads the suspension sentence, never
+ * « code incorrect ».
  */
 export function verifyCodeFailure(error: AuthClientError): string {
   if (error?.status === 429) return RATE_LIMITED;
   if (isServerError(error)) return VERIFY_FAILED;
   if (error?.code === "TOO_MANY_ATTEMPTS") return TOO_MANY_ATTEMPTS;
+  if (error?.code === "BANNED_USER") return ACCOUNT_SUSPENDED;
   return WRONG_CODE;
 }

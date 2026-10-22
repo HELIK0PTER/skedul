@@ -231,28 +231,39 @@ test("T15 a signed-in unverified user confirms the address by code and keeps the
   }
 });
 
-test("a verified sign-in links the customer rows of that address", OPTS, async () => {
+test("a verified sign-in links no customer row, at this pro or at another (Decision 72, FR:SEC-5)", OPTS, async () => {
   const db = await getTestDb();
   const t = makeTestAuth(db);
-  const pro = await createTestPro(db);
+  const first = await createTestPro(db);
+  const second = await createTestPro(db);
   const email = testEmail("link");
   try {
-    const [row] = await db
-      .insert(schema.customer)
-      .values({ professionalId: pro.proId, email, name: "Client lié" })
-      .returning({ id: schema.customer.id });
+    // A row each pro created with that address: the badge « Compte client lié » must not tell them it is a Skedul user.
+    const rows: string[] = [];
+    for (const pro of [first, second]) {
+      const [row] = await db
+        .insert(schema.customer)
+        .values({ professionalId: pro.proId, email, name: "Client non lié" })
+        .returning({ id: schema.customer.id });
+      rows.push(row.id);
+    }
     const call = browser(t);
     assert.equal((await call("/email-otp/send-verification-otp", { email, type: "sign-in" })).status, 200);
     assert.equal((await call("/sign-in/email-otp", { email, otp: t.lastCode(email) })).status, 200);
     const user = await userByEmail(db, email);
-    const [customer] = await db
-      .select({ userId: schema.customer.userId })
-      .from(schema.customer)
-      .where(eq(schema.customer.id, row.id));
-    assert.equal(customer.userId, user.id);
+    assert.equal(user.emailVerified, true);
+    for (const id of rows) {
+      const [customer] = await db
+        .select({ userId: schema.customer.userId })
+        .from(schema.customer)
+        .where(eq(schema.customer.id, id));
+      assert.equal(customer.userId, null, "a sign-in links nothing");
+    }
+    assert.ok(user.lastLoginAt, "the last sign-in is still stamped");
   } finally {
     await deleteUsersByEmail(db, [email]);
-    await deleteTestUser(db, pro.userId);
+    await deleteTestUser(db, first.userId);
+    await deleteTestUser(db, second.userId);
   }
 });
 
@@ -765,9 +776,11 @@ test("IDE2 code requests the route rejects, or that mail nothing, never count ag
     for (const body of rejected) {
       assert.equal((await attacker("/email-otp/send-verification-otp", body)).status, 400, JSON.stringify(body));
     }
-    // A confirmation code for an address without an account: the route answers 200 and mails nothing.
+    // A confirmation code is for the signed-in address only (OUT:129): without a session the answer is the usual 200,
+    // nothing is mailed or counted, and it is the same for an address with an account as for one without.
     const silent = await attacker("/email-otp/send-verification-otp", { email, type: "email-verification" });
     assert.equal(silent.status, 200);
+    assert.deepEqual(silent.json, { success: true });
     assert.equal(t.mails.length, 0);
     assert.equal(await throttleHits(db, otpThrottleKey(email)), null, "the address's counter is untouched");
 
@@ -779,6 +792,51 @@ test("IDE2 code requests the route rejects, or that mail nothing, never count ag
     assert.ok(!logs.some((l) => l.includes(email)), "no address in the logs");
   } finally {
     await deleteUsersByEmail(db, [email]);
+  }
+});
+
+test("OUT:129 a confirmation code is mailed only to the address of the signed-in session, every other request is answered alike", OPTS, async () => {
+  const db = await getTestDb();
+  const t = makeTestAuth(db);
+  const email = testEmail("evown");
+  const other = testEmail("evother");
+  const confirmationMails = (to: string) =>
+    t.mails.filter((m) => m.to === to && m.subject.endsWith("est votre code de confirmation Skedul"));
+  const ask = (call: BrowserCall, typed: string) =>
+    call("/email-otp/send-verification-otp", { email: typed, type: "email-verification" });
+  try {
+    // Two password sign-ups: unverified accounts, each signed in, each with the one code mail of the sign-up.
+    const own = await signUp(t, email);
+    const stranger = await signUp(t, other);
+    assert.equal(confirmationMails(email).length, 1, "the sign-up code");
+    assert.equal(confirmationMails(other).length, 1);
+
+    // No session, and the session of another address: the usual answer, no mail, no counter row.
+    const anonymous = await ask(browser(t), email);
+    const crossed = await ask(stranger, email);
+    for (const answer of [anonymous, crossed]) {
+      assert.equal(answer.status, 200);
+      assert.deepEqual(answer.json, { success: true });
+    }
+    // An address nobody registered gets the very same answer: nothing tells the two apart.
+    const unknown = await ask(browser(t), testEmail("evnobody"));
+    assert.equal(unknown.status, 200);
+    assert.deepEqual(unknown.json, anonymous.json);
+    assert.equal(confirmationMails(email).length, 1, "no new mail");
+    assert.equal(await throttleHits(db, otpThrottleKey(email)), null, "the address's counter is untouched");
+
+    // Its own session: one more mail (the same code, resend strategy « reuse »), one hit; the spelling does not matter.
+    const sent = await ask(own, email);
+    assert.equal(sent.status, 200);
+    assert.deepEqual(sent.json, { success: true });
+    assert.equal(confirmationMails(email).length, 2);
+    assert.equal(await throttleHits(db, otpThrottleKey(email)), 1);
+    assert.equal((await ask(own, mixedCase(email))).status, 200);
+    assert.equal(confirmationMails(email).length, 3);
+    assert.equal(await throttleHits(db, otpThrottleKey(email)), 2);
+    assert.equal(confirmationMails(other).length, 1, "the other account got nothing");
+  } finally {
+    await deleteUsersByEmail(db, [email, other]);
   }
 });
 
