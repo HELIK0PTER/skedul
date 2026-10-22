@@ -43,7 +43,7 @@ export function mockCancelPath(p: {
 
 const merciPathOf = (slug: string, purchaseId: string): string => `/${slug}/merci?p=${purchaseId}`;
 
-/** The purchase when its id has the right shape and its session is simulated (null or a mock id); null otherwise, whatever its status. */
+/** The purchase when its id has the right shape, its ticket type is its pro's own and its session is simulated (null or a mock id); null otherwise, whatever its status. A séance or event of another pro is left out of the row, not a reason to refuse it. */
 async function simulatedPurchase(db: Db, purchaseId: string) {
   if (!isReferenceId(purchaseId)) return null;
   const [row] = await db
@@ -64,7 +64,12 @@ async function simulatedPurchase(db: Db, purchaseId: string) {
     })
     .from(ticketPurchase)
     .innerJoin(professional, eq(professional.id, ticketPurchase.professionalId))
-    .innerJoin(ticketType, eq(ticketType.id, ticketPurchase.ticketTypeId))
+    // The ticket type must be this pro's own too (its foreign key is single-column): a purchase that crossed two pros is
+    // not found, so another pro's type name never reaches this pro's checkout page and the mock never pays such a row (G3b).
+    .innerJoin(
+      ticketType,
+      and(eq(ticketType.id, ticketPurchase.ticketTypeId), eq(ticketType.professionalId, ticketPurchase.professionalId)),
+    )
     .leftJoin(
       booking,
       and(eq(booking.purchaseId, ticketPurchase.id), eq(booking.professionalId, ticketPurchase.professionalId)),

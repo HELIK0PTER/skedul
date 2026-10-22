@@ -289,3 +289,27 @@ dbTest("mockCheckoutState: a séance row that points to another pro's event or s
     await deleteTestUser(db, other.userId);
   }
 });
+
+dbTest("a purchase whose ticket type belongs to another pro is not found: neither shown nor paid (defence in depth, G3b)", async ({ db, pro }) => {
+  const now = new Date();
+  const mineType = await rowType(db, pro, { name: "Type de ce pro" });
+  const mineOffer = await rowOffer(db, pro, mineType);
+  const customerId = await rowCustomer(db, pro, { email: testEmail("crossed-type") });
+  const other = await createTestPro(db);
+  let crossedPurchase: string | null = null;
+  try {
+    const theirType = await makeType(db, other, { name: "Type de l'autre pro" });
+    // Built by hand on purpose: ticket_purchase.ticket_type_id is a single-column foreign key, so nothing but the read's
+    // own join keeps another pro's ticket type name on this pro's checkout page, or lets the mock pay such a row.
+    crossedPurchase = await rowPurchase(db, pro, { customerId, offerId: mineOffer, ticketTypeId: theirType, status: "pending" }, now);
+
+    assert.equal(await mockCheckoutState(db, crossedPurchase), null, "a GET shows nothing of the other pro's type");
+    assert.deepEqual(await mockPay(db, crossedPurchase, now), { kind: "not_found" });
+    assert.equal((await purchaseRow(db, crossedPurchase)).status, "pending", "nothing was paid");
+    assert.equal((await ticketsOf(db, customerId)).length, 0, "no ticket was issued");
+  } finally {
+    // The hand-built row goes first: its foreign key to the other pro's type is NO ACTION.
+    if (crossedPurchase !== null) await db.delete(schema.ticketPurchase).where(eq(schema.ticketPurchase.id, crossedPurchase));
+    await deleteTestUser(db, other.userId);
+  }
+});

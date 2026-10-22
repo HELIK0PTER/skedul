@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { rawErrorLogs } from "@/test/source-guards";
+
 import { GUEST_COOKIE_MAX_AGE } from "../guest-link";
 import { guestCookieOptions, guestLinkDecision, type GuestCustomerRow } from "./guest-access";
 
@@ -131,6 +133,24 @@ test("the personal-link POST checks the origin first, re-checks the link, and se
   assert.match(post.slice(origin, resolve), /forbidden\(\)/, "a foreign or missing Origin is refused with 403");
   assert.ok(resolve < notFound && notFound < stale && stale < set, "not found, then stale, then the cookie");
   assert.equal((route.match(/cookies\.set\(/g) ?? []).length, 1, "the route writes one cookie, in the POST");
+});
+
+test("both personal-link handlers catch a throw from resolveGuestLink, log it through logSafeMessage and answer without a cookie (G3b)", () => {
+  // Drizzle's « Failed query: … params: … » would carry the customer id: Next.js logs an uncaught throw raw.
+  const route = readFileSync(ROUTE, "utf8");
+  assert.deepEqual(rawErrorLogs(route), [], "no console call receives a raw error object");
+  for (const name of ["GET", "POST"]) {
+    const body = handlerOf(route, name);
+    const tried = body.indexOf("try {");
+    const resolve = body.indexOf("resolveGuestLink(");
+    const caught = body.indexOf("} catch (");
+    assert.ok(tried !== -1 && tried < resolve && resolve < caught, `${name} resolves the link inside a try`);
+    const handler = body.slice(caught, body.indexOf("\n  }\n", caught));
+    assert.match(handler, /console\.error\("\[guest-link\] " \+ logSafeMessage\(\w+\)\)/, `${name} logs the safe message only`);
+    assert.match(handler, /return serverError\(\)/, `${name} answers the headers-only error`);
+    assert.doesNotMatch(handler, /cookies/, `${name} sets no cookie on a failure`);
+  }
+  assert.match(route, /function serverError\(\): Response \{\s*return new Response\("Error", \{ status: 500, headers: NO_STORE \}\);/);
 });
 
 test("« Ce n'est pas moi » clears the cookie with the attributes of guestCookieOptions and writes nothing to the database (S52)", () => {

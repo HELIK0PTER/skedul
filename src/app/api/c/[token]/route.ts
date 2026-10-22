@@ -5,6 +5,7 @@ import { GUEST_LINK_PAGE_HEADERS, guestLinkPageHtml } from "@/lib/back-office/gu
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { GUEST_COOKIE } from "@/lib/guest-link";
+import { logSafeMessage } from "@/lib/log-safe";
 import { sameOrigin } from "@/lib/same-origin";
 import { guestKey } from "@/server/guest-key";
 
@@ -15,6 +16,11 @@ const NO_STORE = { "Cache-Control": "no-store" } as const;
 /** The same answer for a bad MAC, an unknown customer and a suspended pro: nothing to learn from it. */
 function notFound(): Response {
   return new Response("Not found", { status: 404, headers: NO_STORE });
+}
+
+/** A throw from the database layer: the caller has logged it through `logSafeMessage`, this answers without any detail and without a cookie. */
+function serverError(): Response {
+  return new Response("Error", { status: 500, headers: NO_STORE });
 }
 
 /** A POST that did not come from this site's own page: nothing is read and nothing is set. */
@@ -40,7 +46,14 @@ function seeOther(request: Request, path: string): NextResponse {
 export async function GET(request: Request, { params }: { params: Promise<{ token: string }> }): Promise<Response> {
   const { token } = await params;
 
-  const decision = await resolveGuestLink(db, token, guestKey());
+  let decision: Awaited<ReturnType<typeof resolveGuestLink>>;
+  try {
+    decision = await resolveGuestLink(db, token, guestKey());
+  } catch (err) {
+    // Next.js would log the raw error, whose driver message carries the query parameters (the customer id): log the safe message only.
+    console.error("[guest-link] " + logSafeMessage(err));
+    return serverError();
+  }
   if (decision.kind === "not_found") return notFound();
   if (decision.kind === "stale") return seeOther(request, `/${decision.slug}/espace?lien=invalide`);
 
@@ -60,7 +73,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
   if (!sameOrigin(request.headers.get("origin"), env.APP_URL)) return forbidden();
 
   const { token } = await params;
-  const decision = await resolveGuestLink(db, token, guestKey());
+  let decision: Awaited<ReturnType<typeof resolveGuestLink>>;
+  try {
+    decision = await resolveGuestLink(db, token, guestKey());
+  } catch (err) {
+    console.error("[guest-link] " + logSafeMessage(err));
+    return serverError();
+  }
   if (decision.kind === "not_found") return notFound();
   if (decision.kind === "stale") return seeOther(request, `/${decision.slug}/espace?lien=invalide`);
 

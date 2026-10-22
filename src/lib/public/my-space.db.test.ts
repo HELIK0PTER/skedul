@@ -133,6 +133,7 @@ dbTest("getMySpace: a card shows that customer's own bookings and tickets, never
   const second = await createTestPro(db);
   const email = testEmail("me");
   const me = await createTestClientUser(db, { email, name: "Beatriz", verified: true });
+  const handBuilt: { bookings: string[]; tickets: string[] } = { bookings: [], tickets: [] };
   try {
     const eventId = await rowEvent(db, pro);
     await db.update(schema.event).set({ title: "Altinha débutants" }).where(eq(schema.event.id, eventId));
@@ -155,6 +156,11 @@ dbTest("getMySpace: a card shows that customer's own bookings and tickets, never
     const secondClient = await rowCustomer(db, second, { name: "Client de l'autre pro" });
     await rowBooking(db, second, { occurrenceId: secondSeance, customerId: secondClient });
     await rowTicket(db, second, { customerId: secondClient, ticketTypeId: secondType });
+    // Rows that crossed two pros, built by hand on purpose (every domain foreign key is single-column, so only the reads'
+    // own professional filters keep them out): a booking and a ticket of the SECOND pro that carry MY customer id, on
+    // the second pro's own séance and type. Neither may reach my card (G3b, the way mock-checkout.db.test.ts builds them).
+    handBuilt.bookings.push(await rowBooking(db, second, { occurrenceId: secondSeance, customerId: mine }));
+    handBuilt.tickets.push(await rowTicket(db, second, { customerId: mine, ticketTypeId: secondType, movements: false }));
 
     const cards = await getMySpace(db, sessionOf(me, email), now);
     assert.equal(cards.length, 1);
@@ -163,7 +169,12 @@ dbTest("getMySpace: a card shows that customer's own bookings and tickets, never
     assert.equal(card.space.customer.id, mine);
     assert.deepEqual(card.space.upcoming.map((b) => [b.bookingId, b.title]), [[myBooking, "Altinha débutants"]]);
     assert.deepEqual(card.space.wallet.map((w) => [w.ticketTypeId, w.usable]), [[typeId, 1]]);
+    assert.equal(JSON.stringify(card).includes("Capoeira roda"), false, "nothing of the second pro's séance reaches the card");
+    assert.equal(JSON.stringify(card).includes(secondType), false, "nor does its ticket type");
   } finally {
+    // The hand-built rows go before the invariant check (and before the second pro): they are not part of any model.
+    for (const id of handBuilt.bookings) await db.delete(schema.booking).where(eq(schema.booking.id, id));
+    for (const id of handBuilt.tickets) await db.delete(schema.ticket).where(eq(schema.ticket.id, id));
     await deleteTestUser(db, second.userId);
     await deleteTestUser(db, me.userId);
   }
