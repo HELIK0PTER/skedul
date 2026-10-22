@@ -339,8 +339,13 @@ dbTest("a gateway failure releases the seat at once and answers CHECKOUT_FAILED"
     lines.push(args.map(String).join(" "));
   });
   const fake = fakeCheckout("test");
-  fake.failCreate = true;
   const email = testEmail("fail");
+  // A Stripe-like failure that quotes the typed address and a session id, as Stripe's validation errors do: the
+  // log line must not repeat either (logSafeMessage), which a fixed message could never prove.
+  fake.create = async (req) => {
+    fake.created.push(req);
+    throw new Error(`Invalid email address: ${email} (session cs_test_a1B2c3D4e5F6)`);
+  };
 
   const { res } = await run(h, buyInput(s, { identity: { name: "Beatriz Almeida", email } }), { fake });
   assert.ok(!res.ok);
@@ -357,9 +362,10 @@ dbTest("a gateway failure releases the seat at once and answers CHECKOUT_FAILED"
   assert.deepEqual(fake.expired, []);
 
   assert.equal(lines.length, 1);
-  assert.ok(lines[0].startsWith("[public] checkout create failed: "), lines[0]);
+  assert.equal(lines[0], "[public] checkout create failed: Invalid email address: [email] (session [session])");
   assert.equal(lines[0].includes("@"), false);
   assert.equal(lines[0].includes(email), false);
+  assert.equal(lines[0].includes("cs_test_"), false);
 });
 
 dbTest("a refused attachment expires the session, frees the seat and says the offer changed", async (h) => {
@@ -374,6 +380,9 @@ dbTest("a refused attachment expires the session, frees the seat and says the of
   assert.equal(res.error, "L'offre a changé : rafraîchissez la page.");
   assert.equal(res.code, "stale");
   assert.deepEqual(res.effects, [{ type: "google.sync_occurrence", occurrenceId: s.occ.id }]);
+  // S24: the Checkout URL of a session that was closed, and the id of a purchase that was released, never leave the server.
+  assert.equal("checkoutUrl" in res, false, "no checkoutUrl key");
+  assert.equal("purchaseId" in res, false, "no purchaseId key");
 
   const purchaseId = fake.created[0].purchaseId;
   assert.deepEqual(fake.expired, [`cs_test_fake_${purchaseId}`]);
@@ -633,6 +642,40 @@ dbTest("a typed address cannot take a seat on a séance at its hold ceiling; an 
     assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 4);
   } finally {
     await deleteTestUser(h.db, o.userId);
+  }
+});
+
+dbTest("a verified session that is not yet an Owner here types its own address past the hold ceiling; another address does not (S33, SEC-I6)", async (h) => {
+  const s = await setup(h, { capacity: 6 });
+  const now = new Date();
+  await addRowHolds(h, s, 3, now);
+  assert.equal(holdCeiling(6), 3);
+
+  const email = testEmail("verified");
+  const { userId } = await createTestClientUser(h.db, { email, name: "Beatriz Almeida", verified: true });
+  try {
+    // Verified, but no customer row at this pro yet: no Owner. The session alone keys the throttle on her user.
+    const visitor = actionVisitorOf({ session: sessionOf({ userId, email, name: "Beatriz Almeida" }, { verified: true }) });
+    assert.equal(visitor.owner, null);
+    assert.equal(await customerOf(h, email), undefined);
+
+    // Typing ANOTHER address makes her a stranger to that address: the ceiling applies.
+    const strangerEmail = testEmail("stranger");
+    const other = await run(h, buyInput(s, { identity: { name: "Camille Durand", email: strangerEmail } }), { visitor, now });
+    assert.ok(!other.res.ok);
+    assert.equal(other.res.error, COPY.TOO_MANY_PAYMENTS);
+    assert.equal(other.fake.created.length, 0);
+    assert.equal(await customerOf(h, strangerEmail), undefined);
+    assert.equal((await bookingsOf(h, s.occ.id)).length, 3);
+
+    // Typing her OWN address: a verified identity cannot be made up by a stranger, so the ceiling is skipped.
+    const own = await run(h, buyInput(s, { identity: { name: "Beatriz Almeida", email } }), { visitor, now });
+    assert.ok(own.res.ok, JSON.stringify(own.res));
+    assert.equal((await bookingsOf(h, s.occ.id)).length, 4);
+    assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 4);
+    assert.equal((await customerOf(h, email))?.userId, userId, "her own address is linked to her account");
+  } finally {
+    await deleteTestUser(h.db, userId);
   }
 });
 

@@ -216,8 +216,13 @@ dbTest("shop purchase: a gateway failure expires the purchase and answers CHECKO
     lines.push(args.map(String).join(" "));
   });
   const fake = fakeCheckout("test");
-  fake.failCreate = true;
   const email = testEmail("fail");
+  // A gateway failure that quotes the typed address and a session id: the log line must not repeat either
+  // (logSafeMessage), which a fixed message could never prove.
+  fake.create = async (req) => {
+    fake.created.push(req);
+    throw new Error(`Invalid email address: ${email} (session cs_test_a1B2c3D4e5F6)`);
+  };
 
   const { res } = await run(h, shopInput(s, { identity: { name: "Beatriz Almeida", email } }), { fake });
   assert.ok(!res.ok);
@@ -229,9 +234,10 @@ dbTest("shop purchase: a gateway failure expires the purchase and answers CHECKO
   assert.equal(purchase.checkoutSessionId, null);
   assert.deepEqual(fake.expired, []);
   assert.equal(lines.length, 1);
-  assert.ok(lines[0].startsWith("[public] checkout create failed: "), lines[0]);
+  assert.equal(lines[0], "[public] checkout create failed: Invalid email address: [email] (session [session])");
   assert.equal(lines[0].includes("@"), false);
   assert.equal(lines[0].includes(email), false);
+  assert.equal(lines[0].includes("cs_test_"), false);
 });
 
 dbTest("shop purchase: a refused attachment expires the session and says the offer changed", async (h) => {
