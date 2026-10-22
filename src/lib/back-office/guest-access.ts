@@ -42,7 +42,14 @@ export function guestCookieOptions(slug: string, production: boolean) {
   } as const;
 }
 
-export type GuestCustomerRow = { customerId: string; linkVersion: number; slug: string; proSuspended: boolean };
+export type GuestCustomerRow = {
+  customerId: string;
+  linkVersion: number;
+  slug: string;
+  /** The pro's business name: the personal-link confirmation page says whose espace it opens. */
+  businessName: string;
+  proSuspended: boolean;
+};
 
 /** The customer, its pro's slug and whether that pro's user is suspended (a lapsed ban counts as lifted). */
 export async function findGuestCustomer(db: Db, customerId: string): Promise<GuestCustomerRow | null> {
@@ -51,6 +58,7 @@ export async function findGuestCustomer(db: Db, customerId: string): Promise<Gue
       customerId: customer.id,
       linkVersion: customer.linkVersion,
       slug: professional.slug,
+      businessName: professional.businessName,
       proSuspended: sql<boolean>`${userIsSuspended()}`,
     })
     .from(customer)
@@ -62,8 +70,8 @@ export async function findGuestCustomer(db: Db, customerId: string): Promise<Gue
 
 export type GuestLinkDecision =
   | { kind: "not_found" }
-  | { kind: "stale"; slug: string }
-  | { kind: "ok"; slug: string; customerId: string };
+  | { kind: "stale"; slug: string; businessName: string }
+  | { kind: "ok"; slug: string; customerId: string; businessName: string };
 
 /**
  * Q21: no verified link, no customer row, a row of another customer or a
@@ -75,8 +83,8 @@ export function guestLinkDecision(link: GuestLink | null, row: GuestCustomerRow 
   if (!link || !row || row.proSuspended || link.customerId !== row.customerId) return { kind: "not_found" };
   // The redirect target is built from the row's slug: never follow one that is not a plain address segment.
   if (!SLUG_SHAPE.test(row.slug)) return { kind: "not_found" };
-  if (link.linkVersion !== row.linkVersion) return { kind: "stale", slug: row.slug };
-  return { kind: "ok", slug: row.slug, customerId: row.customerId };
+  if (link.linkVersion !== row.linkVersion) return { kind: "stale", slug: row.slug, businessName: row.businessName };
+  return { kind: "ok", slug: row.slug, customerId: row.customerId, businessName: row.businessName };
 }
 
 /**

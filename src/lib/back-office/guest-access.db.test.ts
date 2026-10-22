@@ -18,12 +18,25 @@ import { createTestClientUser } from "@/test/public";
 
 const KEY = guestLinkKey("test-secret");
 
+type TestDb = Parameters<typeof findGuestCustomer>[0];
+
+/** The business name the harness gave a pro (« Test <tag> »), read back from its row. */
+async function businessNameOf(db: TestDb, proId: string): Promise<string> {
+  const [row] = await db
+    .select({ businessName: schema.professional.businessName })
+    .from(schema.professional)
+    .where(eq(schema.professional.id, proId));
+  assert.ok(row, "the test pro exists");
+  return row.businessName;
+}
+
 dbTest("findGuestCustomer: the customer, its pro's slug, its link version and the suspension flag", async ({ db, pro }) => {
   const customerId = await makeCustomer(db, pro);
   assert.deepEqual(await findGuestCustomer(db, customerId), {
     customerId,
     linkVersion: 1,
     slug: pro.slug,
+    businessName: await businessNameOf(db, pro.proId),
     proSuspended: false,
   });
 
@@ -102,13 +115,17 @@ dbTest("resolveGuestLink: a valid link is ok and targets the slug of the custome
       kind: "ok",
       slug: pro.slug,
       customerId,
+      businessName: await businessNameOf(db, pro.proId),
     });
     // The slug always comes from the customer's row: a link of the other pro's customer lands on the other pro's page.
     assert.deepEqual(await resolveGuestLink(db, signGuestLink({ customerId: theirs, linkVersion: 1 }, KEY), KEY), {
       kind: "ok",
       slug: other.slug,
       customerId: theirs,
+      // Cross-tenant: the business name is the one of the customer's own pro, never of the pro whose link was tried first.
+      businessName: await businessNameOf(db, other.proId),
     });
+    assert.notEqual(await businessNameOf(db, other.proId), await businessNameOf(db, pro.proId));
   } finally {
     await deleteTestUser(db, other.userId);
   }
@@ -121,16 +138,22 @@ dbTest("resolveGuestLink: a link revoked by « Déconnecter ses liens » is stal
 
   const revoked = await revokeLinks(db, { professionalId: pro.proId, customerId });
   assert.ok(revoked.ok, JSON.stringify(revoked));
-  assert.deepEqual(await resolveGuestLink(db, oldToken, KEY), { kind: "stale", slug: pro.slug });
+  assert.deepEqual(await resolveGuestLink(db, oldToken, KEY), {
+    kind: "stale",
+    slug: pro.slug,
+    businessName: await businessNameOf(db, pro.proId),
+  });
   assert.deepEqual(await resolveGuestLink(db, signGuestLink({ customerId, linkVersion: 2 }, KEY), KEY), {
     kind: "ok",
     slug: pro.slug,
     customerId,
+    businessName: await businessNameOf(db, pro.proId),
   });
   // A version from the future (never issued) is not ok either.
   assert.deepEqual(await resolveGuestLink(db, signGuestLink({ customerId, linkVersion: 3 }, KEY), KEY), {
     kind: "stale",
     slug: pro.slug,
+    businessName: await businessNameOf(db, pro.proId),
   });
 });
 
@@ -171,6 +194,17 @@ dbTest("resolveGuestLink: a slug that is not a plain address segment is never re
   const token = signGuestLink({ customerId, linkVersion: 1 }, KEY);
   await db.update(schema.professional).set({ slug: "//evil.example" }).where(eq(schema.professional.id, pro.proId));
   assert.deepEqual(await resolveGuestLink(db, token, KEY), { kind: "not_found" });
+});
+
+dbTest("resolveGuestLink: the business name reaches the decision as stored, markup included (the page escapes it)", async ({ db, pro }) => {
+  const customerId = await makeCustomer(db, pro);
+  const hostile = '<b>"Cie" & Fils</b>';
+  await db.update(schema.professional).set({ businessName: hostile }).where(eq(schema.professional.id, pro.proId));
+  const token = signGuestLink({ customerId, linkVersion: 1 }, KEY);
+  assert.deepEqual(await resolveGuestLink(db, token, KEY), { kind: "ok", slug: pro.slug, customerId, businessName: hostile });
+
+  await revokeLinks(db, { professionalId: pro.proId, customerId });
+  assert.deepEqual(await resolveGuestLink(db, token, KEY), { kind: "stale", slug: pro.slug, businessName: hostile });
 });
 
 /* ─────────────────────── resolveSpaceIdentity: who looks at the espace ─────────────────────── */
