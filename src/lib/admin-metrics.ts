@@ -1,10 +1,11 @@
 import { ADMIN_TZ } from "@/lib/analytics";
 import { plural } from "@/lib/back-office/format";
 import { dayKeyInTz, formatDateShort, frenchFirst, instantFromWallClock } from "@/lib/datetime";
+import { paymentModeOf, type PaymentMode } from "@/lib/payments/checkout";
 
 export type DailyPoint = { day: string; value: number };
 export type MoneyTotal = { currency: string; cents: number };
-export type IntegrationMode = "live" | "test" | "mock";
+export type IntegrationMode = PaymentMode;
 
 /**
  * The last `days` calendar days in `tz` as YYYY-MM-DD keys, oldest first.
@@ -79,13 +80,8 @@ export function pageViewsDetail(n: number): string {
   return plural(n, "page vue", "pages vues");
 }
 
-export function stripeMode(
-  secretKey: string | undefined,
-  enabled: boolean,
-): IntegrationMode {
-  if (!enabled || !secretKey) return "mock";
-  return /^(sk|rk)_live_/.test(secretKey) ? "live" : "test";
-}
+/** The Stripe mode the admin sees: the one rule of src/lib/payments/checkout.ts, so « Encaissé » and the test banner can never disagree (COV-M8). */
+export const stripeMode = paymentModeOf;
 
 /** "à l'instant", "il y a 5 minutes", "hier"… then a short date after 30 days. */
 export function timeAgo(date: Date, now: Date = new Date()): string {
