@@ -71,3 +71,13 @@ export function nameToSend(name: string): string | undefined {
 export function canOfferCodeSignIn(state: VisitorState): boolean {
   return state === "anonymous";
 }
+
+/**
+ * Where the focus goes when the code dialog closes (WCAG 2.4.3). After a sign-in the control that opened the dialog is
+ * usually gone (the anonymous bar becomes the wallet), so the caller names another target, one that the refresh does
+ * not swap. A dialog closed without a sign-in (Escape, « Fermer ») left the page as it was: null, and `Dialog` gives
+ * the focus back to the control that opened it. The caller is asked after a sign-in only.
+ */
+export function focusTargetOnClose<T>(signedIn: boolean, target: (() => T | null) | undefined): T | null {
+  return signedIn && target ? target() : null;
+}

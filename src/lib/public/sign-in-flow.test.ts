@@ -7,6 +7,7 @@ import {
   authFormGoogleCallbacks,
   canOfferCodeSignIn,
   codeInputValue,
+  focusTargetOnClose,
   googleCallbacks,
   isCompleteCode,
   nameToSend,
@@ -142,4 +143,22 @@ test("canOfferCodeSignIn is true for an anonymous visitor only (risk 7, COV-C1)"
     states.filter((state) => canOfferCodeSignIn(state)),
     ["anonymous"],
   );
+});
+
+test("focusTargetOnClose names the caller's target after a sign-in only; a dialog closed without one gives the focus back to its opener", () => {
+  const target = { name: "planning heading" };
+  let asked = 0;
+  const ask = () => {
+    asked += 1;
+    return target;
+  };
+  assert.equal(focusTargetOnClose(true, ask), target);
+  assert.equal(asked, 1);
+  // Escape, « Fermer » or a click outside: no target (the dialog then restores its opener), and the caller is not even asked.
+  assert.equal(focusTargetOnClose(false, ask), null);
+  assert.equal(asked, 1);
+  // Signed in with no target given, or a target that is gone: nothing to name.
+  assert.equal(focusTargetOnClose(true, undefined), null);
+  assert.equal(focusTargetOnClose(true, () => null), null);
+  assert.equal(focusTargetOnClose(false, undefined), null);
 });

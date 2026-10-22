@@ -90,15 +90,22 @@ test("the dialog is « Retrouver mes tickets » with the shared intro and the na
   assert.match(dialog, /title="Retrouver mes tickets"/);
   assert.match(dialog, /COPY\.CODE_INTRO/);
   assert.match(dialog, /<EmailCodeForm[^>]*\baskName\b/);
-  assert.match(dialog, /onSignedIn=\{onClose\}/);
+  assert.match(dialog, /<EmailCodeForm[^>]*\bonSignedIn=\{signedInThenClose\}/);
   assert.match(dialog, /<ClientSignInChoices/);
 });
 
-test("the dialog forwards an optional returnFocusTo to Dialog (a caller whose opener goes after sign-in names a heading)", () => {
+test("the dialog hands the focus to the caller's target after a sign-in only, to the opener otherwise (WCAG 2.4.3)", () => {
   const dialog = source("src/components/auth/otp-dialog.tsx");
   assert.match(dialog, /returnFocusTo\?: \(\) => HTMLElement \| null;/);
-  assert.match(dialog, /<Dialog[^>]*\breturnFocusTo=\{returnFocusTo\}/);
-  assert.doesNotMatch(dialog, /returnFocusTo=\{\(\)/, "the dialog never picks the target itself");
+  // The sign-in is recorded in a ref, before the dialog closes: Dialog reads the target in the cleanup of the render
+  // that closes it, a closure that would still hold a state value of the render before.
+  assert.match(dialog, /const signedIn = useRef\(false\);/);
+  assert.match(dialog, /function signedInThenClose\(\) \{\s*signedIn\.current = true;\s*onClose\(\);\s*\}/);
+  assert.match(dialog, /useEffect\(\(\) => \{\s*if \(open\) signedIn\.current = false;\s*\}, \[open\]\);/, "a new opening starts without a sign-in");
+  assert.match(dialog, /const focusAfterClose = useCallback\(\(\) => focusTargetOnClose\(signedIn\.current, returnFocusTo\), \[returnFocusTo\]\);/);
+  assert.match(dialog, /<Dialog[^>]*\breturnFocusTo=\{focusAfterClose\}/);
+  assert.doesNotMatch(dialog, /returnFocusTo=\{returnFocusTo\}/, "the caller's target is never handed over unconditionally");
+  assert.doesNotMatch(dialog, /useState\(.*signedIn|setSignedIn/, "a state would be read stale by the closing render");
 });
 
 test("the field ids are unique per dialog instance: the séance page mounts two", () => {
