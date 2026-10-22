@@ -58,11 +58,12 @@ test("fromEngineClient speaks client words, keeps the code, drops it on demand, 
     fromEngineClient({ ok: false, code: "invalid", message: "Merci de répondre à : Niveau" }, "free", V),
     { ok: false, error: "Merci de répondre à : Niveau", code: "invalid", effects: [] },
   );
-  const dropped = fromEngineClient({ ok: false, code: "already_booked" }, "buybook", V, [], { dropCode: true });
-  assert.deepEqual(dropped, { ok: false, error: "Vous êtes déjà inscrit(e).", effects: [] });
+  // dropCode removes the code only, the sentence stays: a code whose sentence is neutral shows exactly that
+  const dropped = fromEngineClient({ ok: false, code: "throttled" }, "buybook", V, [], { dropCode: true });
+  assert.deepEqual(dropped, { ok: false, error: "Trop de demandes. Réessayez dans un moment.", effects: [] });
   assert.equal("code" in dropped, false);
-  const keptByDefault = fromEngineClient({ ok: false, code: "already_booked" }, "buybook", V, [], {});
-  assert.equal(keptByDefault.code, "already_booked");
+  const keptByDefault = fromEngineClient({ ok: false, code: "throttled" }, "buybook", V, [], {});
+  assert.equal(keptByDefault.code, "throttled");
 });
 
 test("fromParse keeps the French error and the field errors, with no effect", () => {

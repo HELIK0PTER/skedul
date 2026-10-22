@@ -21,7 +21,7 @@ import {
 
 const V = { businessName: "Altinha Paris" };
 /** fr-FR groups thousands with a narrow no-break space (U+202F); the contract writes it as a plain space. */
-const plain = (text: string): string => text.replace(/[  ]/g, " ");
+const plain = (text: string): string => text.replace(/[\u00a0\u202f]/g, " ");
 
 test("PUBLIC_STATE_LABELS holds the eight fixed state labels", () => {
   assert.deepEqual(PUBLIC_STATE_LABELS, {

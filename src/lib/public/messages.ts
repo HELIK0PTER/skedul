@@ -69,7 +69,9 @@ export function clientErrorMessage(
   context: PublicErrorContext,
   vars: { businessName: string },
 ): string {
-  // Only `invalid` carries a message meant for the client: the core validated the input with parseFr first, so it is French.
+  // Only `invalid` carries a message meant for the client, and only the claims.ts paths that public cores call put one there
+  // (buildAnswers' « Réponse invalide pour … », the note length): those messages are French. A public core must not map an
+  // engine call whose `invalid` message comes from zod (catalog, occurrences, series, wallet): that text is the schema's.
   if (fail.code === "invalid" && fail.message) return fail.message;
   const text = CLIENT_CONTEXT_MESSAGES[context]?.[fail.code] ?? ENGINE_ERROR_MESSAGES[fail.code];
   return fill(text, vars.businessName);

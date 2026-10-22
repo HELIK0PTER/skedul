@@ -31,7 +31,12 @@ export function publicOk<T extends object>(data: T, effects: Effect[] = []): { o
   return { ...data, ok: true, effects };
 }
 
-/** An engine failure in client words: clientErrorMessage(res, context, vars), the code kept unless opts.dropCode. */
+/**
+ * An engine failure in client words: clientErrorMessage(res, context, vars), the code kept unless opts.dropCode.
+ * `dropCode` removes only the code: the sentence stays the one the engine code says, so it hides nothing by itself.
+ * For Decision 64 (a visitor who is not a verified identity must learn nothing about another customer's state),
+ * answer `publicFail(COPY.BUYBOOK_NOT_POSSIBLE)` instead of dropping the code of `already_booked` / `too_many_holds`.
+ */
 export function fromEngineClient(
   res: EngineFail,
   context: PublicErrorContext,
