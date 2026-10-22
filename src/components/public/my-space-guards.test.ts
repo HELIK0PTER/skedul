@@ -50,7 +50,13 @@ test("the confirmation banner stays mounted when a code is accepted (WCAG 2.4.3,
     "mounted for every signed-in visitor that is not impersonated, `verified` from the state",
   );
   assert.match(page, /verified: state === "verified"/, "verified comes from the visitor state, never from a constant");
-  assert.match(page, /state === "impersonating"/);
+  // The condition itself, not « the word impersonating appears somewhere » (the page's impersonating branch matches that):
+  // an admin impersonating a client must not be offered a confirmation code for the client's address.
+  assert.match(
+    page,
+    /const banner = session && state !== "impersonating" \? \{ email: session\.email, verified: state === "verified" \} : null;/,
+    "no banner while impersonating",
+  );
   const banner = page.indexOf("<VerifyEmailBanner");
   assert.ok(banner < page.indexOf("canOfferCodeSignIn("), "the banner sits above the identity switch");
   assert.ok(banner < page.indexOf("<MySpaceView"), "so the flip to the space does not unmount it");

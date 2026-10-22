@@ -4,6 +4,7 @@ import { navPrimary, navQuiet } from "@/components/landing/cta";
 import styles from "@/components/landing/landing.module.css";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/ui/logo";
+import { accountLink } from "@/lib/account-link";
 import { getCurrentProfessional, getCurrentUser } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +25,8 @@ export async function SiteHeader() {
     getCurrentUser(),
     getCurrentProfessional(),
   ]);
+  // One label per place: « Tableau de bord » for a pro, « Mon espace » (the client space) for any other signed-in user.
+  const account = accountLink({ signedIn: user !== null, hasPro: pro !== null });
 
   return (
     <header className="pointer-events-none sticky top-3 z-40 px-3 sm:top-4">
@@ -64,11 +67,9 @@ export async function SiteHeader() {
           className="mx-1.5 hidden h-5 w-px bg-(--lp-rule) lg:block"
         />
 
-        {user ? (
+        {account ? (
           <Button asChild size="sm" className={navPrimary}>
-            <Link href={pro ? "/dashboard" : "/onboarding"}>
-              {pro ? "Mon espace" : "Devenir pro"}
-            </Link>
+            <Link href={account.href}>{account.label}</Link>
           </Button>
         ) : (
           <>
