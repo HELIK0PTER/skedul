@@ -132,9 +132,34 @@ test("the mock route's POST checks the origin before it reads the body and befor
   assert.match(body, /status: 403/);
 });
 
+test("the mock route catches a throw from the state read and from the payment: a log through logSafeMessage, a 500, the same headers (G2b)", () => {
+  assert.match(ROUTE, /import \{ logSafeMessage \} from "@\/lib\/log-safe"/);
+  for (const [verb, call] of [
+    ["GET", "mockCheckoutState("],
+    ["POST", "mockPay("],
+  ] as const) {
+    const body = bodyOf(verb);
+    const callAt = body.indexOf(call);
+    assert.notEqual(callAt, -1, `${verb} calls ${call}`);
+    const tryAt = body.lastIndexOf("try {", callAt);
+    assert.notEqual(tryAt, -1, `${verb}: the call sits in a try`);
+    assert.equal(body.slice(tryAt, callAt).includes("}"), false, `${verb}: the call is directly inside that try, not after it`);
+    const catchAt = body.indexOf("} catch", callAt);
+    assert.notEqual(catchAt, -1, `${verb}: the try has a catch`);
+    const handler = body.slice(catchAt, body.indexOf("\n  }", catchAt));
+    assert.ok(handler.includes('console.error("[mock-checkout] " + logSafeMessage(err))'), `${verb}: the log goes through logSafeMessage`);
+    assert.ok(handler.includes("return serverError()"), `${verb}: the catch answers the 500`);
+  }
+  assert.match(ROUTE, /function serverError\(\): Response \{\s*return new Response\("Error", \{ status: 500, headers: \{ \.\.\.HEADERS \} \}\);/);
+});
+
 test("the mock route's every response refuses caching, framing and referrers (SEC-M11, S47)", () => {
   assert.match(ROUTE, /"Cache-Control": "no-store"/);
-  assert.match(ROUTE, /"Content-Security-Policy": "frame-ancestors 'none'"/);
+  assert.match(
+    ROUTE,
+    /"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"/,
+    "the page loads nothing but its inline style and posts only to itself (the /api/c pattern)",
+  );
   assert.match(ROUTE, /"X-Frame-Options": "DENY"/);
   assert.match(ROUTE, /"Referrer-Policy": "strict-origin"/);
   assert.doesNotMatch(ROUTE, /"Referrer-Policy": "no-referrer"/, "no-referrer would send Origin: null on the page's own POST");

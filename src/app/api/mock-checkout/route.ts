@@ -2,6 +2,7 @@ import { after } from "next/server";
 
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
+import { logSafeMessage } from "@/lib/log-safe";
 import { mockCheckoutHtml, mockCheckoutState, mockPay } from "@/lib/payments/mock-checkout";
 import { isReferenceId } from "@/lib/public/purchase-reads";
 import { sameOrigin } from "@/lib/same-origin";
@@ -14,16 +15,23 @@ export const dynamic = "force-dynamic";
  * Every response: not cached, not framed, the origin alone as referrer (SEC-M11); the page is built by the server and the
  * route has no other output. `strict-origin`, not `no-referrer`: the policy of the document that holds the form also decides
  * the `Origin` header of its POST, and `no-referrer` makes browsers send `Origin: null`, which `sameOrigin` must refuse.
+ * The CSP is the one of the personal-link page (`/api/c`): the page loads nothing but its inline style and its form posts
+ * only to this origin, so a markup slip could never load or send anything elsewhere.
  */
 const HEADERS = {
   "Cache-Control": "no-store",
-  "Content-Security-Policy": "frame-ancestors 'none'",
+  "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
   "X-Frame-Options": "DENY",
   "Referrer-Policy": "strict-origin",
 } as const;
 
 function notFound(): Response {
   return new Response("Not found", { status: 404, headers: { ...HEADERS } });
+}
+
+/** A throw from the database layer: the caller has logged it through `logSafeMessage`, this answers without any detail. */
+function serverError(): Response {
+  return new Response("Error", { status: 500, headers: { ...HEADERS } });
 }
 
 /** 303 to a path of this app: built from the trusted app URL, never from the request. */
@@ -43,7 +51,14 @@ export async function GET(request: Request): Promise<Response> {
   if (!mockCheckoutEnabled()) return notFound();
   const purchaseId = new URL(request.url).searchParams.get("purchase");
   if (!isReferenceId(purchaseId)) return notFound();
-  const state = await mockCheckoutState(db, purchaseId);
+  let state: Awaited<ReturnType<typeof mockCheckoutState>>;
+  try {
+    state = await mockCheckoutState(db, purchaseId);
+  } catch (err) {
+    // Next.js would log the raw error, which can carry SQL parameters (the purchase id): log the safe message only.
+    console.error("[mock-checkout] " + logSafeMessage(err));
+    return serverError();
+  }
   if (!state) return notFound();
   if (state.kind === "paid") return seeOther(state.merciPath);
   return new Response(mockCheckoutHtml(state.view), {
@@ -72,7 +87,13 @@ export async function POST(request: Request): Promise<Response> {
     return notFound();
   }
   if (!isReferenceId(purchaseId)) return notFound();
-  const res = await mockPay(db, purchaseId, new Date());
+  let res: Awaited<ReturnType<typeof mockPay>>;
+  try {
+    res = await mockPay(db, purchaseId, new Date());
+  } catch (err) {
+    console.error("[mock-checkout] " + logSafeMessage(err));
+    return serverError();
+  }
   if (res.kind === "not_found") return notFound();
   const effects = res.effects;
   if (effects.length > 0) after(() => runEffects(effects, "none"));
