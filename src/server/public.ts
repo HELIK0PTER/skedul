@@ -1,7 +1,14 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { startBuyAndBookCore, type BuyAndBookInput } from "@/lib/public/booking-actions";
+import {
+  bookWithHeldTicketCore,
+  registerFreeCore,
+  startBuyAndBookCore,
+  type BuyAndBookInput,
+  type FreeRegistrationInput,
+  type HeldTicketInput,
+} from "@/lib/public/booking-actions";
 import { splitActionInput } from "@/lib/public/context";
 import type { PublicResult } from "@/lib/public/result";
 import { publicDeps, runPublicAction } from "@/server/public-context";
@@ -17,5 +24,23 @@ export async function startBuyAndBookAction(
   const { slug, rest } = splitActionInput(input);
   return runPublicAction("startBuyAndBook", slug, (pro, visitor, now) =>
     startBuyAndBookCore(db, pro, visitor, rest, publicDeps(), now),
+  );
+}
+
+/** E3 from the séance page: a free registration with a typed identity (registerFreeCore). */
+export async function registerFreeAction(input: { slug: string } & FreeRegistrationInput): Promise<PublicResult> {
+  const { slug, rest } = splitActionInput(input);
+  return runPublicAction("registerFree", slug, (pro, visitor, now) => registerFreeCore(db, pro, visitor, rest, now));
+}
+
+/** E2 client from the séance page: spend one held ticket, for an Owner of this pro only (bookWithHeldTicketCore). */
+export async function bookWithHeldTicketAction(
+  input: { slug: string } & HeldTicketInput,
+): Promise<PublicResult<{ bookingId: string }>> {
+  const { slug, rest } = splitActionInput(input);
+  // The one action that spends tickets. The wrapper writes nothing: the core links the Owner's customer row to her
+  // account (L1345) after its parseFr and its throttle, and still refuses anyone who is not an Owner of this pro.
+  return runPublicAction("bookWithHeldTicket", slug, (pro, visitor, now) =>
+    bookWithHeldTicketCore(db, pro, visitor, rest, now),
   );
 }

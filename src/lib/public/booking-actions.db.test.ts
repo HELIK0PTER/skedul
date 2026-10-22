@@ -10,25 +10,32 @@ import {
   occurrence as occurrenceTable,
   question,
   throttle,
+  ticketMovement,
   ticketPurchase,
 } from "@/lib/db/schema";
 import {
+  activeBookingIdOf,
+  bookWithHeldTicketCore,
   buyAndBookInputSchema,
+  freeRegistrationInputSchema,
+  heldTicketInputSchema,
   holdCeiling,
   honeypotFilled,
   identityInputSchema,
   identityOf,
+  registerFreeCore,
   seatPressureOf,
   startBuyAndBookCore,
   throttleSubjectOf,
 } from "@/lib/public/booking-actions";
 import type { ActionVisitor } from "@/lib/public/context";
 import { COPY } from "@/lib/public/messages";
+import { withoutPublicEffects } from "@/lib/public/result";
 import { checkActionThrottle } from "@/lib/throttle";
 import { normalizeEmail } from "@/lib/tickets";
 import { parseFr } from "@/lib/zod-fr";
 import { addMinutes, createTestPro, dbTest, deleteTestUser, testEmail, type DbHarness } from "@/test/db";
-import { getOccurrence, makeEvent, makeOffer, makeType } from "@/test/fixtures";
+import { getBooking, getOccurrence, giveTickets, makeEvent, makeOffer, makeType, ticketsOf } from "@/test/fixtures";
 import {
   actionVisitorOf,
   createTestClientUser,
@@ -777,4 +784,672 @@ dbTest("seatPressureOf counts the live holds of this pro's séance only", async 
     await deleteTestUser(h.db, other.userId);
   }
   assert.equal(await seatPressureOf(h.db, h.pro.proId, "unknown-occurrence", now), null);
+});
+
+/* ───────────────────────── Task 10: free registration and held ticket ───────────────────────── */
+
+test("the free and held-ticket schemas are strict too", () => {
+  const free = {
+    occurrenceId: "o1",
+    seenStartsAt: "2026-10-25T08:00:00.000Z",
+    identity: { name: "Beatriz Almeida", email: "beatriz@example.com" },
+    answers: [],
+  };
+  assert.equal(parseFr(freeRegistrationInputSchema, free).ok, true);
+  assert.equal(parseFr(freeRegistrationInputSchema, { ...free, offerId: "f1" }).ok, false, "no offer in a free registration");
+  assert.equal(parseFr(freeRegistrationInputSchema, { ...free, customerId: "c1" }).ok, false);
+
+  const held = { occurrenceId: "o1", seenStartsAt: "2026-10-25T08:00:00.000Z", answers: [] };
+  assert.equal(parseFr(heldTicketInputSchema, held).ok, true);
+  for (const extra of [{ identity: free.identity }, { customerId: "c1" }, { userId: "u1" }, { website: "" }]) {
+    const res = parseFr(heldTicketInputSchema, { ...held, ...extra });
+    assert.equal(res.ok, false, JSON.stringify(extra));
+    if (!res.ok) assert.equal(res.error, "Champ inattendu.", JSON.stringify(extra));
+  }
+});
+
+/** A free-mode séance (« Roda libre ») in 3 days; `occurrenceCount` > 1 makes a daily series. */
+async function setupFree(h: DbHarness, over: { capacity?: number; occurrenceCount?: number } = {}) {
+  const { eventId, occurrences } = await makeEvent(h.db, h.pro, {
+    title: "Roda libre",
+    bookingMode: "free",
+    capacity: over.capacity ?? 12,
+    rule:
+      over.occurrenceCount === undefined
+        ? undefined
+        : { freq: "daily", interval: 1, endMode: "count", occurrenceCount: over.occurrenceCount },
+  });
+  return { eventId, occurrences, occ: occurrences[0] };
+}
+
+/** The raw input of a free registration or a held-ticket call for `occ`. */
+function claimInput(occ: { id: string; startsAt: Date }, over: Record<string, unknown> = {}): Record<string, unknown> {
+  return { occurrenceId: occ.id, seenStartsAt: occ.startsAt.toISOString(), answers: [], ...over };
+}
+
+function freeInput(occ: { id: string; startsAt: Date }, over: Record<string, unknown> = {}): Record<string, unknown> {
+  return claimInput(occ, { identity: { name: "Beatriz Almeida", email: testEmail("free") }, ...over });
+}
+
+async function runFree(h: DbHarness, input: unknown, opts: { visitor?: ActionVisitor; now?: Date } = {}) {
+  const pro = await publicProOf(h.db, h.pro);
+  const visitor = opts.visitor ?? actionVisitorOf();
+  const now = opts.now ?? new Date();
+  const res = await registerFreeCore(h.db, pro, visitor, input, now);
+  return { res, visitor, now };
+}
+
+async function runHeld(h: DbHarness, input: unknown, opts: { visitor?: ActionVisitor; now?: Date } = {}) {
+  const pro = await publicProOf(h.db, h.pro);
+  const visitor = opts.visitor ?? actionVisitorOf();
+  const now = opts.now ?? new Date();
+  const res = await bookWithHeldTicketCore(h.db, pro, visitor, input, now);
+  return { res, visitor, now };
+}
+
+dbTest("free registration confirms the booking and plans the confirmation, the pro's notice and the sync", async (h) => {
+  const s = await setupFree(h);
+  const email = testEmail("free");
+  const { res } = await runFree(h, freeInput(s.occ, { identity: { name: " Beatriz Almeida ", email, phone: "" } }));
+  const browser = withoutPublicEffects(res);
+  assert.ok(res.ok, JSON.stringify(res));
+  assert.deepEqual(browser, { ok: true });
+
+  const [b] = await bookingsOf(h, s.occ.id);
+  assert.equal(b.status, "confirmed");
+  assert.equal(b.coverage, "free");
+  assert.equal(b.createdBy, "client");
+  assert.equal(b.purchaseId, null);
+  assert.deepEqual(res.effects, [
+    { type: "email.booking_confirmed", bookingId: b.id },
+    { type: "email.pro_new_booking", bookingId: b.id },
+    { type: "google.sync_occurrence", occurrenceId: s.occ.id },
+  ]);
+  assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 1);
+
+  const row = await customerOf(h, email);
+  assert.equal(row?.id, b.customerId);
+  assert.equal(row?.name, "Beatriz Almeida");
+  assert.equal(row?.phone, null);
+  assert.equal(row?.userId, null);
+});
+
+dbTest("free registration on a tickets-mode séance answers the unavailable sentence", async (h) => {
+  const s = await setup(h);
+  const { res } = await runFree(h, freeInput(s.occ));
+  assert.ok(!res.ok);
+  assert.equal(res.error, "Cette séance n'est plus ouverte aux réservations.");
+  assert.equal(res.code, "unavailable");
+  assert.deepEqual(res.effects, []);
+  assert.equal((await bookingsOf(h, s.occ.id)).length, 0);
+});
+
+dbTest("a full séance answers the French « Complet » sentence", async (h) => {
+  const s = await setupFree(h, { capacity: 1 });
+  const first = await runFree(h, freeInput(s.occ));
+  assert.ok(first.res.ok, JSON.stringify(first.res));
+
+  const second = await runFree(h, freeInput(s.occ));
+  assert.ok(!second.res.ok);
+  assert.equal(second.res.error, "Complet : il ne reste plus de place sur cette séance.");
+  assert.equal(second.res.code, "full");
+  assert.deepEqual(second.res.effects, []);
+  assert.equal((await bookingsOf(h, s.occ.id)).length, 1);
+  assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 1);
+});
+
+dbTest("free: a third registration on one séance from one IP is throttled even with three addresses (S33, SEC-I1)", async (h) => {
+  const s = await setupFree(h);
+  const visitor = actionVisitorOf();
+  const emails = [testEmail("a"), testEmail("b"), testEmail("c")];
+  const results: Awaited<ReturnType<typeof runFree>>[] = [];
+  for (const email of emails) {
+    results.push(await runFree(h, freeInput(s.occ, { identity: { name: "Beatriz Almeida", email } }), { visitor }));
+  }
+  assert.ok(results[0].res.ok, JSON.stringify(results[0].res));
+  assert.ok(results[1].res.ok, JSON.stringify(results[1].res));
+  const third = results[2].res;
+  assert.ok(!third.ok);
+  assert.equal(third.error, "Trop de demandes. Réessayez dans un moment.");
+  assert.equal(third.code, "throttled");
+  assert.equal(await customerOf(h, emails[2]), undefined);
+  assert.equal((await bookingsOf(h, s.occ.id)).length, 2);
+  assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 2);
+});
+
+dbTest("free: the 7th request of one address at this pro is throttled before any write (S19)", async (h) => {
+  const s = await setupFree(h);
+  const email = testEmail("limit");
+  const now = new Date();
+  for (let hit = 1; hit <= 6; hit++) {
+    const allowed = await checkActionThrottle(
+      h.db,
+      {
+        action: "free",
+        professionalId: h.pro.proId,
+        ipHash: testIpHash(),
+        wideIpHash: null,
+        subject: { kind: "email", email },
+        occurrenceId: s.occ.id,
+      },
+      now,
+    );
+    assert.equal(allowed, true, `hit ${hit}`);
+  }
+
+  const { res } = await runFree(h, freeInput(s.occ, { identity: { name: "Beatriz Almeida", email } }), { now });
+  assert.ok(!res.ok);
+  assert.equal(res.error, "Trop de demandes. Réessayez dans un moment.");
+  assert.equal(res.code, "throttled");
+  assert.equal(await customerOf(h, email), undefined);
+  assert.equal((await bookingsOf(h, s.occ.id)).length, 0);
+});
+
+dbTest("free: the 7th registration at this pro from one IP is throttled, whatever the séance (S33, SEC-I1)", async (h) => {
+  // Seven séances of one series: six earlier registrations from this IP, each on ANOTHER séance and with another
+  // address (so neither the per-séance IP key nor an e-mail key is over), then the 7th on the first séance.
+  const s = await setupFree(h, { occurrenceCount: 7 });
+  const visitor = actionVisitorOf();
+  const now = new Date();
+  for (let hit = 1; hit <= 6; hit++) {
+    const allowed = await checkActionThrottle(
+      h.db,
+      {
+        action: "free",
+        professionalId: h.pro.proId,
+        ipHash: visitor.ipHash,
+        wideIpHash: null,
+        subject: { kind: "email", email: testEmail("earlier") },
+        occurrenceId: s.occurrences[hit].id,
+      },
+      now,
+    );
+    assert.equal(allowed, true, `hit ${hit}`);
+  }
+
+  const email = testEmail("seventh");
+  const { res } = await runFree(h, freeInput(s.occ, { identity: { name: "Beatriz Almeida", email } }), {
+    visitor,
+    now,
+  });
+  assert.ok(!res.ok);
+  assert.equal(res.error, "Trop de demandes. Réessayez dans un moment.");
+  assert.equal(res.code, "throttled");
+  assert.equal(await customerOf(h, email), undefined);
+  assert.equal((await bookingsOf(h, s.occ.id)).length, 0);
+});
+
+dbTest("free: a filled honeypot is refused before any customer or throttle row is written (S20)", async (h) => {
+  const s = await setupFree(h);
+  const email = testEmail("bot");
+  const visitor = actionVisitorOf();
+  for (const website of ["http://spam.test", "x", ["x"], 0, null]) {
+    const { res } = await runFree(h, freeInput(s.occ, { identity: { name: "Beatriz Almeida", email }, website }), {
+      visitor,
+    });
+    assert.ok(!res.ok, JSON.stringify(website));
+    assert.equal(res.error, COPY.HONEYPOT_REFUSED);
+    assert.equal(res.code, undefined);
+    assert.deepEqual(res.effects, []);
+  }
+  assert.equal(await customerOf(h, email), undefined);
+  assert.equal((await bookingsOf(h, s.occ.id)).length, 0);
+  assert.deepEqual(await throttleRowsOf(h, visitor.ipHash, email), []);
+});
+
+dbTest("free: a typed address already registered gets the success answer and its own confirmation again (S34, Decision 64)", async (h) => {
+  const s = await setupFree(h);
+  const email = testEmail("again");
+  const identity = { name: "Beatriz Almeida", email };
+
+  const first = await runFree(h, freeInput(s.occ, { identity }));
+  const firstBrowser = withoutPublicEffects(first.res);
+  assert.ok(first.res.ok, JSON.stringify(first.res));
+  const [created] = await bookingsOf(h, s.occ.id);
+
+  const second = await runFree(h, freeInput(s.occ, { identity }));
+  const secondBrowser = withoutPublicEffects(second.res);
+  assert.ok(second.res.ok, JSON.stringify(second.res));
+  assert.deepEqual(secondBrowser, firstBrowser, "the browser cannot tell a repeat from a fresh registration");
+  assert.deepEqual(second.res.effects, [{ type: "email.booking_confirmed", bookingId: created.id }]);
+  assert.equal((await bookingsOf(h, s.occ.id)).length, 1);
+  assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 1);
+});
+
+dbTest("free: a verified identity already registered keeps the engine sentence, it is her own state", async (h) => {
+  const s = await setupFree(h);
+  const email = testEmail("verified");
+  const { userId } = await createTestClientUser(h.db, { email, name: "Beatriz Almeida", verified: true });
+  try {
+    const visitor = actionVisitorOf({
+      session: sessionOf({ userId, email, name: "Beatriz Almeida" }, { verified: true }),
+    });
+    const identity = { name: "Beatriz Almeida", email };
+
+    const first = await runFree(h, freeInput(s.occ, { identity }), { visitor });
+    assert.ok(first.res.ok, JSON.stringify(first.res));
+    assert.equal((await customerOf(h, email))?.userId, userId);
+
+    const second = await runFree(h, freeInput(s.occ, { identity }), { visitor });
+    assert.ok(!second.res.ok);
+    assert.equal(second.res.error, "Vous êtes déjà inscrit(e).");
+    assert.equal(second.res.code, "already_booked");
+    assert.deepEqual(second.res.effects, []);
+    assert.equal((await bookingsOf(h, s.occ.id)).length, 1);
+  } finally {
+    await deleteTestUser(h.db, userId);
+  }
+});
+
+dbTest("free: a séance of another pro is not found and nothing is booked (S6)", async (h) => {
+  const other = await createTestPro(h.db);
+  try {
+    const otherHarness: DbHarness = { db: h.db, pro: other };
+    const foreign = await setupFree(otherHarness);
+    const email = testEmail("tenant");
+
+    const { res } = await runFree(h, freeInput(foreign.occ, { identity: { name: "Beatriz Almeida", email } }));
+    assert.ok(!res.ok);
+    assert.equal(res.error, "Cette séance n'existe plus : rafraîchissez la page.");
+    assert.equal(res.code, "not_found");
+    assert.deepEqual(res.effects, []);
+    assert.equal((await bookingsOf(h, foreign.occ.id)).length, 0);
+    assert.equal((await getOccurrence(h.db, foreign.occ.id)).seatsTaken, 0);
+    assert.equal(await customerOf(otherHarness, email), undefined, "the typed address never reaches the other pro");
+  } finally {
+    await deleteTestUser(h.db, other.userId);
+  }
+});
+
+dbTest("free: a malformed input is refused whole, before anything is read or written (S43, SEC-M15)", async (h) => {
+  const s = await setupFree(h);
+  const email = testEmail("bad");
+  const good = freeInput(s.occ, { identity: { name: "Beatriz Almeida", email } });
+  const visitor = actionVisitorOf();
+
+  const cases: { label: string; input: unknown; error: string }[] = [
+    { label: "an extra key", input: { ...good, userId: "u1" }, error: "Champ inattendu." },
+    { label: "an offer id (a buy + book field)", input: { ...good, offerId: "f1" }, error: "Champ inattendu." },
+    { label: "identity null", input: { ...good, identity: null }, error: "Valeur invalide." },
+    { label: "a wrong type", input: { ...good, occurrenceId: 42 }, error: "Ce champ est obligatoire." },
+    { label: "answers that are not a list", input: { ...good, answers: {} }, error: "Valeur invalide." },
+    { label: "null", input: null, error: "Valeur invalide." },
+  ];
+  for (const c of cases) {
+    const { res } = await runFree(h, c.input, { visitor });
+    assert.ok(!res.ok, c.label);
+    assert.equal(res.error, c.error, c.label);
+    assert.equal(res.code, undefined, c.label);
+    assert.deepEqual(res.effects, [], c.label);
+  }
+  assert.equal(await customerOf(h, email), undefined);
+  assert.equal((await bookingsOf(h, s.occ.id)).length, 0);
+  assert.deepEqual(await throttleRowsOf(h, visitor.ipHash, email), []);
+});
+
+dbTest("held: only an Owner spends tickets, never a typed address, a guest cookie, an unverified or an impersonated session (S1, S2)", async (h) => {
+  const s = await setup(h);
+  const email = testEmail("holder");
+  const holder = await ownerVisitor(h, email);
+  try {
+    const [ticketId] = await giveTickets(h.db, h.pro, holder.customerId, s.typeId, 1);
+    const user = { userId: holder.userId, email, name: "Beatriz Almeida" };
+    const refusals: [string, ActionVisitor][] = [
+      ["an anonymous visitor", actionVisitorOf()],
+      ["a guest cookie alone", actionVisitorOf({ guestCustomerId: holder.customerId })],
+      [
+        "an impersonated session of the holder",
+        actionVisitorOf({ session: sessionOf(user, { verified: true, impersonated: true }) }),
+      ],
+      [
+        "an unverified session of the holder's address",
+        actionVisitorOf({ session: sessionOf(user, { verified: false }) }),
+      ],
+    ];
+    for (const [label, visitor] of refusals) {
+      const { res } = await runHeld(h, claimInput(s.occ), { visitor });
+      assert.ok(!res.ok, label);
+      assert.equal(res.error, COPY.CONFIRM_EMAIL_TO_SPEND, label);
+      assert.equal(res.code, undefined, label);
+      assert.deepEqual(res.effects, [], label);
+      assert.deepEqual(await throttleRowsOf(h, visitor.ipHash, email), [], `${label}: refused before the throttle`);
+    }
+
+    // A typed address has no way in: the held-ticket input carries no identity field at all.
+    const typed = await runHeld(h, claimInput(s.occ, { identity: { name: "Mallory", email } }));
+    assert.ok(!typed.res.ok);
+    assert.equal(typed.res.error, "Champ inattendu.");
+
+    assert.equal((await bookingsOf(h, s.occ.id)).length, 0);
+    assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 0);
+    const tickets = await ticketsOf(h.db, holder.customerId);
+    assert.deepEqual(
+      tickets.map((t) => [t.id, t.status]),
+      [[ticketId, "available"]],
+    );
+  } finally {
+    await deleteTestUser(h.db, holder.userId);
+  }
+});
+
+dbTest("held: an Owner of another pro, or a customer of another pro, spends nothing on this page (S6)", async (h) => {
+  const s = await setup(h);
+  const other = await createTestPro(h.db);
+  const email = testEmail("holder");
+  const { userId } = await createTestClientUser(h.db, { email, name: "Beatriz Almeida", verified: true });
+  try {
+    const otherHarness: DbHarness = { db: h.db, pro: other };
+    const foreign = await setup(otherHarness);
+    const otherCustomer = await rowCustomer(h.db, other, { email, userId });
+    await giveTickets(h.db, other, otherCustomer, foreign.typeId, 1);
+    const session = sessionOf({ userId, email, name: "Beatriz Almeida" }, { verified: true });
+
+    // 1. an Owner of the OTHER pro asks on this pro's page
+    const elsewhere = actionVisitorOf({
+      session,
+      owner: { professionalId: other.proId, customerId: otherCustomer, userId, email },
+    });
+    const refused = await runHeld(h, claimInput(s.occ), { visitor: elsewhere });
+    assert.ok(!refused.res.ok);
+    assert.equal(refused.res.error, COPY.CONFIRM_EMAIL_TO_SPEND);
+
+    // 2. an owner naming this pro but carrying the other pro's customer (the wrapper never builds one): the engine refuses it
+    const forged = actionVisitorOf({
+      session,
+      owner: { professionalId: h.pro.proId, customerId: otherCustomer, userId, email },
+    });
+    const forgedRes = await runHeld(h, claimInput(s.occ), { visitor: forged });
+    assert.ok(!forgedRes.res.ok);
+    assert.equal(forgedRes.res.error, "Cette séance n'existe plus : rafraîchissez la page.");
+    assert.equal(forgedRes.res.code, "not_found");
+
+    assert.equal((await bookingsOf(h, s.occ.id)).length, 0);
+    assert.deepEqual(
+      (await ticketsOf(h.db, otherCustomer)).map((t) => t.status),
+      ["available"],
+    );
+  } finally {
+    await deleteTestUser(h.db, other.userId);
+    await deleteTestUser(h.db, userId);
+  }
+});
+
+dbTest("held: an Owner cannot spend on a séance of another pro (S6)", async (h) => {
+  const s = await setup(h);
+  const other = await createTestPro(h.db);
+  const o = await ownerVisitor(h, testEmail("owner"));
+  try {
+    const foreign = await setup({ db: h.db, pro: other });
+    const [ticketId] = await giveTickets(h.db, h.pro, o.customerId, s.typeId, 1);
+
+    const { res } = await runHeld(h, claimInput(foreign.occ), { visitor: o.visitor });
+    assert.ok(!res.ok);
+    assert.equal(res.error, "Cette séance n'existe plus : rafraîchissez la page.");
+    assert.equal(res.code, "not_found");
+    assert.deepEqual(res.effects, []);
+    assert.equal((await bookingsOf(h, foreign.occ.id)).length, 0);
+    assert.equal((await getOccurrence(h.db, foreign.occ.id)).seatsTaken, 0);
+    const tickets = await ticketsOf(h.db, o.customerId);
+    assert.deepEqual(
+      tickets.map((t) => [t.id, t.status]),
+      [[ticketId, "available"]],
+    );
+  } finally {
+    await deleteTestUser(h.db, other.userId);
+    await deleteTestUser(h.db, o.userId);
+  }
+});
+
+dbTest("held: an Owner spends her ticket, the booking is confirmed and the movement records her user", async (h) => {
+  const s = await setup(h);
+  const o = await ownerVisitor(h, testEmail("owner"));
+  try {
+    const [ticketId] = await giveTickets(h.db, h.pro, o.customerId, s.typeId, 1);
+
+    const { res } = await runHeld(h, claimInput(s.occ), { visitor: o.visitor });
+    assert.ok(res.ok, JSON.stringify(res));
+    assert.deepEqual(res.effects, [
+      { type: "email.booking_confirmed", bookingId: res.bookingId },
+      { type: "email.pro_new_booking", bookingId: res.bookingId },
+      { type: "google.sync_occurrence", occurrenceId: s.occ.id },
+    ]);
+
+    const b = await getBooking(h.db, res.bookingId);
+    assert.equal(b.status, "confirmed");
+    assert.equal(b.coverage, "ticket");
+    assert.equal(b.createdBy, "client");
+    assert.equal(b.customerId, o.customerId);
+    assert.equal(b.occurrenceId, s.occ.id);
+
+    const [spent] = await ticketsOf(h.db, o.customerId);
+    assert.equal(spent.id, ticketId);
+    assert.equal(spent.status, "booked");
+    assert.equal(spent.bookingId, res.bookingId);
+    const [movement] = await h.db
+      .select()
+      .from(ticketMovement)
+      .where(and(eq(ticketMovement.ticketId, ticketId), eq(ticketMovement.kind, "spend")));
+    assert.equal(movement.actor, "client");
+    assert.equal(movement.actorUserId, o.userId);
+    assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 1);
+  } finally {
+    await deleteTestUser(h.db, o.userId);
+  }
+});
+
+dbTest("held: an Owner without a usable ticket gets the engine sentence and no booking", async (h) => {
+  const s = await setup(h);
+  const o = await ownerVisitor(h, testEmail("owner"));
+  try {
+    const { res } = await runHeld(h, claimInput(s.occ), { visitor: o.visitor });
+    assert.ok(!res.ok);
+    assert.equal(res.error, "Aucun ticket utilisable pour cette séance.");
+    assert.equal(res.code, "no_ticket");
+    assert.deepEqual(res.effects, []);
+    assert.equal((await bookingsOf(h, s.occ.id)).length, 0);
+    assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 0);
+  } finally {
+    await deleteTestUser(h.db, o.userId);
+  }
+});
+
+dbTest("held: after 10 hits on her user key the Owner is throttled and nothing changes (S19, SEC-I2)", async (h) => {
+  const s = await setup(h);
+  const o = await ownerVisitor(h, testEmail("owner"));
+  try {
+    const [ticketId] = await giveTickets(h.db, h.pro, o.customerId, s.typeId, 1);
+    const now = new Date();
+    for (let hit = 1; hit <= 10; hit++) {
+      const allowed = await checkActionThrottle(
+        h.db,
+        {
+          action: "held",
+          professionalId: h.pro.proId,
+          ipHash: testIpHash(),
+          wideIpHash: null,
+          subject: { kind: "user", userId: o.userId },
+        },
+        now,
+      );
+      assert.equal(allowed, true, `hit ${hit}`);
+    }
+
+    const { res } = await runHeld(h, claimInput(s.occ), { visitor: o.visitor, now });
+    assert.ok(!res.ok);
+    assert.equal(res.error, "Trop de demandes. Réessayez dans un moment.");
+    assert.equal(res.code, "throttled");
+    assert.deepEqual(res.effects, []);
+    const [key] = await h.db.select().from(throttle).where(eq(throttle.key, `t:held:u:${o.userId}`));
+    assert.equal(key.hits, 11, "the held limit is keyed on the user, not on the address");
+    assert.equal((await bookingsOf(h, s.occ.id)).length, 0);
+    const tickets = await ticketsOf(h.db, o.customerId);
+    assert.deepEqual(
+      tickets.map((t) => [t.id, t.status]),
+      [[ticketId, "available"]],
+    );
+  } finally {
+    await deleteTestUser(h.db, o.userId);
+  }
+});
+
+dbTest("held: a malformed input is refused whole, before the Owner check and the throttle (S43, SEC-M15)", async (h) => {
+  const s = await setup(h);
+  const o = await ownerVisitor(h, testEmail("owner"));
+  try {
+    const [ticketId] = await giveTickets(h.db, h.pro, o.customerId, s.typeId, 1);
+    const good = claimInput(s.occ);
+    const cases: { label: string; input: unknown; error: string }[] = [
+      { label: "an extra key", input: { ...good, userId: "u1" }, error: "Champ inattendu." },
+      { label: "a customer id", input: { ...good, customerId: o.customerId }, error: "Champ inattendu." },
+      { label: "an identity", input: { ...good, identity: { name: "A", email: "a@example.com" } }, error: "Champ inattendu." },
+      { label: "a wrong type", input: { ...good, occurrenceId: 42 }, error: "Ce champ est obligatoire." },
+      { label: "a start that is not a date", input: { ...good, seenStartsAt: "demain" }, error: "Date et heure invalides." },
+      { label: "a honeypot field (this schema has none)", input: { ...good, website: ["x"] }, error: "Champ inattendu." },
+      { label: "null", input: null, error: "Valeur invalide." },
+    ];
+    for (const c of cases) {
+      const { res } = await runHeld(h, c.input, { visitor: o.visitor });
+      assert.ok(!res.ok, c.label);
+      assert.equal(res.error, c.error, c.label);
+      assert.equal(res.code, undefined, c.label);
+      assert.deepEqual(res.effects, [], c.label);
+    }
+    const rows = await h.db.select().from(throttle).where(eq(throttle.key, `t:held:u:${o.userId}`));
+    assert.deepEqual(rows, [], "a malformed call consumes no throttle");
+    assert.equal((await bookingsOf(h, s.occ.id)).length, 0);
+    const tickets = await ticketsOf(h.db, o.customerId);
+    assert.deepEqual(
+      tickets.map((t) => [t.id, t.status]),
+      [[ticketId, "available"]],
+    );
+  } finally {
+    await deleteTestUser(h.db, o.userId);
+  }
+});
+
+/** Like ownerVisitor, but her customer row is NOT linked to the account yet (user_id null): the state in which the first spend links it. */
+async function unlinkedOwnerVisitor(h: DbHarness, email: string) {
+  const { userId } = await createTestClientUser(h.db, { email, name: "Beatriz Almeida", verified: true });
+  const customerId = await rowCustomer(h.db, h.pro, { email });
+  const owner = { professionalId: h.pro.proId, customerId, userId, email };
+  const visitor = actionVisitorOf({
+    session: sessionOf({ userId, email, name: "Beatriz Almeida" }, { verified: true }),
+    owner,
+  });
+  return { userId, customerId, owner, visitor };
+}
+
+/** customer.user_id of one row. */
+async function linkedUserOf(h: DbHarness, customerId: string): Promise<string | null> {
+  const [row] = await h.db
+    .select({ userId: customerTable.userId })
+    .from(customerTable)
+    .where(eq(customerTable.id, customerId));
+  return row.userId;
+}
+
+dbTest("held link: a malformed input, or a visitor who is not an Owner, links no account (Revision 3.2)", async (h) => {
+  const s = await setup(h);
+  const o = await unlinkedOwnerVisitor(h, testEmail("owner"));
+  try {
+    await giveTickets(h.db, h.pro, o.customerId, s.typeId, 1);
+    assert.equal(await linkedUserOf(h, o.customerId), null, "the row starts unlinked");
+    const good = claimInput(s.occ);
+    for (const input of [{ ...good, userId: "u1" }, { ...good, occurrenceId: 42 }, { ...good, seenStartsAt: "demain" }, null]) {
+      const { res } = await runHeld(h, input, { visitor: o.visitor });
+      assert.ok(!res.ok, JSON.stringify(input));
+    }
+    // a guest cookie alone is no Owner: the row it reaches is not linked either
+    const cookie = await runHeld(h, good, { visitor: actionVisitorOf({ guestCustomerId: o.customerId }) });
+    assert.ok(!cookie.res.ok);
+    assert.equal(cookie.res.error, COPY.CONFIRM_EMAIL_TO_SPEND);
+
+    assert.equal(await linkedUserOf(h, o.customerId), null, "nothing was linked");
+    assert.deepEqual(await h.db.select().from(throttle).where(eq(throttle.key, `t:held:u:${o.userId}`)), [], "and nothing was consumed");
+  } finally {
+    await deleteTestUser(h.db, o.userId);
+  }
+});
+
+dbTest("held link: a throttled call links no account (Revision 3.2)", async (h) => {
+  const s = await setup(h);
+  const o = await unlinkedOwnerVisitor(h, testEmail("owner"));
+  try {
+    await giveTickets(h.db, h.pro, o.customerId, s.typeId, 1);
+    const now = new Date();
+    for (let hit = 1; hit <= 10; hit++) {
+      const allowed = await checkActionThrottle(
+        h.db,
+        {
+          action: "held",
+          professionalId: h.pro.proId,
+          ipHash: testIpHash(),
+          wideIpHash: null,
+          subject: { kind: "user", userId: o.userId },
+        },
+        now,
+      );
+      assert.equal(allowed, true, `hit ${hit}`);
+    }
+
+    const { res } = await runHeld(h, claimInput(s.occ), { visitor: o.visitor, now });
+    assert.ok(!res.ok);
+    assert.equal(res.code, "throttled");
+    assert.equal(await linkedUserOf(h, o.customerId), null, "the throttled call wrote nothing");
+    assert.equal((await bookingsOf(h, s.occ.id)).length, 0);
+  } finally {
+    await deleteTestUser(h.db, o.userId);
+  }
+});
+
+dbTest("held link: the first accepted call links the Owner's account to her own row, and only hers (Revision 3.2)", async (h) => {
+  const s = await setup(h);
+  const o = await unlinkedOwnerVisitor(h, testEmail("owner"));
+  const bystander = await rowCustomer(h.db, h.pro, { email: testEmail("bystander") });
+  try {
+    await giveTickets(h.db, h.pro, o.customerId, s.typeId, 1);
+    const { res } = await runHeld(h, claimInput(s.occ), { visitor: o.visitor });
+    assert.ok(res.ok, JSON.stringify(res));
+    assert.equal(await linkedUserOf(h, o.customerId), o.userId, "linked by her own spend");
+    assert.equal(await linkedUserOf(h, bystander), null, "no other row of the pro is touched");
+  } finally {
+    await deleteTestUser(h.db, o.userId);
+  }
+});
+
+dbTest("activeBookingIdOf names the customer's confirmed booking on this pro's séance and nothing else", async (h) => {
+  const s = await setupFree(h);
+  const now = new Date();
+  const customerId = await rowCustomer(h.db, h.pro, { email: testEmail("active") }, now);
+  assert.equal(await activeBookingIdOf(h.db, h.pro.proId, s.occ.id, customerId, now), null);
+
+  const bookingId = await rowBooking(
+    h.db,
+    h.pro,
+    { occurrenceId: s.occ.id, customerId, status: "confirmed", coverage: "free" },
+    now,
+  );
+  const cancelledCustomer = await rowCustomer(h.db, h.pro, { email: testEmail("cancelled") }, now);
+  await rowBooking(
+    h.db,
+    h.pro,
+    { occurrenceId: s.occ.id, customerId: cancelledCustomer, status: "cancelled", coverage: "free" },
+    now,
+  );
+  await h.db.update(occurrenceTable).set({ seatsTaken: 1 }).where(eq(occurrenceTable.id, s.occ.id));
+
+  assert.equal(await activeBookingIdOf(h.db, h.pro.proId, s.occ.id, customerId, now), bookingId);
+  assert.equal(await activeBookingIdOf(h.db, h.pro.proId, s.occ.id, cancelledCustomer, now), null, "ended is not active");
+  assert.equal(await activeBookingIdOf(h.db, h.pro.proId, s.occ.id, "unknown-customer", now), null);
+
+  const other = await createTestPro(h.db);
+  try {
+    assert.equal(
+      await activeBookingIdOf(h.db, other.proId, s.occ.id, customerId, now),
+      null,
+      "another pro's scope never names this pro's booking",
+    );
+  } finally {
+    await deleteTestUser(h.db, other.userId);
+  }
 });

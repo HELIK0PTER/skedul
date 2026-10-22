@@ -5,15 +5,15 @@
  * the page slug (PublicPro), never with anything taken from the input. A core never reads a session or a
  * cookie: the wrapper (src/server/public-context.ts) builds the ActionVisitor. No server-only, no next/*.
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { attachCheckoutSession, startBuyAndBook } from "@/lib/booking/claims";
+import { attachCheckoutSession, bookWithHeldTicket, registerFree, startBuyAndBook } from "@/lib/booking/claims";
 import { releasePurchase } from "@/lib/booking/release";
 import { fail } from "@/lib/booking/types";
 import { upsertCustomer } from "@/lib/booking/wallet";
 import { ts, type Db } from "@/lib/db/atomic";
-import { event, occurrence } from "@/lib/db/schema";
+import { booking, event, occurrence } from "@/lib/db/schema";
 import { logSafeMessage } from "@/lib/log-safe";
 import {
   buybookCheckoutExpiry,
@@ -22,7 +22,7 @@ import {
   type CheckoutRequest,
 } from "@/lib/payments/checkout";
 import type { ActionVisitor, PublicDeps, PublicPro } from "@/lib/public/context";
-import { upsertUserIdFor, type SessionFacts } from "@/lib/public/identity";
+import { linkCustomerUser, upsertUserIdFor, type SessionFacts } from "@/lib/public/identity";
 import { COPY } from "@/lib/public/messages";
 import { plainNameSchema } from "@/lib/public/plain-name";
 import {
@@ -67,6 +67,14 @@ export const buyAndBookInputSchema = claimTargetSchema
   .extend({ offerId: idSchema, identity: identityInputSchema, website: z.unknown().optional() })
   .strict();
 
+/** The WHOLE input of a free registration, `.strict()`: a séance, answers, a typed identity and the honeypot. */
+export const freeRegistrationInputSchema = claimTargetSchema
+  .extend({ identity: identityInputSchema, website: z.unknown().optional() })
+  .strict();
+
+/** The WHOLE input of a held-ticket booking, `.strict()`: no identity field at all, the Owner is the identity. */
+export const heldTicketInputSchema = claimTargetSchema.strict();
+
 export type BuyAndBookInput = {
   occurrenceId: string;
   offerId: string;
@@ -75,6 +83,14 @@ export type BuyAndBookInput = {
   answers: AnswerInput[];
   website?: string;
 };
+export type FreeRegistrationInput = {
+  occurrenceId: string;
+  seenStartsAt: string;
+  identity: IdentityInput;
+  answers: AnswerInput[];
+  website?: string;
+};
+export type HeldTicketInput = { occurrenceId: string; seenStartsAt: string; answers: AnswerInput[] };
 
 /** The honeypot (L786, L863): filled = anything but undefined or "" (SEC-M15); checked right after the shape parse, before any read or write. */
 export function honeypotFilled(website: unknown): boolean {
@@ -280,4 +296,155 @@ export async function startBuyAndBookCore(
     expiresAt: buybookCheckoutExpiry(Date.now()),
   };
   return createCheckoutAndAttach(db, deps, request, "buybook", pro.businessName, now);
+}
+
+/** Server-side only, never returned to the browser: the id of this customer's active booking on the séance (Decision 64). */
+export async function activeBookingIdOf(
+  db: Db,
+  professionalId: string,
+  occurrenceId: string,
+  customerId: string,
+  now: Date,
+): Promise<string | null> {
+  const [row] = await db
+    .select({ id: booking.id })
+    .from(booking)
+    .where(
+      and(
+        eq(booking.professionalId, professionalId),
+        eq(booking.occurrenceId, occurrenceId),
+        eq(booking.customerId, customerId),
+        inArray(booking.status, ["pending", "confirmed"]),
+        or(eq(booking.status, "confirmed"), gt(booking.holdExpiresAt, now)),
+      ),
+    )
+    .limit(1);
+  return row?.id ?? null;
+}
+
+/** E3 (L860-865): shape, honeypot, throttle "free", upsertCustomer, registerFree; for a typed address `already_booked` answers like a success (Decision 64). */
+export async function registerFreeCore(
+  db: Db,
+  pro: PublicPro,
+  visitor: ActionVisitor,
+  input: unknown,
+  now: Date,
+): Promise<PublicCoreResult<object>> {
+  // 1. The whole input, strict: a malformed call reads and writes nothing.
+  const parsed = parseFr(freeRegistrationInputSchema, input);
+  if (!parsed.ok) return fromParse(parsed);
+  const data = parsed.data;
+
+  // 2. The honeypot.
+  if (honeypotFilled(data.website)) return publicFail(COPY.HONEYPOT_REFUSED);
+
+  // 3. The identity to write and who is rate limited.
+  const identity = identityOf(data.identity, visitor);
+  const subject = throttleSubjectOf(visitor.session, identity.email);
+
+  // 4. The throttle, with the séance: the per-séance and per-pro IP keys apply (SEC-I1).
+  const allowed = await checkActionThrottle(
+    db,
+    {
+      action: "free",
+      professionalId: pro.professionalId,
+      ipHash: visitor.ipHash,
+      wideIpHash: visitor.wideIpHash,
+      subject,
+      occurrenceId: data.occurrenceId,
+    },
+    now,
+  );
+  if (!allowed) return publicFail(ENGINE_ERROR_MESSAGES.throttled, { code: "throttled" });
+
+  // 5. The customer row identifies who registers; it authorises nothing (same userId rule as E1).
+  const { customerId } = await upsertCustomer(
+    db,
+    {
+      professionalId: pro.professionalId,
+      email: identity.email,
+      name: identity.name,
+      phone: identity.phone,
+      userId: subject.kind === "user" ? subject.userId : null,
+    },
+    now,
+  );
+
+  // 6. The engine. For a typed address an existing registration looks exactly like a fresh one to the browser
+  // (Decision 64); only the inbox owner gets the confirmation of the EXISTING booking again.
+  const res = await registerFree(
+    db,
+    {
+      professionalId: pro.professionalId,
+      occurrenceId: data.occurrenceId,
+      customerId,
+      seenStartsAt: new Date(data.seenStartsAt),
+      answers: data.answers,
+    },
+    now,
+  );
+  if (res.ok) return publicOk({}, res.effects);
+  if (res.code === "already_booked" && subject.kind === "email") {
+    const existing = await activeBookingIdOf(db, pro.professionalId, data.occurrenceId, customerId, now);
+    return publicOk({}, existing === null ? [] : [{ type: "email.booking_confirmed", bookingId: existing }]);
+  }
+  return fromEngineClient(res, "free", { businessName: pro.businessName });
+}
+
+/**
+ * E2 client (L825-858): ONLY for an Owner (OUT:75), never a typed e-mail nor a guest cookie; throttle "held"; then the
+ * Owner's account is linked to her customer row (L1345) and bookWithHeldTicket runs with the owner's customer and user.
+ * The link is written here, after the parse, the Owner check and the throttle, and not by the wrapper: a malformed or
+ * throttled call writes nothing (contract § 1 Validation, Revision 3.2).
+ */
+export async function bookWithHeldTicketCore(
+  db: Db,
+  pro: PublicPro,
+  visitor: ActionVisitor,
+  input: unknown,
+  now: Date,
+): Promise<PublicCoreResult<{ bookingId: string }>> {
+  // 1. The whole input, strict: there is no identity field to smuggle an address into.
+  const parsed = parseFr(heldTicketInputSchema, input);
+  if (!parsed.ok) return fromParse(parsed);
+  const data = parsed.data;
+
+  // 2. Only a verified, non-impersonated Owner of THIS pro spends tickets (OUT:75, COV-I11): a guest cookie, an
+  // unverified or impersonated session and an Owner of another pro all end here.
+  const owner = visitor.owner;
+  if (!owner || owner.professionalId !== pro.professionalId) return publicFail(COPY.CONFIRM_EMAIL_TO_SPEND);
+
+  // 3. The throttle on her user key: the ticket comes back on every cancellation, so the wallet bounds nothing (SEC-I2).
+  const allowed = await checkActionThrottle(
+    db,
+    {
+      action: "held",
+      professionalId: pro.professionalId,
+      ipHash: visitor.ipHash,
+      wideIpHash: visitor.wideIpHash,
+      subject: { kind: "user", userId: owner.userId },
+    },
+    now,
+  );
+  if (!allowed) return publicFail(ENGINE_ERROR_MESSAGES.throttled, { code: "throttled" });
+
+  // 4. Link her account to her own customer row (L1345), only now: the input is valid and the throttle let her through.
+  // linkCustomerUser fills a null user_id of this pro's row for a verified user of the same address, nothing else.
+  await linkCustomerUser(db, owner, now);
+
+  // 5. The engine, with the Owner's customer and user, never anything typed.
+  const res = await bookWithHeldTicket(
+    db,
+    {
+      professionalId: pro.professionalId,
+      occurrenceId: data.occurrenceId,
+      customerId: owner.customerId,
+      seenStartsAt: new Date(data.seenStartsAt),
+      answers: data.answers,
+      actorUserId: owner.userId,
+    },
+    now,
+  );
+  if (!res.ok) return fromEngineClient(res, "held", { businessName: pro.businessName });
+  return publicOk({ bookingId: res.bookingId }, res.effects);
 }
