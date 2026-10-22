@@ -4,35 +4,52 @@
  * FRESH read of the database (names, dates, places and balances as they are
  * now). No server-only, no env: the public URL, the personal-link key and the
  * clock come in as `deps`, so the DB tests run this module as it is.
- * src/server/notify.ts executes the plans (sendEmail, syncOccurrence,
- * expireCheckoutSession), best effort, after the response.
+ * src/lib/notify-run.ts executes the plans (sendEmail, syncOccurrence,
+ * expireCheckoutSession), best effort, after the response; src/server/notify.ts
+ * wires its real dependencies.
  */
-import { and, asc, eq, inArray, type SQL, sql } from "drizzle-orm";
+import { and, asc, count, eq, inArray, min, ne, type SQL, sql } from "drizzle-orm";
 
-import { expiryGroups, expiryLabel, formatWhen, formatWhenShort, type ExpiryEntry } from "@/lib/back-office/format";
+import { expiryGroups, expiryLabel, formatWhen, formatWhenShort, planningHref, type ExpiryEntry } from "@/lib/back-office/format";
 import { walletBalanceByExpiry } from "@/lib/booking/wallet";
 import type { Effect } from "@/lib/booking/types";
 import { googleCalendarUrl, outlookCalendarUrl } from "@/lib/calendar-links";
 import { clientCancelDeadline } from "@/lib/cancellation";
+import { formatDayMonthYear, todayKey } from "@/lib/civil-date";
 import type { Db } from "@/lib/db/atomic";
-import { booking, customer, event, occurrence, professional, ticket, ticketMovement, ticketType } from "@/lib/db/schema";
+import {
+  booking,
+  customer,
+  event,
+  occurrence,
+  professional,
+  ticket,
+  ticketMovement,
+  ticketPurchase,
+  ticketType,
+  user,
+} from "@/lib/db/schema";
 import { attendeeMovedEmail } from "@/lib/emails/attendee-moved";
 import { bookingCancelledEmail } from "@/lib/emails/booking-cancelled";
 import { bookingConfirmedEmail, type TicketsLeft } from "@/lib/emails/booking-confirmed";
+import { latePaymentEmail } from "@/lib/emails/late-payment";
 import { occurrenceCancelledEmail } from "@/lib/emails/occurrence-cancelled";
 import { occurrenceChangedEmail } from "@/lib/emails/occurrence-changed";
 import type { MailCalendarLinks } from "@/lib/emails/parts";
+import { proBookingCancelledEmail } from "@/lib/emails/pro-booking-cancelled";
+import { proNewBookingEmail } from "@/lib/emails/pro-new-booking";
+import { purchaseReceiptEmail } from "@/lib/emails/purchase-receipt";
 import { ticketsOfferedEmail } from "@/lib/emails/tickets-offered";
 import { personalLinkUrl } from "@/lib/guest-link";
 import { COVERAGE_LABELS } from "@/lib/tickets-vocab";
+import { formatMoney } from "@/lib/utils";
 
 export type OutgoingEmail = { to: string; subject: string; html: string };
 export type NotifyDeps = { appUrl: string; guestKey: Buffer; now: Date };
 export type EffectPlan =
   | { kind: "emails"; professionalId: string | null; emails: OutgoingEmail[] }
   | { kind: "google"; occurrenceId: string }
-  | { kind: "stripe"; purchaseId: string; checkoutSessionId: string }
-  | { kind: "deferred"; type: Effect["type"] };
+  | { kind: "stripe"; purchaseId: string; checkoutSessionId: string };
 
 /* ───────────────────────────── Dedupe ───────────────────────────── */
 
@@ -83,6 +100,7 @@ const bookingFacts = {
   confirmedAt: booking.confirmedAt,
   holdExpiresAt: booking.holdExpiresAt,
   endedAt: booking.endedAt,
+  endedBy: booking.endedBy,
   movedAt: booking.movedAt,
   cancelReason: booking.cancelReason,
   customerId: customer.id,
@@ -405,6 +423,161 @@ async function planTicketsOffered(db: Db, customerId: string, actionId: string, 
   return emails(c.professionalId, [{ to: c.email, ...mail }]);
 }
 
+/* ───────────── P4 plans: the receipt, the late payment and the pro's two notices ───────────── */
+
+/** The address of the pro's own account (the recipient of the pro notices), or null. */
+async function proEmailOf(db: Db, professionalId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ email: user.email })
+    .from(professional)
+    .innerJoin(user, eq(user.id, professional.userId))
+    .where(eq(professional.id, professionalId));
+  return row?.email ?? null;
+}
+
+/** The séance in the pro's planning, as the pro opens it from a notice (spec L1542-1544). */
+function planningUrlOf(b: Pick<BookingFacts, "occurrenceId" | "startsAt" | "tz">, deps: NotifyDeps): string {
+  return `${deps.appUrl.replace(/\/+$/, "")}${planningHref({ occurrenceId: b.occurrenceId, startsAt: b.startsAt, tz: b.tz })}`;
+}
+
+/**
+ * The receipt of a PAID purchase, to its customer. The customer, the pro and the ticket type are read through the
+ * purchase's own professional_id: a purchase that crosses two pros plans nothing. `walletCount` is the purchase's
+ * tickets still available (the ticket a buy + book spent is not counted); `expiryText` says « valables » for several.
+ */
+async function planPurchaseReceipt(db: Db, purchaseId: string, deps: NotifyDeps): Promise<EffectPlan> {
+  const [p] = await db
+    .select({
+      purchaseId: ticketPurchase.id,
+      professionalId: ticketPurchase.professionalId,
+      customerId: customer.id,
+      customerName: customer.name,
+      customerEmail: customer.email,
+      linkVersion: customer.linkVersion,
+      businessName: professional.businessName,
+      tz: professional.timezone,
+      label: ticketPurchase.label,
+      typeName: ticketType.name,
+      quantity: ticketPurchase.quantity,
+      amountCents: ticketPurchase.amountCents,
+      currency: ticketPurchase.currency,
+      paidAt: ticketPurchase.paidAt,
+      livemode: ticketPurchase.livemode,
+    })
+    .from(ticketPurchase)
+    .innerJoin(
+      customer,
+      and(eq(customer.id, ticketPurchase.customerId), eq(customer.professionalId, ticketPurchase.professionalId)),
+    )
+    .innerJoin(professional, eq(professional.id, ticketPurchase.professionalId))
+    .innerJoin(
+      ticketType,
+      and(eq(ticketType.id, ticketPurchase.ticketTypeId), eq(ticketType.professionalId, ticketPurchase.professionalId)),
+    )
+    .where(and(eq(ticketPurchase.id, purchaseId), eq(ticketPurchase.status, "paid")));
+  if (!p || p.paidAt === null) return noEmail();
+
+  const [tickets] = await db
+    .select({
+      expiresAt: min(ticket.expiresAt),
+      available: sql<number>`count(*) filter (where ${ticket.status} = 'available')`.mapWith(Number),
+    })
+    .from(ticket)
+    .where(and(eq(ticket.purchaseId, p.purchaseId), eq(ticket.professionalId, p.professionalId)));
+  const [held] = await readBookings(db, and(eq(booking.purchaseId, p.purchaseId), eq(booking.status, "confirmed")));
+  const bookingLine =
+    held && held.professionalId === p.professionalId
+      ? `Un des tickets a servi pour votre inscription à « ${held.title} » (${whenOf(held)}).`
+      : null;
+
+  const mail = purchaseReceiptEmail({
+    customerName: p.customerName,
+    businessName: p.businessName,
+    label: p.label,
+    typeName: p.typeName,
+    quantity: p.quantity,
+    walletCount: tickets?.available ?? 0,
+    amountLabel: formatMoney(p.amountCents, p.currency),
+    paidOn: formatDayMonthYear(todayKey(p.paidAt, p.tz)),
+    expiryText: expiryLabel(tickets?.expiresAt ?? null, p.tz, deps.now, p.quantity),
+    bookingLine,
+    test: !p.livemode,
+    personalLinkUrl: linkOf(p, deps),
+  });
+  return emails(p.professionalId, [{ to: p.customerEmail, ...mail }]);
+}
+
+/**
+ * « Paiement reçu » for a PAID purchase whose booking is not confirmed (it ended before the money arrived): the
+ * tickets went to the wallet, the séance is not reserved. The booking must belong to the purchase's own pro and
+ * customer, else nothing is planned.
+ */
+async function planLatePayment(db: Db, purchaseId: string, deps: NotifyDeps): Promise<EffectPlan> {
+  const [p] = await db
+    .select({
+      professionalId: ticketPurchase.professionalId,
+      customerId: ticketPurchase.customerId,
+      slug: professional.slug,
+    })
+    .from(ticketPurchase)
+    .innerJoin(professional, eq(professional.id, ticketPurchase.professionalId))
+    .where(and(eq(ticketPurchase.id, purchaseId), eq(ticketPurchase.status, "paid")));
+  if (!p) return noEmail();
+  const [b] = await readBookings(db, and(eq(booking.purchaseId, purchaseId), ne(booking.status, "confirmed")));
+  if (!b || b.professionalId !== p.professionalId || b.customerId !== p.customerId) return noEmail();
+  const [tickets] = await db
+    .select({ n: count() })
+    .from(ticket)
+    .where(and(eq(ticket.purchaseId, purchaseId), eq(ticket.professionalId, p.professionalId)));
+  if (!tickets || tickets.n === 0) return noEmail();
+
+  const mail = latePaymentEmail({
+    customerName: b.customerName,
+    businessName: b.businessName,
+    title: b.title,
+    whenLabel: whenOf(b),
+    count: tickets.n,
+    pageUrl: `${deps.appUrl.replace(/\/+$/, "")}/${p.slug}`,
+    personalLinkUrl: linkOf(b, deps),
+  });
+  return emails(p.professionalId, [{ to: b.customerEmail, ...mail }]);
+}
+
+/** « Nouvelle inscription » to the pro's own address, for a CONFIRMED booking. No personal link. */
+async function planProNewBooking(db: Db, bookingId: string, deps: NotifyDeps): Promise<EffectPlan> {
+  const [b] = await readBookings(db, eq(booking.id, bookingId));
+  if (!b || b.status !== "confirmed") return noEmail();
+  const to = await proEmailOf(db, b.professionalId);
+  if (to === null) return noEmail();
+  const mail = proNewBookingEmail({
+    customerName: b.customerName,
+    customerEmail: b.customerEmail,
+    title: b.title,
+    whenLabel: whenOf(b),
+    coverageLabel: COVERAGE_LABELS[b.coverage],
+    planningUrl: planningUrlOf(b, deps),
+  });
+  return emails(b.professionalId, [{ to, ...mail }]);
+}
+
+/** « Annulation d'un client » to the pro's own address: the booking is cancelled AND the client ended it. */
+async function planProBookingCancelled(db: Db, bookingId: string, deps: NotifyDeps): Promise<EffectPlan> {
+  const [b] = await readBookings(db, eq(booking.id, bookingId));
+  if (!b || b.status !== "cancelled" || b.endedBy !== "client") return noEmail();
+  const to = await proEmailOf(db, b.professionalId);
+  if (to === null) return noEmail();
+  const returned = await returnedBookingIds(db, b.professionalId, [b.bookingId]);
+  const mail = proBookingCancelledEmail({
+    customerName: b.customerName,
+    customerEmail: b.customerEmail,
+    title: b.title,
+    whenLabel: whenOf(b),
+    ticketReturned: returned.has(b.bookingId),
+    planningUrl: planningUrlOf(b, deps),
+  });
+  return emails(b.professionalId, [{ to, ...mail }]);
+}
+
 /**
  * What to do for one effect, from a fresh DB read. A row that no longer exists
  * (or no longer in the state the e-mail talks about) plans no e-mail. The
@@ -425,10 +598,13 @@ export async function planEffect(db: Db, effect: Effect, deps: NotifyDeps): Prom
     case "email.tickets_offered":
       return planTicketsOffered(db, effect.customerId, effect.actionId, deps);
     case "email.pro_new_booking":
+      return planProNewBooking(db, effect.bookingId, deps);
     case "email.pro_booking_cancelled":
+      return planProBookingCancelled(db, effect.bookingId, deps);
     case "email.purchase_receipt":
+      return planPurchaseReceipt(db, effect.purchaseId, deps);
     case "email.late_payment":
-      return { kind: "deferred", type: effect.type };
+      return planLatePayment(db, effect.purchaseId, deps);
     case "google.sync_occurrence":
       return { kind: "google", occurrenceId: effect.occurrenceId };
     case "stripe.expire_session":

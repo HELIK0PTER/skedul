@@ -1,22 +1,27 @@
 import assert from "node:assert/strict";
 import { eq, inArray } from "drizzle-orm";
 
-import { addDaysMs, addMinutes, createTestPro, dbTest, deleteTestUser, testEmail, type Db } from "../test/db";
+import { addDaysMs, addMinutes, createTestPro, dbTest, deleteTestUser, testEmail, type Db, type TestPro } from "../test/db";
 import { dayIn, getOccurrence, giveTickets, makeCustomer, makeEvent, makeOffer, makeType } from "../test/fixtures";
-import { rowBooking } from "../test/rows";
-import { expiryLabel } from "./back-office/format";
+import { rowBooking, rowPurchase } from "../test/rows";
+import { expiryLabel, formatWhen, planningHref } from "./back-office/format";
 import { googleCalendarUrl, outlookCalendarUrl } from "./calendar-links";
-import { cancelBookingsByPro, cancelOccurrence } from "./booking/cancel";
+import { cancelByClient, cancelBookingsByPro, cancelOccurrence } from "./booking/cancel";
 import { setAvailabilityRules } from "./booking/catalog";
-import { attachCheckoutSession, bookRdv, registerPro, startBuyAndBook } from "./booking/claims";
+import { attachCheckoutSession, bookRdv, registerFree, registerPro, startBuyAndBook } from "./booking/claims";
+import { fulfillPurchase } from "./booking/fulfillment";
+import { releasePurchase } from "./booking/release";
 import { updateOccurrence } from "./booking/series";
 import type { Effect } from "./booking/types";
 import { moveAttendee, offerTickets } from "./booking/wallet";
-import { booking, professional } from "./db/schema";
+import { booking, professional, ticketPurchase, user } from "./db/schema";
 import { escapeHtml } from "./email-layout";
-import { instantAt } from "./civil-date";
+import { formatDayMonthYear, instantAt, todayKey } from "./civil-date";
 import { guestLinkKey, personalLinkUrl } from "./guest-link";
 import { planEffect, type EffectPlan, type NotifyDeps, type OutgoingEmail } from "./notify-core";
+import { COPY } from "./public/messages";
+import { ticketExpiry } from "./ticket-expiry";
+import { formatMoney } from "./utils";
 
 const APP = "https://app.test";
 const KEY = guestLinkKey("test-secret");
@@ -763,6 +768,20 @@ dbTest("a booking row that crosses two pros plans no e-mail: its customer and it
         bookingId,
       );
     }
+
+    // pro_new_booking and pro_booking_cancelled: the control plans its notice to the pro, the crossed rows none
+    await db.update(booking).set({ endedBy: "client" }).where(inArray(booking.id, [ownGone, strangerCancelled, misplacedCancelled]));
+    const proEmail = await userEmailOf(db, pro.userId);
+    const [created] = emailsOf(await planEffect(db, { type: "email.pro_new_booking", bookingId: reg.bookingId }, deps), pro.proId);
+    assert.equal(created.to, proEmail);
+    for (const bookingId of [strangerConfirmed, misplacedConfirmed]) {
+      assert.deepEqual(await planEffect(db, { type: "email.pro_new_booking", bookingId }, deps), NONE, bookingId);
+    }
+    const [notice] = emailsOf(await planEffect(db, { type: "email.pro_booking_cancelled", bookingId: ownGone }, deps), pro.proId);
+    assert.equal(notice.to, proEmail);
+    for (const bookingId of [strangerCancelled, misplacedCancelled]) {
+      assert.deepEqual(await planEffect(db, { type: "email.pro_booking_cancelled", bookingId }, deps), NONE, bookingId);
+    }
   } finally {
     // The hand-built rows go first: foreign keys inside the domain are NO ACTION, and a confirmed one
     // would break I1 (seats_taken) when the harness checks.
@@ -771,17 +790,8 @@ dbTest("a booking row that crosses two pros plans no e-mail: its customer and it
   }
 });
 
-dbTest("P4 types are deferred, Google and Stripe pass through, a row that no longer exists plans no e-mail", async ({ db }) => {
+dbTest("Google and Stripe pass through, a row that no longer exists plans no e-mail", async ({ db }) => {
   const deps = depsAt(new Date());
-  const deferred: Effect[] = [
-    { type: "email.pro_new_booking", bookingId: "b1" },
-    { type: "email.pro_booking_cancelled", bookingId: "b1" },
-    { type: "email.purchase_receipt", purchaseId: "p1" },
-    { type: "email.late_payment", purchaseId: "p1" },
-  ];
-  for (const effect of deferred) {
-    assert.deepEqual(await planEffect(db, effect, deps), { kind: "deferred", type: effect.type });
-  }
   assert.deepEqual(await planEffect(db, { type: "google.sync_occurrence", occurrenceId: "o1" }, deps), {
     kind: "google",
     occurrenceId: "o1",
@@ -798,8 +808,301 @@ dbTest("P4 types are deferred, Google and Stripe pass through, a row that no lon
     { type: "email.occurrence_changed", occurrenceId: "gone", bookingIds: ["gone"] },
     { type: "email.attendee_moved", bookingId: "gone", fromOccurrenceId: "gone" },
     { type: "email.tickets_offered", customerId: "gone", actionId: "gone", quantity: 1 },
+    { type: "email.pro_new_booking", bookingId: "gone" },
+    { type: "email.pro_booking_cancelled", bookingId: "gone" },
+    { type: "email.purchase_receipt", purchaseId: "gone" },
+    { type: "email.late_payment", purchaseId: "gone" },
   ];
   for (const effect of gone) {
     assert.deepEqual(await planEffect(db, effect, deps), NONE, effect.type);
+  }
+});
+
+/* ───────────────────── P4: receipt, late payment and the pro's notices ───────────────────── */
+
+/** The address of a user (the pro's own account is the recipient of the pro notices). */
+async function userEmailOf(db: Db, userId: string): Promise<string> {
+  const [row] = await db.select({ email: user.email }).from(user).where(eq(user.id, userId));
+  return row.email;
+}
+
+/** E1 as the action does it: the hold and its pending purchase at `holdAt`, then the Checkout session attached. */
+async function holdSeat(
+  db: Db,
+  pro: TestPro,
+  args: { occurrence: { id: string; startsAt: Date }; customerId: string; offerId: string; holdAt: Date },
+) {
+  const hold = must(
+    await startBuyAndBook(
+      db,
+      {
+        professionalId: pro.proId,
+        occurrenceId: args.occurrence.id,
+        customerId: args.customerId,
+        seenStartsAt: args.occurrence.startsAt,
+        offerId: args.offerId,
+      },
+      args.holdAt,
+    ),
+  );
+  must(
+    await attachCheckoutSession(
+      db,
+      {
+        purchaseId: hold.purchaseId,
+        checkoutSessionId: `cs_test_${hold.purchaseId}`,
+        checkoutUrl: "https://checkout.example.test/s",
+      },
+      args.holdAt,
+    ),
+  );
+  return hold;
+}
+
+/** The webhook's path: the purchase is fulfilled at `now` (a live payment carries its payment intent, invariant I6). */
+function pay(db: Db, purchaseId: string, now: Date, livemode = false) {
+  return fulfillPurchase(db, purchaseId, { sessionId: `cs_test_${purchaseId}`, paymentIntentId: `pi_${purchaseId}`, livemode }, now);
+}
+
+dbTest("purchase_receipt: « Reçu » of a paid buy + book of « Carnet de 4 »: amount, expiry of the 4 tickets, the booking, 3 tickets left, the test line", async ({ db, pro }) => {
+  const now = new Date();
+  const business = await businessNameOf(db, pro.proId);
+  const typeId = await makeType(db, pro, { name: "Cours collectif" });
+  const offerId = await makeOffer(db, pro, typeId, { quantity: 4, priceCents: 8500, validityCount: 3, validityUnit: "month" });
+  const { occurrences: [occ] } = await makeEvent(db, pro, { title: "Altinha du soir", ticketTypeIds: [typeId] });
+  const email = testEmail("receipt");
+  const customerId = await makeCustomer(db, pro, { name: "Beatriz Almeida", email });
+  const hold = await holdSeat(db, pro, { occurrence: occ, customerId, offerId, holdAt: now });
+  const paid = await pay(db, hold.purchaseId, now);
+  assert.equal(paid.outcome, "fulfilled");
+  assert.deepEqual(
+    paid.effects.map((e) => e.type),
+    ["email.purchase_receipt", "email.booking_confirmed", "email.pro_new_booking", "google.sync_occurrence"],
+  );
+
+  const mails = emailsOf(await planEffect(db, effectOf(paid.effects, "email.purchase_receipt"), depsAt(now)), pro.proId);
+  assert.equal(mails.length, 1);
+  const [mail] = mails;
+  const expires = ticketExpiry(now, { count: 3, unit: "month" }, pro.tz);
+  const when = formatWhen(occ.startsAt, occ.endsAt, pro.tz);
+  assert.equal(mail.to, email);
+  assert.equal(mail.subject, `Reçu : Carnet de 4 chez ${business}`);
+  assert.ok(mail.html.includes(esc(`Bonjour Beatriz Almeida, merci pour votre achat chez ${business}.`)));
+  assert.ok(mail.html.includes(esc("Carnet de 4 (4 tickets « Cours collectif »)")), "label, quantity and type");
+  assert.ok(mail.html.includes(esc(formatMoney(8500, "eur"))), "amount");
+  assert.ok(mail.html.includes(esc(formatDayMonthYear(todayKey(now, pro.tz)))), "paid on");
+  assert.ok(expiryLabel(expires, pro.tz, now, 4).startsWith("valables jusqu'au "), "four tickets: « valables »");
+  assert.ok(mail.html.includes(esc(expiryLabel(expires, pro.tz, now, 4))), "the expiry of the 4 tickets");
+  assert.ok(mail.html.includes(esc(`Un des tickets a servi pour votre inscription à « Altinha du soir » (${when}).`)), "booking line");
+  assert.ok(mail.html.includes(esc("3 tickets sont dans votre portefeuille.")), "the spent ticket is not counted");
+  assert.ok(mail.html.includes(esc(COPY.TEST_PAYMENT_LINE)), "livemode false: the test line");
+  assert.ok(mail.html.includes(linkOf(customerId)), "personal link");
+});
+
+dbTest("purchase_receipt: « À l'unité » paid for real: no wallet line (its ticket was spent), no test line, no limit of validity (COV-M1g)", async ({ db, pro }) => {
+  const now = new Date();
+  const business = await businessNameOf(db, pro.proId);
+  const typeId = await makeType(db, pro, { name: "Cours collectif" });
+  const offerId = await makeOffer(db, pro, typeId);
+  const { occurrences: [occ] } = await makeEvent(db, pro, { title: "Altinha du soir", ticketTypeIds: [typeId] });
+  const customerId = await makeCustomer(db, pro, { name: "Beatriz Almeida", email: testEmail("unit") });
+  const hold = await holdSeat(db, pro, { occurrence: occ, customerId, offerId, holdAt: now });
+  const paid = await pay(db, hold.purchaseId, now, true);
+
+  const [mail] = emailsOf(await planEffect(db, effectOf(paid.effects, "email.purchase_receipt"), depsAt(now)), pro.proId);
+  assert.equal(mail.subject, `Reçu : À l'unité chez ${business}`);
+  assert.ok(mail.html.includes(esc("À l'unité (1 ticket « Cours collectif »)")));
+  assert.ok(mail.html.includes(esc(formatMoney(2500, "eur"))));
+  assert.ok(mail.html.includes("sans limite de validité"));
+  assert.equal(mail.html.includes("portefeuille"), false, "the only ticket was spent on the booking");
+  assert.equal(mail.html.includes("Paiement de test"), false, "a live payment carries no test line");
+});
+
+dbTest("late_payment: a payment that lands after the hold ended mails « Paiement reçu » with the ticket count; the receipt says every ticket is in the wallet", async ({ db, pro }) => {
+  const now = new Date();
+  const business = await businessNameOf(db, pro.proId);
+  const typeId = await makeType(db, pro, { name: "Cours collectif" });
+  const { occurrences: [occ] } = await makeEvent(db, pro, { title: "Altinha du soir", ticketTypeIds: [typeId] });
+  const when = formatWhen(occ.startsAt, occ.endsAt, pro.tz);
+  const cases = [
+    { quantity: 4, sentence: "vos 4 tickets sont dans votre portefeuille.", wallet: "4 tickets sont dans votre portefeuille." },
+    { quantity: 1, sentence: "votre ticket est dans votre portefeuille.", wallet: "1 ticket est dans votre portefeuille." },
+  ];
+  for (const { quantity, sentence, wallet } of cases) {
+    const offerId = await makeOffer(db, pro, typeId, { quantity });
+    const email = testEmail("late");
+    const customerId = await makeCustomer(db, pro, { name: "Beatriz Almeida", email });
+    // the hold started 60 minutes ago: it lapsed at 45, and the seat was released before the payment landed
+    const hold = await holdSeat(db, pro, { occurrence: occ, customerId, offerId, holdAt: addMinutes(now, -60) });
+    const released = must(await releasePurchase(db, hold.purchaseId, now));
+    assert.equal(released.released, true);
+    const paid = await pay(db, hold.purchaseId, now);
+    assert.deepEqual(paid.effects.map((e) => e.type), ["email.purchase_receipt", "email.late_payment"]);
+
+    const lateMails = emailsOf(await planEffect(db, effectOf(paid.effects, "email.late_payment"), depsAt(now)), pro.proId);
+    assert.equal(lateMails.length, 1, `${quantity}`);
+    const [mail] = lateMails;
+    assert.equal(mail.to, email);
+    assert.equal(mail.subject, "Paiement reçu : votre place n'était plus réservée");
+    assert.ok(mail.html.includes(esc(`Paiement reçu, votre place n'était plus réservée : ${sentence}`)), sentence);
+    assert.ok(
+      mail.html.includes(
+        esc(`La séance « Altinha du soir » (${when}) n'est pas réservée pour vous. Vous pouvez utiliser vos tickets sur une autre séance.`),
+      ),
+    );
+    assert.ok(mail.html.includes(`href="${APP}/${pro.slug}"`), "the page of the pro");
+    assert.ok(mail.html.includes(`>Voir la page de ${esc(business)}</a>`));
+    assert.ok(mail.html.includes(linkOf(customerId)), "personal link");
+
+    const [receipt] = emailsOf(await planEffect(db, effectOf(paid.effects, "email.purchase_receipt"), depsAt(now)), pro.proId);
+    assert.ok(receipt.html.includes(esc(wallet)), "no ticket was spent: all of them are in the wallet");
+    assert.equal(receipt.html.includes("Un des tickets a servi"), false, "no confirmed booking");
+  }
+});
+
+dbTest("pro_new_booking: one e-mail to the pro's own address with the client, the coverage and the planning link; no personal link", async ({ db, pro }) => {
+  const now = new Date();
+  const proEmail = await userEmailOf(db, pro.userId);
+  const { occurrences: [occ] } = await makeEvent(db, pro, { title: "Roda libre", bookingMode: "free" });
+  const email = testEmail("newbooking");
+  const customerId = await makeCustomer(db, pro, { name: "Thomas Leroy", email });
+  const reg = must(
+    await registerFree(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt }, now),
+  );
+
+  const mails = emailsOf(await planEffect(db, effectOf(reg.effects, "email.pro_new_booking"), depsAt(now)), pro.proId);
+  assert.equal(mails.length, 1);
+  const [mail] = mails;
+  const when = formatWhen(occ.startsAt, occ.endsAt, pro.tz);
+  const planning = `${APP}${planningHref({ occurrenceId: occ.id, startsAt: occ.startsAt, tz: pro.tz })}`;
+  assert.equal(mail.to, proEmail);
+  assert.notEqual(mail.to, email, "the notice goes to the pro, not to the client");
+  assert.equal(mail.subject, "Nouvelle inscription : Roda libre");
+  assert.ok(mail.html.includes(esc(`Thomas Leroy (${email}) s'est inscrit(e) à « Roda libre » (${when}).`)));
+  assert.ok(mail.html.includes(">Couverture</td><td style=\"text-align:right\">Inscription libre</td>"));
+  assert.ok(mail.html.includes(`href="${esc(planning)}"`), "deep link to the séance in the planning");
+  assert.ok(mail.html.includes(">Voir dans le planning</a>"));
+  assert.equal(mail.html.includes("/api/c/"), false, "a pro notice carries no personal link");
+  assert.equal(mail.subject.includes("Thomas") || mail.subject.includes(email), false, "the client is named in the body only");
+});
+
+dbTest("pro_booking_cancelled: the client cancelled; « Son ticket lui a été rendu. » only when a ticket came back; a cancellation by the pro sends no such notice", async ({ db, pro }) => {
+  const now = new Date();
+  const proEmail = await userEmailOf(db, pro.userId);
+  const typeId = await makeType(db, pro, { name: "Cours collectif" });
+  const { occurrences: [free] } = await makeEvent(db, pro, { title: "Roda libre", bookingMode: "free" });
+  const { occurrences: [ticketed] } = await makeEvent(db, pro, { title: "Altinha du soir", ticketTypeIds: [typeId] });
+  const email = testEmail("cancelled");
+  const customerId = await makeCustomer(db, pro, { name: "Thomas Leroy", email });
+  await giveTickets(db, pro, customerId, typeId, 1);
+  const freeReg = must(
+    await registerFree(db, { professionalId: pro.proId, occurrenceId: free.id, customerId, seenStartsAt: free.startsAt }, now),
+  );
+  const ticketReg = must(
+    await registerPro(
+      db,
+      { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: ticketed.id, customerId, asGuest: false },
+      now,
+    ),
+  );
+
+  const freeCancel = must(await cancelByClient(db, { professionalId: pro.proId, customerId, bookingId: freeReg.bookingId, actorUserId: null }, now));
+  const [freeMail] = emailsOf(await planEffect(db, effectOf(freeCancel.effects, "email.pro_booking_cancelled"), depsAt(now)), pro.proId);
+  assert.equal(freeMail.to, proEmail);
+  assert.equal(freeMail.subject, "Annulation : Roda libre");
+  assert.ok(
+    freeMail.html.includes(esc(`Thomas Leroy (${email}) a annulé son inscription à « Roda libre » (${formatWhen(free.startsAt, free.endsAt, pro.tz)}).`)),
+  );
+  assert.equal(freeMail.html.includes("Son ticket lui a été rendu."), false, "a free place spent no ticket");
+  assert.ok(freeMail.html.includes(`href="${esc(`${APP}${planningHref({ occurrenceId: free.id, startsAt: free.startsAt, tz: pro.tz })}`)}"`));
+  assert.equal(freeMail.html.includes("/api/c/"), false);
+
+  const ticketCancel = must(await cancelByClient(db, { professionalId: pro.proId, customerId, bookingId: ticketReg.bookingId, actorUserId: null }, now));
+  assert.equal(ticketCancel.ticketReturned, true);
+  const [ticketMail] = emailsOf(await planEffect(db, effectOf(ticketCancel.effects, "email.pro_booking_cancelled"), depsAt(now)), pro.proId);
+  assert.equal(ticketMail.subject, "Annulation : Altinha du soir");
+  assert.ok(ticketMail.html.includes("Son ticket lui a été rendu."));
+
+  // a cancellation by the pro is not « Annulation d'un client »
+  const other = await makeCustomer(db, pro, { name: "Rafael Souza", email: testEmail("bypro") });
+  const proReg = must(
+    await registerFree(db, { professionalId: pro.proId, occurrenceId: free.id, customerId: other, seenStartsAt: free.startsAt }, now),
+  );
+  must(await cancelBookingsByPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: free.id, bookingIds: [proReg.bookingId] }, now));
+  assert.deepEqual(
+    await planEffect(db, { type: "email.pro_booking_cancelled", bookingId: proReg.bookingId }, depsAt(now)),
+    NONE,
+    "ended by the pro",
+  );
+});
+
+dbTest("the receipt, the late payment and the pro notices plan nothing for a purchase or a booking that is not in their state", async ({ db, pro }) => {
+  const now = new Date();
+  const deps = depsAt(now);
+  const typeId = await makeType(db, pro, { name: "Cours collectif" });
+  const offerId = await makeOffer(db, pro, typeId);
+  const { occurrences: [occ] } = await makeEvent(db, pro, { title: "Altinha du soir", ticketTypeIds: [typeId] });
+  const customerId = await makeCustomer(db, pro, { name: "Beatriz Almeida", email: testEmail("state") });
+  const hold = await holdSeat(db, pro, { occurrence: occ, customerId, offerId, holdAt: now });
+
+  // a pending purchase with its pending booking: nothing is paid, nothing is confirmed
+  const pending: Effect[] = [
+    { type: "email.purchase_receipt", purchaseId: hold.purchaseId },
+    { type: "email.late_payment", purchaseId: hold.purchaseId },
+    { type: "email.pro_new_booking", bookingId: hold.bookingId },
+    { type: "email.pro_booking_cancelled", bookingId: hold.bookingId },
+  ];
+  for (const effect of pending) assert.deepEqual(await planEffect(db, effect, deps), NONE, effect.type);
+
+  // paid and confirmed: the receipt and the pro's new-booking notice exist, a late payment and a cancellation do not
+  const paid = await pay(db, hold.purchaseId, now);
+  assert.equal(paid.bookingConfirmed, true);
+  assert.equal(emailsOf(await planEffect(db, { type: "email.purchase_receipt", purchaseId: hold.purchaseId }, deps), pro.proId).length, 1);
+  assert.equal(emailsOf(await planEffect(db, { type: "email.pro_new_booking", bookingId: hold.bookingId }, deps), pro.proId).length, 1);
+  assert.deepEqual(await planEffect(db, { type: "email.late_payment", purchaseId: hold.purchaseId }, deps), NONE, "the booking was confirmed: nothing was late");
+  assert.deepEqual(await planEffect(db, { type: "email.pro_booking_cancelled", bookingId: hold.bookingId }, deps), NONE, "confirmed, not cancelled");
+
+  // cancelled by the client: no longer a new booking, now a cancellation
+  must(await cancelByClient(db, { professionalId: pro.proId, customerId, bookingId: hold.bookingId, actorUserId: null }, now));
+  assert.deepEqual(await planEffect(db, { type: "email.pro_new_booking", bookingId: hold.bookingId }, deps), NONE, "a cancelled booking is not new");
+  assert.equal(emailsOf(await planEffect(db, { type: "email.pro_booking_cancelled", bookingId: hold.bookingId }, deps), pro.proId).length, 1);
+});
+
+dbTest("S6: a purchase whose customer or type belongs to another pro plans no receipt, and a booking of another pro plans no late payment", async ({ db, pro }) => {
+  const now = new Date();
+  const deps = depsAt(now);
+  const typeId = await makeType(db, pro, { name: "Cours collectif" });
+  const offerId = await makeOffer(db, pro, typeId);
+  const ownEmail = testEmail("own");
+  const own = await makeCustomer(db, pro, { name: "Beatriz Almeida", email: ownEmail });
+  const other = await createTestPro(db);
+  const purchases: string[] = [];
+  const bookings: string[] = [];
+  try {
+    const stranger = await makeCustomer(db, other, { name: "Mallory", email: testEmail("mallory") });
+    const foreignTypeId = await makeType(db, other, { name: "Type d'un autre" });
+    const { occurrences: [foreignOcc] } = await makeEvent(db, other, { title: "Séance d'un autre" });
+    // Built by hand on purpose: ticket_purchase.customer_id, ticket_purchase.ticket_type_id and booking.purchase_id have no
+    // composite FK to the pro, so only the plans' own joins keep a foreign row out of an e-mail.
+    const foreignCustomer = await rowPurchase(db, pro, { customerId: stranger, offerId, ticketTypeId: typeId, status: "paid" }, now);
+    const foreignType = await rowPurchase(db, pro, { customerId: own, offerId, ticketTypeId: foreignTypeId, status: "paid" }, now);
+    const crossed = await rowPurchase(db, pro, { customerId: own, offerId, ticketTypeId: typeId, status: "paid" }, now);
+    purchases.push(foreignCustomer, foreignType, crossed);
+    bookings.push(await rowBooking(db, other, { occurrenceId: foreignOcc.id, customerId: stranger, status: "expired", purchaseId: crossed }, now));
+
+    for (const purchaseId of [foreignCustomer, foreignType]) {
+      assert.deepEqual(await planEffect(db, { type: "email.purchase_receipt", purchaseId }, deps), NONE, purchaseId);
+      assert.deepEqual(await planEffect(db, { type: "email.late_payment", purchaseId }, deps), NONE, purchaseId);
+    }
+    // the control: the same purchase, own customer and own type, still gets its receipt; its crossed booking gets no late payment
+    const [receipt] = emailsOf(await planEffect(db, { type: "email.purchase_receipt", purchaseId: crossed }, deps), pro.proId);
+    assert.equal(receipt.to, ownEmail);
+    assert.equal(receipt.html.includes("Mallory"), false);
+    assert.deepEqual(await planEffect(db, { type: "email.late_payment", purchaseId: crossed }, deps), NONE, "the booking belongs to another pro");
+  } finally {
+    // The hand-built rows go first: the foreign keys inside the domain are NO ACTION.
+    if (bookings.length > 0) await db.delete(booking).where(inArray(booking.id, bookings));
+    if (purchases.length > 0) await db.delete(ticketPurchase).where(inArray(ticketPurchase.id, purchases));
+    await deleteTestUser(db, other.userId);
   }
 });
