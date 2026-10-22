@@ -1,7 +1,7 @@
 import { ADMIN_TZ } from "@/lib/analytics";
 import { plural } from "@/lib/back-office/format";
 import { dayKeyInTz, formatDateShort, frenchFirst, instantFromWallClock } from "@/lib/datetime";
-import { paymentModeOf, type PaymentMode } from "@/lib/payments/checkout";
+import { paymentModeOf, type PaymentMode } from "@/lib/payment-mode";
 
 export type DailyPoint = { day: string; value: number };
 export type MoneyTotal = { currency: string; cents: number };
@@ -80,7 +80,7 @@ export function pageViewsDetail(n: number): string {
   return plural(n, "page vue", "pages vues");
 }
 
-/** The Stripe mode the admin sees: the one rule of src/lib/payments/checkout.ts, so « Encaissé » and the test banner can never disagree (COV-M8). */
+/** The Stripe mode the admin sees: the one rule of src/lib/payment-mode.ts (no import: this file reaches a client bundle through the bar chart), so « Encaissé » and the test banner can never disagree (COV-M8). */
 export const stripeMode = paymentModeOf;
 
 /** "à l'instant", "il y a 5 minutes", "hier"… then a short date after 30 days. */

@@ -9,9 +9,11 @@
  */
 import type Stripe from "stripe";
 
+import { paymentModeOf, type PaymentMode } from "@/lib/payment-mode";
 import { CHECKOUT_MINUTES } from "@/lib/tickets-vocab";
 
-export type PaymentMode = "mock" | "test" | "live";
+// The mode and its rule live in src/lib/payment-mode.ts (no import, so a client bundle can load them); re-exported here.
+export { paymentModeOf, type PaymentMode };
 export type CheckoutKind = "buybook" | "shop";
 
 export type CheckoutRequest = {
@@ -156,12 +158,6 @@ export function closeOutcomeOf(session: {
   if (session.status === "expired") return "already_expired";
   if (session.status === "complete" && session.payment_status === "paid") return "paid";
   return "processing";
-}
-
-/** "mock" when disabled or without key; "live" for sk_live_ / rk_live_; else "test". The ONE mode rule: src/lib/admin-metrics.ts re-exports it as stripeMode (COV-M8). */
-export function paymentModeOf(secretKey: string | undefined, enabled: boolean): PaymentMode {
-  if (!enabled || !secretKey) return "mock";
-  return /^(sk|rk)_live_/.test(secretKey) ? "live" : "test";
 }
 
 /**

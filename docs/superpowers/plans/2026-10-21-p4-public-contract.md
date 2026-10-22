@@ -105,9 +105,10 @@ barrel files: callers import each module directly.
 | C | `src/server/visitor.test.ts` | Source guard (the `pro-context.test.ts` pattern): `getFreshSession()` and `actingSession(` in `currentSessionFacts`, no `getSession()` | 5 |
 | M | `src/server/client-queries.ts` | `resolveSpaceCustomer` delegates to `currentPublicVisitor` (stricter owner predicate, unverified and impersonating kinds); `getSpaceProfile`, `getCustomerSpacePage` unchanged | 5 |
 | M | `src/app/[slug]/espace/page.tsx` | Compiles against the new `SpaceIdentity` kinds (unverified: banner, never the code form; impersonating: `COPY.IMPERSONATING`) | 5 |
-| C | `src/lib/payments/checkout.ts`, `src/lib/payments/checkout.test.ts` | Pure: Checkout request, gateway interface, URL builders, Stripe params with the app marker, close outcomes, mock ids, `paymentModeOf` (the one mode rule), `mockCheckoutAllowed` | 6 |
+| C | `src/lib/payments/checkout.ts`, `src/lib/payments/checkout.test.ts` | Pure: Checkout request, gateway interface, URL builders, Stripe params with the app marker, close outcomes, mock ids, `mockCheckoutAllowed`; re-exports `PaymentMode` and `paymentModeOf` (the one mode rule) from `src/lib/payment-mode.ts` (Revision 3.2) | 6 |
+| C | `src/lib/payment-mode.ts`, `src/lib/payment-mode.test.ts` | `PaymentMode` and `paymentModeOf`, in a module with NO import (Revision 3.2): `admin-metrics.ts` is loaded at run time by the client bar chart, and no `@/lib/payments/*` module may enter a client bundle; the test pins the absence of imports, that `admin-metrics.ts` imports nothing from `@/lib/payments`, and that no `"use client"` file reaches `src/lib/payments/*` or `src/lib/stripe.ts` | 6 |
 | M | `src/lib/stripe.ts` | `paymentMode`, `mockCheckoutEnabled`, `checkoutGateway` (Stripe or mock), `expireCheckoutSession` short-circuits mock ids and keeps its `options` argument; `createCheckoutUrl`, `CheckoutKind`, `CheckoutParams`, `isStripeLive` deleted | 6 |
-| M | `src/lib/admin-metrics.ts` | `stripeMode` becomes `export const stripeMode = paymentModeOf` (one rule for « Encaissé » and the test banner, COV-M8); the P3 additions (`dayLabel` with `frenchFirst`, `activeProsHint`, `pageViewsDetail`) untouched | 6 |
+| M | `src/lib/admin-metrics.ts` | `stripeMode` becomes `export const stripeMode = paymentModeOf`, imported from `@/lib/payment-mode`, never from `@/lib/payments/*` (one rule for « Encaissé » and the test banner, COV-M8); the P3 additions (`dayLabel` with `frenchFirst`, `activeProsHint`, `pageViewsDetail`) untouched | 6 |
 | C | `src/lib/public/context.ts`, `src/lib/public/context.test.ts` | Pure types `PublicPro`, `PublicDeps`, `ActionVisitor`; `publicProOfRow`, `SLUG_PARAM_RE`, `splitActionInput` | 7 |
 | C | `src/lib/public/run-action.ts`, `src/lib/public/run-action.test.ts` | Pure, tested body of the action wrappers: `runPublicActionWith`, `runClientActionWith` (COV-I12) | 7 |
 | C | `src/server/public-context.ts` | `server-only`: `resolvePublicPro`, `publicDeps`, `actionVisitor`, `runPublicAction`, `runClientAction` (real deps around `run-action.ts`; effects scheduled as `runEffects(effects, "none")`) | 7 |
@@ -471,9 +472,16 @@ export async function requireWalletOwner(pro: { professionalId: string; ownerUse
 
 ### 3.6 Checkout gateway (Task 6)
 
-**`src/lib/payments/checkout.ts`** (pure; `import type Stripe from "stripe"`)
+**`src/lib/payment-mode.ts`** (Revision 3.2; NO import, so a client bundle can load it: `admin-metrics.ts` reaches the admin bar chart)
 ```ts
 export type PaymentMode = "mock" | "test" | "live";
+/** "mock" when disabled or without key; "live" for sk_live_ / rk_live_; else "test". The ONE mode rule: src/lib/admin-metrics.ts re-exports it as stripeMode (COV-M8; IntegrationMode = PaymentMode). */
+export function paymentModeOf(secretKey: string | undefined, enabled: boolean): PaymentMode;
+```
+
+**`src/lib/payments/checkout.ts`** (pure; `import type Stripe from "stripe"`; re-exports `PaymentMode` and `paymentModeOf` from `@/lib/payment-mode`, so its importers keep working)
+```ts
+export { paymentModeOf, type PaymentMode } from "@/lib/payment-mode"; // declared in src/lib/payment-mode.ts, see above
 export type CheckoutKind = "buybook" | "shop";
 export type CheckoutRequest = {
   kind: CheckoutKind; purchaseId: string; amountCents: number; currency: string; productName: string;
@@ -515,8 +523,6 @@ export const CREATE_OPTIONS: { readonly timeout: 15_000; readonly maxNetworkRetr
 export function createRequestOptions(purchaseId: string): { idempotencyKey: string; timeout: number; maxNetworkRetries: number };
 /** open → "open"; expired → "already_expired"; complete + paid → "paid"; anything else, no_payment_required included → "processing" (never release on doubt, COV-M2). */
 export function closeOutcomeOf(session: { status: string | null; payment_status: string | null }): "open" | "already_expired" | "paid" | "processing";
-/** "mock" when disabled or without key; "live" for sk_live_ / rk_live_; else "test". The ONE mode rule: src/lib/admin-metrics.ts re-exports it as stripeMode (COV-M8; IntegrationMode = PaymentMode). */
-export function paymentModeOf(secretKey: string | undefined, enabled: boolean): PaymentMode;
 /** The simulated checkout is reachable only without Stripe keys AND outside production, by APP_ENV and by VERCEL_ENV (SEC-I5, Decision 27): !STRIPE_ENABLED && APP_ENV !== "production" && VERCEL_ENV !== "production". */
 export function mockCheckoutAllowed(e: { STRIPE_ENABLED: boolean; APP_ENV: string; VERCEL_ENV?: string }): boolean;
 ```
@@ -1381,6 +1387,7 @@ Each settles a point the spec leaves open, one gap or tension of `map-spec-p4.md
 - Steps: grep the callers of `expireCheckoutSession` (`src/server/admin.ts` with `DELETION_STRIPE_OPTIONS`, `src/server/notify.ts`) before and after: its signature and results stay byte-compatible (COV-I8).
 - Tests (pure): `checkout.test.ts`: `stripeSessionParams` buybook has `payment_method_types: ["card"]`, shop has none; `metadata` and `payment_intent_data.metadata` are exactly `{ purchaseId, app: "skedul-tickets", env }`; `client_reference_id` = the purchase id; `expires_at` in whole seconds; `locale: "fr"`; one line item with the amount and currency; `checkoutUrls` strips a trailing slash of `appUrl`, success `…/merci?p=`, cancel séance or offer; no URL has `redirect`, `next` or `@`; `mockCheckoutUrl` has only `purchase`; `buybookCheckoutExpiry(t)` = t + 31 min; `closeOutcomeOf` matrix (open, expired, complete paid, complete no_payment_required → processing, complete unpaid, null); `paymentModeOf` (`sk_live_`, `rk_live_`, `sk_test_`, disabled) and `stripeMode === paymentModeOf` (COV-M8); `isMockSession`; `mockCheckoutAllowed`: Stripe on → false; `APP_ENV` production → false; `{ STRIPE_ENABLED: false, APP_ENV: "development", VERCEL_ENV: "production" }` → false (SEC-I5); development or preview without Stripe → true. `admin-metrics.test.ts` stays green.
 - tsc proves `createCheckoutUrl` and `isStripeLive` have no importer left.
+- G1b additions (Revision 3.2): `checkout.test.ts` pins `CREATE_OPTIONS` / `createRequestOptions` and that `stripe.ts` creates the session with them; `payment-mode.test.ts` pins the import-free `payment-mode.ts`, that `admin-metrics.ts` imports nothing from `@/lib/payments`, and that no `"use client"` file loads `src/lib/payments/*` or `src/lib/stripe.ts` at run time.
 - Commit: `feat(payments): Checkout gateway with session id, expiry and the app marker`.
 
 **Task 7: Public action plumbing** (G1)
@@ -1802,4 +1809,5 @@ Revision 2 quoted the engine and P3 at `983fa65` and the Task 41 brief, while P3
 | § 3.6 (Task 6) | `src/lib/payments/checkout.ts` gains `CREATE_OPTIONS = { timeout: 15_000, maxNetworkRetries: 1 }` and `createRequestOptions(purchaseId)` (= `{ idempotencyKey: \`checkout:${purchaseId}\`, ...CREATE_OPTIONS }`); the Stripe gateway's `create` passes it, pinned by `checkout.test.ts` | the client defaults (80 s, 2 retries) held a buy + book or shop action for minutes on a hung Stripe, and a late SDK retry reached Stripe with an `expires_at` below its 30-minute minimum; the idempotency key (already there) makes the one retry safe |
 | § 3.8 (Task 8) | `email.purchase_receipt`: the booking line is built only when the confirmed booking attached to the purchase is the purchase's own pro's AND own customer's (`held.customerId === p.customerId`, as `planLatePayment` already did); `notify-core.db.test.ts` gets a hand-built confirmed booking of another customer of the same pro, and the late-payment guards of the S6 test are now reachable (a lapsed booking, with tickets, so only the guard can stop the mail) | the receipt told a purchase's customer the title and time of another customer's booking if a booking row was ever attached to the wrong purchase; the S6 case was built with status `expired`, which the receipt never reads, and its late-payment cases had no booking or no ticket, so no guard was exercised |
 | § 3.8 (Task 8) | `late-payment.ts`: with `count` = 1 the second sentence reads « Vous pouvez utiliser votre ticket sur une autre séance. » (several: « vos tickets »); asserted in `public-emails.test.ts` and in the `quantity: 1` case of `notify-core.db.test.ts` | the sentence next to « votre ticket est dans votre portefeuille. » said « vos tickets » for a single ticket |
+| § 2.1, § 3.6 (Task 6) | `PaymentMode` and `paymentModeOf` move to the new import-free `src/lib/payment-mode.ts`; `checkout.ts` re-exports both (every importer, `stripe.ts` and the Task 7 and Task 13 texts included, keeps working); `admin-metrics.ts` imports them from the new module; `payment-mode.test.ts` pins it | the client bar chart imports `niceCeil` from `admin-metrics.ts` at run time, which imported `@/lib/payments/checkout`: a payments module entered a client bundle, against the client boundary of the Global Constraints |
 
