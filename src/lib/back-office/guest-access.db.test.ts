@@ -4,16 +4,17 @@ import { eq } from "drizzle-orm";
 
 import {
   customerFromGuestCookie,
-  customerFromVerifiedEmail,
   findGuestCustomer,
   resolveGuestLink,
   resolveSpaceIdentity,
+  type SpaceSession,
 } from "@/lib/back-office/guest-access";
 import { revokeLinks } from "@/lib/booking/wallet";
 import * as schema from "@/lib/db/schema";
 import { guestLinkKey, signGuestLink } from "@/lib/guest-link";
 import { addMinutes, createTestPro, dbTest, deleteTestUser, testEmail } from "@/test/db";
 import { makeCustomer } from "@/test/fixtures";
+import { createTestClientUser } from "@/test/public";
 
 const KEY = guestLinkKey("test-secret");
 
@@ -85,24 +86,6 @@ dbTest("customerFromGuestCookie: a valid token never opens another pro's space",
     assert.equal(await customerFromGuestCookie(db, other.proId, myToken, KEY), null);
     assert.equal(await customerFromGuestCookie(db, pro.proId, theirToken, KEY), null);
     assert.equal(await customerFromGuestCookie(db, other.proId, theirToken, KEY), theirs);
-  } finally {
-    await deleteTestUser(db, other.userId);
-  }
-});
-
-dbTest("customerFromVerifiedEmail: the pro's customer with that e-mail, case and spaces ignored, never another pro's", async ({ db, pro }) => {
-  const email = testEmail("space");
-  const customerId = await makeCustomer(db, pro, { email });
-  assert.equal(await customerFromVerifiedEmail(db, pro.proId, email), customerId);
-  assert.equal(await customerFromVerifiedEmail(db, pro.proId, `  ${email.toUpperCase()} `), customerId);
-  assert.equal(await customerFromVerifiedEmail(db, pro.proId, testEmail("nobody")), null);
-
-  const other = await createTestPro(db);
-  try {
-    assert.equal(await customerFromVerifiedEmail(db, other.proId, email), null);
-    const theirs = await makeCustomer(db, other, { email });
-    assert.equal(await customerFromVerifiedEmail(db, other.proId, email), theirs);
-    assert.equal(await customerFromVerifiedEmail(db, pro.proId, email), customerId);
   } finally {
     await deleteTestUser(db, other.userId);
   }
@@ -194,48 +177,91 @@ dbTest("resolveGuestLink: a slug that is not a plain address segment is never re
 
 const noGuest = { guestToken: undefined, key: KEY } as const;
 
+/** The espace view of a session: verified and not impersonated unless `over` says otherwise. */
+const sessionFor = (userId: string, email: string, over: Partial<SpaceSession> = {}): SpaceSession => ({
+  userId,
+  email,
+  emailVerified: true,
+  impersonated: false,
+  ...over,
+});
+
 dbTest("resolveSpaceIdentity: a verified session gives the customer of this pro by e-mail, or no_record", async ({ db, pro }) => {
   const email = testEmail("session");
   const customerId = await makeCustomer(db, pro, { email });
 
   assert.deepEqual(
-    await resolveSpaceIdentity(db, pro.proId, { ...noGuest, session: { email: ` ${email.toUpperCase()}`, emailVerified: true, impersonated: false } }),
+    await resolveSpaceIdentity(db, pro.proId, { ...noGuest, session: sessionFor("u-session", ` ${email.toUpperCase()}`) }),
     { kind: "customer", customerId, via: "session" },
   );
   const stranger = testEmail("stranger");
   assert.deepEqual(
-    await resolveSpaceIdentity(db, pro.proId, { ...noGuest, session: { email: stranger, emailVerified: true, impersonated: false } }),
+    await resolveSpaceIdentity(db, pro.proId, { ...noGuest, session: sessionFor("u-stranger", stranger) }),
     { kind: "no_record", email: stranger },
   );
 });
 
-dbTest("resolveSpaceIdentity: an UNVERIFIED session never reads a wallet, even with the customer's e-mail", async ({ db, pro }) => {
+dbTest("resolveSpaceIdentity: a row linked to another account is not the session's: no_record, cookie or not (Decision 5)", async ({ db, pro }) => {
+  const email = testEmail("linked");
+  const customerId = await makeCustomer(db, pro, { email });
+  const mine = await createTestClientUser(db, { email, verified: true });
+  const rival = await createTestClientUser(db, { email: testEmail("rival"), verified: true });
+  try {
+    const session = sessionFor(mine.userId, email);
+    // unlinked row: the verified owner of the address
+    assert.deepEqual(await resolveSpaceIdentity(db, pro.proId, { ...noGuest, session }), { kind: "customer", customerId, via: "session" });
+
+    // linked to another user: not hers, and the valid cookie of that customer does not open it for a verified session (L1370)
+    await db.update(schema.customer).set({ userId: rival.userId }).where(eq(schema.customer.id, customerId));
+    const token = signGuestLink({ customerId, linkVersion: 1 }, KEY);
+    assert.deepEqual(await resolveSpaceIdentity(db, pro.proId, { ...noGuest, session }), { kind: "no_record", email });
+    assert.deepEqual(await resolveSpaceIdentity(db, pro.proId, { session, guestToken: token, key: KEY }), { kind: "no_record", email });
+
+    // linked to the session user: hers
+    await db.update(schema.customer).set({ userId: mine.userId }).where(eq(schema.customer.id, customerId));
+    assert.deepEqual(await resolveSpaceIdentity(db, pro.proId, { ...noGuest, session }), { kind: "customer", customerId, via: "session" });
+  } finally {
+    await deleteTestUser(db, mine.userId);
+    await deleteTestUser(db, rival.userId);
+  }
+});
+
+dbTest("resolveSpaceIdentity: an UNVERIFIED session is the banner kind, never anonymous, and never reads a wallet (COV-C1, risk 7)", async ({ db, pro }) => {
   const email = testEmail("unverified");
   const customerId = await makeCustomer(db, pro, { email });
-  const session = { email, emailVerified: false, impersonated: false };
+  const session = sessionFor("u-unverified", email, { emailVerified: false });
 
-  assert.deepEqual(await resolveSpaceIdentity(db, pro.proId, { ...noGuest, session }), { kind: "anonymous" });
+  assert.deepEqual(await resolveSpaceIdentity(db, pro.proId, { ...noGuest, session }), {
+    kind: "unverified",
+    email,
+    guestCustomerId: null,
+  });
 
-  // Only the personal link of that customer opens the space for them.
+  // The personal link of that customer still opens a read-only space next to the banner.
   const token = signGuestLink({ customerId, linkVersion: 1 }, KEY);
   assert.deepEqual(await resolveSpaceIdentity(db, pro.proId, { session, guestToken: token, key: KEY }), {
-    kind: "customer",
-    customerId,
-    via: "guest",
+    kind: "unverified",
+    email,
+    guestCustomerId: customerId,
+  });
+  // A garbage cookie is no cookie.
+  assert.deepEqual(await resolveSpaceIdentity(db, pro.proId, { session, guestToken: "not-a-token", key: KEY }), {
+    kind: "unverified",
+    email,
+    guestCustomerId: null,
   });
 });
 
-dbTest("resolveSpaceIdentity: an impersonated session never reads client data through the pro's session", async ({ db, pro }) => {
+dbTest("resolveSpaceIdentity: an impersonated session never reads client data, with or without the cookie (SEC-M6)", async ({ db, pro }) => {
   const email = testEmail("impersonated");
   const customerId = await makeCustomer(db, pro, { email });
-  const session = { email, emailVerified: true, impersonated: true };
-  assert.deepEqual(await resolveSpaceIdentity(db, pro.proId, { ...noGuest, session }), { kind: "anonymous" });
   const token = signGuestLink({ customerId, linkVersion: 1 }, KEY);
-  assert.deepEqual(await resolveSpaceIdentity(db, pro.proId, { session, guestToken: token, key: KEY }), {
-    kind: "customer",
-    customerId,
-    via: "guest",
-  });
+  // impersonation is checked before verification: an unverified impersonated session is impersonating too
+  for (const emailVerified of [true, false]) {
+    const session = sessionFor("u-impersonated", email, { emailVerified, impersonated: true });
+    assert.deepEqual(await resolveSpaceIdentity(db, pro.proId, { ...noGuest, session }), { kind: "impersonating" });
+    assert.deepEqual(await resolveSpaceIdentity(db, pro.proId, { session, guestToken: token, key: KEY }), { kind: "impersonating" });
+  }
 });
 
 dbTest("resolveSpaceIdentity: the verified session wins over the cookie; without a session the cookie works", async ({ db, pro }) => {
@@ -245,7 +271,7 @@ dbTest("resolveSpaceIdentity: the verified session wins over the cookie; without
   const token = signGuestLink({ customerId: mine, linkVersion: 1 }, KEY);
 
   assert.deepEqual(
-    await resolveSpaceIdentity(db, pro.proId, { session: { email: sessionEmail, emailVerified: true, impersonated: false }, guestToken: token, key: KEY }),
+    await resolveSpaceIdentity(db, pro.proId, { session: sessionFor("u-b", sessionEmail), guestToken: token, key: KEY }),
     { kind: "customer", customerId: sessionCustomer, via: "session" },
   );
   assert.deepEqual(await resolveSpaceIdentity(db, pro.proId, { session: null, guestToken: token, key: KEY }), {

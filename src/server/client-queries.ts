@@ -1,6 +1,5 @@
 import "server-only";
 
-import { cookies } from "next/headers";
 import { cache } from "react";
 
 import type { ClientFilter } from "@/lib/back-office/client-filters";
@@ -11,12 +10,11 @@ import {
   type ClientRecordData,
 } from "@/lib/back-office/client-reads";
 import { getCustomerSpace, type CustomerSpace } from "@/lib/back-office/customer-space";
-import { resolveSpaceIdentity, type SpaceIdentity } from "@/lib/back-office/guest-access";
+import type { SpaceIdentity } from "@/lib/back-office/guest-access";
 import { db } from "@/lib/db";
-import { GUEST_COOKIE } from "@/lib/guest-link";
-import { getFreshSession } from "@/lib/session";
-import { guestKey } from "@/server/guest-key";
+import { spaceIdentityOf } from "@/lib/public/identity";
 import { getPublicProfile } from "@/server/queries";
+import { currentPublicVisitor } from "@/server/visitor";
 
 export type { SpaceIdentity };
 
@@ -47,25 +45,14 @@ export async function getClientRecordPage(
 export const getSpaceProfile = cache((slug: string) => getPublicProfile(slug));
 
 /**
- * Who is looking at this pro's espace (spec § 12, Decision 36): the session
- * (read WITHOUT the cookie cache), the personal-link cookie and the guest key,
- * handed to the tested core `resolveSpaceIdentity`. A verified, non-impersonated
- * session wins; else the cookie, checked against this pro and the customer's
- * current link version on every request; else anonymous.
+ * Who is looking at this pro's espace (spec § 12, Decision 36): the request's visitor (fresh session, not
+ * suspended, personal-link cookie, guest key; currentPublicVisitor, shared with the other public pages of the
+ * request) mapped by the tested spaceIdentityOf. An impersonating admin first; the Owner; a verified session
+ * without a record; an unverified session (the confirmation banner, never the code form); the cookie's customer;
+ * else anonymous. A signed-in visitor never maps to anonymous (COV-C1).
  */
-export async function resolveSpaceCustomer(pro: { id: string }): Promise<SpaceIdentity> {
-  const session = await getFreshSession();
-  return resolveSpaceIdentity(db, pro.id, {
-    session: session
-      ? {
-          email: session.user.email,
-          emailVerified: session.user.emailVerified,
-          impersonated: Boolean(session.session.impersonatedBy),
-        }
-      : null,
-    guestToken: (await cookies()).get(GUEST_COOKIE)?.value,
-    key: guestKey(),
-  });
+export async function resolveSpaceCustomer(pro: { id: string; userId: string }): Promise<SpaceIdentity> {
+  return spaceIdentityOf(await currentPublicVisitor(pro.id, pro.userId));
 }
 
 /** The read-only espace of one customer of the pro (null when the customer is not this pro's). */

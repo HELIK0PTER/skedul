@@ -1,16 +1,18 @@
 /**
  * Personal link and client space access (spec § 12). The pure decision of
- * /api/c/<token>, the customer lookups and the two cores the route and the
- * espace page wrap: resolveGuestLink (the route) and resolveSpaceIdentity (the
- * page). No `server-only`, no env and no process db: the callers pass `db`,
- * the guest key and whatever they read from the request.
+ * /api/c/<token>, the customer lookups (ownedCustomerId is the owner predicate
+ * src/lib/public/identity.ts shares) and two cores: resolveGuestLink (the
+ * route) and resolveSpaceIdentity (the espace identity rule; the page maps the
+ * request's visitor with its pure twin spaceIdentityOf, same order). No
+ * `server-only`, no env and no process db: the callers pass `db`, the guest key
+ * and whatever they read from the request.
  *
  * Tenancy: a token or a session e-mail is only a claim. Every lookup below
  * re-reads the customer, its pro and its current link_version, on every
  * request, so a revoked link dies at once, cookie or not, and a customer of
  * pro A is never reachable through pro B's page.
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/atomic";
 import { customer, professional, user } from "@/lib/db/schema";
@@ -110,30 +112,48 @@ export async function customerFromGuestCookie(
   return row && row.linkVersion === link.linkVersion ? row.id : null;
 }
 
-/** Espace by verified session: the customer of this pro whose e-mail is normalizeEmail(email) (customer_pro_email_uq), else null. */
-export async function customerFromVerifiedEmail(db: Db, professionalId: string, email: string): Promise<string | null> {
+/**
+ * The customer of this pro a verified session owns: its e-mail is normalizeEmail(s.email) (customer_pro_email_uq) AND
+ * it is not linked to another account (user_id null or the session user's own). The same predicate as getMySpace (spec
+ * L1377-1378) and as the wallet owner (Decision 5). The caller has checked that the session is verified, fresh and not
+ * impersonated; null when there is no such row.
+ */
+export async function ownedCustomerId(
+  db: Db,
+  professionalId: string,
+  s: { userId: string; email: string },
+): Promise<string | null> {
   const [row] = await db
     .select({ id: customer.id })
     .from(customer)
-    .where(and(eq(customer.professionalId, professionalId), eq(customer.email, normalizeEmail(email))));
+    .where(
+      and(
+        eq(customer.professionalId, professionalId),
+        eq(customer.email, normalizeEmail(s.email)),
+        or(isNull(customer.userId), eq(customer.userId, s.userId)),
+      ),
+    );
   return row?.id ?? null;
 }
 
 export type SpaceIdentity =
   | { kind: "customer"; customerId: string; via: "session" | "guest" }
   | { kind: "no_record"; email: string }
+  /** signed in, address not confirmed: the banner, never the code form (a code sign-in would purge the password, risk 7); the cookie customer is shown read-only when set */
+  | { kind: "unverified"; email: string; guestCustomerId: string | null }
+  | { kind: "impersonating" }
   | { kind: "anonymous" };
 
-/** What the espace needs from a session: its e-mail, whether it was verified, and whether an admin is impersonating. */
-export type SpaceSession = { email: string; emailVerified: boolean; impersonated: boolean };
+/** What the espace needs from a session: its user and e-mail, whether it was verified, and whether an admin is impersonating. */
+export type SpaceSession = { userId: string; email: string; emailVerified: boolean; impersonated: boolean };
 
 /**
- * Who is looking at this pro's espace (spec § 12, Decision 36). A VERIFIED,
- * non-impersonated session wins: its customer at this pro, or no_record. An
- * unverified session counts for nothing (anyone can sign up with someone
- * else's address), and an admin impersonating the pro never reads a client's
- * data through the pro's session. Else the guest cookie, checked against this
- * pro and the customer's current link version. Else anonymous.
+ * Who is looking at this pro's espace (spec § 12, Decision 36). An impersonating admin is `impersonating` (checked
+ * first; the cookie is ignored). A VERIFIED session wins: its owned customer at this pro (ownedCustomerId) or
+ * no_record, and the cookie is ignored (L1370). An unverified session counts for nothing (anyone can sign up with
+ * someone else's address) but is never anonymous: `unverified` carries the cookie's customer, shown read-only next to
+ * the confirmation banner. With no session at all: the guest cookie, checked against this pro and the customer's
+ * current link version, else anonymous.
  */
 export async function resolveSpaceIdentity(
   db: Db,
@@ -141,10 +161,12 @@ export async function resolveSpaceIdentity(
   input: { session: SpaceSession | null; guestToken: string | undefined; key: Buffer },
 ): Promise<SpaceIdentity> {
   const { session } = input;
-  if (session && session.emailVerified && !session.impersonated) {
-    const customerId = await customerFromVerifiedEmail(db, professionalId, session.email);
+  if (session?.impersonated) return { kind: "impersonating" };
+  if (session?.emailVerified) {
+    const customerId = await ownedCustomerId(db, professionalId, session);
     return customerId ? { kind: "customer", customerId, via: "session" } : { kind: "no_record", email: session.email };
   }
-  const customerId = await customerFromGuestCookie(db, professionalId, input.guestToken, input.key);
-  return customerId ? { kind: "customer", customerId, via: "guest" } : { kind: "anonymous" };
+  const guestCustomerId = await customerFromGuestCookie(db, professionalId, input.guestToken, input.key);
+  if (session) return { kind: "unverified", email: session.email, guestCustomerId };
+  return guestCustomerId ? { kind: "customer", customerId: guestCustomerId, via: "guest" } : { kind: "anonymous" };
 }

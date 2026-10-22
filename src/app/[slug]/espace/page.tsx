@@ -3,10 +3,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { FormError } from "@/components/dashboard/form-error";
+import { VerifyEmailBanner } from "@/components/dashboard/verify-email-banner";
 import { CustomerSpaceView } from "@/components/public/customer-space";
 import { PublicShell } from "@/components/public/public-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { COPY } from "@/lib/public/messages";
 import { getCustomerSpacePage, getSpaceProfile, resolveSpaceCustomer } from "@/server/client-queries";
 
 export const metadata: Metadata = { title: "Mon espace", robots: { index: false } };
@@ -36,12 +38,30 @@ export default async function EspacePage({ params, searchParams }: Props) {
   const { pro } = profile;
 
   const identity = await resolveSpaceCustomer(pro);
-  const space =
-    identity.kind === "customer" ? await getCustomerSpacePage(pro.id, identity.customerId) : null;
+  // The customer whose space is shown: the Owner's or the cookie's; an unverified session shows the cookie's, read-only, under the banner.
+  const spaceCustomerId =
+    identity.kind === "customer"
+      ? identity.customerId
+      : identity.kind === "unverified"
+        ? identity.guestCustomerId
+        : null;
+  const space = spaceCustomerId ? await getCustomerSpacePage(pro.id, spaceCustomerId) : null;
 
   return (
     <PublicShell branding={pro} backHref={`/${slug}`}>
-      {space ? (
+      {identity.kind === "impersonating" ? (
+        <Card>
+          <CardContent className="py-8">
+            <p className="text-sm text-zinc-600">{COPY.IMPERSONATING}</p>
+          </CardContent>
+        </Card>
+      ) : identity.kind === "unverified" ? (
+        <div className="space-y-6">
+          <VerifyEmailBanner email={identity.email} verified={false} />
+          <p className="text-sm text-zinc-600">{COPY.CONFIRM_EMAIL_FIRST}</p>
+          {space && <CustomerSpaceView businessName={pro.businessName} slug={slug} space={space} />}
+        </div>
+      ) : space ? (
         <CustomerSpaceView businessName={pro.businessName} slug={slug} space={space} />
       ) : identity.kind === "no_record" ? (
         <Card>
