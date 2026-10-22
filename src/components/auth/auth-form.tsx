@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { signIn, signUp } from "@/lib/auth-client";
@@ -10,6 +10,7 @@ import { authFormErrorMessage } from "@/lib/auth-messages";
 import { resolvePostSignIn, type PostSignIn } from "@/server/entry";
 import { EntryChooser } from "@/components/auth/entry-chooser";
 import { GoogleLogo } from "@/components/auth/google-logo";
+import { useGoogleRedirect } from "@/components/auth/use-google-redirect";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,43 +35,25 @@ export function AuthForm({
   const router = useRouter();
   const isSignUp = mode === "sign-up";
   const [loading, setLoading] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(initialError);
+  const { loading: googleLoading, redirect } = useGoogleRedirect(setError);
   const [choosing, setChoosing] = useState(initialChooser);
   const busy = loading || googleLoading;
   const nextQuery = next ? `?next=${encodeURIComponent(next)}` : "";
 
-  // Coming back from Google with the browser's Back button restores this page
-  // from the back/forward cache with the spinner still on; reset it.
-  useEffect(() => {
-    const onPageShow = (e: PageTransitionEvent) => {
-      if (e.persisted) setGoogleLoading(false);
-    };
-    window.addEventListener("pageshow", onPageShow);
-    return () => window.removeEventListener("pageshow", onPageShow);
-  }, []);
-
   async function onGoogle() {
     setError(null);
-    setGoogleLoading(true);
-    try {
-      // Better Auth redirects the browser to Google. On return, /sign-in sends
-      // the user to `next` or routes them (admins get the entry chooser);
-      // brand-new users go to `next` or onboarding.
-      const result = await signIn.social({
+    // Better Auth redirects the browser to Google. On return, /sign-in sends
+    // the user to `next` or routes them (admins get the entry chooser);
+    // brand-new users go to `next` or onboarding.
+    await redirect(() =>
+      signIn.social({
         provider: "google",
         callbackURL: `/sign-in${nextQuery}`,
         newUserCallbackURL: next ?? "/onboarding",
         errorCallbackURL: isSignUp ? `/sign-up${nextQuery}` : `/sign-in${nextQuery}`,
-      });
-      if (result.error) {
-        setError("La connexion avec Google a échoué. Réessayez.");
-        setGoogleLoading(false);
-      }
-    } catch {
-      setError("La connexion avec Google a échoué. Réessayez.");
-      setGoogleLoading(false);
-    }
+      }),
+    );
   }
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {

@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { authClient, signIn } from "@/lib/auth-client";
 import { authFormErrorMessage, GENERIC_ERROR } from "@/lib/auth-messages";
 import { oauthErrorMessage } from "@/lib/oauth-errors";
 import { GoogleLogo } from "@/components/auth/google-logo";
+import { useGoogleRedirect } from "@/components/auth/use-google-redirect";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,35 +28,18 @@ export function LinkGoogleForm({
   signedInEmail: string | null;
   initialError?: string | null;
 }) {
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(initialError);
-
-  // Back from Google via the browser's Back button: the page comes back from
-  // the back/forward cache with the spinner still on.
-  useEffect(() => {
-    const onPageShow = (e: PageTransitionEvent) => {
-      if (e.persisted) setLoading(false);
-    };
-    window.addEventListener("pageshow", onPageShow);
-    return () => window.removeEventListener("pageshow", onPageShow);
-  }, []);
+  const { loading, setLoading, redirect } = useGoogleRedirect(setError, LINK_FAILED);
 
   /** Sends the signed-in user to Google; on return /sign-in routes them. */
-  async function linkGoogle() {
-    try {
-      const result = await authClient.linkSocial({
+  function linkGoogle() {
+    return redirect(() =>
+      authClient.linkSocial({
         provider: "google",
         callbackURL: "/sign-in",
         errorCallbackURL: "/link-google",
-      });
-      if (result.error) {
-        setError(LINK_FAILED);
-        setLoading(false);
-      }
-    } catch {
-      setError(LINK_FAILED);
-      setLoading(false);
-    }
+      }),
+    );
   }
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {

@@ -14,6 +14,7 @@ import { COPY } from "@/lib/public/messages";
 import { isPlainName } from "@/lib/public/plain-name";
 import { codeInputValue, isCompleteCode, nameToSend } from "@/lib/public/sign-in-flow";
 import { customerInputSchema } from "@/lib/tickets";
+import { BOUNDS } from "@/lib/tickets-vocab";
 import { parseFr } from "@/lib/zod-fr";
 
 /** The e-mail rule of the engine's customer input: the same address check as everywhere else, in French. */
@@ -87,8 +88,11 @@ export function EmailCodeForm({
     }
   }
 
+  // Both handlers stop the event as well: the dialog is not portalled, so a caller may hold it inside its own form,
+  // and the submit must not reach that form.
   async function onSend(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    e.stopPropagation();
     if (busy) return;
     setEmailError(null);
     setNameError(null);
@@ -111,6 +115,7 @@ export function EmailCodeForm({
 
   async function onVerify(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    e.stopPropagation();
     if (busy) return;
     setError(null);
     if (!isCompleteCode(code)) {
@@ -194,6 +199,7 @@ export function EmailCodeForm({
                 id={`${idPrefix}-name`}
                 name="name"
                 autoComplete="name"
+                maxLength={BOUNDS.name}
                 value={name}
                 onChange={(e) => {
                   setName(e.target.value);
@@ -253,7 +259,8 @@ export function EmailCodeForm({
         </Button>
       ) : (
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-          <Button type="submit" className="w-full sm:w-auto" disabled={busy || !isCompleteCode(code)}>
+          {/* Enabled as soon as the field holds something: Enter with fewer than 6 digits is answered with CODE_FORMAT, not ignored. */}
+          <Button type="submit" className="w-full sm:w-auto" disabled={busy || code === ""}>
             {verifying && <Loader2 className="animate-spin" aria-hidden />}
             {verifying ? COPY.PENDING_VERIFY : "Valider le code"}
           </Button>

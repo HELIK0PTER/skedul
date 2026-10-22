@@ -1,16 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { GoogleLogo } from "@/components/auth/google-logo";
+import { useGoogleRedirect } from "@/components/auth/use-google-redirect";
 import { Button } from "@/components/ui/button";
 import { signIn } from "@/lib/auth-client";
 import { COPY } from "@/lib/public/messages";
 import { googleCallbacks, passwordSignInHref, returnPathOf } from "@/lib/public/sign-in-flow";
-
-const GOOGLE_FAILED = "La connexion avec Google a échoué. Réessayez.";
 
 /**
  * The two other ways in, under the code form: « Continuer avec Google » (only when a Google OAuth client is configured)
@@ -19,33 +18,14 @@ const GOOGLE_FAILED = "La connexion avec Google a échoué. Réessayez.";
  * (a purchase reference, a payment flag) never reaches Google or the sign-in page (SEC-M7).
  */
 export function ClientSignInChoices({ returnTo, googleEnabled }: { returnTo: string; googleEnabled: boolean }) {
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { loading, redirect } = useGoogleRedirect(setError);
   const back = returnPathOf(returnTo);
-
-  // Back from Google with the browser's Back button restores this page from the back/forward cache with the spinner still on.
-  useEffect(() => {
-    const onPageShow = (e: PageTransitionEvent) => {
-      if (e.persisted) setLoading(false);
-    };
-    window.addEventListener("pageshow", onPageShow);
-    return () => window.removeEventListener("pageshow", onPageShow);
-  }, []);
 
   async function onGoogle() {
     setError(null);
-    setLoading(true);
-    try {
-      // Better Auth redirects the browser to Google; the callbacks bring a client back to this page, never to the pro onboarding.
-      const result = await signIn.social({ provider: "google", ...googleCallbacks(back) });
-      if (result.error) {
-        setError(GOOGLE_FAILED);
-        setLoading(false);
-      }
-    } catch {
-      setError(GOOGLE_FAILED);
-      setLoading(false);
-    }
+    // Better Auth redirects the browser to Google; the callbacks bring a client back to this page, never to the pro onboarding.
+    await redirect(() => signIn.social({ provider: "google", ...googleCallbacks(back) }));
   }
 
   return (

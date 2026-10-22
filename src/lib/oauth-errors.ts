@@ -1,3 +1,6 @@
+/** What the three Google buttons show when the redirect to Google could not start (and the default of the codes below). */
+export const GOOGLE_FAILED = "La connexion avec Google a échoué. Réessayez.";
+
 /**
  * French message for the `?error=` code Better Auth appends to a social
  * sign-in's or link's `errorCallbackURL`. Returns null when there is no error.
@@ -25,6 +28,6 @@ export function oauthErrorMessage(code: string | null | undefined): string | nul
     case "BANNED_USER":
       return "Ce compte est suspendu. Contactez le support si vous pensez qu'il s'agit d'une erreur.";
     default:
-      return "La connexion avec Google a échoué. Réessayez.";
+      return GOOGLE_FAILED;
   }
 }
