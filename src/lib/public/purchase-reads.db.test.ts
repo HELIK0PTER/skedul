@@ -10,8 +10,9 @@ import type { Db } from "@/lib/db/atomic";
 import * as schema from "@/lib/db/schema";
 import { purchaseByReference } from "@/lib/public/purchase-reads";
 import { HOLD_MINUTES } from "@/lib/tickets";
-import { addMinutes, createTestPro, dbTest, deleteTestUser, type TestPro } from "@/test/db";
+import { addMinutes, createTestPro, dbTest, deleteTestUser, testEmail, type TestPro } from "@/test/db";
 import { makeCustomer, makeEvent, makeOffer, makeType } from "@/test/fixtures";
+import { rowBooking, rowCustomer, rowOffer, rowPurchase, rowRdv, rowSeance, rowType } from "@/test/rows";
 
 /** A 4-ticket offer linked to a fresh event: « Altinha débutants » at « Gymnase Jean Bouin », capacity 12. */
 async function catalog(db: Db, pro: TestPro) {
@@ -219,6 +220,44 @@ dbTest("purchaseByReference: tenancy, another pro's purchase is null under this 
     assert.equal((await purchaseByReference(db, pro.proId, mine.purchaseId, now))?.purchaseId, mine.purchaseId);
     assert.equal((await purchaseByReference(db, other.proId, theirs.purchaseId, now))?.purchaseId, theirs.purchaseId);
   } finally {
+    await deleteTestUser(db, other.userId);
+  }
+});
+
+dbTest("purchaseByReference: a séance row that points to another pro's event or ticket type shows none of its text (defence in depth, G2b)", async ({ db, pro }) => {
+  const now = new Date();
+  const mineType = await rowType(db, pro);
+  const mineOffer = await rowOffer(db, pro, mineType);
+  const customerId = await rowCustomer(db, pro, { email: testEmail("cross") });
+  const other = await createTestPro(db);
+  const handBuilt: { bookings: string[]; occurrences: string[] } = { bookings: [], occurrences: [] };
+  try {
+    const theirType = await makeType(db, other, { name: "Type de l'autre pro" });
+    const { eventId: theirEvent } = await makeEvent(db, other, { title: "Séance de l'autre pro", ticketTypeIds: [theirType] });
+    await db.update(schema.event).set({ location: "Gymnase de l'autre pro" }).where(eq(schema.event.id, theirEvent));
+
+    // Built by hand on purpose: occurrence.event_id and occurrence.ticket_type_id are single-column foreign keys, so
+    // nothing but the read's own joins keeps another pro's event or ticket type out of the reference.
+    const viaEvent = await rowSeance(db, pro, theirEvent, { seatsTaken: 1 }, now);
+    const viaType = await rowRdv(db, pro, theirType, { seatsTaken: 1 }, now);
+    handBuilt.occurrences.push(viaEvent, viaType);
+    for (const occurrenceId of [viaEvent, viaType]) {
+      const purchaseId = await rowPurchase(db, pro, { customerId, offerId: mineOffer, ticketTypeId: mineType, status: "pending" }, now);
+      handBuilt.bookings.push(
+        await rowBooking(db, pro, { occurrenceId, customerId, status: "confirmed", coverage: "guest", purchaseId }, now),
+      );
+
+      const ref = await purchaseByReference(db, pro.proId, purchaseId, now);
+      assert.ok(ref?.booking, "the booking is the pro's own and is still described");
+      assert.equal(ref.booking.occurrenceId, occurrenceId);
+      assert.equal(ref.booking.title, "", "no title of another pro");
+      assert.equal(ref.booking.location, null, "no location of another pro");
+      assert.equal(JSON.stringify(ref).includes("l'autre pro"), false, "nothing of the other pro's event or type anywhere in the reference");
+    }
+  } finally {
+    // The hand-built rows go first: the foreign keys inside the domain are NO ACTION and they point at the other pro's rows.
+    for (const id of handBuilt.bookings) await db.delete(schema.booking).where(eq(schema.booking.id, id));
+    for (const id of handBuilt.occurrences) await db.delete(schema.occurrence).where(eq(schema.occurrence.id, id));
     await deleteTestUser(db, other.userId);
   }
 });

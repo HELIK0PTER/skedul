@@ -100,8 +100,10 @@ export async function purchaseByReference(
       })
       .from(booking)
       .innerJoin(occurrence, and(eq(occurrence.id, booking.occurrenceId), eq(occurrence.professionalId, professionalId)))
-      .leftJoin(event, eq(event.id, occurrence.eventId))
-      .leftJoin(ticketType, eq(ticketType.id, occurrence.ticketTypeId))
+      // Defence in depth: the foreign keys are single-column, so a row that points at another pro's event or ticket type
+      // must still show none of its text (title, location).
+      .leftJoin(event, and(eq(event.id, occurrence.eventId), eq(event.professionalId, professionalId)))
+      .leftJoin(ticketType, and(eq(ticketType.id, occurrence.ticketTypeId), eq(ticketType.professionalId, professionalId)))
       .where(and(eq(booking.purchaseId, purchaseId), eq(booking.professionalId, professionalId))),
     db
       .select({ n: count() })
