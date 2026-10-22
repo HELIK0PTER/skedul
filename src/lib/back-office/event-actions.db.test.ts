@@ -855,10 +855,17 @@ dbTest("previewNewEventCore: refuses the start dates createEventCore refuses, wi
  * A Mon / Wed / Fri series of 8 séances from the day after tomorrow (one question), cut by « cette séance et les
  * suivantes » at its 4th séance: A keeps the 3 séances before the cut, B (a later segment of the same series) owns the
  * 5 others. Both segments are live, as after a split made from the planning.
+ *
+ * The series starts on the first Monday, Wednesday or Friday on or after the day after tomorrow, in the pro's zone: the
+ * delete archives a segment only when the cut date is not after the event's own start date, and the first séance of a
+ * Mon / Wed / Fri rule falls on its start date only when that date is one of those weekdays (a start on any other
+ * weekday made these tests depend on the day they ran).
  */
 async function twoLiveSegments({ db, pro }: DbHarness, now: Date) {
   const ctx = proCtx(pro);
   const typeId = await makeType(db, pro);
+  let startDate = dayIn(pro, 2, now);
+  while (![1, 3, 5].includes(dayOfWeek(startDate))) startDate = addDays(startDate, 1);
   const created = await createEventCore(
     db,
     ctx,
@@ -866,7 +873,7 @@ async function twoLiveSegments({ db, pro }: DbHarness, now: Date) {
       title: "Roda",
       ticketTypeIds: [typeId],
       questions: [{ label: "Niveau", type: "text", required: false }],
-      rule: weekly(dayIn(pro, 2, now), [1, 3, 5], { endMode: "count", occurrenceCount: 8 }),
+      rule: weekly(startDate, [1, 3, 5], { endMode: "count", occurrenceCount: 8 }),
     }),
     now,
   );
