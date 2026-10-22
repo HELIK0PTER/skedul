@@ -6,6 +6,7 @@ import {
   HEALTH_KEYS,
   IP_HASH_RE,
   actionThrottleKeys,
+  checkActionThrottle,
   nextWindow,
   otpThrottleKey,
   resetThrottleKey,
@@ -64,7 +65,11 @@ const PRO = "pro_1";
 const digestOf = (normalizedEmail: string): string => createHash("sha256").update(normalizedEmail).digest("hex").slice(0, 32);
 const LEA = digestOf("lea@example.com");
 
-/** The arguments of one call; the e-mail is typed with a capital and a trailing space on purpose. */
+/**
+ * The arguments of one call; the e-mail is typed with a capital and a trailing space on purpose. Deliberately loose
+ * (the cast): the tests that need a seat-taking action WITHOUT its occurrence id build it here, and the type itself is
+ * pinned by the `@ts-expect-error` line of the occurrence-id test below.
+ */
 function argsOf(over: Partial<ActionThrottleArgs> & { action: ThrottleAction }): ActionThrottleArgs {
   return {
     professionalId: PRO,
@@ -72,7 +77,7 @@ function argsOf(over: Partial<ActionThrottleArgs> & { action: ThrottleAction }):
     wideIpHash: null,
     subject: { kind: "email", email: "Lea@Example.com " },
     ...over,
-  };
+  } as ActionThrottleArgs;
 }
 
 test("IP_HASH_RE accepts exactly 32 lower-case hex characters", () => {
@@ -117,21 +122,48 @@ test("actionThrottleKeys: a verified identity consumes its user key only, never 
   assert.equal(keys.some((k) => k.key.includes(":e:")), false);
 });
 
-test("actionThrottleKeys: the per-séance IP key exists for buybook and free only, and only with an occurrence id", () => {
+test("actionThrottleKeys: the per-séance IP key exists for buybook and free only, and they are the actions THROTTLE_LIMITS says", () => {
   for (const action of ["buybook", "free"] as const) {
     const keys = actionThrottleKeys(argsOf({ action, occurrenceId: "occ_1" }));
     assert.ok(keys.some((k) => k.key === `t:${action}:o:occ_1:ip:${IP}` && k.limit === 2), action);
-    assert.equal(actionThrottleKeys(argsOf({ action })).some((k) => k.key.includes(":o:")), false, `${action} without occurrence`);
   }
   for (const action of ["rdv", "shop", "held", "cancel", "release"] as const) {
     assert.equal(actionThrottleKeys(argsOf({ action, occurrenceId: "occ_1" })).some((k) => k.key.includes(":o:")), false, action);
+    assert.equal(actionThrottleKeys(argsOf({ action })).some((k) => k.key.includes(":o:")), false, `${action} takes no séance`);
+  }
+  // The type of ActionThrottleArgs names these two actions: the table must agree with it.
+  assert.deepEqual(THROTTLE_ACTIONS.filter((a) => THROTTLE_LIMITS[a].perOccurrenceIp !== null), ["free", "buybook"]);
+});
+
+test("actionThrottleKeys: a buybook or a free registration without its occurrence id is a programming error, never a weaker limit (S33)", () => {
+  for (const action of ["buybook", "free"] as const) {
+    // @ts-expect-error a seat-taking action cannot be built without its occurrenceId: tsc proves it for every caller
+    const forgotten: ActionThrottleArgs = { action, professionalId: PRO, ipHash: IP, wideIpHash: null, subject: { kind: "email", email: "a@b.fr" } };
+    const message = new RegExp(`^Error: throttle: occurrenceId required for ${action}$`);
+    assert.throws(() => actionThrottleKeys(forgotten), message, action);
+    assert.throws(() => actionThrottleKeys({ ...forgotten, occurrenceId: "" }), message, `${action} with an empty id`);
+    assert.ok(actionThrottleKeys({ ...forgotten, occurrenceId: "occ_1" }).length > 0, `${action} with an id`);
+  }
+  // The other actions take no séance: the type lets the field go.
+  const shop: ActionThrottleArgs = { action: "shop", professionalId: PRO, ipHash: IP, wideIpHash: null, subject: { kind: "email", email: "a@b.fr" } };
+  assert.equal(actionThrottleKeys(shop).length, 3);
+});
+
+test("checkActionThrottle: a forgotten occurrence id rejects before the database is touched", async () => {
+  const untouched = new Proxy({}, {
+    get: () => {
+      throw new Error("the database was touched");
+    },
+  }) as Parameters<typeof checkActionThrottle>[0];
+  for (const action of ["buybook", "free"] as const) {
+    await assert.rejects(checkActionThrottle(untouched, argsOf({ action }), T0), /^Error: throttle: occurrenceId required for/, action);
   }
 });
 
 test("actionThrottleKeys: only free registrations add the per-pro IP key", () => {
-  assert.ok(actionThrottleKeys(argsOf({ action: "free" })).some((k) => k.key === `t:free:p:${PRO}:ip:${IP}` && k.limit === 6));
+  assert.ok(actionThrottleKeys(argsOf({ action: "free", occurrenceId: "occ_1" })).some((k) => k.key === `t:free:p:${PRO}:ip:${IP}` && k.limit === 6));
   for (const action of ["buybook", "rdv", "shop", "held", "cancel", "release"] as const) {
-    assert.equal(actionThrottleKeys(argsOf({ action })).some((k) => k.key.includes(":p:")), false, action);
+    assert.equal(actionThrottleKeys(argsOf({ action, occurrenceId: "occ_1" })).some((k) => k.key.includes(":p:")), false, action);
   }
 });
 
@@ -149,7 +181,7 @@ test("actionThrottleKeys: a free registration with everything set lists its six 
 test("actionThrottleKeys: every action takes its limits from THROTTLE_LIMITS", () => {
   for (const action of THROTTLE_ACTIONS) {
     const limits = THROTTLE_LIMITS[action];
-    const keys = actionThrottleKeys(argsOf({ action, wideIpHash: WIDE }));
+    const keys = actionThrottleKeys(argsOf({ action, wideIpHash: WIDE, occurrenceId: "occ_1" }));
     const limitOf = (needle: string): number | undefined => keys.find((k) => k.key.includes(needle))?.limit;
     assert.equal(limitOf(":ip:"), limits.ip, `${action} ip`);
     assert.equal(limitOf(":ip48:"), limits.ip48, `${action} ip48`);

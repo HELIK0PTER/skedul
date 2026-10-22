@@ -335,22 +335,26 @@ Exact values: `free` { ip 20, ip48 60, email 6, emailGlobal 20, perOccurrenceIp 
 export const IP_HASH_RE = /^[0-9a-f]{32}$/;
 /** A typed address (per-pro and global e-mail keys) or a verified identity (its user key only: strangers typing the address cannot lock it out). */
 export type ThrottleSubject = { kind: "email"; email: string } | { kind: "user"; userId: string };
-export type ActionThrottleArgs = {
-  action: ThrottleAction; professionalId: string;
+/** The actions that take a seat: their per-séance IP key needs the séance (THROTTLE_LIMITS[action].perOccurrenceIp is not null for exactly these, pinned by throttle.test.ts). */
+export type SeatTakingThrottleAction = "buybook" | "free";
+type ActionThrottleBase = {
+  professionalId: string;
   /** ipHash(daily salt, ipBuckets(ip).narrow), never an address */
   ipHash: string;
   /** ipHash(daily salt, ipBuckets(ip).wide), null for IPv4 */
   wideIpHash: string | null;
   subject: ThrottleSubject;
-  /** set by the seat-taking actions (buybook, free): adds the per-séance IP key */
-  occurrenceId?: string;
 };
+/** A seat-taking action (buybook, free) must name its séance (tsc refuses the call without it, and actionThrottleKeys throws at run time); the other actions take no séance. */
+export type ActionThrottleArgs =
+  | (ActionThrottleBase & { action: SeatTakingThrottleAction; occurrenceId: string })
+  | (ActionThrottleBase & { action: Exclude<ThrottleAction, SeatTakingThrottleAction>; occurrenceId?: string });
 /** Pure: every key and limit the action consumes (exact list below). */
 export function actionThrottleKeys(args: ActionThrottleArgs): { key: string; limit: number }[];
-/** Throws (nothing consumed) when ipHash or a non-null wideIpHash fails IP_HASH_RE; else consumes every actionThrottleKeys entry in ONE Promise.all (THROTTLE_WINDOW_SEC); false if any is over. */
+/** Throws (nothing consumed) when ipHash or a non-null wideIpHash fails IP_HASH_RE, or when a seat-taking action has no occurrence id; else consumes every actionThrottleKeys entry in ONE Promise.all (THROTTLE_WINDOW_SEC); false if any is over. */
 export async function checkActionThrottle(db: ThrottleDb, args: ActionThrottleArgs, now: Date): Promise<boolean>;
 ```
-Keys (exact; `<d>` = the first 32 hex of sha256(normalizeEmail(email)), as `throttleKey` does today): `t:<a>:ip:<ipHash>` (`ip`); `t:<a>:ip48:<wideIpHash>` when not null (`ip48`); subject email → `t:<a>:e:<d>` (`emailGlobal`) and `t:<a>:e:<professionalId>:<d>` (`email`); subject user → `t:<a>:u:<userId>` (`email`); `occurrenceId` set and `perOccurrenceIp` not null → `t:<a>:o:<occurrenceId>:ip:<ipHash>` (`perOccurrenceIp`); `perProIp` not null → `t:<a>:p:<professionalId>:ip:<ipHash>` (`perProIp`). The guard message: `"checkActionThrottle: ipHash must be the 32 hex characters of ipHash()"`. `throttleKey`, `otpThrottleKey`, `resetThrottleKey` stay for the auth caps; `hitThrottle(db, key, by, windowSec, now)` (the one upsert `consumeThrottle` now delegates to) and `proMailThrottleKey` (`t:mail:p:<professionalId>`, the mail budget) stay as P3 `f7f97d8` wrote them, and `checkActionThrottle` consumes through `consumeThrottle`. The `throttle` table also holds `t:mail:p:…` and `t:horizon:p:…` keys: `tickets.test.ts` asserts that no `ThrottleAction` is named `mail` or `horizon`, so no P4 key ever shares a counter with them; `purgeThrottle` keeps rows 2 days (`THROTTLE_PURGE_DAYS`), longer than the 24 h mail window.
+Keys (exact; `<d>` = the first 32 hex of sha256(normalizeEmail(email)), as `throttleKey` does today): `t:<a>:ip:<ipHash>` (`ip`); `t:<a>:ip48:<wideIpHash>` when not null (`ip48`); subject email → `t:<a>:e:<d>` (`emailGlobal`) and `t:<a>:e:<professionalId>:<d>` (`email`); subject user → `t:<a>:u:<userId>` (`email`); `perOccurrenceIp` not null (`buybook` and `free`) → `t:<a>:o:<occurrenceId>:ip:<ipHash>` (`perOccurrenceIp`), and a missing or empty `occurrenceId` for such an action is a programming error (`actionThrottleKeys` throws `throttle: occurrenceId required for <action>`, so `checkActionThrottle` rejects with nothing consumed, S33); `perProIp` not null → `t:<a>:p:<professionalId>:ip:<ipHash>` (`perProIp`). The guard message: `"checkActionThrottle: ipHash must be the 32 hex characters of ipHash()"`. `throttleKey`, `otpThrottleKey`, `resetThrottleKey` stay for the auth caps; `hitThrottle(db, key, by, windowSec, now)` (the one upsert `consumeThrottle` now delegates to) and `proMailThrottleKey` (`t:mail:p:<professionalId>`, the mail budget) stay as P3 `f7f97d8` wrote them, and `checkActionThrottle` consumes through `consumeThrottle`. The `throttle` table also holds `t:mail:p:…` and `t:horizon:p:…` keys: `tickets.test.ts` asserts that no `ThrottleAction` is named `mail` or `horizon`, so no P4 key ever shares a counter with them; `purgeThrottle` keeps rows 2 days (`THROTTLE_PURGE_DAYS`), longer than the 24 h mail window.
 
 ### 3.4 Engine security carries (Task 4)
 

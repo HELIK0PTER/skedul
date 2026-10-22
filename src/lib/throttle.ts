@@ -83,27 +83,37 @@ export const IP_HASH_RE = /^[0-9a-f]{32}$/;
 /** A typed address (per-pro and global e-mail keys) or a verified identity (its user key only: strangers typing the address cannot lock it out). */
 export type ThrottleSubject = { kind: "email"; email: string } | { kind: "user"; userId: string };
 
-export type ActionThrottleArgs = {
-  action: ThrottleAction;
+/** The actions that take a seat: their per-séance IP key needs the séance (THROTTLE_LIMITS[action].perOccurrenceIp is not null for exactly these, pinned by throttle.test.ts). */
+export type SeatTakingThrottleAction = "buybook" | "free";
+
+type ActionThrottleBase = {
   professionalId: string;
   /** ipHash(daily salt, ipBuckets(ip).narrow), never an address */
   ipHash: string;
   /** ipHash(daily salt, ipBuckets(ip).wide), null for IPv4 */
   wideIpHash: string | null;
   subject: ThrottleSubject;
-  /** set by the seat-taking actions (buybook, free): adds the per-séance IP key */
-  occurrenceId?: string;
 };
+
+/**
+ * One throttled call. A seat-taking action (buybook, free) must name its séance: its per-séance IP key
+ * is part of the limit, so the type refuses the call without it (a forgotten key would silently weaken
+ * the limit, S33) and `actionThrottleKeys` throws on it at run time too. The other actions take no séance.
+ */
+export type ActionThrottleArgs =
+  | (ActionThrottleBase & { action: SeatTakingThrottleAction; occurrenceId: string })
+  | (ActionThrottleBase & { action: Exclude<ThrottleAction, SeatTakingThrottleAction>; occurrenceId?: string });
 
 /**
  * Pure: every key and limit the action consumes, in this order: the IP key, the /48 key (when there is
  * one), then for a typed address the global e-mail key and the per-pro e-mail key, or for a verified
- * identity its user key, then the per-séance IP key (seat-taking actions with an occurrence id) and the
- * per-pro IP key (free registrations).
+ * identity its user key, then the per-séance IP key (seat-taking actions) and the per-pro IP key (free
+ * registrations). Throws when a seat-taking action has no occurrence id.
  */
 export function actionThrottleKeys(args: ActionThrottleArgs): { key: string; limit: number }[] {
   const { action, professionalId } = args;
   const limits = THROTTLE_LIMITS[action];
+  if (limits.perOccurrenceIp !== null && !args.occurrenceId) throw new Error(`throttle: occurrenceId required for ${action}`);
   const keys: { key: string; limit: number }[] = [{ key: throttleKey(action, "ip", args.ipHash), limit: limits.ip }];
   if (args.wideIpHash !== null) keys.push({ key: `t:${action}:ip48:${args.wideIpHash}`, limit: limits.ip48 });
   if (args.subject.kind === "email") {
@@ -113,7 +123,7 @@ export function actionThrottleKeys(args: ActionThrottleArgs): { key: string; lim
   } else {
     keys.push({ key: `t:${action}:u:${args.subject.userId}`, limit: limits.email });
   }
-  if (args.occurrenceId !== undefined && limits.perOccurrenceIp !== null) {
+  if (limits.perOccurrenceIp !== null) {
     keys.push({ key: `t:${action}:o:${args.occurrenceId}:ip:${args.ipHash}`, limit: limits.perOccurrenceIp });
   }
   if (limits.perProIp !== null) {
@@ -122,13 +132,15 @@ export function actionThrottleKeys(args: ActionThrottleArgs): { key: string; lim
   return keys;
 }
 
-/** Throws (nothing consumed) when ipHash or a non-null wideIpHash fails IP_HASH_RE; else consumes every actionThrottleKeys entry in ONE Promise.all (THROTTLE_WINDOW_SEC); false if any is over. */
+/** Throws (nothing consumed) when ipHash or a non-null wideIpHash fails IP_HASH_RE, or when a seat-taking action has no occurrence id; else consumes every actionThrottleKeys entry in ONE Promise.all (THROTTLE_WINDOW_SEC); false if any is over. */
 export async function checkActionThrottle(db: ThrottleDb, args: ActionThrottleArgs, now: Date): Promise<boolean> {
   if (!IP_HASH_RE.test(args.ipHash) || (args.wideIpHash !== null && !IP_HASH_RE.test(args.wideIpHash))) {
     throw new Error("checkActionThrottle: ipHash must be the 32 hex characters of ipHash()");
   }
+  // Built before the first write: a forgotten occurrence id throws here, with nothing consumed.
+  const keys = actionThrottleKeys(args);
   const results = await Promise.all(
-    actionThrottleKeys(args).map(({ key, limit }) => consumeThrottle(db, key, { limit, windowSec: THROTTLE_WINDOW_SEC }, now)),
+    keys.map(({ key, limit }) => consumeThrottle(db, key, { limit, windowSec: THROTTLE_WINDOW_SEC }, now)),
   );
   return results.every(Boolean);
 }
