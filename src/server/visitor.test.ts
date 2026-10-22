@@ -54,7 +54,7 @@ test("currentPublicVisitor is cached per request and builds the visitor from the
 
 test("the file declares no writer of the wallet Owner: the Owner is linked by its core, after parseFr and the throttle (Revision 3.2)", () => {
   assert.doesNotMatch(SOURCE, /linkCustomerUser/, "visitor.ts never writes customer.user_id");
-  assert.doesNotMatch(SOURCE, /WalletOwner/, "no helper returns an Owner: it is the owner field of the visitor");
+  assert.doesNotMatch(SOURCE, /WalletOwner/, "no helper returns an Owner: it is the owner field of the visitor");
 });
 
 /** Every .ts and .tsx file under `dir`, test files excluded, with forward slashes. */
