@@ -158,6 +158,30 @@ async function fulfil(
   return { handled: res.outcome, effects: res.effects };
 }
 
+/**
+ * Rules 6 and 7: an event that changes the state of a purchase without paying it (processing, release) acts only when the
+ * session is the purchase's OWN. `gone`: the purchase no longer exists (LED:427: the pro was deleted, its open sessions
+ * expire, their purchases are gone). `other`: it carries a different session, said in the log without any id. A purchase with
+ * no session attached yet counts as `own`: the event cannot belong to another one.
+ */
+async function ownSession(
+  db: Db,
+  purchaseId: string,
+  session: CheckoutSessionLike,
+  type: string,
+): Promise<"own" | "gone" | "other"> {
+  const [row] = await db
+    .select({ checkoutSessionId: ticketPurchase.checkoutSessionId })
+    .from(ticketPurchase)
+    .where(eq(ticketPurchase.id, purchaseId));
+  if (!row) return "gone";
+  if (row.checkoutSessionId !== null && row.checkoutSessionId !== session.id) {
+    console.warn(`[stripe] ${type} ignored: not the purchase's session`);
+    return "other";
+  }
+  return "own";
+}
+
 /** Rule 7: `async_payment_failed` and `expired` release the purchase of THIS session only. */
 async function release(
   db: Db,
@@ -166,17 +190,9 @@ async function release(
   type: string,
   now: Date,
 ): Promise<WebhookOutcome> {
-  // The common case of LED:427: the pro was deleted, its open sessions expire, their purchases no longer exist.
+  // The common case of LED:427: no purchase any more, nothing to release.
   if (found.kind !== "found") return ignored();
-  const [row] = await db
-    .select({ checkoutSessionId: ticketPurchase.checkoutSessionId })
-    .from(ticketPurchase)
-    .where(eq(ticketPurchase.id, found.purchaseId));
-  if (!row) return ignored();
-  if (row.checkoutSessionId !== null && row.checkoutSessionId !== session.id) {
-    console.warn(`[stripe] ${type} ignored: not the purchase's session`);
-    return ignored();
-  }
+  if ((await ownSession(db, found.purchaseId, session, type)) !== "own") return ignored();
   const res = await releasePurchase(db, found.purchaseId, now);
   if (res.ok) return { handled: "released", effects: res.effects };
   if (res.code === "not_found") return ignored();
@@ -227,6 +243,8 @@ export async function handleStripeEvent(
         return ignored();
       }
       if (session.payment_status === "unpaid" && found.kind === "found") {
+        // Rule 6: only the purchase's own session may freeze it out of the nightly expiry.
+        if ((await ownSession(db, found.purchaseId, session, type)) !== "own") return ignored();
         const res = await markProcessing(db, found.purchaseId, now);
         return res.ok ? { handled: "processing", effects: [] } : ignored();
       }

@@ -134,6 +134,21 @@ async function captureConsole<T>(run: () => Promise<T>): Promise<{ result: T; li
   }
 }
 
+/** `recordOrphanPayment`'s warning: the one line that keeps the Stripe ids so the owner can refund by hand (L1116). */
+const ORPHAN_LINE = /^\[stripe\] orphan payment cs_test_[\w-]+\/pi_test_[\w-]+$/;
+const NOT_THEIRS = (type: string) => `[stripe] ${type} ignored: not the purchase's session`;
+
+/** Runs `run` with the console captured and checks it printed exactly `expected` (a string or a pattern per line): the run output stays pristine, and a missing or an extra warning fails the test. */
+async function logs<T>(run: () => Promise<T>, expected: (string | RegExp)[]): Promise<T> {
+  const { result, lines } = await captureConsole(run);
+  assert.equal(lines.length, expected.length, JSON.stringify(lines));
+  expected.forEach((want, i) => {
+    if (typeof want === "string") assert.equal(lines[i], want);
+    else assert.match(lines[i], want);
+  });
+  return result;
+}
+
 dbTest("E10 completed + paid fulfils a buy + book: tickets, confirmed booking, receipt + confirmation + pro notice + sync", async ({ db, pro }) => {
   const p = await pendingBuyBook(db, pro);
   const pi = `pi_test_${nanoid()}`;
@@ -174,18 +189,45 @@ dbTest("E10 the same completed event twice is a duplicate: no second ticket, no 
   assert.equal(await orphans(db), before, "a retry of the same payment is not an orphan");
 });
 
-dbTest("E10 a second payment of a paid purchase is an orphan: counted for a refund, no new ticket (SEC-M2)", async ({ db, pro }) => {
+dbTest("E10 another payment intent on the paid purchase's own session is an orphan: counted for a refund, no new ticket (SEC-M2, other payment)", async ({ db, pro }) => {
   const p = await pendingShop(db, pro);
-  assert.equal((await deliver(db, "checkout.session.completed", checkoutSession(p))).handled, "fulfilled");
+  const first = `pi_test_${nanoid()}`;
+  assert.equal((await deliver(db, "checkout.session.completed", checkoutSession(p, { payment_intent: first }))).handled, "fulfilled");
   const before = await orphans(db);
 
-  // Another Checkout session of the same purchase, paid with another payment intent.
-  const second = { ...p, sessionId: `cs_test_${nanoid()}` };
-  const out = await deliver(db, "checkout.session.completed", checkoutSession(second));
+  // The same Checkout session, but money taken with another payment intent: only the payment differs.
+  const out = await logs(
+    () => deliver(db, "checkout.session.completed", checkoutSession(p, { payment_intent: `pi_test_${nanoid()}` })),
+    [ORPHAN_LINE],
+  );
   assert.deepEqual(out, { handled: "orphan", effects: [] });
   assert.equal(await orphans(db), before + 1);
   assert.equal((await ticketsOf(db, p.customerId)).length, 3, "no ticket for the second payment");
-  assert.equal((await purchaseRow(db, p.purchaseId)).checkoutSessionId, p.sessionId, "the first payment stays the purchase's");
+  const row = await purchaseRow(db, p.purchaseId);
+  assert.equal(row.paymentIntentId, first, "the first payment stays the purchase's");
+  assert.equal(row.checkoutSessionId, p.sessionId);
+});
+
+dbTest("E10 another Checkout session on the paid purchase is an orphan: counted for a refund, no new ticket (SEC-M2, other session)", async ({ db, pro }) => {
+  const p = await pendingShop(db, pro);
+  const pi = `pi_test_${nanoid()}`;
+  assert.equal((await deliver(db, "checkout.session.completed", checkoutSession(p, { payment_intent: pi }))).handled, "fulfilled");
+  const before = await orphans(db);
+
+  // Another Checkout session of the same purchase that reports the very same payment intent: only the session differs.
+  const second = { ...p, sessionId: `cs_test_${nanoid()}` };
+  const out = await logs(() => deliver(db, "checkout.session.completed", checkoutSession(second, { payment_intent: pi })), [ORPHAN_LINE]);
+  assert.deepEqual(out, { handled: "orphan", effects: [] });
+  assert.equal(await orphans(db), before + 1);
+  assert.equal((await ticketsOf(db, p.customerId)).length, 3, "no ticket for the second session");
+  const row = await purchaseRow(db, p.purchaseId);
+  assert.equal(row.checkoutSessionId, p.sessionId, "the first session stays the purchase's");
+  assert.equal(row.paymentIntentId, pi);
+
+  // Control: the very same session and payment intent again is a plain duplicate, not an orphan.
+  const replay = await deliver(db, "checkout.session.completed", checkoutSession(p, { payment_intent: pi }));
+  assert.deepEqual(replay, { handled: "duplicate", effects: [] });
+  assert.equal(await orphans(db), before + 1);
 });
 
 dbTest("E10 completed + unpaid marks processing (delayed method), then async_payment_succeeded fulfils", async ({ db, pro }) => {
@@ -208,6 +250,29 @@ dbTest("E10 completed + unpaid marks processing (delayed method), then async_pay
   const late = await deliver(db, "checkout.session.completed", checkoutSession(p, { payment_status: "unpaid", payment_intent: pi }));
   assert.deepEqual(late, IGNORED);
   assert.equal((await purchaseRow(db, p.purchaseId)).status, "paid");
+});
+
+dbTest("E10 completed + unpaid of a session that is not the purchase's marks nothing as processing (rule 6, the own-session check of rule 7)", async ({ db, pro }) => {
+  const p = await pendingShop(db, pro);
+  // The metadata names the purchase, but the session id is not the one attached to it.
+  const stranger = checkoutSession(p, { id: `cs_test_${nanoid()}`, payment_status: "unpaid" });
+  const out = await logs(() => deliver(db, "checkout.session.completed", stranger), [NOT_THEIRS("checkout.session.completed")]);
+  assert.deepEqual(out, IGNORED);
+  const waiting = await purchaseRow(db, p.purchaseId);
+  assert.equal(waiting.status, "pending");
+  assert.equal(waiting.processingAt, null, "a foreign session cannot freeze the purchase out of the nightly expiry");
+
+  // Its own session still does (the unpaid test above), and so does an event that finds a purchase with no session attached yet.
+  const own = await deliver(db, "checkout.session.completed", checkoutSession(p, { payment_status: "unpaid" }));
+  assert.deepEqual(own, { handled: "processing", effects: [] });
+
+  const typeId = await makeType(db, pro, { name: "Cours collectif" });
+  const offerId = await makeOffer(db, pro, typeId, { quantity: 3, priceCents: 19000 });
+  const started = await startPurchase(db, { professionalId: pro.proId, offerId, customerId: await makeCustomer(db, pro) });
+  assert.ok(started.ok, JSON.stringify(started));
+  const noSession = { purchaseId: started.purchaseId, sessionId: `cs_test_${nanoid()}`, amountCents: started.amountCents };
+  const bare = await deliver(db, "checkout.session.completed", checkoutSession(noSession, { payment_status: "unpaid" }));
+  assert.deepEqual(bare, { handled: "processing", effects: [] });
 });
 
 dbTest("E11 async_payment_failed releases the hold: purchase and booking expired, seat freed, Google re-synced", async ({ db, pro }) => {
@@ -243,8 +308,11 @@ dbTest("E11 expired of a session that is not the purchase's is ignored and relea
   const p = await pendingBuyBook(db, pro);
   // The metadata names the purchase, but the session id is not the one attached to it.
   const stranger = checkoutSession(p, { id: `cs_test_${nanoid()}`, payment_status: "unpaid" });
-  assert.deepEqual(await deliver(db, "checkout.session.expired", stranger), IGNORED);
-  assert.deepEqual(await deliver(db, "checkout.session.async_payment_failed", stranger), IGNORED);
+  assert.deepEqual(await logs(() => deliver(db, "checkout.session.expired", stranger), [NOT_THEIRS("checkout.session.expired")]), IGNORED);
+  assert.deepEqual(
+    await logs(() => deliver(db, "checkout.session.async_payment_failed", stranger), [NOT_THEIRS("checkout.session.async_payment_failed")]),
+    IGNORED,
+  );
 
   assert.equal((await purchaseRow(db, p.purchaseId)).status, "pending");
   assert.equal((await getBooking(db, p.bookingId)).status, "pending");
@@ -270,7 +338,7 @@ dbTest("LED:427 a pending purchase deleted with its pro: its expired event is ig
     assert.deepEqual(expired, IGNORED);
     assert.equal(await orphans(db), before, "an expired session of a deleted purchase is nothing to refund");
 
-    const paid = await deliver(db, "checkout.session.completed", checkoutSession(p));
+    const paid = await logs(() => deliver(db, "checkout.session.completed", checkoutSession(p)), [ORPHAN_LINE]);
     assert.deepEqual(paid, { handled: "orphan", effects: [] });
     assert.equal(await orphans(db), before + 1, "a payment that landed anyway is counted for a manual refund");
   } finally {
@@ -293,7 +361,10 @@ dbTest("E10 the purchase id is resolved from the session id when the metadata do
 dbTest("E10 a client_reference_id that differs from the found purchase is ignored: nothing issued, nothing counted (SEC-I7)", async ({ db, pro }) => {
   const p = await pendingShop(db, pro);
   const before = await orphans(db);
-  const out = await deliver(db, "checkout.session.completed", checkoutSession(p, { client_reference_id: nanoid() }));
+  const out = await logs(
+    () => deliver(db, "checkout.session.completed", checkoutSession(p, { client_reference_id: nanoid() })),
+    ["[stripe] checkout.session.completed ignored: reference mismatch"],
+  );
   assert.deepEqual(out, IGNORED);
   assert.equal((await purchaseRow(db, p.purchaseId)).status, "pending");
   assert.equal((await ticketsOf(db, p.customerId)).length, 0);
@@ -303,11 +374,11 @@ dbTest("E10 a client_reference_id that differs from the found purchase is ignore
 dbTest("E10 a paid session of ours with no purchase to settle is an orphan: 200 and counted for a manual refund", async ({ db }) => {
   const ghost = { purchaseId: nanoid(), sessionId: `cs_test_${nanoid()}`, amountCents: 8500 };
   const before = await orphans(db);
-  const out = await deliver(db, "checkout.session.completed", checkoutSession(ghost));
+  const out = await logs(() => deliver(db, "checkout.session.completed", checkoutSession(ghost)), [ORPHAN_LINE]);
   assert.deepEqual(out, { handled: "orphan", effects: [] });
   assert.equal(await orphans(db), before + 1);
 
-  const asyncOut = await deliver(db, "checkout.session.async_payment_succeeded", checkoutSession(ghost));
+  const asyncOut = await logs(() => deliver(db, "checkout.session.async_payment_succeeded", checkoutSession(ghost)), [ORPHAN_LINE]);
   assert.deepEqual(asyncOut, { handled: "orphan", effects: [] });
   assert.equal(await orphans(db), before + 2);
 });
@@ -324,7 +395,10 @@ dbTest("E10 an amount or a currency that is not the purchase's issues nothing an
     ["no currency", { currency: null }],
   ];
   for (const [label, over] of wrong) {
-    const out = await deliver(db, "checkout.session.completed", checkoutSession(p, over));
+    const out = await logs(() => deliver(db, "checkout.session.completed", checkoutSession(p, over)), [
+      ORPHAN_LINE,
+      "[stripe] amount mismatch on a purchase",
+    ]);
     assert.deepEqual(out, { handled: "orphan", effects: [] }, label);
   }
   assert.equal(await orphans(db), before + wrong.length);
@@ -340,9 +414,14 @@ dbTest("E10 an amount or a currency that is not the purchase's issues nothing an
 dbTest("E10 no_payment_required and a missing payment status issue nothing (COV-M2)", async ({ db, pro }) => {
   const p = await pendingShop(db, pro);
   const before = await orphans(db);
-  assert.deepEqual(await deliver(db, "checkout.session.completed", checkoutSession(p, { payment_status: "no_payment_required" })), IGNORED);
-  assert.deepEqual(await deliver(db, "checkout.session.completed", checkoutSession(p, { payment_status: null })), IGNORED);
-  assert.deepEqual(await deliver(db, "checkout.session.completed", checkoutSession(p, { payment_status: "something_new" })), IGNORED);
+  const free = await logs(
+    () => deliver(db, "checkout.session.completed", checkoutSession(p, { payment_status: "no_payment_required" })),
+    ["[stripe] no_payment_required ignored"],
+  );
+  assert.deepEqual(free, IGNORED);
+  // A missing or an unknown status issues nothing either, and says nothing.
+  assert.deepEqual(await logs(() => deliver(db, "checkout.session.completed", checkoutSession(p, { payment_status: null })), []), IGNORED);
+  assert.deepEqual(await logs(() => deliver(db, "checkout.session.completed", checkoutSession(p, { payment_status: "something_new" })), []), IGNORED);
   assert.equal((await purchaseRow(db, p.purchaseId)).status, "pending");
   assert.equal((await ticketsOf(db, p.customerId)).length, 0);
   assert.equal(await orphans(db), before);
@@ -357,14 +436,16 @@ dbTest("SEC-I7 sessions that are not our app in this environment are ignored, ne
   const otherApp = checkoutSession(p, { metadata: { purchaseId: p.purchaseId, app: "billing", env: TEST.env } });
   const otherEnv = checkoutSession(p, {}, "preview");
   const subscription = checkoutSession(p, { mode: "subscription" });
-  for (const [label, session] of [
-    ["no marker", noMarker],
-    ["no metadata", noMetadata],
-    ["another app", otherApp],
-    ["another environment", otherEnv],
-    ["subscription mode", subscription],
+  const otherEnvLine = "[stripe] checkout.session.completed ignored: other environment";
+  for (const [label, session, warning] of [
+    ["no marker", noMarker, []],
+    ["no metadata", noMetadata, []],
+    ["another app", otherApp, []],
+    ["another environment", otherEnv, [otherEnvLine]],
+    ["subscription mode", subscription, []],
   ] as const) {
-    assert.deepEqual(await deliver(db, "checkout.session.completed", session), IGNORED, label);
+    // Only a session of our own app in another environment is worth a line; a foreign one is silent.
+    assert.deepEqual(await logs(() => deliver(db, "checkout.session.completed", session), [...warning]), IGNORED, label);
   }
   assert.equal(await orphans(db), before, "none of them is an orphan");
   assert.equal((await purchaseRow(db, p.purchaseId)).status, "pending");
@@ -383,9 +464,10 @@ dbTest("SEC-M1 the livemode of the event must be the deployment's: a test event 
   const p = await pendingShop(db, pro);
   const before = await orphans(db);
 
-  const liveOnTest = await deliver(db, "checkout.session.completed", checkoutSession(p), TEST, true);
+  const mismatch = ["[stripe] checkout.session.completed ignored: livemode mismatch"];
+  const liveOnTest = await logs(() => deliver(db, "checkout.session.completed", checkoutSession(p), TEST, true), mismatch);
   assert.deepEqual(liveOnTest, IGNORED);
-  const testOnLive = await deliver(db, "checkout.session.completed", checkoutSession(p, {}, LIVE.env), LIVE, false);
+  const testOnLive = await logs(() => deliver(db, "checkout.session.completed", checkoutSession(p, {}, LIVE.env), LIVE, false), mismatch);
   assert.deepEqual(testOnLive, IGNORED);
   assert.equal((await purchaseRow(db, p.purchaseId)).status, "pending");
   assert.equal(await orphans(db), before);
@@ -510,10 +592,16 @@ dbTest("S31 the log lines of ignored events carry no session id, payment intent 
   );
   assert.deepEqual(notTheirs.lines, ["[stripe] checkout.session.expired ignored: not the purchase's session"]);
 
+  const notTheirsUnpaid = await captureConsole(() =>
+    deliver(db, "checkout.session.completed", checkoutSession(p, { id: `cs_test_${nanoid()}`, payment_status: "unpaid" })),
+  );
+  assert.deepEqual(notTheirsUnpaid.result, IGNORED);
+  assert.deepEqual(notTheirsUnpaid.lines, ["[stripe] checkout.session.completed ignored: not the purchase's session"]);
+
   const foreign = await captureConsole(() => deliver(db, "checkout.session.completed", checkoutSession(p, { metadata: null })));
   assert.deepEqual(foreign.lines, [], "a foreign session is silent");
 
-  for (const lines of [livemode.lines, otherEnv.lines, reference.lines, free.lines, notTheirs.lines, foreign.lines]) quiet(lines);
+  for (const lines of [livemode.lines, otherEnv.lines, reference.lines, free.lines, notTheirs.lines, notTheirsUnpaid.lines, foreign.lines]) quiet(lines);
 
   // The two lines of an amount mismatch: the engine's orphan warning (the one place the Stripe ids stay, L1116) and ours, without any.
   const wrong = await captureConsole(() => deliver(db, "checkout.session.completed", checkoutSession(p, { amount_total: p.amountCents + 1 })));
