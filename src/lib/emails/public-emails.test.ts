@@ -178,6 +178,10 @@ test("late-payment: the spec sentence verbatim for 4 tickets and for 1, the séa
   const one = latePaymentEmail({ ...late, count: 1 });
   assert.ok(one.html.includes(h("Paiement reçu, votre place n'était plus réservée : votre ticket est dans votre portefeuille.")));
   assert.equal(one.html.includes("vos 1 tickets"), false);
+  // the second sentence agrees with the count too: « votre ticket » for one, « vos tickets » for several
+  assert.ok(one.html.includes(h("La séance « Altinha débutants » (lun. 26 octobre 2026 · 19:00 à 20:00) n'est pas réservée pour vous. Vous pouvez utiliser votre ticket sur une autre séance.")));
+  assert.equal(one.html.includes("vos tickets sur une autre séance"), false);
+  assert.equal(four.html.includes("votre ticket sur une autre séance"), false);
 });
 
 test("pro-new-booking: the client's name and address in the body, the coverage row, the planning button, no personal link", () => {

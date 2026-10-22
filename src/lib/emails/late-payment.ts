@@ -19,17 +19,18 @@ export type LatePaymentArgs = {
 };
 
 export function latePaymentEmail(a: LatePaymentArgs): { subject: string; html: string } {
-  const held =
-    a.count > 1
-      ? `vos ${formatCount(a.count)} tickets sont dans votre portefeuille.`
-      : "votre ticket est dans votre portefeuille.";
+  const several = a.count > 1;
+  const held = several
+    ? `vos ${formatCount(a.count)} tickets sont dans votre portefeuille.`
+    : "votre ticket est dans votre portefeuille.";
+  const useThem = several ? "vos tickets" : "votre ticket";
   const html = layout(
     escapeHtml("Paiement reçu"),
     `
     ${mailParagraph(`Bonjour ${a.customerName},`)}
     ${mailParagraph(`Paiement reçu, votre place n'était plus réservée : ${held}`)}
     ${mailParagraph(
-      `La séance « ${a.title} » (${a.whenLabel}) n'est pas réservée pour vous. Vous pouvez utiliser vos tickets sur une autre séance.`,
+      `La séance « ${a.title} » (${a.whenLabel}) n'est pas réservée pour vous. Vous pouvez utiliser ${useThem} sur une autre séance.`,
     )}
     <p style="margin:16px 0 0">${mailButton(a.pageUrl, `Voir la page de ${a.businessName}`)}</p>
     ${mailPersonalLink(a.personalLinkUrl)}

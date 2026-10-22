@@ -925,10 +925,10 @@ dbTest("late_payment: a payment that lands after the hold ended mails « Paiemen
   const { occurrences: [occ] } = await makeEvent(db, pro, { title: "Altinha du soir", ticketTypeIds: [typeId] });
   const when = formatWhen(occ.startsAt, occ.endsAt, pro.tz);
   const cases = [
-    { quantity: 4, sentence: "vos 4 tickets sont dans votre portefeuille.", wallet: "4 tickets sont dans votre portefeuille." },
-    { quantity: 1, sentence: "votre ticket est dans votre portefeuille.", wallet: "1 ticket est dans votre portefeuille." },
+    { quantity: 4, sentence: "vos 4 tickets sont dans votre portefeuille.", use: "vos tickets", wallet: "4 tickets sont dans votre portefeuille." },
+    { quantity: 1, sentence: "votre ticket est dans votre portefeuille.", use: "votre ticket", wallet: "1 ticket est dans votre portefeuille." },
   ];
-  for (const { quantity, sentence, wallet } of cases) {
+  for (const { quantity, sentence, use, wallet } of cases) {
     const offerId = await makeOffer(db, pro, typeId, { quantity });
     const email = testEmail("late");
     const customerId = await makeCustomer(db, pro, { name: "Beatriz Almeida", email });
@@ -947,7 +947,7 @@ dbTest("late_payment: a payment that lands after the hold ended mails « Paiemen
     assert.ok(mail.html.includes(esc(`Paiement reçu, votre place n'était plus réservée : ${sentence}`)), sentence);
     assert.ok(
       mail.html.includes(
-        esc(`La séance « Altinha du soir » (${when}) n'est pas réservée pour vous. Vous pouvez utiliser vos tickets sur une autre séance.`),
+        esc(`La séance « Altinha du soir » (${when}) n'est pas réservée pour vous. Vous pouvez utiliser ${use} sur une autre séance.`),
       ),
     );
     assert.ok(mail.html.includes(`href="${APP}/${pro.slug}"`), "the page of the pro");
