@@ -130,6 +130,7 @@ function ProCard({ card }: { card: MySpaceCard }) {
                     {w.archived && (
                       <p className="text-xs text-zinc-600 wrap-anywhere">{`Ce type n'est plus proposé par ${businessName}.`}</p>
                     )}
+                    {w.typeClass === "orphan" && <p className="text-xs text-zinc-600 wrap-anywhere">{COPY.ORPHAN_TYPE}</p>}
                   </li>
                 ))}
               </ul>

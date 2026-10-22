@@ -1,21 +1,142 @@
 /**
- * Wiring guards for the client espace page (src/app/[slug]/espace/page.tsx). The page reads the session and the cookie
- * and renders client leaves, which node:test cannot load, so what it must keep is pinned on its source. Task 22 of the
- * P4 plan extends this file with the guards of the espace leaves. Run from the repository root.
+ * Wiring guards for the client espace (Task 22). The leaves import Server Actions, Better Auth's client and next/*,
+ * which node:test cannot load, so what they must keep is pinned on their source; the rules they apply have their own
+ * pure tests (space-view.test.ts, sign-in-flow.test.ts). Run from the repository root.
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const PAGE = readFileSync("src/app/[slug]/espace/page.tsx", "utf8");
+const read = (path: string): string => readFileSync(path, "utf8");
+const CANCEL = read("src/components/public/cancel-booking-button.tsx");
+const SPEND = read("src/components/public/spend-seance-button.tsx");
+const OTHER = read("src/components/public/other-address-button.tsx");
+const FORGET = read("src/components/public/forget-guest-link-button.tsx");
+const STATUS = read("src/components/public/space-status.tsx");
+const PAGE = read("src/app/[slug]/espace/page.tsx");
+const MY_SPACE = read("src/components/public/my-space.tsx");
 
-test("« Confirmez votre adresse pour voir vos réservations. » is shown only when no space is rendered, never above the reservations of the personal link (Revision 3.2)", () => {
-  assert.equal((PAGE.match(/\{COPY\.CONFIRM_EMAIL_FIRST\}/g) ?? []).length, 1, "one use of the line");
-  // The line and the space are the two arms of one ternary on `space`: where the reservations are shown, the line is not.
+test("« Annuler » asks first, calls the action through callOrFail, announces the result and gives the focus to the section heading (WCAG 2.4.3)", () => {
+  assert.match(CANCEL, /^"use client";/);
+  assert.match(CANCEL, /import \{ cancelMyBookingAction \} from "@\/server\/client";/);
+  assert.match(CANCEL, /callOrFail\(\(\) => cancelMyBookingAction\(\{ slug, bookingId \}\)\)/);
+  assert.match(CANCEL, /<ConfirmDialog/);
+  assert.match(CANCEL, /cancelBookingCopy\(coverage, businessName\)/);
+  assert.match(CANCEL, /returnFocusTo=\{focusAfterClose\}/);
+  assert.match(CANCEL, /useCallback\(\(\) => \(leaving\.current \? upcomingHeading\(\) : null\), \[\]\)/, "the heading after a confirmed cancellation, else the opener");
+  const flag = CANCEL.indexOf("leaving.current = true;");
+  assert.ok(flag !== -1 && flag < CANCEL.indexOf("await callOrFail("), "the flag is set before the answer is awaited");
+  assert.ok(CANCEL.indexOf("leaving.current = false;") > CANCEL.indexOf("if (!res.ok)"), "a refusal keeps the focus in the dialog's own flow");
+  assert.match(CANCEL, /announce\(COPY\.CANCELLED_OK\)/);
+  assert.ok(CANCEL.indexOf("if (!res.ok)") < CANCEL.indexOf("announce(COPY.CANCELLED_OK)"), "announced on success only");
+  assert.doesNotMatch(CANCEL, /router\.refresh|useRouter/, "the action revalidates the page itself");
+});
+
+test("« Réserver avec 1 ticket » posts the ISO start the server rendered and no answers, announces and focuses the heading", () => {
+  assert.match(SPEND, /^"use client";/);
+  assert.match(SPEND, /import \{ bookWithHeldTicketAction \} from "@\/server\/public";/);
+  assert.match(
+    SPEND,
+    /callOrFail\(\(\) => bookWithHeldTicketAction\(\{ slug, occurrenceId: seance\.occurrenceId, seenStartsAt: seance\.startsAt, answers: \[\] \}\)\)/,
+  );
+  assert.match(SPEND, /spendControlOf\(\{ needsAnswers: seance\.needsAnswers, canSpend, visitorState \}\)/);
+  assert.match(SPEND, /announce\(SPEND_DONE\)/);
+  assert.match(SPEND, /upcomingHeading\(\)\?\.focus\(\)/);
+  assert.ok(SPEND.indexOf("if (!res.ok)") < SPEND.indexOf("announce(SPEND_DONE)"), "announced on success only");
+  assert.doesNotMatch(SPEND, /router\.refresh|useRouter|new Date\(/);
+});
+
+test("the spend button never prefills or locks the sign-in address, offers the dialog to an anonymous visitor only and describes the disabled state (Decision 7, risk 7, COV-C1)", () => {
+  const dialog = /<OtpDialog[\s\S]*?\/>/.exec(SPEND);
+  assert.ok(dialog, "the sign-in dialog is mounted");
+  assert.doesNotMatch(dialog[0], /email|defaultValue|value=|readOnly/i, "the address field is the dialog's own, empty");
+  assert.match(SPEND, /canOfferCodeSignIn\(visitorState\)/);
+  assert.match(SPEND, /control === "disabled"/);
+  assert.match(SPEND, /aria-describedby=\{hintId\}/);
+  assert.match(SPEND, /\{COPY\.CONFIRM_EMAIL_TO_SPEND\}/);
+  assert.match(SPEND, /<Link href=\{`\/\$\{slug\}\/seance\/\$\{seance\.occurrenceId\}`\}>/);
+});
+
+test("« Utiliser une autre adresse » signs out, then leaves with a full navigation that drops the router cache (SEC-M12)", () => {
+  assert.match(OTHER, /^"use client";/);
+  const out = OTHER.indexOf("await signOut()");
+  const leave = OTHER.indexOf("window.location.replace(returnPathOf(path))");
+  assert.ok(out !== -1 && leave > out, "sign out first, then the full navigation");
+  assert.match(OTHER, /\{COPY\.OTHER_ADDRESS\}/);
+  assert.doesNotMatch(OTHER, /router\.(refresh|push|replace)/);
+});
+
+test("« Ce n'est pas moi » clears the cookie through the action, then navigates in full (Decision 63)", () => {
+  assert.match(FORGET, /^"use client";/);
+  assert.match(FORGET, /import \{ forgetGuestLinkAction \} from "@\/server\/client";/);
+  const act = FORGET.indexOf("callOrFail(() => forgetGuestLinkAction({ slug }))");
+  const leave = FORGET.indexOf("window.location.replace(`/${slug}/espace`)");
+  assert.ok(act !== -1 && leave > act, "the action first, then the full navigation");
+  assert.match(FORGET, /\{COPY\.NOT_ME\}/);
+  assert.match(FORGET, /<FormError message=\{error\} \/>/);
+  assert.doesNotMatch(FORGET, /router\./);
+});
+
+test("the success line is one always-mounted status region shared by the leaves, so it outlives the row that triggered it", () => {
+  assert.match(STATUS, /^"use client";/);
+  assert.match(STATUS, /<p\s+role="status"/);
+  assert.match(STATUS, /export function SpaceStatusProvider/);
+  assert.match(STATUS, /export function useSpaceStatus/);
+  assert.match(STATUS, /document\.getElementById\(UPCOMING_HEADING_ID\)/);
+});
+
+test("the page reads the identity from the request's visitor, never a session of its own, and hands no id or row to a client leaf", () => {
+  assert.match(PAGE, /resolveSpaceCustomer\(pro\)/);
+  assert.doesNotMatch(PAGE, /getSession\(|getFreshSession\(|cookies\(/);
+  assert.doesNotMatch(PAGE, /\bcustomerId=\{|\buserId=\{|stripeAccountId|googleCalendarId/);
+  assert.match(PAGE, /const returnTo = `\/\$\{pro\.slug\}\/espace`;/);
+  assert.match(PAGE, /title: "Mon espace"/);
+  assert.match(PAGE, /robots: \{ index: false \}/);
   assert.match(
     PAGE,
-    /\{space \? \(\s*<CustomerSpaceView[^>]*\/>\s*\) : \(\s*<p className="text-sm text-zinc-600">\{COPY\.CONFIRM_EMAIL_FIRST\}<\/p>\s*\)\}/,
+    /spend=\{\{ seances: spendable, canSpend: canSpendIn\(identity\), visitorState, googleEnabled: env\.GOOGLE_CALENDAR_ENABLED, returnTo \}\}/,
   );
-  // The unverified branch keeps its banner above both.
-  assert.match(PAGE, /<VerifyEmailBanner email=\{identity\.email\} verified=\{false\} \/>/);
+});
+
+test("the sign-in-by-code form is offered to an anonymous visitor only, after every signed-in state was handled (risk 7, COV-C1, S38)", () => {
+  const steps = [
+    'if (identity.kind === "impersonating") {',
+    'if (identity.kind === "no_record") {',
+    "if (space) {",
+    'if (identity.kind === "unverified") {',
+    "canOfferCodeSignIn(visitorState)",
+    "<EmailCodeForm",
+  ].map((text) => PAGE.indexOf(text));
+  assert.ok(steps.every((at) => at !== -1), "every branch is there");
+  assert.ok(steps.every((at, i) => i === 0 || at > steps[i - 1]), "in this order: the form is the last resort");
+  assert.equal((PAGE.match(/<EmailCodeForm/g) ?? []).length, 1);
+  assert.equal((PAGE.match(/<ClientSignInChoices/g) ?? []).length, 1);
+});
+
+test("the confirmation banner is rendered once, outside the identity switch, as the first child of the shell, so it stays mounted when a code is accepted (WCAG 2.4.3, Revision 3.2)", () => {
+  assert.equal((PAGE.match(/<VerifyEmailBanner/g) ?? []).length, 1, "one banner, in the shell");
+  assert.match(PAGE, /const banner = bannerOfIdentity\(identity, space\?\.customer\.email \?\? null\);/);
+  assert.match(
+    PAGE,
+    /<PublicShell branding=\{pro\} backHref=\{`\/\$\{slug\}`\}>\s*\{banner && <VerifyEmailBanner email=\{banner\.email\} verified=\{banner\.verified\} \/>\}\s*\{children\}\s*<\/PublicShell>/,
+  );
+  assert.ok(PAGE.indexOf("<VerifyEmailBanner") < PAGE.indexOf('if (identity.kind === "impersonating") {'), "defined before the branches, which all go through the shell");
+});
+
+test("the unverified visitor gets the sentence only when no space is shown; the link's customer gets the guest note and « Ce n'est pas moi »; the Owner without a record gets the other-address button", () => {
+  // « Confirmez votre adresse pour voir vos réservations. » once, in the unverified branch that comes AFTER `if (space)`: never above reservations that are shown (G1b).
+  assert.equal((PAGE.match(/\{COPY\.CONFIRM_EMAIL_FIRST\}/g) ?? []).length, 1);
+  assert.ok(PAGE.indexOf("{COPY.CONFIRM_EMAIL_FIRST}") > PAGE.indexOf("if (space) {"));
+  assert.ok(PAGE.indexOf("{COPY.CONFIRM_EMAIL_FIRST}") > PAGE.indexOf('if (identity.kind === "unverified") {'));
+  assert.match(PAGE, /\{COPY\.IMPERSONATING\}/);
+  assert.match(PAGE, /noRecordText\(pro\.businessName, identity\.email\)/);
+  assert.match(PAGE, /<OtherAddressButton path=\{returnTo\} \/>/);
+  assert.match(PAGE, /guestNote\(space\.customer\.email\)/);
+  assert.match(PAGE, /<ForgetGuestLinkButton slug=\{pro\.slug\} \/>/);
+  assert.match(PAGE, /Ce lien n'est plus valide\./);
+});
+
+test("the /mon-espace cards carry the same wallet notes as the espace: an archived type and a type no upcoming séance accepts (§ 3.23 MySpaceView, COV-I2)", () => {
+  assert.match(MY_SPACE, /w\.archived && /);
+  assert.match(MY_SPACE, /\{w\.typeClass === "orphan" && <p className="text-xs text-zinc-600 wrap-anywhere">\{COPY\.ORPHAN_TYPE\}<\/p>\}/);
 });
