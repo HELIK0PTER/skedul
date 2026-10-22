@@ -3,10 +3,11 @@
  * From the payment return page a client gives a held seat back. The purchase
  * id comes from the input and nowhere else, is checked against the slug's pro
  * by purchaseByReference and, when an Owner is signed in, against the
- * Owner's customer (OUT:74, the precondition of releasePurchase). The core
- * never fulfils (the webhook is the fulfilment path) and never releases what
- * may be paid: it asks Stripe first and releases nothing it cannot prove
- * unpaid. No `server-only`, no env, no process db.
+ * Owner's customer (OUT:74, the precondition of releasePurchase). A reference
+ * with no booking (a shop purchase) is not found: there is no seat to give
+ * back. The core never fulfils (the webhook is the fulfilment path) and never
+ * releases what may be paid: it asks Stripe first and releases nothing it
+ * cannot prove unpaid. No `server-only`, no env, no process db.
  */
 import { z } from "zod";
 
@@ -49,6 +50,10 @@ export async function abandonCheckoutCore(
   if (!ref) return notFound();
   // A signed-in Owner can only release what is hers; a reference of another customer is ignored (OUT:74).
   if (visitor.owner && ref.customerId !== visitor.owner.customerId) return notFound();
+  // A reference without a booking is a shop purchase: there is no seat to give back, and closing its Checkout session or
+  // ending it is not what this action is for. Answered like a reference that names nothing, before any throttle key or
+  // gateway call (releasePurchase would end the purchase and report that nothing was released).
+  if (ref.booking === null) return notFound();
 
   const email = await customerEmailOf(db, pro.professionalId, ref.customerId);
   if (email === null) return notFound();
@@ -68,7 +73,7 @@ export async function abandonCheckoutCore(
   if (ref.status === "paid") return outcome("paid");
   if (ref.status === "expired") return outcome("already_ended");
   // A pending purchase whose booking is confirmed has nothing left to give back (SEC-C1).
-  if (ref.booking?.status === "confirmed") return outcome("already_ended");
+  if (ref.booking.status === "confirmed") return outcome("already_ended");
 
   if (ref.checkoutSessionId !== null) {
     const closed = await deps.checkout.closeForRelease(ref.checkoutSessionId);

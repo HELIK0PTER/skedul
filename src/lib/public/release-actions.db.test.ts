@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
 import { attachCheckoutSession, startBuyAndBook } from "@/lib/booking/claims";
-import { fulfillPurchase } from "@/lib/booking/fulfillment";
+import { fulfillPurchase, startPurchase } from "@/lib/booking/fulfillment";
 import { releasePurchase } from "@/lib/booking/release";
 import type { Db } from "@/lib/db/atomic";
 import * as schema from "@/lib/db/schema";
@@ -101,6 +101,14 @@ async function assertStillHeld(db: Db, held: Held, label: string): Promise<void>
   assert.equal((await getBooking(db, held.bookingId)).status, "pending", `${label}: booking`);
   assert.equal((await getOccurrence(db, held.occurrenceId)).seatsTaken, 1, `${label}: seat`);
   assert.equal(await purchaseStatus(db, held.purchaseId), "pending", `${label}: purchase`);
+}
+
+/** Every `release` throttle row (key and hits): a refused call must leave this list exactly as it found it. */
+async function releaseThrottleRows(db: Db): Promise<{ key: string; hits: number }[]> {
+  const res = await db.execute<{ key: string; hits: number }>(
+    sql`select key, hits from throttle where key like 't:release:%' order by key`,
+  );
+  return res.rows.map((r) => ({ key: r.key, hits: Number(r.hits) }));
 }
 
 /** Uses up the per-pro and the global e-mail keys of `release` for a typed address, the way 30 strangers typing it would. */
@@ -205,15 +213,61 @@ dbTest("E11 abandon: a pending purchase whose booking is already confirmed answe
   const occurrenceId = await rowSeance(db, pro, await rowEvent(db, pro), { seatsTaken: 1 });
   const purchaseId = await rowPurchase(db, pro, { customerId, offerId, ticketTypeId: typeId, status: "pending" });
   const bookingId = await rowBooking(db, pro, { occurrenceId, customerId, status: "confirmed", coverage: "guest", purchaseId });
+  // A session is attached: without the confirmed-booking guard the core would ask the gateway and end the purchase.
+  const attached = await attachCheckoutSession(db, {
+    purchaseId,
+    checkoutSessionId: `cs_test_${nanoid()}`,
+    checkoutUrl: `https://checkout.test/${purchaseId}`,
+  });
+  assert.ok(attached.ok, JSON.stringify(attached));
   const fake = fakeCheckout();
 
   const res = await abandon(db, pro, {}, { purchaseId }, fake);
   assert.ok(res.ok);
   assert.equal(res.outcome, "already_ended");
   assert.deepEqual(res.effects, []);
-  assert.deepEqual(fake.closed, []);
+  assert.deepEqual(fake.closed, [], "no gateway call for a purchase whose seat is confirmed");
+  assert.deepEqual(fake.expired, []);
   assert.equal((await getBooking(db, bookingId)).status, "confirmed", "a confirmed seat is never released by a reference");
   assert.equal((await getOccurrence(db, occurrenceId)).seatsTaken, 1);
+  assert.equal(await purchaseStatus(db, purchaseId), "pending", "the purchase itself is left alone");
+});
+
+dbTest("E11 abandon: a reference to a shop purchase (no booking, no seat) is not found before any gateway call and ends nothing (G2b)", async ({ db, pro }) => {
+  const typeId = await makeType(db, pro, { name: "Cours collectif" });
+  const offerId = await makeOffer(db, pro, typeId, { quantity: 4, priceCents: 8500, validityCount: 3, validityUnit: "month" });
+  const fake = fakeCheckout();
+  const throttleBefore = await releaseThrottleRows(db);
+
+  for (const session of ["stripe", "mock", "none"] as const) {
+    const customerId = await makeCustomer(db, pro, { email: testEmail("shop") });
+    const started = await startPurchase(db, { professionalId: pro.proId, offerId, customerId });
+    assert.ok(started.ok, JSON.stringify(started));
+    if (session !== "none") {
+      const attached = await attachCheckoutSession(db, {
+        purchaseId: started.purchaseId,
+        checkoutSessionId: session === "mock" ? mockSessionId(started.purchaseId) : `cs_test_${nanoid()}`,
+        checkoutUrl: `https://checkout.test/${started.purchaseId}`,
+      });
+      assert.ok(attached.ok, JSON.stringify(attached));
+    }
+
+    assertNotFound(await abandon(db, pro, {}, { purchaseId: started.purchaseId }, fake));
+    assert.equal(await purchaseStatus(db, started.purchaseId), "pending", `${session}: the shop purchase is not ended by a seat release`);
+  }
+  assert.deepEqual(fake.closed, [], "no closeForRelease for a purchase without a seat");
+  assert.deepEqual(fake.expired, [], "no session expired either");
+
+  // A paid shop purchase gets the same answer: the reference stands for a seat to give back, and there is none.
+  const customerId = await makeCustomer(db, pro, { email: testEmail("shop-paid") });
+  const started = await startPurchase(db, { professionalId: pro.proId, offerId, customerId });
+  assert.ok(started.ok, JSON.stringify(started));
+  const done = await fulfillPurchase(db, started.purchaseId, { sessionId: null, paymentIntentId: null, livemode: false });
+  assert.equal(done.outcome, "fulfilled");
+  assertNotFound(await abandon(db, pro, {}, { purchaseId: started.purchaseId }, fake));
+  assert.equal(await purchaseStatus(db, started.purchaseId), "paid");
+  assert.deepEqual(fake.closed, []);
+  assert.deepEqual(await releaseThrottleRows(db), throttleBefore, "answered like a reference that names nothing: no throttle key consumed");
 });
 
 dbTest("E11 abandon: no session id attached means nothing to ask Stripe, the hold is released", async ({ db, pro }) => {
@@ -288,6 +342,20 @@ dbTest("E11 abandon: strangers typing an address cannot lock out its verified ho
     const res = await abandon(db, pro, holder, { purchaseId: held.purchaseId }, fake);
     assert.ok(res.ok, JSON.stringify(res));
     assert.equal(res.outcome, "released");
+
+    // The user key is the holder's own limit: once it is used up the holder is refused too, whatever the e-mail keys say.
+    const userKeys = actionThrottleKeys({
+      action: "release",
+      professionalId: pro.proId,
+      ipHash: testIpHash(),
+      wideIpHash: null,
+      subject: { kind: "user", userId: client.userId },
+    }).filter((k) => k.key.includes(":u:"));
+    assert.equal(userKeys.length, 1, "the holder has one user key");
+    await hitThrottle(db, userKeys[0].key, userKeys[0].limit, THROTTLE_WINDOW_SEC, new Date());
+    const refused = await abandon(db, pro, holder, { purchaseId: held.purchaseId }, fake);
+    assert.ok(!refused.ok);
+    assert.equal(refused.code, "throttled");
   } finally {
     await deleteTestUser(db, client.userId);
   }
@@ -330,9 +398,10 @@ dbTest("E11 abandon: an Owner who is not the purchase's customer gets not found,
   assert.deepEqual(fake.closed, [held.sessionId]);
 });
 
-dbTest("E11 abandon: a malformed input is refused whole, in French, before anything is read or written (S43)", async ({ db, pro }) => {
+dbTest("E11 abandon: a malformed input is refused whole, in French, with no gateway call, no write and no throttle key consumed (S43)", async ({ db, pro }) => {
   const held = await heldSeat(db, pro);
   const fake = fakeCheckout();
+  const throttleBefore = await releaseThrottleRows(db);
   const cases: [unknown, string][] = [
     [null, "Valeur invalide."],
     ["x", "Valeur invalide."],
@@ -355,7 +424,9 @@ dbTest("E11 abandon: a malformed input is refused whole, in French, before anyth
     assert.deepEqual(res.effects, []);
   }
   assert.deepEqual(fake.closed, []);
+  assert.deepEqual(fake.expired, []);
   await assertStillHeld(db, held, "malformed");
+  assert.deepEqual(await releaseThrottleRows(db), throttleBefore, "a refused input consumed no throttle key");
 
   // The schema itself: strict, one key.
   assert.equal(abandonInputSchema.safeParse({ purchaseId: held.purchaseId }).success, true);
@@ -364,4 +435,10 @@ dbTest("E11 abandon: a malformed input is refused whole, in French, before anyth
   // A well-formed id that names nothing is the same not found as a foreign one.
   assertNotFound(await abandon(db, pro, {}, { purchaseId: nanoid() }, fake));
   assertNotFound(await abandon(db, pro, {}, { purchaseId: "../x" }, fake));
+  assert.deepEqual(await releaseThrottleRows(db), throttleBefore, "nor did a reference that names nothing");
+
+  // Control: a valid call does consume keys, so the comparison above could have failed.
+  const res = await abandon(db, pro, {}, { purchaseId: held.purchaseId }, fake);
+  assert.ok(res.ok, JSON.stringify(res));
+  assert.notDeepEqual(await releaseThrottleRows(db), throttleBefore);
 });
