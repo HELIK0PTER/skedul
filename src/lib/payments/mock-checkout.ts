@@ -58,7 +58,8 @@ async function simulatedPurchase(db: Db, purchaseId: string) {
       ticketTypeName: ticketType.name,
       slug: professional.slug,
       businessName: professional.businessName,
-      occurrenceId: booking.occurrenceId,
+      // From the filtered join, not from the booking: a booking that points to another pro's séance has no séance here.
+      occurrenceId: occurrence.id,
       eventTitle: event.title,
     })
     .from(ticketPurchase)
@@ -68,8 +69,14 @@ async function simulatedPurchase(db: Db, purchaseId: string) {
       booking,
       and(eq(booking.purchaseId, ticketPurchase.id), eq(booking.professionalId, ticketPurchase.professionalId)),
     )
-    .leftJoin(occurrence, eq(occurrence.id, booking.occurrenceId))
-    .leftJoin(event, eq(event.id, occurrence.eventId))
+    // The séance and its event must be this pro's own (the foreign keys are single-column, so a row that crossed two pros
+    // would otherwise put another pro's event title or séance id on this pro's checkout page): the same filters as
+    // purchaseByReference (G2b).
+    .leftJoin(
+      occurrence,
+      and(eq(occurrence.id, booking.occurrenceId), eq(occurrence.professionalId, ticketPurchase.professionalId)),
+    )
+    .leftJoin(event, and(eq(event.id, occurrence.eventId), eq(event.professionalId, ticketPurchase.professionalId)))
     .where(eq(ticketPurchase.id, purchaseId));
   if (!row) return null;
   if (row.checkoutSessionId !== null && !isMockSession(row.checkoutSessionId)) return null;

@@ -12,8 +12,9 @@ import { mockSessionId } from "@/lib/payments/checkout";
 import { mockCheckoutState, mockPay } from "@/lib/payments/mock-checkout";
 import { HEALTH_KEYS, readHealth } from "@/lib/throttle";
 import { formatMoney } from "@/lib/utils";
-import { createTestPro, dbTest, deleteTestUser, type TestPro } from "@/test/db";
+import { createTestPro, dbTest, deleteTestUser, testEmail, type TestPro } from "@/test/db";
 import { getBooking, getOccurrence, makeCustomer, makeEvent, makeOffer, makeType, ticketsOf } from "@/test/fixtures";
+import { rowBooking, rowCustomer, rowOffer, rowPurchase, rowSeance, rowType } from "@/test/rows";
 
 type Session = "mock" | "none" | "stripe";
 
@@ -241,6 +242,50 @@ dbTest("tenancy: another pro's simulated purchase is paid within its own pro, re
     assert.equal((await purchaseRow(db, mine.purchaseId)).status, "pending");
     assert.equal((await ticketsOf(db, mine.customerId)).length, 0);
   } finally {
+    await deleteTestUser(db, other.userId);
+  }
+});
+
+dbTest("mockCheckoutState: a séance row that points to another pro's event or séance shows none of its text and keeps its id out of the cancel link (defence in depth, G3a)", async ({ db, pro }) => {
+  const now = new Date();
+  const mineType = await rowType(db, pro, { name: "Type de ce pro" });
+  const mineOffer = await rowOffer(db, pro, mineType);
+  const customerId = await rowCustomer(db, pro, { email: testEmail("cross") });
+  const other = await createTestPro(db);
+  const handBuilt: { bookings: string[]; occurrences: string[] } = { bookings: [], occurrences: [] };
+  try {
+    const theirType = await makeType(db, other, { name: "Type de l'autre pro" });
+    const {
+      eventId: theirEvent,
+      occurrences: [theirSeance],
+    } = await makeEvent(db, other, { title: "Séance de l'autre pro", ticketTypeIds: [theirType] });
+    // Built by hand on purpose: occurrence.event_id is a single-column foreign key and so is booking.occurrence_id, so
+    // nothing but the read's own joins keeps another pro's event or séance out of this pro's checkout page.
+    const viaEvent = await rowSeance(db, pro, theirEvent, { seatsTaken: 1 }, now);
+    handBuilt.occurrences.push(viaEvent);
+
+    for (const [label, occurrenceId] of [
+      ["this pro's séance on the other pro's event", viaEvent],
+      ["the other pro's own séance", theirSeance.id],
+    ] as const) {
+      const purchaseId = await rowPurchase(db, pro, { customerId, offerId: mineOffer, ticketTypeId: mineType, status: "pending" }, now);
+      handBuilt.bookings.push(await rowBooking(db, pro, { occurrenceId, customerId, status: "confirmed", coverage: "guest", purchaseId }, now));
+
+      const state = await mockCheckoutState(db, purchaseId);
+      assert.ok(state?.kind === "pending", label);
+      assert.equal(state.view.productLabel, "Type de ce pro · Offre de test", `${label}: the pro's own type, never the other pro's event title`);
+      assert.equal(JSON.stringify(state).includes("l'autre pro"), false, `${label}: nothing of the other pro's event or type`);
+      if (occurrenceId === theirSeance.id) {
+        assert.equal(state.view.cancelPath.includes(occurrenceId), false, "another pro's séance id is not linked from this pro's page");
+        assert.equal(state.view.cancelPath, `/${pro.slug}/offre/${mineOffer}?paiement=annule&p=${purchaseId}`, "the offer, like a shop purchase");
+      } else {
+        assert.ok(state.view.cancelPath.includes(occurrenceId), "this pro's own séance is still the way back");
+      }
+    }
+  } finally {
+    // The hand-built rows go first: the foreign keys inside the domain are NO ACTION and they point at the other pro's rows.
+    for (const id of handBuilt.bookings) await db.delete(schema.booking).where(eq(schema.booking.id, id));
+    for (const id of handBuilt.occurrences) await db.delete(schema.occurrence).where(eq(schema.occurrence.id, id));
     await deleteTestUser(db, other.userId);
   }
 });

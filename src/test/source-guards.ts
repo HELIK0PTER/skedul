@@ -168,11 +168,32 @@ function withoutSafeCalls(args: string): string {
   return chars.join("");
 }
 
-/** The names a caught error is commonly bound to, plus every `catch (name)` and `.catch((name) => ...)` binding of this source. */
+/** The names a destructuring pattern binds (`message, code: c, cause = x, ...rest` gives message, c, cause, rest); a nested pattern is skipped. */
+function boundNames(pattern: string): string[] {
+  const names: string[] = [];
+  for (const raw of pattern.split(",")) {
+    const part = raw.trim().replace(/^\.\.\./, "");
+    const alias = part.includes(":") ? part.slice(part.indexOf(":") + 1) : part;
+    const id = /^\s*([A-Za-z_$][\w$]*)/.exec(alias);
+    if (id) names.push(id[1]);
+  }
+  return names;
+}
+
+/**
+ * The names a caught error is commonly bound to, plus every name a catch of this source binds: `catch (x)`,
+ * `catch ({ message, cause: c })`, `.catch((x) => ...)`, `.catch(async x => ...)`, `.catch(function (x) { ... })`,
+ * `.catch(({ message }) => ...)`, with or without a type annotation.
+ */
 function errorNamesOf(code: string): Set<string> {
   const names = new Set(["err", "error", "e", "cause", "reason"]);
   for (const m of code.matchAll(/\bcatch\s*\(\s*([A-Za-z_$][\w$]*)/g)) names.add(m[1]);
-  for (const m of code.matchAll(/\.catch\s*\(\s*\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*=>/g)) names.add(m[1]);
+  for (const m of code.matchAll(/\.catch\s*\(\s*(?:async\s+)?\(?\s*([A-Za-z_$][\w$]*)\s*(?::[^)=]*)?\)?\s*=>/g)) names.add(m[1]);
+  for (const m of code.matchAll(/\.catch\s*\(\s*(?:async\s+)?function\s*[A-Za-z_$]*\s*\(\s*([A-Za-z_$][\w$]*)/g)) names.add(m[1]);
+  for (const m of code.matchAll(/\bcatch\s*\(\s*\{([^}]*)\}/g)) for (const name of boundNames(m[1])) names.add(name);
+  for (const m of code.matchAll(/\.catch\s*\(\s*(?:async\s+)?(?:function\s*[A-Za-z_$]*\s*)?\(\s*\{([^}]*)\}/g)) {
+    for (const name of boundNames(m[1])) names.add(name);
+  }
   return names;
 }
 
@@ -184,7 +205,7 @@ function namesRawError(args: string, names: Set<string>): boolean {
     const at = m.index ?? 0;
     const before = args.slice(0, at).trimEnd();
     const after = args.slice(at + m[0].length).trimStart();
-    if (before.endsWith(".")) continue; // a property (`verified.reason`), not the caught error itself
+    if (before.endsWith(".") && !before.endsWith("...")) continue; // a property (`verified.reason`), not the caught error itself; a spread (`...err`) is the error
     if ((before.endsWith("{") || before.endsWith(",")) && after.startsWith(":")) continue; // an object key (`{ error: 1 }`)
     return true;
   }
@@ -193,25 +214,35 @@ function namesRawError(args: string, names: Set<string>): boolean {
 
 /**
  * Every `console.log|info|warn|error(...)` call of `source` that hands a raw error to the log: its arguments name an
- * identifier commonly bound to a caught error (`err`, `error`, `e`, `cause`, `reason`, and any `catch (x)` or `.catch((x) =>`
- * binding of the same source) or read a `.stack`, as a bare argument, in `String(err)`, in `err.message` or inside a
- * template literal's `${ }`; unless the identifier only appears inside `logSafeMessage( ... )`. The whole error (stack,
- * cause, driver message with its SQL parameters) would reach the platform log, which `logSafeMessage` scrubs. Returns the
- * text of each offending call, so a failing test shows it; an empty list is a pass. Comments, string text and regular
- * expressions are never read as code. A property that happens to be named like an error (`verified.reason`) is not one.
+ * identifier commonly bound to a caught error (`err`, `error`, `e`, `cause`, `reason`, and every name a `catch (x)`,
+ * `catch ({ message })`, `.catch((x) =>`, `.catch(function (x)` or `.catch(({ message }) =>` of the same source binds)
+ * or read a `.stack`, as a bare argument, in a spread (`{ ...err }`), in `String(err)`, in `err.message` or inside a
+ * template literal's `${ }`; unless the identifier only appears inside `logSafeMessage( ... )`. Also every console method
+ * passed as an argument without being called (`.catch(console.error)`, `.then(ok, console.warn)`), which receives the
+ * raw error: reported as the reference itself. The whole error (stack, cause, driver message with its SQL parameters)
+ * would reach the platform log, which `logSafeMessage` scrubs. Returns the text of each offending call or reference, in
+ * source order, so a failing test shows it; an empty list is a pass. Comments, string text and regular expressions are
+ * never read as code. A property that happens to be named like an error (`verified.reason`) is not one.
  */
 export function rawErrorLogs(source: string): string[] {
   const code = codeView(source);
   const names = errorNamesOf(code);
-  const found: string[] = [];
+  const found: { at: number; text: string }[] = [];
   const head = /\bconsole\s*\.\s*(?:log|info|warn|error)\s*\(/g;
   for (let m = head.exec(code); m !== null; m = head.exec(code)) {
     const open = m.index + m[0].length - 1;
     const close = closingParen(code, open);
     if (namesRawError(withoutSafeCalls(code.slice(open + 1, close)), names)) {
-      found.push(source.slice(m.index, Math.min(close + 1, source.length)));
+      found.push({ at: m.index, text: source.slice(m.index, Math.min(close + 1, source.length)) });
     }
     head.lastIndex = Math.max(close, m.index + m[0].length);
   }
-  return found;
+  // A console method passed as an argument without being called (nor assigned or compared) is handed to something that
+  // calls it with the error. A default value or an assignment (`log = console.error`) is not a hand-over: it names a logger.
+  const reference = /\bconsole\s*\.\s*(?:log|info|warn|error)\b(?!\s*[(=])/g;
+  for (let m = reference.exec(code); m !== null; m = reference.exec(code)) {
+    const before = code.slice(0, m.index).trimEnd();
+    if (before.endsWith("(") || before.endsWith(",")) found.push({ at: m.index, text: source.slice(m.index, m.index + m[0].length) });
+  }
+  return found.sort((x, y) => x.at - y.at).map((hit) => hit.text);
 }

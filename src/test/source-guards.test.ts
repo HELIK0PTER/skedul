@@ -38,6 +38,78 @@ test("rawErrorLogs: a catch binding of the same source counts as a caught error,
   assert.equal(hits('console.error("[x] failed", failure);'), 0, "no catch binds it here");
 });
 
+test("rawErrorLogs: a spread of a caught error is reported (a `...` before the name is not a property access)", () => {
+  const spread = [
+    'console.error("[x] failed", { ...err });',
+    "console.error({ ...error, step: 2 });",
+    "console.error(...err);",
+    'console.warn("[x] failed", ...[err]);',
+    'try { run(); } catch (failure) { console.error("[x] failed", { ...failure }); }',
+  ];
+  for (const source of spread) assert.equal(hits(source), 1, source);
+  // A property named like an error is still a property, spread or not.
+  assert.equal(hits('console.error("[x] failed", { ...verified.reason });'), 0);
+  assert.equal(hits('console.error("[x] failed", ...errors);'), 0, "another name");
+});
+
+test("rawErrorLogs: a console method handed over as a callback receives the error, and is reported", () => {
+  const callbacks = [
+    "run().catch(console.error);",
+    "run().catch(console.warn);",
+    "run().then(ok, console.error);",
+    "run().catch(console.error.bind(console));",
+    "run().catch( console . log );",
+  ];
+  for (const source of callbacks) assert.equal(hits(source), 1, source);
+  // Reported as the reference, with its own text, in source order with the calls.
+  assert.deepEqual(rawErrorLogs('console.error("[a] x", err);\nrun().catch(console.error);'), ['console.error("[a] x", err)', "console.error"]);
+  // Not a hand-over: a call (without an error), an assignment, a default value or a property that only names a logger, a comparison, a string.
+  for (const source of [
+    'console.error("[x] done");',
+    "console.error = capture;",
+    "const report = console.warn;",
+    "export function run(log: (line: string) => void = console.error) { log(line); }",
+    "const deps = { log: console.error };",
+    'typeof console.error === "function";',
+    'const name = "console.error";',
+    "// run().catch(console.error)",
+  ]) {
+    assert.equal(hits(source), 0, source);
+  }
+});
+
+test("rawErrorLogs: the parameter of a function-expression catch handler counts as a caught error", () => {
+  const handlers = [
+    'run().catch(function (boom) { console.error("[x] failed", boom); });',
+    'run().catch(function named(boom) { console.error("[x] failed", boom); });',
+    'run().catch(async function (boom) { console.error("[x] failed", boom); });',
+    'run().catch(async (boom) => { console.error("[x] failed", boom); });',
+    'run().catch(async boom => console.error("[x] failed", boom));',
+    'run().catch((boom: unknown) => console.error("[x] failed", boom));',
+    'run().catch(function (boom: unknown) { console.error(boom); });',
+    'try { run(); } catch (boom: unknown) { console.error("[x] failed", boom); }',
+  ];
+  for (const source of handlers) assert.equal(hits(source), 1, source);
+  assert.equal(hits('run().catch(function (boom) { console.error("[x] failed"); });'), 0, "bound but not logged");
+  assert.equal(hits('run().then(function (boom) { console.error("[x] failed", boom); });'), 0, "a then handler binds a value, not a caught error");
+});
+
+test("rawErrorLogs: the names inside a destructured catch parameter count as a caught error", () => {
+  const destructured = [
+    'try { run(); } catch ({ message }) { console.error("[x] failed", message); }',
+    'try { run(); } catch ({ message: text }) { console.error("[x] failed", text); }',
+    'try { run(); } catch ({ code, cause }) { console.error("[x] failed", cause); }',
+    'try { run(); } catch ({ code, ...rest }) { console.error("[x] failed", rest); }',
+    'try { run(); } catch ({ message = "none" }) { console.error("[x] failed", message); }',
+    'run().catch(({ message }) => console.error("[x] failed", message));',
+    'run().catch(async function ({ message }) { console.error("[x] failed", message); });',
+  ];
+  for (const source of destructured) assert.equal(hits(source), 1, source);
+  assert.equal(hits('try { run(); } catch ({ message }) { console.error("[x] failed"); }'), 0, "bound but not logged");
+  assert.equal(hits('console.error("[x] failed", message);'), 0, "no catch binds it here");
+  assert.equal(hits('try { run(); } catch ({ message: text }) { console.error("[x] failed", message); }'), 0, "renamed: only the alias is bound");
+});
+
 test("rawErrorLogs: logSafeMessage scrubs the error, so an identifier that only appears inside it is not reported", () => {
   const safe = [
     "console.error(`[x] failed: ${logSafeMessage(err)}`);",
