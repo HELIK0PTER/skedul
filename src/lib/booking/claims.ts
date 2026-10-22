@@ -62,7 +62,8 @@ type ClientClaimBase = {
   occurrenceId: string;
   /**
    * E1 / E3: from upsertCustomer (identifies the row, authorises nothing). E2 (bookWithHeldTicket): ONLY the
-   * verified wallet owner's customer (requireWalletOwner), never a customer resolved from a typed e-mail (OUT:75).
+   * verified wallet Owner's customer (the `owner` of the P4 visitor, resolveVisitor), never a customer resolved from
+   * a typed e-mail (OUT:75).
    */
   customerId: string;
   /** occurrence.starts_at the client saw: G(starts_at = seen, 'changed') */
@@ -567,9 +568,10 @@ function spentTicketId(results: readonly unknown[], index: number | undefined, b
 
 /**
  * E2 client: spend a held ticket on an event séance in `tickets` mode. The
- * P4 action passes ONLY the verified wallet owner's customer and user
- * (requireWalletOwner, OUT:75): never a customer resolved from a typed e-mail,
- * never a guest cookie. `actorUserId` is that owner's user id, recorded on the
+ * P4 action passes ONLY the verified wallet Owner's customer and user (the
+ * `owner` of the visitor from resolveVisitor, which the core links after
+ * parseFr and the throttle, OUT:75): never a customer resolved from a typed
+ * e-mail, never a guest cookie. `actorUserId` is that owner's user id, recorded on the
  * spend movement. Batch: lock occurrence, R,
  * G(not already booked), SEAT(+1), G(ONLINE_OK 'tickets'), G(CHANGED), INSERT
  * booking (confirmed, ticket), spend (SKIP LOCKED pick) + assertSpent, answers.
@@ -821,8 +823,9 @@ export type BookRdvInput = {
   startsAt: Date;
   /**
    * For « held_ticket » (it spends this customer's ticket) this must be the
-   * verified wallet owner (P4 requireWalletOwner), never a customer resolved
-   * from an e-mail typed by an anonymous visitor (upsertCustomer).
+   * verified wallet Owner (the `owner` of the P4 visitor, resolveVisitor),
+   * never a customer resolved from an e-mail typed by an anonymous visitor
+   * (upsertCustomer).
    */
   customerId: string;
   answers?: AnswerInput[];

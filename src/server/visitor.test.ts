@@ -5,7 +5,7 @@
  * src/server/pro-context.test.ts. Run from the repository root.
  */
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import test from "node:test";
 
 const SOURCE = readFileSync("src/server/visitor.ts", "utf8");
@@ -52,12 +52,24 @@ test("currentPublicVisitor is cached per request and builds the visitor from the
   assert.match(body, /resolveVisitor\(/);
 });
 
-test("requireWalletOwner reads the fresh facts, ignores the cookie, and links the account only after finding the owner", () => {
-  const body = sectionOf("export async function requireWalletOwner");
-  assert.match(body, /currentSessionFacts\(\)/);
-  assert.match(body, /guestToken: undefined/, "the cookie never makes an Owner");
-  assert.match(body, /resolveVisitor\(/);
-  assert.ok(body.indexOf("if (!owner) return null") !== -1, "no owner, no write");
-  assert.ok(body.indexOf("if (!owner) return null") < body.indexOf("linkCustomerUser("), "the link is written after the owner check");
-  assert.match(body, /linkCustomerUser\(db, owner, now\)/);
+test("the file declares no writer of the wallet Owner: the Owner is linked by its core, after parseFr and the throttle (Revision 3.2)", () => {
+  assert.doesNotMatch(SOURCE, /linkCustomerUser/, "visitor.ts never writes customer.user_id");
+  assert.doesNotMatch(SOURCE, /WalletOwner/, "no helper returns an Owner: it is the owner field of the visitor");
+});
+
+/** Every .ts and .tsx file under `dir`, test files excluded, with forward slashes. */
+function sourceFilesUnder(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = `${dir}/${name}`;
+    if (statSync(path).isDirectory()) return sourceFilesUnder(path);
+    return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [path] : [];
+  });
+}
+
+test("no file under src outside the test files names requireWalletOwner (a writer that wrappers could call before their core parses and throttles)", () => {
+  const files = sourceFilesUnder("src");
+  assert.ok(files.length > 200, `the scan found the sources (${files.length})`);
+  assert.ok(files.includes("src/server/visitor.ts") && files.includes("src/lib/booking/claims.ts"), "the scan reaches the visitor and the engine claims");
+  const offenders = files.filter((file) => /requireWalletOwner/.test(readFileSync(file, "utf8")));
+  assert.deepEqual(offenders, []);
 });

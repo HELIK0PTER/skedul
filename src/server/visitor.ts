@@ -8,14 +8,7 @@ import { clientIpFrom, ipBuckets } from "@/lib/client-ip";
 import { dayKeyInTz } from "@/lib/datetime";
 import { db } from "@/lib/db";
 import { GUEST_COOKIE } from "@/lib/guest-link";
-import {
-  linkCustomerUser,
-  resolveVisitor,
-  sessionFactsOf,
-  type PublicVisitor,
-  type SessionFacts,
-  type WalletOwner,
-} from "@/lib/public/identity";
+import { resolveVisitor, sessionFactsOf, type PublicVisitor, type SessionFacts } from "@/lib/public/identity";
 import { getFreshSession } from "@/lib/session";
 import { actingSession } from "@/lib/suspension";
 import { ipHash } from "@/lib/visitor-hash";
@@ -37,7 +30,11 @@ export async function currentSessionFacts(): Promise<SessionFacts | null> {
   return sessionFactsOf(actingSession(await getFreshSession()));
 }
 
-/** cache()d per request on (professionalId, ownerUserId): resolveVisitor with the fresh session, the skedul_guest cookie and the guest key. */
+/**
+ * cache()d per request on (professionalId, ownerUserId): resolveVisitor with the fresh session, the skedul_guest cookie
+ * and the guest key. It only reads. The wallet Owner is its `owner` field; the one write that depends on it (the
+ * account link) is made by bookWithHeldTicketCore, after its parseFr and its throttle (contract Revision 3.2).
+ */
 export const currentPublicVisitor: (professionalId: string, ownerUserId: string) => Promise<PublicVisitor> = cache(
   async (professionalId: string, ownerUserId: string): Promise<PublicVisitor> =>
     resolveVisitor(
@@ -50,21 +47,3 @@ export const currentPublicVisitor: (professionalId: string, ownerUserId: string)
       { professionalId, ownerUserId },
     ),
 );
-
-/**
- * The wallet owner of this pro (L1341-1346), or null: fresh session, not impersonated, verified, owned customer;
- * then linkCustomerUser. It WRITES, and a wrapper runs before its core has parsed the input and passed the throttle,
- * so no wrapper calls it (contract Revision 3.2): the one core that links the account, bookWithHeldTicketCore, calls
- * linkCustomerUser itself on the Owner of the visitor, after parseFr and checkActionThrottle. The cookie is never
- * read here: it can be planted by another site and never makes an Owner.
- */
-export async function requireWalletOwner(
-  pro: { professionalId: string; ownerUserId: string },
-  now: Date,
-): Promise<WalletOwner | null> {
-  const session = await currentSessionFacts();
-  const { owner } = await resolveVisitor(db, { session, guestToken: undefined, key: guestKey() }, pro);
-  if (!owner) return null;
-  await linkCustomerUser(db, owner, now);
-  return owner;
-}
