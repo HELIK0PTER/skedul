@@ -5,7 +5,6 @@ import { useId, useState, useTransition } from "react";
 import { Loader2 } from "lucide-react";
 
 import { OtpDialog } from "@/components/auth/otp-dialog";
-import { FormError } from "@/components/dashboard/form-error";
 import { upcomingHeading, useSpaceStatus } from "@/components/public/space-status";
 import { Button } from "@/components/ui/button";
 import { callOrFail } from "@/lib/pro-messages";
@@ -87,7 +86,7 @@ export function SpendSeanceButton({
           {pending ? COPY.PENDING_BOOK : SPEND_LABEL}
         </Button>
       )}
-      <FormError message={error} />
+      <div role="alert">{error && <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-rose-700">{error}</p>}</div>
       {control === "signin" && canOfferCodeSignIn(visitorState) && (
         <OtpDialog open={signInOpen} onClose={() => setSignInOpen(false)} returnTo={returnTo} googleEnabled={googleEnabled} />
       )}

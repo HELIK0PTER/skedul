@@ -73,8 +73,16 @@ test("« Ce n'est pas moi » clears the cookie through the action, then navigate
   const leave = FORGET.indexOf("window.location.replace(`/${slug}/espace`)");
   assert.ok(act !== -1 && leave > act, "the action first, then the full navigation");
   assert.match(FORGET, /\{COPY\.NOT_ME\}/);
-  assert.match(FORGET, /<FormError message=\{error\} \/>/);
+  assert.match(FORGET, /<div role="alert">/, "the failure sits in an always-mounted alert region");
   assert.doesNotMatch(FORGET, /router\./);
+});
+
+test("every failure of a leaf sits in an always-mounted role=\"alert\" region, never in FormError, which mounts its alert together with the text (§ 1 UI rules, COV-M11)", () => {
+  for (const [name, source] of [["SPEND", SPEND], ["OTHER", OTHER], ["FORGET", FORGET]] as const) {
+    assert.match(source, /<div role="alert">\{error && <p className="rounded-lg bg-destructive\/10 px-3 py-2 text-sm text-rose-700">\{error\}<\/p>\}<\/div>/, `${name}: the region stays mounted, only its text comes and goes`);
+    assert.doesNotMatch(source, /<FormError\b/, `${name}: FormError mounts its alert together with the text`);
+    assert.doesNotMatch(source, /dashboard\/form-error/, `${name}: no FormError import left`);
+  }
 });
 
 test("the success line is one always-mounted status region shared by the leaves, so it outlives the row that triggered it", () => {

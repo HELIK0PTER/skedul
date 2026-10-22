@@ -3,7 +3,6 @@
 import { useState, useTransition } from "react";
 import { Loader2 } from "lucide-react";
 
-import { FormError } from "@/components/dashboard/form-error";
 import { Button } from "@/components/ui/button";
 import { callOrFail } from "@/lib/pro-messages";
 import { COPY } from "@/lib/public/messages";
@@ -36,7 +35,7 @@ export function ForgetGuestLinkButton({ slug }: { slug: string }) {
         {pending && <Loader2 className="animate-spin" aria-hidden />}
         {COPY.NOT_ME}
       </Button>
-      <FormError message={error} />
+      <div role="alert">{error && <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-rose-700">{error}</p>}</div>
     </div>
   );
 }

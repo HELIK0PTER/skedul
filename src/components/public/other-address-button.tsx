@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
 
-import { FormError } from "@/components/dashboard/form-error";
 import { Button } from "@/components/ui/button";
 import { signOut } from "@/lib/auth-client";
 import { REQUEST_FAILED } from "@/lib/pro-messages";
@@ -44,7 +43,7 @@ export function OtherAddressButton({ path }: { path: string }) {
         {pending && <Loader2 className="animate-spin" aria-hidden />}
         {COPY.OTHER_ADDRESS}
       </Button>
-      <FormError message={error} />
+      <div role="alert">{error && <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-rose-700">{error}</p>}</div>
     </div>
   );
 }
