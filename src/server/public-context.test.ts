@@ -43,7 +43,7 @@ test("both wrappers are thin: they hand the real dependencies to the tested bodi
   const publicBody = sectionOf("export async function runPublicAction");
   assert.match(publicBody, /runPublicActionWith</);
   assert.match(publicBody, /resolvePro: async \(slug\) => \(await resolvePublicPro\(slug\)\)\?\.pro \?\? null/);
-  assert.match(publicBody, /visitor: \(pro, now\) => actionVisitor\(pro, now, opts\)/);
+  assert.match(publicBody, /visitor: \(pro, now\) => actionVisitor\(pro, now\)/);
   const clientBody = sectionOf("export async function runClientAction");
   assert.match(clientBody, /runClientActionWith</);
   assert.match(clientBody, /session: currentSessionFacts/);
@@ -62,13 +62,20 @@ test("revalidation covers every PUBLIC_REVALIDATE target and nothing else", () =
   assert.match(body, /for \(const target of PUBLIC_REVALIDATE\) revalidatePath\(target\.path, target\.type\)/);
 });
 
-test("actionVisitor builds the visitor on the server: fresh facts, cached visitor, IP hashes; the held ticket path links through requireWalletOwner", () => {
+test("actionVisitor builds the visitor on the server: fresh facts, cached visitor, IP hashes; the Owner is read, never linked", () => {
   const body = sectionOf("export async function actionVisitor");
   assert.match(body, /currentSessionFacts\(\)/);
   assert.match(body, /currentPublicVisitor\(pro\.professionalId, pro\.ownerUserId\)/);
   assert.match(body, /visitorIpHashes\(now\)/);
-  assert.match(body, /opts\.linkOwner \? await requireWalletOwner\(pro, now\) : visitor\.owner/);
+  assert.match(body, /owner: visitor\.owner,/);
   assert.doesNotMatch(CODE, /\bgetSession\b/, "only the fresh reads of visitor.ts may read a session");
+});
+
+test("no write happens before the core has validated and throttled: this file links no account (Revision 3.2)", () => {
+  // linkCustomerUser runs inside bookWithHeldTicketCore, after parseFr and checkActionThrottle (Task 10): nothing here may write the link
+  assert.doesNotMatch(CODE, /linkCustomerUser|requireWalletOwner|linkOwner/);
+  assert.doesNotMatch(sectionOf("export async function actionVisitor"), /await\s+(?!Promise\.all)/, "actionVisitor only reads, through Promise.all");
+  assert.doesNotMatch(sectionOf("export async function runPublicAction"), /\bopts\b/, "no per-action option can switch a write on in the wrapper");
 });
 
 test("publicDeps takes the app URL, the gateway, the one mock rule and APP_ENV from the server, never from input", () => {

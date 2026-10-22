@@ -7,7 +7,8 @@
  * impersonating a pro is a visitor with no client identity (no wallet, no cookie); the wallet Owner is a verified
  * session whose e-mail is the e-mail of a customer of THIS pro that is not linked to another account; the guest
  * cookie is read only for a signed-out or an unverified visitor, never for a verified or an impersonating one. A
- * render never writes: linkCustomerUser runs only inside requireWalletOwner, which only actions call.
+ * render never writes: linkCustomerUser runs only in an action core, after the core has parsed its input and passed
+ * its throttle (bookWithHeldTicketCore), never in a wrapper or a page.
  */
 import { and, eq, isNull, sql } from "drizzle-orm";
 
@@ -111,7 +112,7 @@ export async function resolveVisitor(
 }
 
 /**
- * requireWalletOwner's write (L1345): set customer.user_id to the owner's user when it is still null. The statement
+ * The Owner's link write (L1345): set customer.user_id to the owner's user when it is still null. The statement
  * names the pro and the customer (a customer of another pro is never touched), keeps a linked row as it is, and,
  * defence in depth, links only a VERIFIED user whose e-mail is the row's own (the caller has checked it).
  */

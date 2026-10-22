@@ -123,7 +123,7 @@ dbTest("resolveVisitor: a verified session with a record is the Owner of THAT pr
         guestCustomerId: null,
       });
 
-      // a render never links the account: only requireWalletOwner does, in an action
+      // a render never links the account: only an action core does (linkCustomerUser), after its validation and throttle
       const after = await customerRow(db, customerId);
       assert.equal(after.userId, null);
       assert.equal(after.updatedAt.getTime(), before.updatedAt.getTime());

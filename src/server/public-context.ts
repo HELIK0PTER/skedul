@@ -14,7 +14,7 @@ import { runClientActionWith, runPublicActionWith } from "@/lib/public/run-actio
 import { checkoutGateway, mockCheckoutEnabled } from "@/lib/stripe";
 import { runEffects } from "@/server/notify";
 import { getPublicProfile } from "@/server/queries";
-import { currentPublicVisitor, currentSessionFacts, requireWalletOwner, visitorIpHashes } from "@/server/visitor";
+import { currentPublicVisitor, currentSessionFacts, visitorIpHashes } from "@/server/visitor";
 
 /** getPublicProfile(slug, opts) → { pro: publicProOfRow(row), branding: the PublicBranding fields of the row } (a suspended pro is null unless includeSuspended). */
 export async function resolvePublicPro(
@@ -50,21 +50,20 @@ export function publicDeps(): PublicDeps {
   };
 }
 
-/** The fresh session facts, the visitor of this pro (owner, guest cookie), both IP hashes (visitorIpHashes); with linkOwner, requireWalletOwner's link write. */
-export async function actionVisitor(
-  pro: PublicPro,
-  now: Date,
-  opts: { linkOwner?: boolean } = {},
-): Promise<ActionVisitor> {
+/**
+ * The fresh session facts, the visitor of this pro (owner, guest cookie), both IP hashes (visitorIpHashes). It only
+ * reads: the Owner it returns carries what linkCustomerUser needs, and the one core that links the account
+ * (bookWithHeldTicketCore) does it after its parseFr and its throttle, never before (contract § 1 Validation).
+ */
+export async function actionVisitor(pro: PublicPro, now: Date): Promise<ActionVisitor> {
   const [session, visitor, hashes] = await Promise.all([
     currentSessionFacts(),
     currentPublicVisitor(pro.professionalId, pro.ownerUserId),
     visitorIpHashes(now),
   ]);
-  const owner = opts.linkOwner ? await requireWalletOwner(pro, now) : visitor.owner;
   return {
     session,
-    owner,
+    owner: visitor.owner,
     guestCustomerId: visitor.guestCustomerId,
     ipHash: hashes.ipHash,
     wideIpHash: hashes.wideIpHash,
@@ -90,12 +89,11 @@ export async function runPublicAction<T extends object>(
   name: string,
   slug: unknown,
   fn: (pro: PublicPro, visitor: ActionVisitor, now: Date) => Promise<PublicCoreResult<T>>,
-  opts?: { linkOwner?: boolean },
 ): Promise<PublicResult<T>> {
   return runPublicActionWith<T>(
     {
       resolvePro: async (slug) => (await resolvePublicPro(slug))?.pro ?? null,
-      visitor: (pro, now) => actionVisitor(pro, now, opts),
+      visitor: (pro, now) => actionVisitor(pro, now),
       schedule: scheduleEffects,
       revalidate: revalidatePublic,
       log: (line) => console.error(line),

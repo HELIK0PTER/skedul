@@ -53,8 +53,10 @@ export const currentPublicVisitor: (professionalId: string, ownerUserId: string)
 
 /**
  * The wallet owner of this pro (L1341-1346), or null: fresh session, not impersonated, verified, owned customer;
- * then linkCustomerUser. Actions only (it writes). The cookie is never read here: it can be planted by another
- * site and never makes an Owner.
+ * then linkCustomerUser. It WRITES, and a wrapper runs before its core has parsed the input and passed the throttle,
+ * so no wrapper calls it (contract Revision 3.2): the one core that links the account, bookWithHeldTicketCore, calls
+ * linkCustomerUser itself on the Owner of the visitor, after parseFr and checkActionThrottle. The cookie is never
+ * read here: it can be planted by another site and never makes an Owner.
  */
 export async function requireWalletOwner(
   pro: { professionalId: string; ownerUserId: string },
