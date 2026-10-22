@@ -9,6 +9,7 @@ import type { CustomerSpace } from "@/lib/back-office/customer-space";
 import { CustomerSpaceView } from "./customer-space";
 
 const space = (over: Partial<CustomerSpace> = {}): CustomerSpace => ({
+  businessName: "Altinha Paris",
   customer: { id: "c1", name: "Beatriz Almeida", email: "beatriz@example.com" },
   upcoming: [],
   wallet: [],
@@ -26,7 +27,11 @@ test("an empty wallet leads to the Boutique of the pro's page, not to the page i
 
 test("a wallet with tickets has no Boutique call to action", () => {
   const markup = render(
-    space({ wallet: [{ ticketTypeId: "t1", name: "Cours collectif", color: "#6d5cf6", archived: false, usable: 2, expiries: [] }] }),
+    space({
+      wallet: [
+        { ticketTypeId: "t1", name: "Cours collectif", color: "#6d5cf6", archived: false, typeClass: "ok", usable: 2, expiries: [] },
+      ],
+    }),
   );
   assert.doesNotMatch(markup, /Voir la boutique/);
 });

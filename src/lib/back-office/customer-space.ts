@@ -1,37 +1,54 @@
 /**
- * Read-only espace of one customer at one pro (spec § 12, Q22). P3 shows what
- * is booked and what is left in the wallet; P4 reuses this read and adds the
- * cancel and spend actions. No `server-only`, no env, no process db.
+ * Espace of one customer at one pro (spec § 12, Q22): what is booked, whether it can still be cancelled online, and
+ * what is left in the wallet. P3 showed it read-only; P4 adds the cancel and spend actions on top of this read. No
+ * `server-only`, no env, no process db.
  *
- * Every statement filters `professional_id` AND `customer_id`: the id of the
- * customer comes from a link or a session, so it is only a claim until this
- * read has checked that the customer is this pro's.
+ * Every statement filters `professional_id` AND `customer_id`: the id of the customer comes from a link or a
+ * session, so it is only a claim until this read has checked that the customer is this pro's.
  */
 import { and, asc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 
 import { formatWhen, formatWhenShort } from "@/lib/back-office/format";
 import { groupWallet, type WalletTicketRow, type WalletTypeRow } from "@/lib/back-office/wallet-view";
+import { loadTypeFacts } from "@/lib/booking/wallet";
 import { clientCanCancel, clientCancelDeadline } from "@/lib/cancellation";
 import type { Db } from "@/lib/db/atomic";
 import { booking, customer, event, occurrence, professional, ticket, ticketType } from "@/lib/db/schema";
-import { COVERAGE_LABELS } from "@/lib/tickets";
+import { cancelLockedText } from "@/lib/public/messages";
+import { COVERAGE_LABELS, type BookingCoverage } from "@/lib/tickets";
+import { classifyTypes, type TypeClass } from "@/lib/wallet-rules";
 
 export type CustomerSpace = {
+  /** the pro's business name: the locked cancellation sentence and the archived-type note name it */
+  businessName: string;
   customer: { id: string; name: string; email: string };
   upcoming: {
     bookingId: string;
     title: string;
     whenLabel: string;
     location: string | null;
+    coverage: BookingCoverage;
     coverageLabel: string;
-    cancelText: string | null;
+    /** cancelTextOf(…) !== null: clientCanCancel allows it now (before the deadline, or after a pro change or a move) */
+    cancellable: boolean;
+    /** cancelTextOf(…) when cancellable (its séance or rendez-vous wording kept), else « Seul(e) {pro} peut annuler maintenant. » (L921) */
+    cancelText: string;
   }[];
-  wallet: { ticketTypeId: string; name: string; color: string; archived: boolean; usable: number; expiries: string[] }[];
+  wallet: {
+    ticketTypeId: string;
+    name: string;
+    color: string;
+    archived: boolean;
+    /** orphan = no upcoming event accepts the type and it is not a paid RDV type; archived; else ok (the rules of the client list alerts) */
+    typeClass: TypeClass;
+    usable: number;
+    expiries: string[];
+  }[];
 };
 
 /**
- * The online cancellation hint of one booking; null when the client can no longer cancel online (P4 turns it into a
- * button). A rendez-vous is called a rendez-vous, a séance a séance.
+ * The online cancellation hint of one booking; null when the client can no longer cancel online (getCustomerSpace then
+ * gives the locked sentence). A rendez-vous is called a rendez-vous, a séance a séance.
  */
 export function cancelTextOf(
   b: { startsAt: Date; bookingCreatedAt: Date; changedAt: Date | null; movedAt: Date | null },
@@ -57,10 +74,10 @@ export function cancelTextOf(
 
 /**
  * Confirmed bookings on scheduled future occurrences (soonest first) and the
- * usable tickets by type with their expiries; null when the customer is not
- * this pro's. A pending booking (a seat hold, live or lapsed) is not a booking
- * yet, so only `confirmed` rows are read. Dates are formatted in the PRO's
- * time zone.
+ * usable tickets by type with their expiries and type class; null when the
+ * customer is not this pro's. A pending booking (a seat hold, live or lapsed) is
+ * not a booking yet, so only `confirmed` rows are read. Dates are formatted in
+ * the PRO's time zone.
  */
 export async function getCustomerSpace(
   db: Db,
@@ -74,6 +91,7 @@ export async function getCustomerSpace(
       name: customer.name,
       email: customer.email,
       tz: professional.timezone,
+      businessName: professional.businessName,
       cancelHours: professional.cancelDeadlineHours,
     })
     .from(customer)
@@ -81,7 +99,7 @@ export async function getCustomerSpace(
     .where(and(eq(customer.id, customerId), eq(customer.professionalId, professionalId)));
   if (!owner) return null;
 
-  const [bookings, tickets] = await Promise.all([
+  const [bookings, tickets, typeFacts] = await Promise.all([
     db
       .select({
         bookingId: booking.id,
@@ -132,7 +150,10 @@ export async function getCustomerSpace(
           or(isNull(ticket.expiresAt), gt(ticket.expiresAt, now)),
         ),
       ),
+    // The same type facts as the client list alerts (an rdv_free type is not RDV-enabled there): no second rule.
+    loadTypeFacts(db, professionalId, now),
   ]);
+  const classes = classifyTypes(typeFacts);
 
   const typeIds = [...new Set(tickets.map((t) => t.ticketTypeId))];
   const typeRows =
@@ -153,20 +174,27 @@ export async function getCustomerSpace(
   const walletRows: WalletTicketRow[] = tickets.map((t) => ({ ...t, bookingStartsAt: null }));
 
   return {
+    businessName: owner.businessName,
     customer: { id: owner.id, name: owner.name, email: owner.email },
-    upcoming: bookings.map((b) => ({
-      bookingId: b.bookingId,
-      title: b.title,
-      whenLabel: formatWhen(b.startsAt, b.endsAt, owner.tz),
-      location: b.location && b.location.trim() !== "" ? b.location : null,
-      coverageLabel: COVERAGE_LABELS[b.coverage],
-      cancelText: cancelTextOf(b, b.cancelHours ?? owner.cancelHours, now, owner.tz, b.eventId === null ? "rdv" : "seance"),
-    })),
-    wallet: groupWallet(walletRows, types, new Map(), now, owner.tz).map((g) => ({
+    upcoming: bookings.map((b) => {
+      const hint = cancelTextOf(b, b.cancelHours ?? owner.cancelHours, now, owner.tz, b.eventId === null ? "rdv" : "seance");
+      return {
+        bookingId: b.bookingId,
+        title: b.title,
+        whenLabel: formatWhen(b.startsAt, b.endsAt, owner.tz),
+        location: b.location && b.location.trim() !== "" ? b.location : null,
+        coverage: b.coverage,
+        coverageLabel: COVERAGE_LABELS[b.coverage],
+        cancellable: hint !== null,
+        cancelText: hint ?? cancelLockedText(owner.businessName),
+      };
+    }),
+    wallet: groupWallet(walletRows, types, classes, now, owner.tz).map((g) => ({
       ticketTypeId: g.ticketTypeId,
       name: g.name,
       color: g.color,
       archived: g.archived,
+      typeClass: classes.get(g.ticketTypeId) ?? (g.archived ? "archived" : "ok"),
       usable: g.usableCount,
       expiries: g.expirySummary,
     })),

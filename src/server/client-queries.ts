@@ -14,6 +14,7 @@ import type { SpaceIdentity } from "@/lib/back-office/guest-access";
 import { db } from "@/lib/db";
 import { spaceIdentityOf, type SessionFacts } from "@/lib/public/identity";
 import { getMySpace, type MySpaceCard } from "@/lib/public/my-space";
+import { spendableSeances, type SpendableSeance } from "@/lib/public/spendable";
 import { getPublicProfile } from "@/server/queries";
 import { currentPublicVisitor } from "@/server/visitor";
 
@@ -59,6 +60,11 @@ export async function resolveSpaceCustomer(pro: { id: string; userId: string }):
 /** The read-only espace of one customer of the pro (null when the customer is not this pro's). */
 export function getCustomerSpacePage(professionalId: string, customerId: string): Promise<CustomerSpace | null> {
   return getCustomerSpace(db, professionalId, customerId, new Date());
+}
+
+/** « Utiliser vos tickets »: the séances an Owner can book now with a held ticket (Task 21). The caller passes the Owner's customer id only. */
+export function getSpendableSeances(professionalId: string, customerId: string): Promise<SpendableSeance[]> {
+  return spendableSeances(db, professionalId, customerId, new Date());
 }
 
 /**

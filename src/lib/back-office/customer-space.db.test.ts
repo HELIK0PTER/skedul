@@ -8,15 +8,21 @@ import { setTicketTypeArchived } from "@/lib/booking/catalog";
 import { clientCancelDeadline } from "@/lib/cancellation";
 import { formatDayMonth, formatDayMonthYear, parseKey, todayKey } from "@/lib/civil-date";
 import * as schema from "@/lib/db/schema";
+import { cancelLockedText } from "@/lib/public/messages";
 import { expiryFromLastDay } from "@/lib/ticket-expiry";
 import { COVERAGE_LABELS } from "@/lib/tickets";
 import { addDaysMs, addMinutes, createTestPro, dbTest, deleteTestUser, testEmail } from "@/test/db";
-import { dayIn, getOccurrence, giveTickets, makeCustomer, makeType } from "@/test/fixtures";
+import { dayIn, getOccurrence, giveTickets, makeCustomer, makeEvent, makeType } from "@/test/fixtures";
 import { rowBooking, rowCustomer, rowEvent, rowOffer, rowPurchase, rowRdv, rowRdvType, rowSeance, rowType } from "@/test/rows";
+
+const BUSINESS = "Altinha Test";
 
 dbTest("getCustomerSpace: confirmed future bookings only, soonest first, with place, coverage and cancellation hint", async ({ db, pro }) => {
   const now = new Date();
-  await db.update(schema.professional).set({ cancelDeadlineHours: 24 }).where(eq(schema.professional.id, pro.proId));
+  await db
+    .update(schema.professional)
+    .set({ cancelDeadlineHours: 24, businessName: BUSINESS })
+    .where(eq(schema.professional.id, pro.proId));
   const email = testEmail("beatriz");
   const customerId = await rowCustomer(db, pro, { name: "Beatriz Almeida", email });
   const eventId = await rowEvent(db, pro);
@@ -71,21 +77,29 @@ dbTest("getCustomerSpace: confirmed future bookings only, soonest first, with pl
     `Annulation en ligne possible jusqu'au ${formatWhenShort(clientCancelDeadline(startsAt, 24), pro.tz)}.`;
 
   const two = await when(inTwoDays);
+  assert.equal(space.businessName, BUSINESS, "the pro's business name travels with the space");
   assert.deepEqual(byId.get(bTwoDays), {
     bookingId: bTwoDays,
     title: "Altinha débutants",
     whenLabel: two.label,
     location: "Gymnase Jean Bouin",
+    coverage: "guest",
     coverageLabel: COVERAGE_LABELS.guest,
+    cancellable: true,
     cancelText: deadlineText(two.startsAt),
   });
 
   const five = await when(inFiveDays);
   assert.equal(byId.get(bFiveDays)?.location, "Salle B", "a location set on the séance wins over the event's");
+  assert.equal(byId.get(bFiveDays)?.coverage, "free");
   assert.equal(byId.get(bFiveDays)?.coverageLabel, COVERAGE_LABELS.free);
+  assert.equal(byId.get(bFiveDays)?.cancellable, true);
   assert.equal(byId.get(bFiveDays)?.cancelText, deadlineText(five.startsAt));
 
-  assert.equal(byId.get(bTooLate)?.cancelText, null, "inside the deadline and never changed: no online cancellation");
+  assert.equal(byId.get(bTooLate)?.cancellable, false, "inside the deadline and never changed: no online cancellation");
+  assert.equal(byId.get(bTooLate)?.cancelText, cancelLockedText(BUSINESS), "the P3 null is now the locked sentence");
+  assert.equal(byId.get(bTooLate)?.cancelText, "Seul(e) Altinha Test peut annuler maintenant.");
+  assert.equal(byId.get(bChanged)?.cancellable, true);
   assert.equal(
     byId.get(bChanged)?.cancelText,
     "Annulation en ligne possible jusqu'au début de la séance.",
@@ -98,9 +112,46 @@ dbTest("getCustomerSpace: confirmed future bookings only, soonest first, with pl
     title: "Cours particulier",
     whenLabel: rdvWhen.label,
     location: null,
+    coverage: "guest",
     coverageLabel: COVERAGE_LABELS.guest,
+    cancellable: true,
     cancelText: deadlineText(rdvWhen.startsAt),
   });
+});
+
+dbTest("getCustomerSpace: a locked rendez-vous says who can still cancel it, and the wallet carries each type's class (LED:438, COV-I2)", async ({ db, pro }) => {
+  const now = new Date();
+  await db.update(schema.professional).set({ businessName: BUSINESS }).where(eq(schema.professional.id, pro.proId));
+  const customerId = await rowCustomer(db, pro);
+  // A paid RDV in 5 hours with the default 24 h deadline: locked.
+  const rdvType = await rowRdvType(db, pro, { name: "Cours particulier" });
+  const rdv = await rowRdv(db, pro, rdvType, { startsAt: addMinutes(now, 5 * 60) });
+  const bRdv = await rowBooking(db, pro, { occurrenceId: rdv, customerId, status: "confirmed", coverage: "guest" });
+
+  const linked = await makeType(db, pro, { name: "Cours lié" });
+  const orphan = await makeType(db, pro, { name: "Cours orphelin" });
+  const paidRdv = await makeType(db, pro, { name: "Rendez-vous payant", rdvEnabled: true, rdvDurationMin: 60 });
+  const old = await makeType(db, pro, { name: "Ancien stage" });
+  await makeEvent(db, pro, { title: "Altinha", ticketTypeIds: [linked] }, now);
+  for (const typeId of [linked, orphan, paidRdv, old]) await giveTickets(db, pro, customerId, typeId, 1);
+  const archived = await setTicketTypeArchived(db, { professionalId: pro.proId, ticketTypeId: old, archived: true });
+  assert.ok(archived.ok, JSON.stringify(archived));
+
+  const space = await getCustomerSpace(db, pro.proId, customerId, now);
+  assert.ok(space);
+  const locked = space.upcoming.find((u) => u.bookingId === bRdv);
+  assert.equal(locked?.coverage, "guest");
+  assert.equal(locked?.cancellable, false);
+  assert.equal(locked?.cancelText, "Seul(e) Altinha Test peut annuler maintenant.");
+  assert.deepEqual(
+    Object.fromEntries(space.wallet.map((w) => [w.name, w.typeClass])),
+    {
+      "Cours lié": "ok", // accepted by an upcoming tickets-mode event
+      "Cours orphelin": "orphan", // no upcoming event accepts it and it is not a paid RDV type
+      "Rendez-vous payant": "ok", // a paid RDV type needs no event
+      "Ancien stage": "archived",
+    },
+  );
 });
 
 dbTest("getCustomerSpace: a lapsed or live hold, an expired booking and a cancelled séance are not upcoming bookings", async ({ db, pro }) => {

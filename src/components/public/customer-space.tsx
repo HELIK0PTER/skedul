@@ -50,7 +50,7 @@ export function CustomerSpaceView({
                       <span className="min-w-0 wrap-anywhere">{b.location}</span>
                     </p>
                   )}
-                  {b.cancelText && <p className="text-xs text-zinc-600">{b.cancelText}</p>}
+                  <p className="text-xs text-zinc-600">{b.cancelText}</p>
                 </li>
               ))}
             </ul>
