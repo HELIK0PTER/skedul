@@ -9,11 +9,19 @@ import test from "node:test";
 
 const source = (path: string): string => readFileSync(path, "utf8");
 
-test("both error lines of the Google link form are alert regions (LED:405)", () => {
+test("both error lines of the Google link form are always-mounted alert regions (LED:405, UI rule)", () => {
   const form = source("src/components/auth/link-google-form.tsx");
-  const errorTags = form.match(/<p\b[^>]*bg-destructive\/10[^>]*>/g) ?? [];
-  assert.equal(errorTags.length, 2, "the Google step and the password step");
-  for (const tag of errorTags) assert.match(tag, /role="alert"/, tag);
+  // One region per step (the Google step and the password step), rendered from the first render with `{error}` as its
+  // only child: a live region inserted together with its text is not reliably announced. Empty, it is visually hidden
+  // (sr-only, out of the layout) rather than absent.
+  const regions = form.match(/<p\b[^>]*role="alert"[^>]*>[\s\S]*?<\/p>/g) ?? [];
+  assert.equal(regions.length, 2, "the Google step and the password step");
+  for (const region of regions) {
+    assert.match(region, /className=\{error \? ERROR_CLASS : "sr-only"\}/, region);
+    assert.match(region, />\s*\{error\}\s*<\/p>$/, "the text is the region's only child");
+  }
+  assert.doesNotMatch(form, /\{error && \(/, "no conditionally mounted error line");
+  assert.match(form, /const ERROR_CLASS = "rounded-lg bg-destructive\/10 px-3 py-2 text-sm text-destructive";/);
   // The French mapping of P3 444f102 stays: never the English message of Better Auth.
   assert.match(form, /authFormErrorMessage\(result\.error\)/);
 });

@@ -301,7 +301,8 @@ export function buildAuthOptions(deps: AuthDeps) {
         const email = otpCapEmail(body);
         if (email === null) return;
         if (body?.type === "email-verification") {
-          const session = await getSessionFromCtx(ctx);
+          // Read fresh (the database, never the 5-minute cookie cache): a revoked or banned session must not get a mail.
+          const session = await getSessionFromCtx(ctx, { disableCookieCache: true });
           if (!session || session.user.email.toLowerCase() !== email) return ctx.json({ success: true });
         }
         const allowed = await consumeThrottle(db, otpThrottleKey(email), OTP_EMAIL_LIMIT, now());

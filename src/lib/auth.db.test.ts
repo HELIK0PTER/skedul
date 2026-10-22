@@ -840,6 +840,37 @@ test("OUT:129 a confirmation code is mailed only to the address of the signed-in
   }
 });
 
+test("a confirmation code counts a session only when it is read fresh: a revoked session with a live cookie cache gets nothing", OPTS, async () => {
+  const db = await getTestDb();
+  const t = makeTestAuth(db);
+  const email = testEmail("evfresh");
+  const confirmationMails = () =>
+    t.mails.filter((m) => m.to === email && m.subject.endsWith("est votre code de confirmation Skedul"));
+  const ask = (call: BrowserCall) => call("/email-otp/send-verification-otp", { email, type: "email-verification" });
+  try {
+    // The sign-up signs the browser in and sets the 5-minute session cookie cache (the cache cookie rides along in the jar).
+    const own = await signUp(t, email);
+    assert.equal(confirmationMails().length, 1, "the sign-up code");
+    assert.equal((await ask(own)).status, 200);
+    assert.equal(confirmationMails().length, 2, "a live session is mailed a code");
+    assert.equal(await throttleHits(db, otpThrottleKey(email)), 1);
+
+    // The session goes (a sign-out elsewhere, an admin ban, « Déconnecter tous les appareils ») while the browser still
+    // holds a valid cache cookie: the cache says « signed in », the database says « no session ».
+    const user = await userByEmail(db, email);
+    await db.delete(schema.session).where(eq(schema.session.userId, user.id));
+    assert.equal(await sessionCount(db, user.id), 0);
+
+    const revoked = await ask(own);
+    assert.equal(revoked.status, 200);
+    assert.deepEqual(revoked.json, { success: true }, "the usual answer");
+    assert.equal(confirmationMails().length, 2, "no new mail: the session is read from the database, not from the cache");
+    assert.equal(await throttleHits(db, otpThrottleKey(email)), 1, "and nothing is counted");
+  } finally {
+    await deleteUsersByEmail(db, [email]);
+  }
+});
+
 test("a failing sign-in code counter answers 500 and neither mails nor stores a code", OPTS, async (ctx) => {
   const db = await getTestDb();
   const email = testEmail("otpfail");

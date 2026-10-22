@@ -14,6 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 const LINK_FAILED = oauthErrorMessage("unable_to_link_account") ?? GENERIC_ERROR;
+/** The failure line. Its region is always mounted (empty and sr-only until a failure), so the text is announced when it arrives. */
+const ERROR_CLASS = "rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive";
 
 /**
  * Links Google to an existing email/password account. Better Auth refuses to
@@ -67,11 +69,9 @@ export function LinkGoogleForm({
         <p className="text-sm text-muted-foreground">
           {`Vous êtes connecté avec ${signedInEmail}. Choisissez sur Google le compte qui utilise cette adresse.`}
         </p>
-        {error && (
-          <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {error}
-          </p>
-        )}
+        <p role="alert" className={error ? ERROR_CLASS : "sr-only"}>
+          {error}
+        </p>
         <Button
           type="button"
           variant="secondary"
@@ -132,11 +132,9 @@ export function LinkGoogleForm({
         />
       </div>
 
-      {error && (
-        <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          {error}
-        </p>
-      )}
+      <p role="alert" className={error ? ERROR_CLASS : "sr-only"}>
+        {error}
+      </p>
 
       <Button type="submit" className="w-full" disabled={loading}>
         {loading && <Loader2 className="size-4 animate-spin" />}

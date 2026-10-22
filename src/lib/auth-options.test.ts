@@ -418,7 +418,10 @@ function otpCtx(body: Record<string, unknown>, sessionEmail: string | null): Hoo
   return {
     path: OTP_SEND_PATH,
     body,
-    // getSessionFromCtx returns ctx.context.session as it is; without one it reads the cookie and resolves to null.
+    // With a session in the context, getSessionFromCtx returns it as it is: no read happens, so this stub cannot show
+    // that the hook asks for a fresh one (the DB test « a confirmation code counts a session only when it is read
+    // fresh » and the guard below do). Without one it tries to read the request: the stub has no headers, getSession()
+    // throws « Headers is required », and getSessionFromCtx's own catch turns that into null.
     context: sessionEmail === null ? {} : { session: { session: { id: "s1" }, user: { id: "u1", email: sessionEmail } } },
   };
 }
@@ -524,4 +527,10 @@ test("the best-effort auth logs carry the step and a scrubbed message, never the
 
 test("no console call of the auth options receives a raw error object (shared guard, whatever the binding)", () => {
   assert.deepEqual(rawErrorLogs(readFileSync("src/lib/auth-options.ts", "utf8")), []);
+});
+
+test("the confirmation-code hook reads the session fresh, never from the 5-minute cookie cache (Identity)", () => {
+  const source = readFileSync("src/lib/auth-options.ts", "utf8");
+  assert.equal((source.match(/getSessionFromCtx\(/g) ?? []).length, 1, "the hook is the only reader of the session here");
+  assert.match(source, /getSessionFromCtx\(ctx, \{ disableCookieCache: true \}\)/);
 });
