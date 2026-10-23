@@ -1,18 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
 import { cancelOccurrence } from "@/lib/booking/cancel";
 import { setTicketTypeArchived } from "@/lib/booking/catalog";
 import { instantAt, type DateKey } from "@/lib/civil-date";
 import type { Db } from "@/lib/db/atomic";
-import { event, occurrence, timeOff } from "@/lib/db/schema";
+import { event, eventTicketType, occurrence, timeOff } from "@/lib/db/schema";
 import { addMinutes, createTestPro, dbTest, deleteTestUser, type TestPro } from "@/test/db";
 import { dayIn, makeEvent, makeType } from "@/test/fixtures";
 import { rowBooking, rowCustomer, rowEvent, rowLink, rowOffer, rowPurchase, rowSeance, rowType } from "@/test/rows";
 
-import { effectiveLocation, listPublicSeances, nextPublicSeanceStart } from "./planning-reads";
+import { acceptedTypesOf, effectiveLocation, listPublicSeances, nextPublicSeanceStart } from "./planning-reads";
 
 const WINDOW = { bookingHorizonDays: 60, minNoticeMinutes: 60, cancelDeadlineHours: 24 };
 const LA = "America/Los_Angeles";
@@ -344,6 +344,88 @@ dbTest("tenancy: another pro's time off, types and séances never reach this pro
     const theirs = await listPublicSeances(db, proOf(other), wide(other, now), now);
     assert.deepEqual(theirs.map((s) => [s.title, s.acceptedTypes.map((t) => t.id)]), [["Chez l'autre", [theirType]]]);
   } finally {
+    await deleteTestUser(db, other.userId);
+  }
+});
+
+dbTest("tenancy: séances that cross two pros, built by hand, are in neither list and never the next séance (S6, G3b)", async ({ db, pro }) => {
+  const now = new Date();
+  const other = await createTestPro(db);
+  const handBuilt: string[] = [];
+  try {
+    const mine = await makeEvent(db, pro, { title: "Altinha débutants", rule: { startDate: dayIn(pro, 5, now) } }, now);
+    const theirs = await makeEvent(db, other, { title: "Chez l'autre", rule: { startDate: dayIn(other, 5, now) } }, now);
+    // Séances that cross the two pros, built by hand on purpose (every domain foreign key is single-column, so only the
+    // read's own professional filters keep them out; G3b, the way my-space.db.test.ts builds them): the other pro's id
+    // on MY event (the occurrence filter refuses it on my page, the event filter on theirs) and my id on THEIR event
+    // (the event filter refuses it on my page, the occurrence filter on theirs). Both start before the genuine séances,
+    // so a page's next séance would be a crossed one if either filter let it through.
+    handBuilt.push(await seanceAt(db, other, mine.eventId, now, 2));
+    handBuilt.push(await seanceAt(db, pro, theirs.eventId, now, 3));
+
+    const idsOf = async (p: TestPro) => (await listPublicSeances(db, proOf(p), wide(p, now), now)).map((s) => s.occurrenceId);
+    assert.deepEqual(await idsOf(pro), [mine.occurrences[0].id]);
+    assert.deepEqual(await idsOf(other), [theirs.occurrences[0].id]);
+    assert.deepEqual(await nextPublicSeanceStart(db, proOf(pro), now, now), mine.occurrences[0].startsAt);
+    assert.deepEqual(await nextPublicSeanceStart(db, proOf(other), now, now), theirs.occurrences[0].startsAt);
+  } finally {
+    // The hand-built rows go before the invariant check (and before the other pro): they are not part of any model.
+    for (const id of handBuilt) await db.delete(occurrence).where(eq(occurrence.id, id));
+    await deleteTestUser(db, other.userId);
+  }
+});
+
+dbTest("tenancy: links that cross two pros, built by hand, never make another pro's type accepted (S6, G3b)", async ({ db, pro }) => {
+  const now = new Date();
+  const other = await createTestPro(db);
+  const handBuilt: { eventId: string; ticketTypeId: string }[] = [];
+  /** A link row written under `owner`'s professional_id, whoever the event and the type belong to. */
+  const link = async (owner: TestPro, eventId: string, ticketTypeId: string) => {
+    await rowLink(db, owner, eventId, ticketTypeId, now);
+    handBuilt.push({ eventId, ticketTypeId });
+  };
+  try {
+    const myType = await makeType(db, pro, { name: "Cours collectif" });
+    const theirType = await makeType(db, other, { name: "Cours d'essai" });
+    const sides = [
+      { me: pro, them: other, own: myType, foreign: theirType },
+      { me: other, them: pro, own: theirType, foreign: myType },
+    ];
+    const built: { me: TestPro; own: string; plain: string; crossed: string }[] = [];
+    for (const side of sides) {
+      const plain = await makeEvent(db, side.me, { title: "Séance avec son type", ticketTypeIds: [side.own], rule: { startDate: dayIn(side.me, 4, now) } }, now);
+      const crossed = await makeEvent(db, side.me, { title: "Séance sans type", rule: { startDate: dayIn(side.me, 5, now) } }, now);
+      // Links that cross the two pros, built by hand on purpose (every domain foreign key is single-column, so only the
+      // read's own professional filters keep them out; G3b). Each is refused by exactly one filter of acceptedTypesOf,
+      // so removing either filter lets one of them through: the other pro's type linked to my event under MY id (the
+      // type's filter), the same under THEIR id (both filters), and my own type linked to my event under THEIR id (the
+      // link's filter).
+      await link(side.me, plain.eventId, side.foreign);
+      await link(side.them, crossed.eventId, side.foreign);
+      await link(side.them, crossed.eventId, side.own);
+      built.push({ me: side.me, own: side.own, plain: plain.eventId, crossed: crossed.eventId });
+    }
+
+    for (const b of built) {
+      const seances = await listPublicSeances(db, proOf(b.me), wide(b.me, now), now);
+      assert.deepEqual(
+        seances.map((s) => [s.eventId, s.acceptedTypes.map((t) => t.id)]),
+        [
+          [b.plain, [b.own]],
+          [b.crossed, []],
+        ],
+        "only the pro's own type, linked under the pro's own id, is accepted",
+      );
+      // acceptedTypesOf trusts the event ids it is given (its callers read them under the pro's own filter): ask it for
+      // the events of the pro whose id it is given.
+      const accepted = await acceptedTypesOf(db, b.me.proId, [b.plain, b.crossed]);
+      assert.deepEqual([...accepted].map(([eventId, types]) => [eventId, types.map((t) => t.id)]), [[b.plain, [b.own]]]);
+    }
+  } finally {
+    // The hand-built rows go before the invariant check (and before the other pro): they are not part of any model.
+    for (const l of handBuilt) {
+      await db.delete(eventTicketType).where(and(eq(eventTicketType.eventId, l.eventId), eq(eventTicketType.ticketTypeId, l.ticketTypeId)));
+    }
     await deleteTestUser(db, other.userId);
   }
 });

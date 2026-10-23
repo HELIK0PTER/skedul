@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { setTicketTypeArchived } from "@/lib/booking/catalog";
-import { event, ticketOffer } from "@/lib/db/schema";
+import { event, eventTicketType, ticketOffer } from "@/lib/db/schema";
 import { createTestPro, dbTest, deleteTestUser } from "@/test/db";
 import { dayIn, makeEvent, makeOffer, makeType } from "@/test/fixtures";
 import { rowEvent, rowLink, rowOffer, rowType } from "@/test/rows";
@@ -96,6 +96,65 @@ dbTest("listBoutique: another pro's types, offers and events are never listed", 
     assert.deepEqual([...(await acceptedByTitles(db, other.proId, [mine]))], []);
     assert.deepEqual([...(await acceptedByTitles(db, pro.proId, [theirs]))], []);
   } finally {
+    await deleteTestUser(db, other.userId);
+  }
+});
+
+dbTest("acceptedByTitles: links that cross two pros, built by hand, never advertise an event under another pro's type (S6, G3b)", async ({ db, pro }) => {
+  const other = await createTestPro(db);
+  const handBuilt: { eventId: string; ticketTypeId: string }[] = [];
+  try {
+    const mine = await makeType(db, pro, { name: "Cours collectif" });
+    await makeOffer(db, pro, mine, { quantity: 4, priceCents: 8500 });
+    const theirs = await makeType(db, other, { name: "Cours d'essai" });
+    await makeOffer(db, other, theirs, { quantity: 1, priceCents: 3000 });
+    const myEvent = await makeEvent(db, pro, { title: "Altinha débutants", ticketTypeIds: [mine] });
+    const theirEvent = await makeEvent(db, other, { title: "Chez l'autre", ticketTypeIds: [theirs] });
+    // Links that cross the two pros, built by hand on purpose (every domain foreign key is single-column, so only the
+    // read's own professional filters keep them out; G3b, the way my-space.db.test.ts builds them). MY event linked to
+    // THEIR type under THEIR id: on their page only the inner event filter refuses it, on mine only the link filter.
+    // THEIR event linked to MY type under MY id: the same, the other way round.
+    await rowLink(db, other, myEvent.eventId, theirs);
+    handBuilt.push({ eventId: myEvent.eventId, ticketTypeId: theirs });
+    await rowLink(db, pro, theirEvent.eventId, mine);
+    handBuilt.push({ eventId: theirEvent.eventId, ticketTypeId: mine });
+
+    assert.deepEqual([...(await acceptedByTitles(db, pro.proId, [mine, theirs]))], [[mine, ["Altinha débutants"]]]);
+    assert.deepEqual([...(await acceptedByTitles(db, other.proId, [mine, theirs]))], [[theirs, ["Chez l'autre"]]]);
+    // And on the two Boutique pages.
+    assert.deepEqual((await listBoutique(db, pro.proId)).map((t) => [t.ticketTypeId, t.acceptedBy]), [[mine, ["Altinha débutants"]]]);
+    assert.deepEqual((await listBoutique(db, other.proId)).map((t) => [t.ticketTypeId, t.acceptedBy]), [[theirs, ["Chez l'autre"]]]);
+  } finally {
+    // The hand-built rows go before the invariant check (and before the other pro): they are not part of any model.
+    for (const l of handBuilt) {
+      await db.delete(eventTicketType).where(and(eq(eventTicketType.eventId, l.eventId), eq(eventTicketType.ticketTypeId, l.ticketTypeId)));
+    }
+    await deleteTestUser(db, other.userId);
+  }
+});
+
+dbTest("listBoutique: offers that cross two pros, built by hand, never reach the other pro's Boutique (S6, G3b)", async ({ db, pro }) => {
+  const other = await createTestPro(db);
+  const handBuilt: string[] = [];
+  try {
+    const mine = await makeType(db, pro, { name: "Cours collectif" });
+    const myOffer = await makeOffer(db, pro, mine, { quantity: 4, priceCents: 8500 });
+    const theirs = await makeType(db, other, { name: "Cours d'essai" });
+    const theirOffer = await makeOffer(db, other, theirs, { quantity: 1, priceCents: 3000 });
+    // Offers that cross the two pros, built by hand on purpose (every domain foreign key is single-column, so only the
+    // read's own professional filters keep them out; G3b): an offer of MY type written under THEIR id (the offer filter
+    // refuses it on my page, the type filter on theirs), and an offer of THEIR type written under MY id (the type
+    // filter refuses it on my page, the offer filter on theirs).
+    handBuilt.push(await rowOffer(db, other, mine, { quantity: 2, priceCents: 4500 }));
+    handBuilt.push(await rowOffer(db, pro, theirs, { quantity: 3, priceCents: 6500 }));
+
+    const offersOf = async (professionalId: string) =>
+      (await listBoutique(db, professionalId)).map((t) => [t.ticketTypeId, t.offers.map((o) => o.offerId)]);
+    assert.deepEqual(await offersOf(pro.proId), [[mine, [myOffer]]]);
+    assert.deepEqual(await offersOf(other.proId), [[theirs, [theirOffer]]]);
+  } finally {
+    // The hand-built rows go before the invariant check (and before the other pro): they are not part of any model.
+    for (const id of handBuilt) await db.delete(ticketOffer).where(eq(ticketOffer.id, id));
     await deleteTestUser(db, other.userId);
   }
 });
