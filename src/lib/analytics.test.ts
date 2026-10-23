@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   browserName,
@@ -55,6 +56,24 @@ test("isTrackedPath keeps public pages and drops back-office, admin and API", ()
   ]) {
     assert.equal(isTrackedPath(p), false, p);
   }
+});
+
+test("the sign-in and account-recovery pages stay tracked on purpose: public, no personal data in their path, part of the platform funnel (G3b)", () => {
+  // /admin/traffic « Pages les plus vues » counts the platform's own funnel (/, /demo, /sign-up, /sign-in), and these
+  // pages are reachable signed out by anyone. What isTrackedPath keeps out is what shows personal data or a personal
+  // link: the client spaces, the back-office, onboarding, admin and the API.
+  for (const p of ["/sign-in", "/sign-up", "/forgot-password", "/reset-password", "/link-google"]) {
+    assert.equal(isTrackedPath(p), true, p);
+  }
+  assert.equal(isTrackedPath("/mon-espace"), false, "the client space is personal");
+});
+
+test("the tracker beacon carries the pathname only: a ?next=, ?token= or ?error= of the auth pages never reaches /api/track (G3b)", () => {
+  const tracker = readFileSync("src/components/analytics/page-view-tracker.tsx", "utf8");
+  assert.match(tracker, /const pathname = usePathname\(\);/);
+  assert.match(tracker, /path: pathname,/);
+  assert.equal((tracker.match(/location\.search/g) ?? []).length, 1, "the query is read once, for utm_source only");
+  assert.match(tracker, /new URLSearchParams\(window\.location\.search\)\.get\("utm_source"\)/);
 });
 
 test("proSlugFromPath returns the pro slug of public pro pages only", () => {

@@ -59,6 +59,25 @@ export function canSpendIn(identity: SpaceIdentity): boolean {
 }
 
 /**
+ * Who is offered « Se déconnecter » on the espace: a visitor with a session who is not an impersonating admin, verified
+ * or not (an unverified visitor sees only the banner's code button otherwise and has no way out). The personal link
+ * alone is no sign-in (« Ce n'est pas moi » is its exit), the admin ends the impersonation elsewhere, and a verified
+ * visitor without a record has « Utiliser une autre adresse », which signs out too.
+ */
+export function canSignOutIn(identity: SpaceIdentity): boolean {
+  switch (identity.kind) {
+    case "unverified":
+      return true;
+    case "customer":
+      return identity.via === "session";
+    case "no_record":
+    case "impersonating":
+    case "anonymous":
+      return false;
+  }
+}
+
+/**
  * The e-mail confirmation banner of the espace (the dashboard layout pattern): every signed-in, non-impersonated
  * visitor gets it, with `verified` read from the visitor state, so the client component stays mounted when a code is
  * accepted and the identity flips: « Adresse confirmée. » is then announced and takes the focus (WCAG 2.4.3). The

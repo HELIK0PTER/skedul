@@ -126,7 +126,7 @@ test("the confirmation banner is rendered once, outside the identity switch, as 
   assert.match(PAGE, /const banner = bannerOfIdentity\(identity, space\?\.customer\.email \?\? null\);/);
   assert.match(
     PAGE,
-    /<PublicShell branding=\{pro\} backHref=\{`\/\$\{slug\}`\}>\s*\{banner && <VerifyEmailBanner email=\{banner\.email\} verified=\{banner\.verified\} \/>\}\s*\{children\}\s*<\/PublicShell>/,
+    /<PublicShell branding=\{pro\} backHref=\{`\/\$\{slug\}`\}>\s*\{banner && <VerifyEmailBanner email=\{banner\.email\} verified=\{banner\.verified\} \/>\}\s*\{children\}\s*\{canSignOutIn\(identity\) && \([\s\S]*?\)\}\s*<\/PublicShell>/,
   );
   assert.ok(PAGE.indexOf("<VerifyEmailBanner") < PAGE.indexOf('if (identity.kind === "impersonating") {'), "defined before the branches, which all go through the shell");
 });
@@ -142,6 +142,17 @@ test("the unverified visitor gets the sentence only when no space is shown; the 
   assert.match(PAGE, /guestNote\(space\.customer\.email\)/);
   assert.match(PAGE, /<ForgetGuestLinkButton slug=\{pro\.slug\} \/>/);
   assert.match(PAGE, /Ce lien n'est plus valide\./);
+});
+
+test("the espace offers « Se déconnecter » once, in the shell, to the visitors canSignOutIn names, and returns to the espace itself (G3b)", () => {
+  assert.equal((PAGE.match(/<ClientSignOutButton/g) ?? []).length, 1, "one control, in the shell");
+  assert.match(PAGE, /import \{ ClientSignOutButton \} from "@\/components\/public\/client-sign-out-button";/);
+  assert.match(
+    PAGE,
+    /\{children\}\s*\{canSignOutIn\(identity\) && \(\s*<div className="mt-8">\s*<ClientSignOutButton returnTo=\{returnTo\} \/>\s*<\/div>\s*\)\}\s*<\/PublicShell>/,
+    "after the content of every branch, for the visitors with a session only",
+  );
+  assert.ok(PAGE.indexOf("<ClientSignOutButton") < PAGE.indexOf('if (identity.kind === "impersonating") {'), "defined in the shell all branches go through");
 });
 
 test("the /mon-espace cards carry the same wallet notes as the espace: an archived type and a type no upcoming séance accepts (§ 3.23 MySpaceView, COV-I2)", () => {

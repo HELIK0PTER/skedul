@@ -38,7 +38,7 @@ export default async function SignInPage({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-xl">Bon retour 👋</CardTitle>
+        <CardTitle className="text-xl">Bon retour</CardTitle>
         <p className="text-sm text-muted-foreground">
           Connectez-vous pour accéder à votre espace.
         </p>

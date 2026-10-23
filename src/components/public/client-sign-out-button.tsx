@@ -6,13 +6,16 @@ import { Loader2, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { signOut } from "@/lib/auth-client";
 import { GENERIC_ERROR } from "@/lib/auth-messages";
+import { returnPathOf } from "@/lib/public/sign-in-flow";
 
 /**
- * « Se déconnecter » on /mon-espace. After the sign-out the page is reloaded with a full navigation that REPLACES
- * the history entry (SEC-M12): never a router refresh, which would keep the router cache of the signed-in space, and
- * Back never shows it again. A failed sign-out says so and stays on the page, still signed in.
+ * « Se déconnecter » on /mon-espace and on the espace of a pro. After the sign-out the page is reloaded with a full
+ * navigation that REPLACES the history entry (SEC-M12): never a router refresh, which would keep the router cache of
+ * the signed-in space, and Back never shows it again. `returnTo` is the page the caller built from its own route
+ * params (the espace of the pro; /mon-espace by default) and still goes through returnPathOf. A failed sign-out says
+ * so and stays on the page, still signed in.
  */
-export function ClientSignOutButton() {
+export function ClientSignOutButton({ returnTo = "/mon-espace" }: { returnTo?: string }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,7 +35,7 @@ export function ClientSignOutButton() {
       setPending(false);
       return;
     }
-    window.location.replace("/mon-espace");
+    window.location.replace(returnPathOf(returnTo));
   }
 
   return (

@@ -6,6 +6,7 @@ import { ClientSignInChoices } from "@/components/auth/client-sign-in-choices";
 import { EmailCodeForm } from "@/components/auth/email-code-form";
 import { FormError } from "@/components/dashboard/form-error";
 import { VerifyEmailBanner } from "@/components/dashboard/verify-email-banner";
+import { ClientSignOutButton } from "@/components/public/client-sign-out-button";
 import { CustomerSpaceView } from "@/components/public/customer-space";
 import { ForgetGuestLinkButton } from "@/components/public/forget-guest-link-button";
 import { OtherAddressButton } from "@/components/public/other-address-button";
@@ -15,7 +16,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { env } from "@/lib/env";
 import { COPY, guestNote, noRecordText } from "@/lib/public/messages";
 import { canOfferCodeSignIn } from "@/lib/public/sign-in-flow";
-import { bannerOfIdentity, canSpendIn, visitorStateOfIdentity } from "@/lib/public/space-view";
+import { bannerOfIdentity, canSignOutIn, canSpendIn, visitorStateOfIdentity } from "@/lib/public/space-view";
 import {
   getCustomerSpacePage,
   getSpaceProfile,
@@ -76,6 +77,11 @@ export default async function EspacePage({ params, searchParams }: Props) {
     <PublicShell branding={pro} backHref={`/${slug}`}>
       {banner && <VerifyEmailBanner email={banner.email} verified={banner.verified} />}
       {children}
+      {canSignOutIn(identity) && (
+        <div className="mt-8">
+          <ClientSignOutButton returnTo={returnTo} />
+        </div>
+      )}
     </PublicShell>
   );
 

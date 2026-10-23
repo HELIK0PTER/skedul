@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ClientSignInChoices } from "@/components/auth/client-sign-in-choices";
 import { EmailCodeForm } from "@/components/auth/email-code-form";
 import { VerifyEmailBanner } from "@/components/dashboard/verify-email-banner";
+import { ClientSignOutButton } from "@/components/public/client-sign-out-button";
 import { MySpaceView } from "@/components/public/my-space";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -50,7 +51,12 @@ export default async function MySpacePage() {
           </Card>
         )}
 
-        {state === "unverified" && <p className="text-sm text-zinc-600">{COPY.CONFIRM_EMAIL_FIRST}</p>}
+        {state === "unverified" && (
+          <div className="space-y-4">
+            <p className="text-sm text-zinc-600">{COPY.CONFIRM_EMAIL_FIRST}</p>
+            <ClientSignOutButton />
+          </div>
+        )}
 
         {state === "impersonating" && (
           <Card className="p-6">

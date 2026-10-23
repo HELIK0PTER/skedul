@@ -10,6 +10,7 @@ import {
   UPCOMING_HEADING_ID,
   UPCOMING_TITLE,
   bannerOfIdentity,
+  canSignOutIn,
   canSpendIn,
   cancelBookingCopy,
   cancelButtonName,
@@ -98,6 +99,16 @@ test("bannerOfIdentity: every signed-in, non-impersonated visitor has the banner
   for (const identity of [unverified, { kind: "no_record", email: "a@b.fr" }, { kind: "customer", customerId: "c1", via: "session" }] as const) {
     assert.equal(bannerOfIdentity(identity, "a@b.fr")?.verified, visitorStateOfIdentity(identity) === "verified");
   }
+});
+
+test("canSignOutIn: a visitor with a session, verified or not, can sign out; the cookie alone, an admin and a signed-out visitor have nothing to sign out of (G3b)", () => {
+  assert.equal(canSignOutIn({ kind: "unverified", email: "a@b.fr", guestCustomerId: null }), true, "an unverified session has no other way out");
+  assert.equal(canSignOutIn({ kind: "unverified", email: "a@b.fr", guestCustomerId: "c1" }), true);
+  assert.equal(canSignOutIn({ kind: "customer", customerId: "c1", via: "session" }), true);
+  assert.equal(canSignOutIn({ kind: "customer", customerId: "c1", via: "guest" }), false, "the personal link is not a sign-in: « Ce n'est pas moi » is its exit");
+  assert.equal(canSignOutIn({ kind: "no_record", email: "a@b.fr" }), false, "« Utiliser une autre adresse » is the sign-out of that state");
+  assert.equal(canSignOutIn({ kind: "impersonating" }), false, "the admin ends the impersonation elsewhere");
+  assert.equal(canSignOutIn({ kind: "anonymous" }), false);
 });
 
 test("spendControlOf: the control each visitor state gets for a séance", () => {

@@ -68,7 +68,21 @@ test("the client leaves of /mon-espace never refresh the router, and sign-out is
   }
   const out = source("src/components/public/client-sign-out-button.tsx");
   assert.match(out, /signOut\(\)/);
-  assert.match(out, /window\.location\.replace\("\/mon-espace"\)/);
+  assert.match(out, /export function ClientSignOutButton\(\{ returnTo = "\/mon-espace" \}: \{ returnTo\?: string \}\)/, "the page to come back to defaults to /mon-espace");
+  assert.match(out, /window\.location\.replace\(returnPathOf\(returnTo\)\)/, "a full navigation to the page the caller built, through returnPathOf");
+  assert.ok(out.indexOf("await signOut()") < out.indexOf("window.location.replace("), "signed out first, then the navigation");
+});
+
+test("/mon-espace offers the sign-out to an unverified visitor too, and never while impersonating (G3b)", () => {
+  const page = source("src/app/mon-espace/page.tsx");
+  const unverified = page.indexOf('{state === "unverified" && (');
+  const impersonating = page.indexOf('{state === "impersonating" && (');
+  assert.ok(unverified !== -1 && impersonating > unverified);
+  const branch = page.slice(unverified, impersonating);
+  assert.match(branch, /COPY\.CONFIRM_EMAIL_FIRST/);
+  assert.match(branch, /<ClientSignOutButton \/>/);
+  assert.match(page, /import \{ ClientSignOutButton \} from "@\/components\/public\/client-sign-out-button";/);
+  assert.equal((page.match(/<ClientSignOutButton/g) ?? []).length, 1, "one place, the unverified branch; the verified view carries its own");
 });
 
 test("the leaves send the typed value only and answer a thrown call with the shared message", () => {

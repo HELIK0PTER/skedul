@@ -21,6 +21,15 @@ export function entryPath(choice: EntryChoice): "/admin" | "/dashboard" {
 }
 
 /**
+ * Where a signed-in visitor of the pro funnel (`/sign-up`) goes: the validated `next` when there is one, else the pro
+ * back-office when they own a page, else the pro onboarding. The dashboard is no default for a user without a pro page:
+ * its layout sends them on to `/mon-espace`, so a signed-in client who opens the funnel would never reach the onboarding.
+ */
+export function signedInSignUpTarget(input: { next: string | null; hasProfessional: boolean }): string {
+  return input.next ?? (input.hasProfessional ? "/dashboard" : "/onboarding");
+}
+
+/**
  * Destination right after sign-in (L1394-1395), or "choose" to show the chooser: an admin chooses (or gets the
  * remembered choice); anyone else goes to the pro back-office when they own a page, else to their client space.
  * Only the sign-up funnel lands on the pro onboarding (L1397).
