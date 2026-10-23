@@ -8,11 +8,10 @@
 import { and, asc, desc, eq, inArray, isNull, lte, gt, or, sql } from "drizzle-orm";
 
 import { elapsedHoldsOf } from "@/lib/back-office/planning-reads";
-import { effectiveWindow, type BookingWindow } from "@/lib/booking-window";
+import type { BookingWindow } from "@/lib/booking-window";
 import { loadQuestions, type QuestionRow } from "@/lib/booking/answers";
 import { activeBookingOf } from "@/lib/booking/claims";
 import { usableTickets } from "@/lib/booking/eligibility";
-import { seatsShown } from "@/lib/booking/holds";
 import { walletBalance } from "@/lib/booking/wallet";
 import type { Db } from "@/lib/db/atomic";
 import { booking, customer, event, eventTicketType, occurrence, ticketOffer, ticketPurchase, ticketType } from "@/lib/db/schema";
@@ -20,7 +19,7 @@ import { offerCovers, validityOf } from "@/lib/ticket-expiry";
 import { idSchema, offerLabel, validityLabel, type BookingCoverage } from "@/lib/tickets";
 
 import type { BoutiqueOffer } from "./boutique-reads";
-import { acceptedTypesOf, effectiveLocation, type PublicSeance } from "./planning-reads";
+import { acceptedTypesOf, publicSeanceOf, UNDER_TIME_OFF, type PublicSeance } from "./planning-reads";
 
 export type PublicOfferChoice = BoutiqueOffer & {
   ticketTypeId: string;
@@ -110,6 +109,7 @@ export async function getPublicSeance(
   if (!idSchema.safeParse(occurrenceId).success) return null;
   const [row] = await db
     .select({
+      occurrenceId: occurrence.id,
       occurrenceEventId: occurrence.eventId,
       eventId: event.id,
       title: event.title,
@@ -128,8 +128,7 @@ export async function getPublicSeance(
       status: occurrence.status,
       capacity: occurrence.capacity,
       seatsTaken: occurrence.seatsTaken,
-      underTimeOff: sql<boolean>`exists (select 1 from time_off t where t.professional_id = occurrence.professional_id
-        and t.start_at < occurrence.ends_at and t.end_at > occurrence.starts_at)`,
+      underTimeOff: sql<boolean>`${UNDER_TIME_OFF}`,
     })
     .from(occurrence)
     .leftJoin(event, and(eq(event.id, occurrence.eventId), eq(event.professionalId, pro.professionalId)))
@@ -143,31 +142,18 @@ export async function getPublicSeance(
   const bookingMode = row.bookingMode;
   const [elapsed, types, questions, offers] = await Promise.all([
     elapsedHoldsOf(db, pro.professionalId, [occurrenceId], now),
-    bookingMode === "tickets" ? acceptedTypesOf(db, pro.professionalId, [eventId]) : Promise.resolve(new Map<string, { id: string; name: string; color: string }[]>()),
+    bookingMode === "tickets"
+      ? acceptedTypesOf(db, pro.professionalId, [eventId])
+      : Promise.resolve(new Map<string, PublicSeance["acceptedTypes"]>()),
     loadQuestions(db, { eventId }),
     bookingMode === "tickets" ? offersOf(db, pro, eventId, row.startsAt, now) : Promise.resolve([]),
   ]);
+  // The planning list's own mapper: the two pages never disagree on the seats, the place, the window or the time off.
+  const seance = publicSeanceOf({ ...row, eventId, title: row.title, color: row.color, bookingMode }, elapsed, types, pro.window);
   return {
     kind: "seance",
-    occurrenceId,
-    eventId,
-    title: row.title,
+    ...seance,
     description: row.description,
-    color: row.color,
-    startsAt: row.startsAt,
-    endsAt: row.endsAt,
-    location: effectiveLocation(row.locationOverride, row.eventLocation),
-    status: row.status,
-    bookingMode,
-    capacity: row.capacity,
-    seatsLeft: seatsShown({ capacity: row.capacity, seatsTaken: row.seatsTaken, elapsedHolds: elapsed.get(occurrenceId) ?? 0 }),
-    acceptedTypes: types.get(eventId) ?? [],
-    window: effectiveWindow(pro.window, {
-      bookingHorizonDays: row.eventHorizonDays,
-      minNoticeMinutes: row.eventNoticeMinutes,
-      cancelDeadlineHours: row.eventCancelHours,
-    }),
-    underTimeOff: row.underTimeOff,
     isPrivate: row.isPrivate ?? false,
     archived: row.archivedAt !== null,
     questions,

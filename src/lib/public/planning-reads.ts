@@ -47,9 +47,71 @@ export function effectiveLocation(override: string | null, eventLocation: string
   return place !== null && place.trim() !== "" ? place : null;
 }
 
-/** A time off of the pro overlaps the séance: literal table names, no interpolated column (drizzle's one-table trap). */
-const UNDER_TIME_OFF = sql`exists (select 1 from time_off t where t.professional_id = occurrence.professional_id
+/**
+ * A time off of the pro overlaps the séance: literal table names, no interpolated column (drizzle's one-table trap).
+ * The one spelling of the rule: the planning filter and column below and `getPublicSeance` (seance-reads.ts) use it, so
+ * the list hides an empty séance under a time off exactly when the séance page says « Réservations fermées ».
+ */
+export const UNDER_TIME_OFF = sql`exists (select 1 from time_off t where t.professional_id = occurrence.professional_id
   and t.start_at < occurrence.ends_at and t.end_at > occurrence.starts_at)`;
+
+/** The columns a read selects to build a PublicSeance (publicSeanceOf): listPublicSeances and getPublicSeance. */
+export type PublicSeanceRow = {
+  occurrenceId: string;
+  eventId: string;
+  title: string;
+  color: string;
+  startsAt: Date;
+  endsAt: Date;
+  locationOverride: string | null;
+  eventLocation: string | null;
+  status: OccurrenceStatus;
+  bookingMode: BookingMode;
+  capacity: number;
+  seatsTaken: number;
+  eventHorizonDays: number | null;
+  eventNoticeMinutes: number | null;
+  eventCancelHours: number | null;
+  /** the UNDER_TIME_OFF column */
+  underTimeOff: boolean;
+};
+
+/**
+ * The one mapping from a selected row to a PublicSeance, for the planning list and the séance page alike: the place,
+ * the seats (a lapsed hold is a free seat: `elapsedHolds` of the grouped read, by occurrence), the types a tickets
+ * séance accepts (`typesByEvent` of acceptedTypesOf: [] for any other mode), the effective window and the time-off flag.
+ */
+export function publicSeanceOf(
+  r: PublicSeanceRow,
+  elapsedHolds: ReadonlyMap<string, number>,
+  typesByEvent: ReadonlyMap<string, PublicSeance["acceptedTypes"]>,
+  proWindow: BookingWindow,
+): PublicSeance {
+  return {
+    occurrenceId: r.occurrenceId,
+    eventId: r.eventId,
+    title: r.title,
+    color: r.color,
+    startsAt: r.startsAt,
+    endsAt: r.endsAt,
+    location: effectiveLocation(r.locationOverride, r.eventLocation),
+    status: r.status,
+    bookingMode: r.bookingMode,
+    capacity: r.capacity,
+    seatsLeft: seatsShown({
+      capacity: r.capacity,
+      seatsTaken: r.seatsTaken,
+      elapsedHolds: elapsedHolds.get(r.occurrenceId) ?? 0,
+    }),
+    acceptedTypes: r.bookingMode === "tickets" ? (typesByEvent.get(r.eventId) ?? []) : [],
+    window: effectiveWindow(proWindow, {
+      bookingHorizonDays: r.eventHorizonDays,
+      minNoticeMinutes: r.eventNoticeMinutes,
+      cancelDeadlineHours: r.eventCancelHours,
+    }),
+    underTimeOff: r.underTimeOff,
+  };
+}
 
 /**
  * The filter listPublicSeances and nextPublicSeanceStart share (L490-496): séances of this pro's non-private,
@@ -147,32 +209,7 @@ export async function listPublicSeances(
     elapsedHoldsOf(db, pro.professionalId, rows.map((r) => r.occurrenceId), now),
     acceptedTypesOf(db, pro.professionalId, ticketsEventIds),
   ]);
-  return rows.map(
-    (r): PublicSeance => ({
-      occurrenceId: r.occurrenceId,
-      eventId: r.eventId,
-      title: r.title,
-      color: r.color,
-      startsAt: r.startsAt,
-      endsAt: r.endsAt,
-      location: effectiveLocation(r.locationOverride, r.eventLocation),
-      status: r.status,
-      bookingMode: r.bookingMode,
-      capacity: r.capacity,
-      seatsLeft: seatsShown({
-        capacity: r.capacity,
-        seatsTaken: r.seatsTaken,
-        elapsedHolds: elapsed.get(r.occurrenceId) ?? 0,
-      }),
-      acceptedTypes: r.bookingMode === "tickets" ? (types.get(r.eventId) ?? []) : [],
-      window: effectiveWindow(pro.window, {
-        bookingHorizonDays: r.eventHorizonDays,
-        minNoticeMinutes: r.eventNoticeMinutes,
-        cancelDeadlineHours: r.eventCancelHours,
-      }),
-      underTimeOff: r.underTimeOff,
-    }),
-  );
+  return rows.map((r) => publicSeanceOf(r, elapsed, types, pro.window));
 }
 
 /** The start of the first séance listPublicSeances would show at or after `after`; null when none. */

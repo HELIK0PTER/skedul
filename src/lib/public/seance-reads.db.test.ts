@@ -25,6 +25,7 @@ import {
 } from "@/test/rows";
 
 import type { PublicVisitor } from "./identity";
+import { listPublicSeances, type PublicSeance } from "./planning-reads";
 import { purchaseByReference } from "./purchase-reads";
 import { getPublicSeance, livePendingHoldsOf, seanceVisitorFacts } from "./seance-reads";
 import { referenceForPage, seanceViewerOf } from "./visibility";
@@ -204,6 +205,73 @@ dbTest("getPublicSeance: an RDV is { kind: rdv }, another pro's séance, an unkn
     }
   } finally {
     await deleteTestUser(db, other.userId);
+  }
+});
+
+dbTest("getPublicSeance says what the planning list says about the same séance: seats, place, window, types and time off (Task 24 review)", async ({ db, pro }) => {
+  const now = new Date();
+  const range = { start: now, end: addMinutes(now, 15 * 24 * 60) };
+  const typeId = await makeType(db, pro, { name: "Cours collectif", color: "#22c55e" });
+  const offerId = await makeOffer(db, pro, typeId, { quantity: 4, priceCents: 8500 });
+
+  await makeEvent(db, pro, { title: "Altinha débutants", capacity: 8, ticketTypeIds: [typeId] }, now);
+  // The event's own horizon, notice, cancel deadline and place, a séance with its own place, and a lapsed hold (capacity 5,
+  // one seat taken by a hold that ended: it is a free seat again).
+  const custom = await makeEvent(
+    db,
+    pro,
+    { title: "Altinha intermédiaires", capacity: 5, ticketTypeIds: [typeId], rule: { startDate: dayIn(pro, 4, now) } },
+    now,
+  );
+  await db
+    .update(event)
+    .set({ bookingHorizonDays: 20, minNoticeMinutes: 180, cancelDeadlineHours: 6, location: "Gymnase Jean Bouin" })
+    .where(eq(event.id, custom.eventId));
+  await db.update(occurrence).set({ locationOverride: "Plage de Copacabana", seatsTaken: 1 }).where(eq(occurrence.id, custom.occurrences[0].id));
+  await pendingHold({ db, pro }, { occurrenceId: custom.occurrences[0].id, typeId, offerId, holdExpiresAt: addMinutes(now, -5) });
+  // A booked séance under a time off stays in the list, closed online (an empty one would be hidden).
+  const blocked = await makeEvent(db, pro, { title: "Altinha bloquée", rule: { startDate: dayIn(pro, 5, now) } }, now);
+  await rowBooking(db, pro, { occurrenceId: blocked.occurrences[0].id, customerId: await rowCustomer(db, pro) }, now);
+  await db.update(occurrence).set({ seatsTaken: 1 }).where(eq(occurrence.id, blocked.occurrences[0].id));
+  await db.insert(timeOff).values({
+    id: nanoid(),
+    professionalId: pro.proId,
+    startAt: instantAt(dayIn(pro, 5, now), 0, pro.tz),
+    endAt: instantAt(dayIn(pro, 6, now), 0, pro.tz),
+    allDay: true,
+    reason: null,
+  });
+  const struck = await makeEvent(db, pro, { title: "Altinha annulée", ticketTypeIds: [typeId] }, now);
+  const cancelled = await cancelOccurrence(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: struck.occurrences[0].id }, now);
+  assert.ok(cancelled.ok, JSON.stringify(cancelled));
+  // A free séance keeps no accepted type, a stale link or not; an onsite one neither.
+  const roda = await rowEvent(db, pro, { bookingMode: "free" }, now);
+  await db.update(event).set({ title: "Roda libre" }).where(eq(event.id, roda));
+  await rowLink(db, pro, roda, typeId);
+  await rowSeance(db, pro, roda, { startsAt: instantAt(dayIn(pro, 7, now), 600, pro.tz), seriesDate: dayIn(pro, 7, now) }, now);
+  await makeEvent(db, pro, { title: "Atelier sur place", bookingMode: "none", rule: { startDate: dayIn(pro, 8, now) } }, now);
+
+  const listed = await listPublicSeances(db, proOf(pro), range, now);
+  const byTitle = new Map(listed.map((s) => [s.title, s]));
+  assert.equal(listed.length, 6, [...byTitle.keys()].join(", "));
+  // Not vacuous: the list itself shows each of the differences the page has to repeat.
+  assert.equal(byTitle.get("Altinha bloquée")?.underTimeOff, true);
+  assert.equal(byTitle.get("Altinha débutants")?.underTimeOff, false);
+  assert.deepEqual(
+    [byTitle.get("Altinha intermédiaires")?.seatsLeft, byTitle.get("Altinha intermédiaires")?.location],
+    [5, "Plage de Copacabana"],
+  );
+  assert.deepEqual(byTitle.get("Altinha intermédiaires")?.window, { bookingHorizonDays: 20, minNoticeMinutes: 180, cancelDeadlineHours: 6 });
+  assert.deepEqual(byTitle.get("Altinha débutants")?.acceptedTypes.map((t) => t.name), ["Cours collectif"]);
+  assert.equal(byTitle.get("Altinha annulée")?.status, "cancelled");
+  assert.deepEqual(byTitle.get("Roda libre")?.acceptedTypes, []);
+  assert.deepEqual(byTitle.get("Atelier sur place")?.acceptedTypes, []);
+
+  for (const seance of listed) {
+    const detail = await getPublicSeance(db, proOf(pro), seance.occurrenceId, now);
+    assert.ok(detail && detail.kind === "seance", seance.title);
+    const shared = Object.fromEntries(Object.keys(seance).map((key) => [key, detail[key as keyof PublicSeance]]));
+    assert.deepEqual(shared, seance, `${seance.title}: the séance page and the planning disagree`);
   }
 });
 
