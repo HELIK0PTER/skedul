@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { codeView, rawErrorLogs, sourceFilesUnder } from "./source-guards";
+import { bodyOf, codeView, rawErrorLogs, sourceFilesUnder } from "./source-guards";
 
 /** The calls rawErrorLogs reports for a one-statement source. */
 const hits = (source: string): number => rawErrorLogs(source).length;
@@ -204,4 +204,69 @@ test("sourceFilesUnder: the .ts and .tsx files under a directory, test files exc
   const all = sourceFilesUnder("src");
   assert.ok(all.length > 200, `the whole tree is walked (${all.length})`);
   assert.ok(all.includes("src/server/visitor.ts") && all.includes("src/lib/booking/claims.ts"));
+});
+
+const FILE = [
+  "/** The first. */",
+  "export async function first(a: number) {",
+  "  return a;",
+  "}",
+  "",
+  "/** The second, with its own doc comment. */",
+  "export function second() {",
+  "  return 2;",
+  "}",
+  "",
+  "function helper() {",
+  "  return 3;",
+  "}",
+  "export default async function Third() {",
+  "  return helper();",
+  "}",
+  "",
+].join("\n");
+
+test("bodyOf: the declaration of an exported function up to the next top-level doc comment or export, the neighbour's comment left out", () => {
+  const first = bodyOf(FILE, "first");
+  assert.ok(first.startsWith("export async function first(a: number) {"));
+  assert.ok(first.includes("return a;"));
+  assert.ok(!first.includes("second") && !first.includes("The second"), "the doc comment of the next function is not part of this one");
+  assert.ok(bodyOf(FILE, "second").includes("return 2;"));
+});
+
+test("bodyOf: stops at the next export even without a doc comment, keeps a private helper in between, and reads a default export to the end of the file", () => {
+  const second = bodyOf(FILE, "second");
+  assert.ok(second.includes("function helper()") && second.includes("return 3;"), "a private helper belongs to the function above it");
+  assert.ok(!second.includes("Third"), "the next export starts the next body");
+  const third = bodyOf(FILE, "Third");
+  assert.ok(third.startsWith("export default async function Third() {"));
+  assert.ok(third.includes("return helper();"), "to the end of the file");
+});
+
+test("bodyOf: a name that is a prefix of another export does not match it, a generic or CRLF source still works", () => {
+  const source = "export async function requireProContext() {\n  return 1;\n}\n/** doc */\nexport async function requirePro<T>(x: T) {\n  return 2;\n}\n";
+  assert.ok(bodyOf(source, "requirePro").includes("return 2;"), "requirePro is the generic one, not requireProContext");
+  assert.ok(!bodyOf(source, "requirePro").includes("return 1;"));
+  assert.ok(bodyOf(source.replace(/\n/g, "\r\n"), "requireProContext").includes("return 1;"));
+  assert.ok(!bodyOf(source.replace(/\n/g, "\r\n"), "requireProContext").includes("return 2;"));
+});
+
+test("bodyOf: throws when the function is not exported (a private function or a name inside a string does not count)", () => {
+  assert.throws(() => bodyOf(FILE, "helper"), /helper/);
+  assert.throws(() => bodyOf(FILE, "missing"), /missing/);
+  assert.throws(() => bodyOf('const s = "export async function ghost() {}";', "ghost"), /ghost/);
+});
+
+test("rawErrorLogs: the hand-over shapes it does not see are documented, and this test pins them so a change is deliberate (read by eye in Task 31)", () => {
+  for (const source of [
+    "const opts = { onError: console.error };",
+    "const log = verbose ? console.error : noop;",
+    "const log = custom ?? console.error;",
+    'try { run(); } catch ({ cause: { detail } }) { console.error("[x] failed", detail); }',
+  ]) {
+    assert.equal(hits(source), 0, source);
+  }
+  // The same calls, spelled as the rule reads them, are reported: the blind spots are the shapes above, nothing more.
+  assert.equal(hits("run().catch(console.error);"), 1);
+  assert.equal(hits('try { run(); } catch ({ cause }) { console.error("[x] failed", cause); }'), 1);
 });

@@ -35,7 +35,8 @@ export async function chooseEntry(
 ): Promise<string> {
   const valid = parseEntryChoice(choice);
   if (!valid || !(await getAdminUser())) {
-    // Not an admin: nothing to choose, the pro back-office when they own a page, else their client space.
+    // Nothing to choose: the caller is not an admin, or an admin sent a choice that is neither "admin" nor "client".
+    // Either way they go where resolveEntry sends everyone else: the pro back-office when they own a page, else their client space.
     return (await getCurrentProfessional()) ? "/dashboard" : "/mon-espace";
   }
   if (remember) {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { rawErrorLogs } from "@/test/source-guards";
+import { bodyOf, rawErrorLogs } from "@/test/source-guards";
 
 import { GUEST_COOKIE_MAX_AGE } from "../guest-link";
 import { guestCookieOptions, guestLinkDecision, type GuestCustomerRow } from "./guest-access";
@@ -104,17 +104,8 @@ test("guestLinkDecision hands the row's business name to the page as stored: esc
 
 const ROUTE = "src/app/api/c/[token]/route.ts";
 
-/** The text of `export async function <name>(` up to the next doc comment or export, so a neighbouring handler's comment never leaks in. */
-function handlerOf(source: string, name: string): string {
-  const start = source.indexOf(`export async function ${name}(`);
-  assert.notEqual(start, -1, `${name} is exported`);
-  const rest = source.slice(start + 1);
-  const end = rest.search(/\n(?:\/\*\*|export )/);
-  return end === -1 ? source.slice(start) : source.slice(start, start + 1 + end);
-}
-
 test("the personal-link GET only decides and shows the confirmation page: no cookie, no write (Decision 68, S41, S52)", () => {
-  const get = handlerOf(readFileSync(ROUTE, "utf8"), "GET");
+  const get = bodyOf(readFileSync(ROUTE, "utf8"), "GET");
   assert.doesNotMatch(get, /cookies\.set|Set-Cookie|GUEST_COOKIE/i, "a GET never plants an identity");
   assert.match(get, /guestLinkPageHtml\(\{ businessName: decision\.businessName, actionPath: `\/api\/c\/\$\{encodeURIComponent\(token\)\}` \}\)/);
   assert.match(get, /headers: GUEST_LINK_PAGE_HEADERS/);
@@ -123,7 +114,7 @@ test("the personal-link GET only decides and shows the confirmation page: no coo
 
 test("the personal-link POST checks the origin first, re-checks the link, and sets the cookie on the ok branch only (S41)", () => {
   const route = readFileSync(ROUTE, "utf8");
-  const post = handlerOf(route, "POST");
+  const post = bodyOf(route, "POST");
   const origin = post.indexOf('sameOrigin(request.headers.get("origin"), env.APP_URL)');
   const resolve = post.indexOf("resolveGuestLink(");
   const notFound = post.indexOf('decision.kind === "not_found"');
@@ -140,7 +131,7 @@ test("both personal-link handlers catch a throw from resolveGuestLink, log it th
   const route = readFileSync(ROUTE, "utf8");
   assert.deepEqual(rawErrorLogs(route), [], "no console call receives a raw error object");
   for (const name of ["GET", "POST"]) {
-    const body = handlerOf(route, name);
+    const body = bodyOf(route, name);
     const tried = body.indexOf("try {");
     const resolve = body.indexOf("resolveGuestLink(");
     const caught = body.indexOf("} catch (");
@@ -155,7 +146,7 @@ test("both personal-link handlers catch a throw from resolveGuestLink, log it th
 
 test("« Ce n'est pas moi » clears the cookie with the attributes of guestCookieOptions and writes nothing to the database (S52)", () => {
   const client = readFileSync("src/server/client.ts", "utf8");
-  const action = handlerOf(client, "forgetGuestLinkAction");
+  const action = bodyOf(client, "forgetGuestLinkAction");
   assert.match(action, /runPublicAction\(/);
   assert.match(action, /\(await cookies\(\)\)\.set\(GUEST_COOKIE, "", \{ \.\.\.guestCookieOptions\(pro\.slug, process\.env\.NODE_ENV === "production"\), maxAge: 0 \}\)/);
   assert.doesNotMatch(client, /httpOnly|sameSite/, "no attribute is spelled out in client.ts");

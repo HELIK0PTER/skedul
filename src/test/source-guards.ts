@@ -15,6 +15,23 @@ export function sourceFilesUnder(dir: string): string[] {
   });
 }
 
+/**
+ * The source of the exported function `exportName` (`export function`, `export async function` or `export default
+ * [async] function`, at the start of a line), from its declaration up to the next top-level doc comment or export, or
+ * the end of the file: a neighbour's doc comment never leaks into the body, an undocumented private helper
+ * between two exports belongs to the function above it, and a name that is only the beginning of another export does not match it. Throws
+ * when the function is not exported, so a guard on a renamed function fails instead of reading nothing. Replaces the
+ * local copies of the wiring guards (`bodyOf`, `handlerOf`) of the entry, pro-context, mock-checkout and guest-access tests.
+ */
+export function bodyOf(source: string, exportName: string): string {
+  const escaped = exportName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const head = new RegExp(`^export (?:default )?(?:async )?function ${escaped}\\b`, "m").exec(source);
+  if (head === null) throw new Error(`\`export function ${exportName}\` is not in the source`);
+  const afterHead = head.index + head[0].length;
+  const next = source.slice(afterHead).search(/\r?\n(?:\/\*\*|export )/);
+  return next === -1 ? source.slice(head.index) : source.slice(head.index, afterHead + next);
+}
+
 /** Characters after which a `/` starts a regular expression, not a division. */
 const REGEX_AFTER = "(,=:[!&|?{};+-*%<>~^";
 /** Keywords after which a `/` starts a regular expression. */
@@ -223,6 +240,12 @@ function namesRawError(args: string, names: Set<string>): boolean {
  * would reach the platform log, which `logSafeMessage` scrubs. Returns the text of each offending call or reference, in
  * source order, so a failing test shows it; an empty list is a pass. Comments, string text and regular expressions are
  * never read as code. A property that happens to be named like an error (`verified.reason`) is not one.
+ *
+ * What it does NOT see (a human reads these by eye in the final sweep, and `source-guards.test.ts` pins the list so a
+ * change is deliberate): a console method handed over as an object value (`{ onError: console.error }`), in a
+ * conditional (`verbose ? console.error : noop`), through a nullish fallback (`custom ?? console.error`), and an error
+ * bound by a NESTED destructured catch parameter (`catch ({ cause: { detail } })`, whose `detail` is not a known error
+ * name). Only a reference right after `(` or `,` counts as handed to a callee.
  */
 export function rawErrorLogs(source: string): string[] {
   const code = codeView(source);

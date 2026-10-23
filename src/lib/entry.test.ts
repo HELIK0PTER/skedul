@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
+import { bodyOf } from "@/test/source-guards";
+
 import { entryPath, parseEntryChoice, resolveEntry, signedInSignUpTarget } from "./entry";
 
 test("resolveEntry sends a non-admin with a pro page to /dashboard, whatever the cookie says", () => {
@@ -53,14 +55,6 @@ test("signedInSignUpTarget: a signed-in visitor of the pro funnel keeps a safe n
 
 // The wrappers below import next/headers and a "use server" boundary, which the node:test runner cannot load:
 // what they must keep is pinned on their source. Run from the repository root.
-
-/** The text of `export async function <name>` up to the next top-level doc comment or the end of the file. */
-function bodyOf(source: string, name: string): string {
-  const start = source.indexOf(`export async function ${name}`);
-  assert.notEqual(start, -1, `${name} is exported`);
-  const end = source.indexOf("\n/**", start);
-  return source.slice(start, end === -1 ? undefined : end);
-}
 
 test("resolvePostSignIn and chooseEntry read the pro page of the signed-in user: no path lands a client on the pro onboarding (L1394-1397)", () => {
   const source = readFileSync("src/server/entry.ts", "utf8");

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { COPY } from "@/lib/public/messages";
-import { rawErrorLogs } from "@/test/source-guards";
+import { bodyOf, rawErrorLogs } from "@/test/source-guards";
 
 import { mockCancelPath, mockCheckoutHtml, type MockCheckoutView } from "./mock-checkout";
 
@@ -92,14 +92,6 @@ test("mockCancelPath: the séance of a buy + book, else the offer of the shop, e
 // The route handler imports next/server, which node:test cannot load: its wiring is pinned on the source.
 const ROUTE = readFileSync("src/app/api/mock-checkout/route.ts", "utf8");
 
-/** The text of `export async function <verb>(` up to the next doc comment or exported function (or the end of the file). */
-function bodyOf(verb: "GET" | "POST"): string {
-  const start = ROUTE.indexOf(`export async function ${verb}(`);
-  assert.notEqual(start, -1, `${verb} is exported`);
-  const ends = [ROUTE.indexOf("\n/**", start + 1), ROUTE.indexOf("\nexport async function", start + 1)].filter((i) => i !== -1);
-  return ROUTE.slice(start, ends.length === 0 ? undefined : Math.min(...ends));
-}
-
 test("the mock route runs its effects with the budget none and logs no raw error (Decision 74, S49, S31)", () => {
   assert.match(ROUTE, /runEffects\(effects, "none"\)/);
   assert.doesNotMatch(ROUTE, /runEffects\([^)]*"pro"/);
@@ -108,18 +100,18 @@ test("the mock route runs its effects with the budget none and logs no raw error
 
 test("the mock route: both verbs answer 404 unless the simulation is enabled, the GET writes nothing and takes no redirect parameter (S15)", () => {
   for (const verb of ["GET", "POST"] as const) {
-    const body = bodyOf(verb);
+    const body = bodyOf(ROUTE, verb);
     assert.ok(body.indexOf("mockCheckoutEnabled()") !== -1, `${verb} checks the one availability rule`);
     assert.ok(body.indexOf("mockCheckoutEnabled()") < body.indexOf("isReferenceId("), `${verb} checks it before anything else`);
   }
-  assert.doesNotMatch(bodyOf("GET"), /mockPay|fulfillPurchase|runEffects|after\(|formData/, "a GET never pays");
-  assert.match(bodyOf("GET"), /searchParams\.get\("purchase"\)/);
+  assert.doesNotMatch(bodyOf(ROUTE, "GET"), /mockPay|fulfillPurchase|runEffects|after\(|formData/, "a GET never pays");
+  assert.match(bodyOf(ROUTE, "GET"), /searchParams\.get\("purchase"\)/);
   assert.doesNotMatch(ROUTE, /searchParams\.get\("(redirect|next|returnTo|success|url)"\)/, "no redirect parameter (L1146-1147)");
   assert.match(ROUTE, /new URL\(path, env\.APP_URL\)/, "the way back is built from the trusted app URL");
 });
 
 test("the mock route's POST checks the origin before it reads the body and before it pays", () => {
-  const body = bodyOf("POST");
+  const body = bodyOf(ROUTE, "POST");
   const at = (needle: string) => {
     const index = body.indexOf(needle);
     assert.notEqual(index, -1, `${needle} is in the POST`);
@@ -139,7 +131,7 @@ test("the mock route catches a throw from the state read and from the payment: a
     ["GET", "mockCheckoutState("],
     ["POST", "mockPay("],
   ] as const) {
-    const body = bodyOf(verb);
+    const body = bodyOf(ROUTE, verb);
     const callAt = body.indexOf(call);
     assert.notEqual(callAt, -1, `${verb} calls ${call}`);
     const tryAt = body.lastIndexOf("try {", callAt);
