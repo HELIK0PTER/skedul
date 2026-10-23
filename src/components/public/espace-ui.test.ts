@@ -26,7 +26,7 @@ test("« Annuler » asks first, calls the action through callOrFail, announces t
   assert.match(CANCEL, /useCallback\(\(\) => \(leaving\.current \? upcomingHeading\(\) : null\), \[\]\)/, "the heading after a confirmed cancellation, else the opener");
   const flag = CANCEL.indexOf("leaving.current = true;");
   assert.ok(flag !== -1 && flag < CANCEL.indexOf("await callOrFail("), "the flag is set before the answer is awaited");
-  assert.ok(CANCEL.indexOf("leaving.current = false;") > CANCEL.indexOf("if (!res.ok)"), "a refusal keeps the focus in the dialog's own flow");
+  assert.match(refusalBranch(CANCEL), /leaving\.current = false;/, "a refusal keeps the focus in the dialog's own flow: the reset sits in the refusal branch itself (G3b)");
   assert.match(CANCEL, /announce\(COPY\.CANCELLED_OK\)/);
   assert.ok(CANCEL.indexOf("if (!res.ok)") < CANCEL.indexOf("announce(COPY.CANCELLED_OK)"), "announced on success only");
   assert.doesNotMatch(CANCEL, /router\.refresh|useRouter/, "the action revalidates the page itself");
@@ -54,7 +54,7 @@ test("the spend button never prefills or locks the sign-in address, offers the d
   assert.match(SPEND, /control === "disabled"/);
   assert.match(SPEND, /aria-describedby=\{hintId\}/);
   assert.match(SPEND, /\{COPY\.CONFIRM_EMAIL_TO_SPEND\}/);
-  assert.match(SPEND, /<Link href=\{`\/\$\{slug\}\/seance\/\$\{seance\.occurrenceId\}`\}>/);
+  assert.match(SPEND, /<Link href=\{`\/\$\{slug\}\/seance\/\$\{seance\.occurrenceId\}`\}/);
 });
 
 test("« Utiliser une autre adresse » signs out, then leaves with a full navigation that drops the router cache (SEC-M12)", () => {
@@ -158,4 +158,48 @@ test("the espace offers « Se déconnecter » once, in the shell, to the visitor
 test("the /mon-espace cards carry the same wallet notes as the espace: an archived type and a type no upcoming séance accepts (§ 3.23 MySpaceView, COV-I2)", () => {
   assert.match(MY_SPACE, /w\.archived && /);
   assert.match(MY_SPACE, /\{w\.typeClass === "orphan" && <p className="text-xs text-zinc-600 wrap-anywhere">\{COPY\.ORPHAN_TYPE\}<\/p>\}/);
+});
+
+/** The statements of the `if (!res.ok) { ... }` branch of the leaf's transition (it closes at the indentation of the `if`). */
+function refusalBranch(source: string): string {
+  const match = /if \(!res\.ok\) \{\r?\n([\s\S]*?)\r?\n {6}\}/.exec(source);
+  assert.ok(match, "the refusal branch is there");
+  return match[1];
+}
+
+test("« Annuler » clears the status line when it starts, so two successes in a row are both announced; a refusal resets the flag in the refusal branch itself (G3b)", () => {
+  const submit = CANCEL.slice(CANCEL.indexOf("function submit() {"), CANCEL.indexOf("return (\n    <>"));
+  assert.ok(submit.length > 0, "submit is found");
+  const cleared = submit.indexOf("announce(null);");
+  assert.ok(cleared !== -1 && cleared < submit.indexOf("startTransition("), "announce(null) runs before the action starts (the useSpaceStatus contract)");
+  // The same message twice is one state: without the reset the second « Inscription annulée. » would not be read out.
+  assert.match(refusalBranch(CANCEL), /leaving\.current = false;/, "removing the reset from the refusal branch fails this test");
+  assert.match(refusalBranch(CANCEL), /setError\(res\.error\);/);
+});
+
+test("« Réserver avec 1 ticket » keeps the focus on a refusal: aria-disabled while pending, never `disabled` on the clicked button (G3b)", () => {
+  assert.doesNotMatch(SPEND, /disabled=\{pending\}/, "a focused button that becomes disabled drops the focus on <body>");
+  const book = SPEND.slice(SPEND.indexOf("function book() {"), SPEND.indexOf("if (control === \"none\")"));
+  assert.match(book, /if \(pending\) return;/, "a click or Enter while the answer is awaited does nothing");
+  assert.match(SPEND, /aria-disabled=\{pending \|\| undefined\}/);
+  assert.match(SPEND, /aria-disabled:pointer-events-none aria-disabled:opacity-50/, "it still looks disabled");
+  // The refusal text reaches a screen reader through the always-mounted alert region, and the button keeps the focus.
+  assert.match(refusalBranch(SPEND), /setError\(res\.error\);/);
+  assert.doesNotMatch(refusalBranch(SPEND), /focus\(/, "nothing moves the focus away on a refusal");
+});
+
+test("the up-to-8 rows of « Utiliser vos tickets » have distinct accessible names that start with the visible label, on the link, the disabled and the enabled button (G3b)", () => {
+  assert.match(SPEND, /import \{ SPEND_DONE, SPEND_LABEL, SPEND_LINK_LABEL, spendButtonName, spendControlOf \} from "@\/lib\/public\/space-view";/);
+  assert.match(SPEND, /<Link href=\{`\/\$\{slug\}\/seance\/\$\{seance\.occurrenceId\}`\} aria-label=\{spendButtonName\(SPEND_LINK_LABEL, seance\.title, seance\.whenLabel\)\}>/);
+  assert.equal((SPEND.match(/aria-label=\{spendButtonName\(/g) ?? []).length, 3, "the link and the two buttons");
+  assert.match(SPEND, /aria-label=\{spendButtonName\(SPEND_LABEL, seance\.title, seance\.whenLabel\)\}/);
+  assert.match(SPEND, /aria-label=\{spendButtonName\(pending \? COPY\.PENDING_BOOK : SPEND_LABEL, seance\.title, seance\.whenLabel\)\}/, "the pending label is the visible one");
+});
+
+test("the « Réserver » link of a séance with questions does not stretch full width on a phone (G3b)", () => {
+  assert.match(SPEND, /<Button asChild variant="secondary" size="sm" className="self-start sm:self-auto">/);
+});
+
+test("the no_record « Voir la page de … » button wraps long business names like the espace's own (G3b)", () => {
+  assert.match(PAGE, /<Button asChild variant="secondary" size="sm" className="h-auto min-h-8 max-w-full whitespace-normal py-1\.5 wrap-anywhere">\s*<Link href=\{`\/\$\{slug\}`\}>\{`Voir la page de \$\{pro\.businessName\}`\}<\/Link>/);
 });

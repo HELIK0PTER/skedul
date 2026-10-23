@@ -11,7 +11,7 @@ import { callOrFail } from "@/lib/pro-messages";
 import type { VisitorState } from "@/lib/public/identity";
 import { COPY } from "@/lib/public/messages";
 import { canOfferCodeSignIn } from "@/lib/public/sign-in-flow";
-import { SPEND_DONE, SPEND_LABEL, SPEND_LINK_LABEL, spendControlOf } from "@/lib/public/space-view";
+import { SPEND_DONE, SPEND_LABEL, SPEND_LINK_LABEL, spendButtonName, spendControlOf } from "@/lib/public/space-view";
 import type { SpendableSeance } from "@/lib/public/spendable";
 import { bookWithHeldTicketAction } from "@/server/public";
 
@@ -22,7 +22,11 @@ import { bookWithHeldTicketAction } from "@/server/public";
  * dialog with an EMPTY address (Decision 7: the cookie can be planted by someone else, the code proves the address);
  * a disabled button described by « Confirmez votre email pour utiliser vos tickets. » for an unverified one; nothing
  * while an admin impersonates. A success is announced in the shared status line and the focus goes to the section
- * heading (this row leaves the list when the page revalidates).
+ * heading (this row leaves the list when the page revalidates). While the answer is awaited the button is
+ * `aria-disabled`, not `disabled`: a focused button that becomes disabled drops the focus on <body>, so after a
+ * refusal (whose text sits in the always-mounted alert region) the visitor would have to find the row again. Every
+ * control carries an accessible name that starts with its visible label and names the séance, because the list holds
+ * up to eight identical labels.
  */
 export function SpendSeanceButton({
   slug,
@@ -47,6 +51,7 @@ export function SpendSeanceButton({
   const control = spendControlOf({ needsAnswers: seance.needsAnswers, canSpend, visitorState });
 
   function book() {
+    if (pending) return;
     setError(null);
     announce(null);
     startTransition(async () => {
@@ -63,8 +68,10 @@ export function SpendSeanceButton({
   if (control === "none") return null;
   if (control === "link") {
     return (
-      <Button asChild variant="secondary" size="sm">
-        <Link href={`/${slug}/seance/${seance.occurrenceId}`}>{SPEND_LINK_LABEL}</Link>
+      <Button asChild variant="secondary" size="sm" className="self-start sm:self-auto">
+        <Link href={`/${slug}/seance/${seance.occurrenceId}`} aria-label={spendButtonName(SPEND_LINK_LABEL, seance.title, seance.whenLabel)}>
+          {SPEND_LINK_LABEL}
+        </Link>
       </Button>
     );
   }
@@ -73,7 +80,13 @@ export function SpendSeanceButton({
     <div className="flex flex-col items-start gap-1.5 sm:items-end">
       {control === "disabled" ? (
         <>
-          <Button type="button" size="sm" disabled aria-describedby={hintId}>
+          <Button
+            type="button"
+            size="sm"
+            disabled
+            aria-describedby={hintId}
+            aria-label={spendButtonName(SPEND_LABEL, seance.title, seance.whenLabel)}
+          >
             {SPEND_LABEL}
           </Button>
           <p id={hintId} className="text-xs text-zinc-600 sm:text-right">
@@ -81,7 +94,14 @@ export function SpendSeanceButton({
           </p>
         </>
       ) : (
-        <Button type="button" size="sm" disabled={pending} onClick={control === "book" ? book : () => setSignInOpen(true)}>
+        <Button
+          type="button"
+          size="sm"
+          aria-disabled={pending || undefined}
+          aria-label={spendButtonName(pending ? COPY.PENDING_BOOK : SPEND_LABEL, seance.title, seance.whenLabel)}
+          className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
+          onClick={control === "book" ? book : () => setSignInOpen(true)}
+        >
           {pending && <Loader2 className="animate-spin" aria-hidden />}
           {pending ? COPY.PENDING_BOOK : SPEND_LABEL}
         </Button>

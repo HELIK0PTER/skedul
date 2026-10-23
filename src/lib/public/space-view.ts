@@ -34,6 +34,11 @@ export function cancelButtonName(title: string, whenLabel: string): string {
   return `${CANCEL_LABEL} : ${title}, ${whenLabel}`;
 }
 
+/** The accessible name of a row's « Réserver … »: starts with the visible label (WCAG 2.5.3) and says which séance, so the rows of the list are told apart. */
+export function spendButtonName(label: string, title: string, whenLabel: string): string {
+  return `${label} : ${title}, ${whenLabel}`;
+}
+
 /**
  * The visitor state an espace identity stands for. The personal-link cookie alone is « anonymous » (it spends nothing:
  * it proves nothing about who holds the browser); a signed-in visitor is never anonymous (COV-C1).

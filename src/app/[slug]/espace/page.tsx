@@ -102,7 +102,7 @@ export default async function EspacePage({ params, searchParams }: Props) {
           <p className="text-sm wrap-anywhere">{noRecordText(pro.businessName, identity.email)}</p>
           <div className="flex flex-wrap items-start gap-2">
             <OtherAddressButton path={returnTo} />
-            <Button asChild variant="secondary" size="sm">
+            <Button asChild variant="secondary" size="sm" className="h-auto min-h-8 max-w-full whitespace-normal py-1.5 wrap-anywhere">
               <Link href={`/${slug}`}>{`Voir la page de ${pro.businessName}`}</Link>
             </Button>
           </div>

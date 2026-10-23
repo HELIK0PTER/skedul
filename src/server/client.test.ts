@@ -49,3 +49,16 @@ test("every action goes through the wrappers that read the fresh session, check 
   assert.match(SOURCE, /updateMyNameCore\(db, session, input, now\)/);
   assert.match(SOURCE, /revokeMyLinksCore\(db, session, now\)/);
 });
+
+test("cancelMyBookingAction hands the core the input without the slug (`rest`), never `input`, and takes the visitor from runPublicAction (G3b)", () => {
+  const action = exportedActions().find((a) => a.name === "cancelMyBookingAction");
+  assert.ok(action, "exported");
+  assert.match(action.body, /const \{ slug, rest \} = splitActionInput\(input\);/, "the slug is split off first");
+  assert.match(
+    action.body,
+    /runPublicAction\("cancelMyBooking", slug, \(pro, visitor, now\) => cancelMyBookingCore\(db, pro, visitor, rest, now\)\)/,
+    "the core gets the pro the slug resolved, the visitor the server built and the rest of the input",
+  );
+  // The strict schema of the core would refuse a `slug` key: passing `input` would turn every cancellation into a validation error.
+  assert.doesNotMatch(action.body, /cancelMyBookingCore\([^)]*\binput\b/);
+});

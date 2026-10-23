@@ -14,6 +14,7 @@ import {
   canSpendIn,
   cancelBookingCopy,
   cancelButtonName,
+  spendButtonName,
   spendControlOf,
   visitorStateOfIdentity,
 } from "./space-view";
@@ -52,6 +53,16 @@ test("cancelBookingCopy: a ticket comes back and the pro is told; every case pro
     const copy = cancelBookingCopy(coverage, "Altinha Paris");
     assert.doesNotMatch(`${copy.title} ${copy.body} ${copy.confirm}`, DASHES);
   }
+});
+
+test("spendButtonName starts with the visible label (WCAG 2.5.3) and names the séance, so the rows of the list are told apart (G3b)", () => {
+  const first = spendButtonName(SPEND_LABEL, "Altinha débutants", "lun. 26 octobre 2026 · 19:00 à 20:00");
+  const second = spendButtonName(SPEND_LABEL, "Altinha débutants", "mer. 28 octobre 2026 · 19:00 à 20:00");
+  assert.equal(first, "Réserver avec 1 ticket : Altinha débutants, lun. 26 octobre 2026 · 19:00 à 20:00");
+  assert.notEqual(first, second, "same title, another day");
+  assert.ok(spendButtonName(SPEND_LINK_LABEL, "x", "y").startsWith(SPEND_LINK_LABEL));
+  assert.ok(first.startsWith(SPEND_LABEL));
+  assert.doesNotMatch(first, DASHES);
 });
 
 test("cancelButtonName starts with the visible label (WCAG 2.5.3) and names the booking", () => {

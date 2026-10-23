@@ -46,6 +46,9 @@ export function CancelBookingButton({
 
   function submit() {
     setError(null);
+    // The useSpaceStatus contract: a new action clears the previous line, so a second success with the same text is a
+    // change of state and is announced again.
+    announce(null);
     leaving.current = true;
     startTransition(async () => {
       const res = await callOrFail(() => cancelMyBookingAction({ slug, bookingId }));

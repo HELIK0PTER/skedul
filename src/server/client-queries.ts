@@ -62,7 +62,13 @@ export function getCustomerSpacePage(professionalId: string, customerId: string)
   return getCustomerSpace(db, professionalId, customerId, new Date());
 }
 
-/** « Utiliser vos tickets »: the séances an Owner can book now with a held ticket (Task 21). The caller passes the Owner's customer id only. */
+/**
+ * « Utiliser vos tickets »: the séances a held ticket can book now (Task 21). The caller passes the id of the customer
+ * whose espace it renders (`resolveSpaceCustomer`): the Owner's, or the personal link's customer for the read-only list
+ * (the cookie proves nothing about who holds the browser, so for it the list is information only). Never an id from
+ * the request. What books is the control `canSpendIn` offers to the Owner alone, and the engine reads the Owner's own
+ * customer again when the booking is made.
+ */
 export function getSpendableSeances(professionalId: string, customerId: string): Promise<SpendableSeance[]> {
   return spendableSeances(db, professionalId, customerId, new Date());
 }

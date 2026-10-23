@@ -91,6 +91,14 @@ dbTest(
     );
     await rowLink(db, pro, freeMode.eventId, typeId);
     await eventAt(12, { title: "No linked type", ticketTypeIds: [] });
+    // A cancelled séance (o.status <> 'scheduled') and a séance of an archived event (e.archived_at set) are not listed (G3b).
+    const cancelledSeance = await eventAt(13, { title: "Cancelled séance" });
+    await db
+      .update(schema.occurrence)
+      .set({ status: "cancelled", cancelledAt: now })
+      .where(eq(schema.occurrence.id, cancelledSeance.occ.id));
+    const archivedEvent = await eventAt(14, { title: "Archived event" });
+    await db.update(schema.event).set({ archivedAt: now }).where(eq(schema.event.id, archivedEvent.eventId));
 
     const list = await spendableSeances(db, pro.proId, customerId, now);
     assert.deepEqual(
