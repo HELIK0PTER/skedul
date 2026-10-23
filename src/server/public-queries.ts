@@ -6,7 +6,17 @@ import { minGeneratedUntil, needsHorizon } from "@/lib/booking/occurrences";
 import { db } from "@/lib/db";
 import { listBoutique, type BoutiqueType } from "@/lib/public/boutique-reads";
 import type { PublicPro } from "@/lib/public/context";
+import { getPublicOffer, type PublicOfferDetail } from "@/lib/public/offer-reads";
 import { listPublicSeances, nextPublicSeanceStart, type PublicSeance } from "@/lib/public/planning-reads";
+import { purchaseByReference, type PurchaseReference } from "@/lib/public/purchase-reads";
+import {
+  getPublicSeance,
+  livePendingHoldsOf,
+  seanceVisitorFacts,
+  type LivePendingHold,
+  type PublicSeanceDetail,
+  type SeanceVisitorFacts,
+} from "@/lib/public/seance-reads";
 import { getPublicProfile } from "@/server/queries";
 
 /*
@@ -42,4 +52,36 @@ export function getBoutiquePage(professionalId: string): Promise<BoutiqueType[]>
 export async function getHorizonNeed(pro: Pick<PublicPro, "professionalId" | "timezone">): Promise<boolean> {
   const now = new Date();
   return needsHorizon(await minGeneratedUntil(db, pro.professionalId, now), now, pro.timezone);
+}
+
+/** One occurrence of the pro for the séance page: the séance, { kind: "rdv" } for an RDV, null when not this pro's (see getPublicSeance). */
+export function getSeancePage(pro: PublicPro, occurrenceId: string): Promise<PublicSeanceDetail | { kind: "rdv" } | null> {
+  return getPublicSeance(db, pro, occurrenceId, new Date());
+}
+
+/**
+ * What ONE server-derived customer (an Owner, or the guest cookie's customer: never a typed e-mail, never the customer
+ * of a ?p= reference) holds on this séance. A guest gets the booking status only (see seanceVisitorFacts).
+ */
+export function getSeanceVisitorFacts(
+  professionalId: string,
+  occurrenceId: string,
+  viewer: { customerId: string; source: "owner" | "guest" },
+): Promise<SeanceVisitorFacts> {
+  return seanceVisitorFacts(db, professionalId, occurrenceId, viewer, new Date());
+}
+
+/** The live seat holds of an Owner's customer at this pro, soonest end first (Owner only, see livePendingHoldsOf). */
+export function getLivePendingHolds(professionalId: string, customerId: string): Promise<LivePendingHold[]> {
+  return livePendingHoldsOf(db, professionalId, customerId, new Date());
+}
+
+/** The offer page's offer: on sale, unavailable, or null when not this pro's (see getPublicOffer). */
+export function getOfferPage(professionalId: string, offerId: string): Promise<PublicOfferDetail | null> {
+  return getPublicOffer(db, professionalId, offerId);
+}
+
+/** The purchase a ?p= reference names, scoped to this pro. Server side only: its customerId never reaches a client component (see purchaseByReference, referenceForPage). */
+export function getPurchaseReference(professionalId: string, purchaseId: string): Promise<PurchaseReference | null> {
+  return purchaseByReference(db, professionalId, purchaseId, new Date());
 }
