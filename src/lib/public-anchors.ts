@@ -9,3 +9,10 @@ export const BOUTIQUE_ANCHOR = "boutique";
 export function boutiqueHref(slug: string): string {
   return `/${slug}#${BOUTIQUE_ANCHOR}`;
 }
+
+/**
+ * The « Planning » heading of the public page (`tabIndex={-1}`). The sign-in dialog of the visitor bar gives it the focus
+ * once the visitor is signed in: the page then refreshes and the bar is replaced by the Owner's wallet, so the focus
+ * needs an element outside that swap which every state of the page renders.
+ */
+export const PLANNING_HEADING_ID = "planning-title";

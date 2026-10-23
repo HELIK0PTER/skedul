@@ -85,3 +85,6 @@ export function getOfferPage(professionalId: string, offerId: string): Promise<P
 export function getPurchaseReference(professionalId: string, purchaseId: string): Promise<PurchaseReference | null> {
   return purchaseByReference(db, professionalId, purchaseId, new Date());
 }
+
+/** True when a pro page exists at this slug, suspended or not, memoized for ONE request (see the layout of the public segment). */
+export const publicPageExists = cache(async (slug: string): Promise<boolean> => (await getPublicProfile(slug, { includeSuspended: true })) !== null);
