@@ -128,20 +128,28 @@ test("the personal-link POST checks the origin first, re-checks the link, and se
 
 test("both personal-link handlers catch a throw from resolveGuestLink, log it through logSafeMessage and answer without a cookie (G3b)", () => {
   // Drizzle's « Failed query: … params: … » would carry the customer id: Next.js logs an uncaught throw raw.
-  const route = readFileSync(ROUTE, "utf8");
-  assert.deepEqual(rawErrorLogs(route), [], "no console call receives a raw error object");
-  for (const name of ["GET", "POST"]) {
-    const body = bodyOf(route, name);
-    const tried = body.indexOf("try {");
-    const resolve = body.indexOf("resolveGuestLink(");
-    const caught = body.indexOf("} catch (");
-    assert.ok(tried !== -1 && tried < resolve && resolve < caught, `${name} resolves the link inside a try`);
-    const handler = body.slice(caught, body.indexOf("\n  }\n", caught));
-    assert.match(handler, /console\.error\("\[guest-link\] " \+ logSafeMessage\(\w+\)\)/, `${name} logs the safe message only`);
-    assert.match(handler, /return serverError\(\)/, `${name} answers the headers-only error`);
-    assert.doesNotMatch(handler, /cookies/, `${name} sets no cookie on a failure`);
+  // core.autocrlf is on in this repo: the guard must read the same on an LF and on a CRLF checkout.
+  const source = readFileSync(ROUTE, "utf8");
+  for (const [eol, label] of [["\n", "LF"], ["\r\n", "CRLF"]] as const) {
+    const route = source.replace(/\r?\n/g, eol);
+    assert.deepEqual(rawErrorLogs(route), [], `${label}: no console call receives a raw error object`);
+    for (const name of ["GET", "POST"]) {
+      const body = bodyOf(route, name);
+      const tried = body.indexOf("try {");
+      const resolve = body.indexOf("resolveGuestLink(");
+      const caught = body.indexOf("} catch (");
+      assert.ok(tried !== -1 && tried < resolve && resolve < caught, `${label} ${name} resolves the link inside a try`);
+      // The catch block ends at the first closing brace at the handler's indent, on either line ending.
+      const rest = body.slice(caught);
+      const end = rest.search(/\r?\n {2}\}\r?\n/);
+      assert.notEqual(end, -1, `${label} ${name} the catch block has a closing brace at the handler's indent`);
+      const handler = rest.slice(0, end);
+      assert.match(handler, /console\.error\("\[guest-link\] " \+ logSafeMessage\(\w+\)\)/, `${label} ${name} logs the safe message only`);
+      assert.match(handler, /return serverError\(\)/, `${label} ${name} answers the headers-only error`);
+      assert.doesNotMatch(handler, /cookies/, `${label} ${name} sets no cookie on a failure`);
+    }
+    assert.match(route, /function serverError\(\): Response \{\s*return new Response\("Error", \{ status: 500, headers: NO_STORE \}\);/, `${label}: serverError is headers-only`);
   }
-  assert.match(route, /function serverError\(\): Response \{\s*return new Response\("Error", \{ status: 500, headers: NO_STORE \}\);/);
 });
 
 test("« Ce n'est pas moi » clears the cookie with the attributes of guestCookieOptions and writes nothing to the database (S52)", () => {
