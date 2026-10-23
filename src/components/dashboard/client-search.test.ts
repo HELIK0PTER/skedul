@@ -44,3 +44,44 @@ test("searchClientsAction is a read: runProQuery (fresh session, no revalidation
   assert.match(body, /runProQuery\("searchClients", \(ctx, now\) => searchClientsCore\(db, ctx, input, now\)\)/);
   assert.doesNotMatch(body, /runProAction/);
 });
+
+/** The text of `function <name>(` up to the next function of the component (or the end of the file). */
+function functionBody(src: string, name: string): string {
+  const start = src.indexOf(`function ${name}(`);
+  assert.notEqual(start, -1, `${name} is declared`);
+  const next = src.indexOf("\n  function ", start + 1);
+  const ret = src.indexOf("\n  return (", start + 1);
+  const ends = [next, ret].filter((i) => i !== -1);
+  return src.slice(start, ends.length === 0 ? undefined : Math.min(...ends));
+}
+
+test("a search answer older than the latest request or reset is ignored: a late answer cannot undo « Voir tous les clients » (G3b)", () => {
+  const search = source("src/components/dashboard/client-search.tsx");
+  assert.match(search, /const latest = useRef\(0\);/, "a request counter");
+
+  const submit = functionBody(search, "submit");
+  const issued = submit.indexOf("const request = ++latest.current;");
+  const awaited = submit.indexOf("await callOrFail(");
+  const stale = submit.indexOf("if (request !== latest.current) return;");
+  assert.ok(issued !== -1 && issued < awaited, "each request takes its number before the call");
+  assert.ok(awaited < stale, "the answer is compared with the latest request after the await");
+  assert.ok(stale < submit.indexOf("setError(res.error)") && stale < submit.indexOf("setFound({ q, rows: res.rows })"), "a stale answer sets neither the rows nor the error");
+
+  // An empty term and the reset button both forget the search: they invalidate any request still in flight.
+  const emptyTerm = submit.slice(submit.indexOf('if (q === "") {'), submit.indexOf("startTransition("));
+  assert.match(emptyTerm, /latest\.current \+= 1;/, "an empty submit while a search is pending");
+  assert.match(functionBody(search, "showAll"), /latest\.current \+= 1;/, "the reset button");
+});
+
+test("a search that returns clients announces how many in the always-mounted status region, with the plural of the codebase (G3b)", () => {
+  const search = source("src/components/dashboard/client-search.tsx");
+  const region = search.slice(search.indexOf('<div role="status">'));
+  assert.match(search, /plural\(rows\.length, "client trouvé", "clients trouvés"\)/, "« 1 client trouvé » / « 3 clients trouvés » through plural()");
+  assert.match(search, /import \{ formatCount, plural \} from "@\/lib\/back-office\/format";/);
+  // Only a typed search is announced (the rows the page rendered are not an answer to anything), after the empty and capped cases.
+  assert.match(
+    region,
+    /\) : capped \? \([\s\S]*?\) : searched !== "" \? \(\s*<p className="mt-3 text-sm text-zinc-600">\{plural\(rows\.length, "client trouvé", "clients trouvés"\)\}<\/p>\s*\) : null\}\s*<\/div>/,
+    "the found line is the last branch of the status region",
+  );
+});

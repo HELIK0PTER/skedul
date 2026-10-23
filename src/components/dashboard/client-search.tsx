@@ -12,7 +12,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { clientsHref, type ClientFilter } from "@/lib/back-office/client-filters";
 import type { ClientListRow } from "@/lib/back-office/client-reads";
-import { formatCount } from "@/lib/back-office/format";
+import { formatCount, plural } from "@/lib/back-office/format";
 import { callOrFail } from "@/lib/pro-messages";
 import { searchClientsAction } from "@/server/pro-clients";
 
@@ -21,7 +21,10 @@ import { searchClientsAction } from "@/server/pro-clients";
  * component state only: it is sent to searchClientsAction and never put in a URL, so a client's name or e-mail does
  * not reach the address bar, the history or the platform request log. The page renders this component with
  * `key={filter}`, so a filter chip (a link to ?filter=…) starts a fresh search. An empty term shows the rows of the
- * filter again. The empty text and the capped line live in an always-mounted `role="status"` region.
+ * filter again. The empty text, the capped line and the number of clients a search found live in an always-mounted
+ * `role="status"` region. Every request takes a number: an answer that is not the latest request's any more (a newer
+ * search, an empty submit, « Voir tous les clients ») is dropped, so a slow search cannot replace a list the pro has
+ * just reset.
  */
 export function ClientSearch({
   filter,
@@ -37,6 +40,7 @@ export function ClientSearch({
   children: React.ReactNode;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const latest = useRef(0);
   const [term, setTerm] = useState("");
   const [found, setFound] = useState<{ q: string; rows: ClientListRow[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -54,11 +58,14 @@ export function ClientSearch({
     const q = term.trim();
     setError(null);
     if (q === "") {
+      latest.current += 1;
       setFound(null);
       return;
     }
+    const request = ++latest.current;
     startTransition(async () => {
       const res = await callOrFail(() => searchClientsAction({ q, filter }));
+      if (request !== latest.current) return;
       if (!res.ok) {
         setError(res.error);
         return;
@@ -69,6 +76,7 @@ export function ClientSearch({
 
   /** « Voir tous les clients » inside the unfiltered list: forget the search and give the focus back to the field. */
   function showAll() {
+    latest.current += 1;
     setTerm("");
     setFound(null);
     setError(null);
@@ -120,6 +128,8 @@ export function ClientSearch({
           <p className="mt-3 text-sm text-zinc-600">
             {`Les ${formatCount(limit)} premiers clients sont affichés. Précisez la recherche pour trouver les autres.`}
           </p>
+        ) : searched !== "" ? (
+          <p className="mt-3 text-sm text-zinc-600">{plural(rows.length, "client trouvé", "clients trouvés")}</p>
         ) : null}
       </div>
     </>
