@@ -65,6 +65,89 @@ test("/[slug] warns the owner of the page", () => {
   assert.match(HOME, /\{visitor\.isPageOwner && <OwnerPreviewBanner \/>\}/);
 });
 
+/* ───────────────────────── /[slug]/seance/[occurrenceId] ───────────────────────── */
+
+const seance = (): string => source("src/app/[slug]/seance/[occurrenceId]/page.tsx");
+/** The default export of the séance page, without generateMetadata above it (the shared `bodyOf`, G3b). */
+const seancePage = (): string => bodyOf(seance(), "SeancePage");
+
+test("the séance page reads the visitor fresh through currentPublicVisitor, never the cached session, and is never cached", () => {
+  const text = seance();
+  assert.match(seancePage(), /currentPublicVisitor\(pro\.professionalId, pro\.ownerUserId\)/);
+  assert.doesNotMatch(text, /\bgetSession\(/);
+  assert.doesNotMatch(text, /unstable_cache|"use cache"|export const revalidate/);
+});
+
+test("an unknown séance is a 404 and an RDV goes to the espace", () => {
+  const page = seancePage();
+  assert.match(page, /if \(!detail\) notFound\(\);/);
+  assert.match(page, /if \(detail\.kind === "rdv"\) redirect\(`\/\$\{(?:pro\.)?slug\}\/espace`\);/);
+});
+
+test("a private séance is a 404 unless canSeePrivateSeance allows it, before the booking block", () => {
+  const page = seancePage();
+  const gate = page.indexOf("canSeePrivateSeance(");
+  assert.notEqual(gate, -1);
+  assert.match(page.slice(gate, gate + 400), /notFound\(\)/);
+  assert.ok(gate < page.indexOf("<OccurrenceBooking"), "the gate comes first");
+  assert.match(page, /detail\.isPrivate && !canSeePrivateSeance\(/);
+});
+
+test("the visitor facts are read for a customer viewer only (an Owner or a guest cookie), never for a typed address", () => {
+  assert.match(seancePage(), /(?:kind === "customer"|customerViewer) \? (?:await )?getSeanceVisitorFacts\(/);
+});
+
+test("a guest cookie never makes a booking « booked » and never hides the form: a notice shows above it instead (Decision 63)", () => {
+  const page = seancePage();
+  assert.match(page, /source === "guest"/);
+  assert.match(page, /source === "owner"/, "a booked state comes from the Owner's own facts");
+  assert.match(page, /COPY\.GUEST_BOOKING_EXISTS/);
+});
+
+test("the séance metadata never reads the viewer: a private, archived or RDV séance carries the business name only (SEC-M10)", () => {
+  const text = seance();
+  const metadata = bodyOf(text, "generateMetadata");
+  assert.doesNotMatch(metadata, /currentPublicVisitor|cookies\(|headers\(/);
+  assert.match(metadata, /detail\.isPrivate/);
+  assert.match(metadata, /detail\.archived/);
+  assert.match(metadata, /referrer: "no-referrer"/);
+  assert.match(metadata, /robots: \{ index: false \}/);
+  assert.match(metadata, /title: `\$\{detail\.title\} · \$\{pro\.businessName\}`/);
+});
+
+test("no row, user or customer identifier reaches a client prop, and the séance start travels as an ISO string", () => {
+  const page = seancePage();
+  assert.doesNotMatch(page, /\b(ownerUserId|userId|customerId|bookingId|owner)=\{/, "no identity, no booking id and no row in a prop");
+  assert.match(page, /seenStartsAt=\{detail\.startsAt\.toISOString\(\)\}/);
+  assert.match(page, /returnTo=\{`\/\$\{(?:pro\.)?slug\}\/seance\/\$\{(?:detail\.)?occurrenceId\}`\}/);
+});
+
+test("the séance page mounts one VerifyEmailBanner for every signed-in visitor, so it survives a code being accepted (Task 25b lesson)", () => {
+  const page = seancePage();
+  assert.equal((page.match(/<VerifyEmailBanner/g) ?? []).length, 1, "one instance");
+  assert.match(page, /\{visitor\.email !== null && <VerifyEmailBanner email=\{visitor\.email\} verified=\{visitor\.state === "verified"\} \/>\}/);
+  assert.ok(page.indexOf("<VerifyEmailBanner") < page.indexOf("<OccurrenceBooking"), "above the booking card the refresh may swap");
+});
+
+test("the séance heading can take the focus a successful booking hands it (the id of SEANCE_HEADING_ID, tabIndex -1)", () => {
+  assert.match(seancePage(), /<h2\s+id="seance-title"\s+tabIndex=\{-1\}/);
+});
+
+test("the séance page takes one clock per request: loadSeance reads it once and returns it, the page uses that one (G4a)", () => {
+  const text = seance();
+  const start = text.indexOf("const loadSeance = cache(");
+  const end = text.indexOf("export async function generateMetadata");
+  assert.ok(start !== -1 && end > start, "the loader sits above generateMetadata");
+  const loader = text.slice(start, end);
+  assert.equal((loader.match(/new Date\(\)/g) ?? []).length, 1, "the loader reads the clock once");
+  assert.match(loader, /getSeancePage\(resolved\.pro, occurrenceId, now\)/);
+  assert.match(loader, /return \{ \.\.\.resolved, detail, now \};/);
+  const page = seancePage();
+  assert.doesNotMatch(page, /new Date\(\)/, "the page never reads the clock itself");
+  assert.match(page, /const \{ pro, branding, detail, now \} = loaded;/);
+  assert.match(page, /getSeanceVisitorFacts\(pro\.professionalId, detail\.occurrenceId, customerViewer, now\)/);
+});
+
 test("/[slug] holds the public projection of the pro, never the professional row (G4a)", () => {
   assert.match(HOME, /const profile = await getPublicPageProfile\(slug\);/);
   assert.match(HOME, /const \{ pro, branding, bio \} = profile;/);
