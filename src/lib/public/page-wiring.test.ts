@@ -67,6 +67,18 @@ test("/[slug] warns the owner of the page", () => {
 
 /* ───────────────────────── /[slug]/seance/[occurrenceId] ───────────────────────── */
 
+test("the séance page passes the picked fields of the offers and the test mode of the payment gateway", () => {
+  const text = source("src/app/[slug]/seance/[occurrenceId]/page.tsx");
+  assert.match(text, /const payment = paymentMode\(\);/);
+  assert.match(text, /const testMode = payment === "live" \? null : payment;/);
+  assert.match(text, /testMode=\{testMode\}/);
+  const at = text.indexOf("offers={detail.offers.map(");
+  assert.notEqual(at, -1);
+  const picked = text.slice(at, text.indexOf("}))}", at));
+  for (const key of ["offerId", "label", "priceCents", "validityText", "covers"]) assert.match(picked, new RegExp(`${key}: o\\.${key}`));
+  assert.doesNotMatch(picked, /ticketType|quantity/, "the type and the quantity of an offer stay on the server");
+});
+
 const seance = (): string => source("src/app/[slug]/seance/[occurrenceId]/page.tsx");
 /** The default export of the séance page, without generateMetadata above it (the shared `bodyOf`, G3b). */
 const seancePage = (): string => bodyOf(seance(), "SeancePage");

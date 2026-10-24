@@ -18,6 +18,7 @@ import { COPY, seatsLeftLabel } from "@/lib/public/messages";
 import { seanceState, stateLabel } from "@/lib/public/planning-view";
 import { BOOKED_CONFIRMED, BOOKED_PENDING, SEE_MY_SPACE, stateLine } from "@/lib/public/seance-copy";
 import { canSeePrivateSeance, seancePageMode, seanceViewerOf, type PageBooking } from "@/lib/public/visibility";
+import { paymentMode } from "@/lib/stripe";
 import { getCustomerSpacePage } from "@/server/client-queries";
 import { resolvePublicPro } from "@/server/public-context";
 import { getSeancePage, getSeanceVisitorFacts } from "@/server/public-queries";
@@ -98,6 +99,8 @@ export default async function SeancePage({ params }: Props) {
   const label = stateLabel(state);
   const when = formatWhen(detail.startsAt, detail.endsAt, pro.timezone);
   const showSeats = state.kind === "open" || state.kind === "free";
+  const payment = paymentMode();
+  const testMode = payment === "live" ? null : payment;
 
   return (
     <PublicShell branding={branding} backHref={`/${pro.slug}`}>
@@ -186,7 +189,13 @@ export default async function SeancePage({ params }: Props) {
               options: q.options,
               required: q.required,
             }))}
-            offers={[]}
+            offers={detail.offers.map((o) => ({
+              offerId: o.offerId,
+              label: o.label,
+              priceCents: o.priceCents,
+              validityText: o.validityText,
+              covers: o.covers,
+            }))}
             visitor={{
               state: visitor.state,
               email: visitor.state === "verified" ? visitor.email : null,
@@ -197,7 +206,7 @@ export default async function SeancePage({ params }: Props) {
             }}
             googleEnabled={env.GOOGLE_CALENDAR_ENABLED}
             returnTo={`/${pro.slug}/seance/${detail.occurrenceId}`}
-            testMode={null}
+            testMode={testMode}
           />
         </>
       )}
