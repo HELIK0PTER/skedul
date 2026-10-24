@@ -179,7 +179,11 @@ test("toPublicSeanceVM: state text, seats text, muted and the accessible name pe
 
   const free = row({ bookingMode: "free", acceptedTypes: [], seatsLeft: 5 });
   assert.deepEqual([free.stateText, free.seatsText, free.muted, free.badges], ["Inscription libre", "5 places restantes", false, []]);
-  assert.equal(free.ariaLabel, "Altinha débutants, lundi 12 octobre 19:00 à 20:00, Inscription libre");
+  assert.equal(
+    free.ariaLabel,
+    "Altinha débutants, lundi 12 octobre 19:00 à 20:00, Inscription libre, 5 places restantes",
+    "a free séance names both its state and its seats (G4a)",
+  );
 
   const one = row({ seatsLeft: 1 });
   assert.equal(one.seatsText, "1 place restante");
@@ -198,7 +202,13 @@ test("toPublicSeanceVM: state text, seats text, muted and the accessible name pe
   const notYet = toPublicSeanceVM(seance(PARIS, "2026-12-30", 19 * 60), "altinha-paris", now, PARIS);
   assert.deepEqual([notYet.stateText, notYet.muted], ["Réservations pas encore ouvertes", false]);
 
-  for (const vm of [cancelled, free, one, full, closed, onsite, ongoing, past, notYet]) {
+  const lastOne = row({ bookingMode: "free", acceptedTypes: [], seatsLeft: 1 });
+  assert.equal(lastOne.ariaLabel, "Altinha débutants, lundi 12 octobre 19:00 à 20:00, Inscription libre, 1 place restante");
+  // The other states keep COV-M12's rule: the state text alone, or the seats text alone for an open séance.
+  assert.equal(full.ariaLabel, "Altinha débutants, lundi 12 octobre 19:00 à 20:00, Complet");
+  assert.equal(one.ariaLabel, "Altinha débutants, lundi 12 octobre 19:00 à 20:00, 1 place restante");
+
+  for (const vm of [cancelled, free, lastOne, one, full, closed, onsite, ongoing, past, notYet]) {
     assert.equal(NO_DASH.test(vm.ariaLabel), false, vm.ariaLabel);
     assert.ok(vm.ariaLabel.startsWith("Altinha débutants, "), vm.ariaLabel);
   }

@@ -75,3 +75,18 @@ test("/[slug] holds the public projection of the pro, never the professional row
   assert.match(metadata, /title: profile\.pro\.businessName/);
   assert.match(metadata, /description: profile\.branding\.headline \?\? undefined/);
 });
+
+test("/[slug] takes one clock per request and hands it to every read and every view function (G4a)", () => {
+  const body = bodyOf(HOME, "PublicProfilePage");
+  const inAfter = body.slice(body.indexOf("after(async"));
+  const outside = body.slice(0, body.indexOf("after(async"));
+  assert.equal((outside.match(/new Date\(\)/g) ?? []).length, 1, "one request clock before the after() block");
+  assert.equal((inAfter.match(/new Date\(\)/g) ?? []).length, 1, "the throttle key inside after() reads the clock of that later moment");
+  assert.match(body, /const now = new Date\(\);/);
+  assert.match(body, /getPlanningPage\(pro, range, now\)/);
+  assert.match(body, /getHorizonNeed\(pro, now\)/);
+  assert.match(body, /getNextSeanceStart\(pro, range\.end, now\)/);
+  assert.match(body, /getNextSeanceStart\(pro, now, now\)/);
+  assert.match(body, /toPublicSeanceVM\(s, pro\.slug, now, tz\)/);
+  assert.match(body, /todayKey: todayKey\(now, tz\)/);
+});

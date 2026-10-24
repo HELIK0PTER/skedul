@@ -69,7 +69,7 @@ export type PublicSeanceVM = {
   /** cancelled, past, closed, full */
   muted: boolean;
   badges: { name: string; color: string }[];
-  /** COV-M12: « {title}, {dayLabel} {timeLabel}, {stateText ?? seatsText} » (the row link's accessible name) */
+  /** COV-M12: « {title}, {dayLabel} {timeLabel}, {stateText}, {seatsText} », each of the last two only when the row shows it (the row link's accessible name) */
   ariaLabel: string;
 };
 
@@ -80,7 +80,9 @@ export function toPublicSeanceVM(s: PublicSeance, slug: string, now: Date, tz: s
   const timeLabel = formatTimeRange(s.startsAt, s.endsAt, tz);
   const stateText = stateLabel(state);
   const seatsText = state.kind === "open" || state.kind === "free" ? seatsLeftLabel(state.seatsLeft) : null;
-  const tail = stateText ?? seatsText;
+  // The name says every phrase the row shows besides the title and the time: only a free séance has both (« Inscription
+  // libre » and its seats), every other state has the one or the other (G4a).
+  const tail = [stateText, seatsText].filter((part): part is string => part !== null).join(", ");
   const head = `${s.title}, ${dayLongLabel(dayKey)} ${timeLabel}`;
   return {
     occurrenceId: s.occurrenceId,
@@ -94,7 +96,7 @@ export function toPublicSeanceVM(s: PublicSeance, slug: string, now: Date, tz: s
     seatsText,
     muted: state.kind === "cancelled" || state.kind === "past" || state.kind === "closed" || state.kind === "full",
     badges: s.acceptedTypes.map((t) => ({ name: t.name, color: t.color })),
-    ariaLabel: tail === null ? head : `${head}, ${tail}`,
+    ariaLabel: tail === "" ? head : `${head}, ${tail}`,
   };
 }
 
