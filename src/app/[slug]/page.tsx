@@ -1,10 +1,20 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { after } from "next/server";
 
+import { VerifyEmailBanner } from "@/components/dashboard/verify-email-banner";
 import { Boutique } from "@/components/public/boutique";
+import { OwnerPreviewBanner } from "@/components/public/owner-preview-banner";
 import { PublicPlanning } from "@/components/public/public-planning";
 import { PublicShell } from "@/components/public/public-shell";
+import { TestPaymentsBanner } from "@/components/public/test-payments-banner";
+import { VisitorBar } from "@/components/public/visitor-bar";
+import { WalletPanel } from "@/components/public/wallet-panel";
+import { ensureHorizon } from "@/lib/booking/occurrences";
 import { addDays, todayKey } from "@/lib/civil-date";
+import { db } from "@/lib/db";
+import { env } from "@/lib/env";
+import { logSafeMessage } from "@/lib/log-safe";
 import { paramForWeek, weekBounds, weekStartFromParam } from "@/lib/planning";
 import { publicProOfRow } from "@/lib/public/context";
 import {
@@ -15,7 +25,17 @@ import {
   toPublicSeanceVM,
 } from "@/lib/public/planning-view";
 import { BOUTIQUE_ANCHOR } from "@/lib/public-anchors";
-import { getBoutiquePage, getNextSeanceStart, getPlanningPage, getPublicPageProfile } from "@/server/public-queries";
+import { paymentMode } from "@/lib/stripe";
+import { consumeThrottle } from "@/lib/throttle";
+import { getCustomerSpacePage } from "@/server/client-queries";
+import {
+  getBoutiquePage,
+  getHorizonNeed,
+  getNextSeanceStart,
+  getPlanningPage,
+  getPublicPageProfile,
+} from "@/server/public-queries";
+import { currentPublicVisitor } from "@/server/visitor";
 
 type Props = {
   params: Promise<{ slug: string }>;
@@ -30,9 +50,10 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 /**
- * The public page of a pro: its planning (« Liste » or « Semaine », one week at a time) and its Boutique. Dynamic by
- * construction (it reads the search parameters) and read-only: a render never writes. Anyone may open it; what is
- * personal to a visitor (wallet, banners) is added by the next task.
+ * The public page of a pro: its planning (« Liste » or « Semaine », one week at a time), its Boutique, and what the
+ * visitor is (the owner banner, the bar or the Owner's wallet, the test-payments note). Dynamic by construction: it
+ * reads the search parameters, the fresh session and the personal-link cookie. A render never writes; the one write,
+ * the horizon refresh, runs after the response (spec § 13.2, contract § 4 row 12 and § 5).
  */
 export default async function PublicProfilePage({ params, searchParams }: Props) {
   const { slug } = await params;
@@ -48,14 +69,55 @@ export default async function PublicProfilePage({ params, searchParams }: Props)
   const weekKey = paramForWeek(weekStart, tz);
   const days = Array.from({ length: 7 }, (_, i) => addDays(weekKey, i));
 
-  const [seances, boutique] = await Promise.all([getPlanningPage(pro, range), getBoutiquePage(pro.professionalId)]);
+  // Who the visitor is: the fresh session (a suspended user counts as none) and the personal-link cookie, read only.
+  const visitor = await currentPublicVisitor(pro.professionalId, pro.ownerUserId);
+  const [seances, boutique, needsHorizon, space] = await Promise.all([
+    getPlanningPage(pro, range),
+    getBoutiquePage(pro.professionalId),
+    getHorizonNeed(pro),
+    // The wallet is the Owner's only: never a typed address, a purchase reference or a personal-link cookie (Decision 61).
+    visitor.owner ? getCustomerSpacePage(pro.professionalId, visitor.owner.customerId) : Promise.resolve(null),
+  ]);
   // Only an empty week asks where the next séance is, and only a week with nothing after it asks if there is any at all.
   const nextStart = seances.length === 0 ? await getNextSeanceStart(pro, range.end) : null;
   const anyStart = seances.length === 0 && nextStart === null ? await getNextSeanceStart(pro, now) : null;
   const { empty, nextWeekHref } = planningEmptyState({ slug: pro.slug, view, tz, shown: seances.length, nextStart, anyStart });
+  const payment = paymentMode();
+  const testMode = payment === "live" ? null : payment;
+
+  // A render never writes: when a series is generated less than a few weeks ahead, the refresh runs after the response,
+  // and its per-pro key (one run per 5 minutes) is consumed inside after(), never during the render (SEC-M13).
+  if (needsHorizon) {
+    after(async () => {
+      try {
+        if (await consumeThrottle(db, `t:horizon:p:${pro.professionalId}`, { limit: 1, windowSec: 300 }, new Date())) {
+          const res = await ensureHorizon(db, pro.professionalId);
+          if (!res.ok) console.error(`[public] ensureHorizon refused: ${res.code}`);
+        }
+      } catch (err) {
+        console.error(`[public] ensureHorizon failed: ${logSafeMessage(err)}`);
+      }
+    });
+  }
 
   return (
     <PublicShell branding={profile.pro}>
+      {visitor.isPageOwner && <OwnerPreviewBanner />}
+      {/* One instance for every signed-in visitor (the address is only set for a verified or unverified session), above the wallet / bar switch the refresh may swap: it keeps its state across the unverified -> verified flip, so « Adresse confirmée. » is announced and takes the focus (WCAG 2.4.3). */}
+      {visitor.email !== null && <VerifyEmailBanner email={visitor.email} verified={visitor.state === "verified"} />}
+      {visitor.owner && space ? (
+        <div className="mb-6">
+          <WalletPanel slug={pro.slug} businessName={pro.businessName} wallet={space.wallet} variant="full" />
+        </div>
+      ) : (
+        <VisitorBar
+          state={visitor.state}
+          slug={pro.slug}
+          returnTo={`/${pro.slug}`}
+          googleEnabled={env.GOOGLE_CALENDAR_ENABLED}
+          hasGuestSpace={visitor.guestCustomerId !== null}
+        />
+      )}
       {profile.pro.bio && <p className="mb-8 whitespace-pre-line text-zinc-600 wrap-anywhere">{profile.pro.bio}</p>}
       <div className="space-y-10">
         <PublicPlanning
@@ -69,7 +131,12 @@ export default async function PublicProfilePage({ params, searchParams }: Props)
           nextWeekHref={nextWeekHref}
           shopHref={boutique.length > 0 ? `#${BOUTIQUE_ANCHOR}` : null}
         />
-        <Boutique slug={pro.slug} currency={pro.currency} types={boutique} />
+        {boutique.length > 0 && (
+          <div className="space-y-4">
+            {testMode && <TestPaymentsBanner mode={testMode} />}
+            <Boutique slug={pro.slug} currency={pro.currency} types={boutique} />
+          </div>
+        )}
       </div>
     </PublicShell>
   );
