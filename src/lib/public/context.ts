@@ -3,6 +3,7 @@
  * cores take a `PublicPro`, an `ActionVisitor` and `PublicDeps` that the server wrapper builds from the slug, the
  * fresh session and the request, never from the action input.
  */
+import type { PublicBranding } from "@/components/public/public-shell";
 import type { BookingWindow } from "@/lib/booking-window";
 import type { CheckoutGateway } from "@/lib/payments/checkout";
 import type { SessionFacts, WalletOwner } from "@/lib/public/identity";
@@ -62,6 +63,46 @@ export function publicProOfRow(row: {
       minNoticeMinutes: row.minNoticeMinutes,
       cancelDeadlineHours: row.cancelDeadlineHours,
     },
+  };
+}
+
+/** The columns of the professional row the `/[slug]` page renders or needs: `PublicProfileRow` (profile-reads.ts) is assignable to it. */
+export type PublicPageFields = Parameters<typeof publicProOfRow>[0] & {
+  headline: string | null;
+  bio: string | null;
+  brandColor: string;
+  bannerUrl: string | null;
+  headerLayout: string | null;
+  avatarKind: string | null;
+  avatarStyle: string | null;
+  avatarSeed: string | null;
+  avatarUrl: string | null;
+};
+
+/**
+ * What the `/[slug]` page holds of the professional (G4a): the pro the cores use, the nine branding fields the shell
+ * draws and the presentation text. Picked field by field, so a wider row (a Stripe account, a Google calendar, the
+ * theme, a timestamp) loses everything it carries beyond these; the user id of the professional survives only as
+ * `pro.ownerUserId`, for the page-owner detection, and is never sent to the browser. No client component imports
+ * this type (profile-guard.test.ts).
+ */
+export type PublicPageProfile = { pro: PublicPro; branding: PublicBranding; bio: string | null };
+
+export function publicPageProfileOfRow(row: PublicPageFields): PublicPageProfile {
+  return {
+    pro: publicProOfRow(row),
+    branding: {
+      businessName: row.businessName,
+      headline: row.headline,
+      brandColor: row.brandColor,
+      bannerUrl: row.bannerUrl,
+      headerLayout: row.headerLayout,
+      avatarKind: row.avatarKind,
+      avatarStyle: row.avatarStyle,
+      avatarSeed: row.avatarSeed,
+      avatarUrl: row.avatarUrl,
+    },
+    bio: row.bio,
   };
 }
 

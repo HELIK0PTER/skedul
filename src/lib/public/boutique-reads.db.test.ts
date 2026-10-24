@@ -5,6 +5,7 @@ import { setTicketTypeArchived } from "@/lib/booking/catalog";
 import { event, eventTicketType, ticketOffer } from "@/lib/db/schema";
 import { createTestPro, dbTest, deleteTestUser } from "@/test/db";
 import { dayIn, makeEvent, makeOffer, makeType } from "@/test/fixtures";
+import { keyPaths, privateKeyPaths } from "@/test/key-paths";
 import { rowEvent, rowLink, rowOffer, rowType } from "@/test/rows";
 
 import { acceptedByTitles, listBoutique } from "./boutique-reads";
@@ -161,4 +162,26 @@ dbTest("listBoutique: offers that cross two pros, built by hand, never reach the
 
 dbTest("listBoutique: a pro with nothing on sale has an empty Boutique", async ({ db, pro }) => {
   assert.deepEqual(await listBoutique(db, pro.proId), []);
+});
+
+dbTest("listBoutique: a type and its offers carry the public fields only, nothing of the pro's row (G4a)", async ({ db, pro }) => {
+  const type = await makeType(db, pro, { name: "Cours collectif", description: "Les cours en groupe." });
+  await makeOffer(db, pro, type, { quantity: 4, priceCents: 8500, validityCount: 3, validityUnit: "month" });
+  await makeEvent(db, pro, { title: "Altinha débutants", ticketTypeIds: [type] });
+  const [first] = await listBoutique(db, pro.proId);
+  assert.ok(first);
+  assert.deepEqual(keyPaths(first), [
+    "acceptedBy",
+    "color",
+    "description",
+    "name",
+    "offers",
+    "offers[].label",
+    "offers[].offerId",
+    "offers[].priceCents",
+    "offers[].quantity",
+    "offers[].validityText",
+    "ticketTypeId",
+  ]);
+  assert.deepEqual(privateKeyPaths(first), []);
 });

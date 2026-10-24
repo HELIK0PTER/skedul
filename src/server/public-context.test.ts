@@ -89,6 +89,6 @@ test("publicDeps takes the app URL, the gateway, the one mock rule and APP_ENV f
 test("resolvePublicPro hands a pro and its branding fields only: no user id, Stripe id or Google id reaches the branding", () => {
   const body = sectionOf("export async function resolvePublicPro");
   assert.match(body, /getPublicProfile\(slug, opts\)/);
-  assert.match(body, /publicProOfRow\(row\)/);
-  assert.doesNotMatch(body, /branding[^]*\b(userId|stripeAccountId|googleCalendarId)\b/);
+  assert.match(body, /publicPageProfileOfRow\(profile\.pro\)/, "the same projection as the /[slug] page (G4a)");
+  assert.doesNotMatch(body, /\b(userId|stripeAccountId|googleCalendarId)\b/, "the row's private fields are not named here at all");
 });

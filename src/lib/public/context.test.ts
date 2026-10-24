@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { IP_HASH_RE } from "@/lib/throttle";
+import { keyPaths, privateKeyPaths } from "@/test/key-paths";
 import { actionVisitorOf, fakeCheckout, publicDepsOf, sessionOf } from "@/test/public";
 
-import { SLUG_PARAM_RE, publicProOfRow, splitActionInput } from "./context";
+import { SLUG_PARAM_RE, publicPageProfileOfRow, publicProOfRow, splitActionInput } from "./context";
 
 const ROW = {
   id: "pro_1",
@@ -16,6 +17,20 @@ const ROW = {
   bookingHorizonDays: 60,
   minNoticeMinutes: 90,
   cancelDeadlineHours: 12,
+};
+
+/** The columns of the professional row the public page renders (profile-reads PUBLIC_PROFILE_COLUMNS). */
+const PROFILE_ROW = {
+  ...ROW,
+  headline: "Cours collectifs de futevolei",
+  bio: "Bienvenue sur la page.\nÀ bientôt.",
+  brandColor: "#0f766e",
+  bannerUrl: "https://blob.test/banner.png",
+  headerLayout: "vitrine",
+  avatarKind: "initiales",
+  avatarStyle: "ocean",
+  avatarSeed: "seed-1",
+  avatarUrl: null,
 };
 
 test("publicProOfRow maps the row to the pro the cores use and keeps nothing else of it", () => {
@@ -33,6 +48,75 @@ test("publicProOfRow maps the row to the pro the cores use and keeps nothing els
   for (const key of ["stripeAccountId", "googleCalendarId", "bio", "id", "userId"]) {
     assert.equal(key in pro, false, `${key} must not be carried over`);
   }
+});
+
+test("publicPageProfileOfRow (G4a): the page holds the pro, the branding and the bio, with exactly these keys", () => {
+  const profile = publicPageProfileOfRow(PROFILE_ROW);
+  assert.deepEqual(profile, {
+    pro: publicProOfRow(ROW),
+    branding: {
+      businessName: "Altinha Paris",
+      headline: "Cours collectifs de futevolei",
+      brandColor: "#0f766e",
+      bannerUrl: "https://blob.test/banner.png",
+      headerLayout: "vitrine",
+      avatarKind: "initiales",
+      avatarStyle: "ocean",
+      avatarSeed: "seed-1",
+      avatarUrl: null,
+    },
+    bio: "Bienvenue sur la page.\nÀ bientôt.",
+  });
+  // The one id of the professional's user the page keeps is the owner detection one, inside `pro` (never sent to the browser).
+  assert.deepEqual(keyPaths(profile), [
+    "bio",
+    "branding",
+    "branding.avatarKind",
+    "branding.avatarSeed",
+    "branding.avatarStyle",
+    "branding.avatarUrl",
+    "branding.bannerUrl",
+    "branding.brandColor",
+    "branding.businessName",
+    "branding.headerLayout",
+    "branding.headline",
+    "pro",
+    "pro.businessName",
+    "pro.currency",
+    "pro.ownerUserId",
+    "pro.professionalId",
+    "pro.slug",
+    "pro.timezone",
+    "pro.window",
+    "pro.window.bookingHorizonDays",
+    "pro.window.cancelDeadlineHours",
+    "pro.window.minNoticeMinutes",
+  ]);
+});
+
+test("publicPageProfileOfRow (G4a): nothing private of a wide professional row is carried over, whatever the row holds", () => {
+  const wide = {
+    ...PROFILE_ROW,
+    stripeAccountId: "acct_1",
+    googleCalendarId: "cal_1",
+    themePreset: "violet",
+    customColor: "#123456",
+    createdAt: new Date("2026-01-01T00:00:00Z"),
+    updatedAt: new Date("2026-01-02T00:00:00Z"),
+  };
+  const profile = publicPageProfileOfRow(wide);
+  assert.deepEqual(keyPaths(profile), keyPaths(publicPageProfileOfRow(PROFILE_ROW)), "a wider row gives the same keys");
+  const paths = keyPaths(profile);
+  for (const forbidden of ["userId", "stripeAccountId", "googleCalendarId", "themePreset", "customColor", "createdAt", "updatedAt", "id"]) {
+    assert.equal(paths.some((p) => p === forbidden || p.endsWith(`.${forbidden}`)), false, `${forbidden} must not be a key of the page profile`);
+  }
+  assert.deepEqual(
+    privateKeyPaths(profile),
+    ["pro.ownerUserId", "pro.professionalId"],
+    "the only private-looking keys are the owner detection id and the pro id the cores need, both inside `pro`",
+  );
+  const text = JSON.stringify(profile);
+  for (const secret of ["acct_1", "cal_1", "#123456", "2026-01-01"]) assert.equal(text.includes(secret), false, secret);
 });
 
 test("SLUG_PARAM_RE accepts a pro address and refuses anything else (no path, no case, no dot, 60 characters at most)", () => {

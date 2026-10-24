@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { rawErrorLogs } from "@/test/source-guards";
+import { bodyOf, rawErrorLogs } from "@/test/source-guards";
 
 const source = (path: string): string => readFileSync(path, "utf8");
 
@@ -63,4 +63,15 @@ test("/[slug] shows the test-payments banner above the Boutique whenever the pay
 
 test("/[slug] warns the owner of the page", () => {
   assert.match(HOME, /\{visitor\.isPageOwner && <OwnerPreviewBanner \/>\}/);
+});
+
+test("/[slug] holds the public projection of the pro, never the professional row (G4a)", () => {
+  assert.match(HOME, /const profile = await getPublicPageProfile\(slug\);/);
+  assert.match(HOME, /const \{ pro, branding, bio \} = profile;/);
+  assert.match(HOME, /<PublicShell branding=\{branding\}>/, "the shell gets the nine branding fields, not the row");
+  assert.match(HOME, /\{bio && <p /, "the presentation text comes from the projection");
+  assert.doesNotMatch(HOME, /publicProOfRow|profile\.pro\.(?:bio|headline)|branding=\{profile\.pro\}|\.\.\.profile\.pro/, "the row mapper and the row spread are gone from the page");
+  const metadata = bodyOf(HOME, "generateMetadata");
+  assert.match(metadata, /title: profile\.pro\.businessName/);
+  assert.match(metadata, /description: profile\.branding\.headline \?\? undefined/);
 });

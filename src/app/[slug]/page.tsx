@@ -16,7 +16,6 @@ import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { logSafeMessage } from "@/lib/log-safe";
 import { paramForWeek, weekBounds, weekStartFromParam } from "@/lib/planning";
-import { publicProOfRow } from "@/lib/public/context";
 import {
   groupByDay,
   parsePlanningParams,
@@ -46,7 +45,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   const profile = await getPublicPageProfile(slug);
   if (!profile) return { title: "Page introuvable" };
-  return { title: profile.pro.businessName, description: profile.pro.headline ?? undefined };
+  return { title: profile.pro.businessName, description: profile.branding.headline ?? undefined };
 }
 
 /**
@@ -59,7 +58,7 @@ export default async function PublicProfilePage({ params, searchParams }: Props)
   const { slug } = await params;
   const profile = await getPublicPageProfile(slug);
   if (!profile) notFound();
-  const pro = publicProOfRow(profile.pro);
+  const { pro, branding, bio } = profile;
   const { semaine, view } = parsePlanningParams(await searchParams);
 
   const now = new Date();
@@ -101,7 +100,7 @@ export default async function PublicProfilePage({ params, searchParams }: Props)
   }
 
   return (
-    <PublicShell branding={profile.pro}>
+    <PublicShell branding={branding}>
       {visitor.isPageOwner && <OwnerPreviewBanner />}
       {/* One instance for every signed-in visitor (the address is only set for a verified or unverified session), above the wallet / bar switch the refresh may swap: it keeps its state across the unverified -> verified flip, so « Adresse confirmée. » is announced and takes the focus (WCAG 2.4.3). */}
       {visitor.email !== null && <VerifyEmailBanner email={visitor.email} verified={visitor.state === "verified"} />}
@@ -118,7 +117,7 @@ export default async function PublicProfilePage({ params, searchParams }: Props)
           hasGuestSpace={visitor.guestCustomerId !== null}
         />
       )}
-      {profile.pro.bio && <p className="mb-8 whitespace-pre-line text-zinc-600 wrap-anywhere">{profile.pro.bio}</p>}
+      {bio && <p className="mb-8 whitespace-pre-line text-zinc-600 wrap-anywhere">{bio}</p>}
       <div className="space-y-10">
         <PublicPlanning
           nav={planningNav({ slug: pro.slug, weekKey, view, todayKey: todayKey(now, tz) })}

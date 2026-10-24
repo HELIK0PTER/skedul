@@ -7,7 +7,7 @@ import { after } from "next/server";
 import type { PublicBranding } from "@/components/public/public-shell";
 import type { Effect } from "@/lib/booking/types";
 import { env } from "@/lib/env";
-import { publicProOfRow, type ActionVisitor, type PublicDeps, type PublicPro } from "@/lib/public/context";
+import { publicPageProfileOfRow, type ActionVisitor, type PublicDeps, type PublicPro } from "@/lib/public/context";
 import type { SessionFacts } from "@/lib/public/identity";
 import { PUBLIC_REVALIDATE, type PublicCoreResult, type PublicResult } from "@/lib/public/result";
 import { runClientActionWith, runPublicActionWith } from "@/lib/public/run-action";
@@ -16,28 +16,15 @@ import { runEffects } from "@/server/notify";
 import { getPublicProfile } from "@/server/queries";
 import { currentPublicVisitor, currentSessionFacts, visitorIpHashes } from "@/server/visitor";
 
-/** getPublicProfile(slug, opts) → { pro: publicProOfRow(row), branding: the PublicBranding fields of the row } (a suspended pro is null unless includeSuspended). */
+/** getPublicProfile(slug, opts) → { pro, branding } of publicPageProfileOfRow(profile.pro), the projection the /[slug] page holds (a suspended pro is null unless includeSuspended). */
 export async function resolvePublicPro(
   slug: string,
   opts?: { includeSuspended?: boolean },
 ): Promise<{ pro: PublicPro; branding: PublicBranding } | null> {
   const profile = await getPublicProfile(slug, opts);
   if (!profile) return null;
-  const row = profile.pro;
-  return {
-    pro: publicProOfRow(row),
-    branding: {
-      businessName: row.businessName,
-      headline: row.headline,
-      brandColor: row.brandColor,
-      bannerUrl: row.bannerUrl,
-      headerLayout: row.headerLayout,
-      avatarKind: row.avatarKind,
-      avatarStyle: row.avatarStyle,
-      avatarSeed: row.avatarSeed,
-      avatarUrl: row.avatarUrl,
-    },
-  };
+  const { pro, branding } = publicPageProfileOfRow(profile.pro);
+  return { pro, branding };
 }
 
 /** { appUrl: env.APP_URL, checkout: checkoutGateway, mockAllowed: mockCheckoutEnabled(), env: env.APP_ENV }. */

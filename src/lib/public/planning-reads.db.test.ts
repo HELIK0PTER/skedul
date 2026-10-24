@@ -10,6 +10,7 @@ import type { Db } from "@/lib/db/atomic";
 import { event, eventTicketType, occurrence, timeOff } from "@/lib/db/schema";
 import { addMinutes, createTestPro, dbTest, deleteTestUser, type TestPro } from "@/test/db";
 import { dayIn, makeEvent, makeType } from "@/test/fixtures";
+import { keyPaths, privateKeyPaths } from "@/test/key-paths";
 import { rowBooking, rowCustomer, rowEvent, rowLink, rowOffer, rowPurchase, rowSeance, rowType } from "@/test/rows";
 
 import { acceptedTypesOf, effectiveLocation, listPublicSeances, nextPublicSeanceStart } from "./planning-reads";
@@ -428,4 +429,38 @@ dbTest("tenancy: links that cross two pros, built by hand, never make another pr
     }
     await deleteTestUser(db, other.userId);
   }
+});
+
+/** The keys of a PublicSeance (acceptedTypes filled): what the planning hands the page, and nothing of the pro's or a customer's row (G4a). */
+const PUBLIC_SEANCE_KEYS = [
+  "acceptedTypes",
+  "acceptedTypes[].color",
+  "acceptedTypes[].id",
+  "acceptedTypes[].name",
+  "bookingMode",
+  "capacity",
+  "color",
+  "endsAt",
+  "eventId",
+  "location",
+  "occurrenceId",
+  "seatsLeft",
+  "startsAt",
+  "status",
+  "title",
+  "underTimeOff",
+  "window",
+  "window.bookingHorizonDays",
+  "window.cancelDeadlineHours",
+  "window.minNoticeMinutes",
+];
+
+dbTest("listPublicSeances: a séance carries the public fields only, nothing of the pro's or a customer's row (G4a)", async ({ db, pro }) => {
+  const now = new Date();
+  const type = await makeType(db, pro, { name: "Cours collectif" });
+  await makeEvent(db, pro, { title: "Altinha débutants", ticketTypeIds: [type] }, now);
+  const [first] = await listPublicSeances(db, proOf(pro), wide(pro, now), now);
+  assert.ok(first);
+  assert.deepEqual(keyPaths(first), PUBLIC_SEANCE_KEYS);
+  assert.deepEqual(privateKeyPaths(first), []);
 });

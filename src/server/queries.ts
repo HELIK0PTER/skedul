@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { account, availabilityRule, professional, timeOff, user } from "@/lib/db/schema";
 import { env } from "@/lib/env";
 import { isTimezoneLocked } from "@/lib/back-office/settings-actions";
-import { userNotSuspended } from "@/lib/suspension";
+import { readPublicProfile } from "@/lib/public/profile-reads";
 import { getPayments, type PaymentsPeriod } from "@/lib/back-office/payments-reads";
 import { revenueLive } from "@/server/revenue";
 import { getDashboardData } from "@/lib/back-office/dashboard-reads";
@@ -76,28 +76,14 @@ export async function getSettingsExtras(
 }
 
 /**
- * A suspended pro's page is offline (null), except where `includeSuspended` is
- * set: the thank-you page, so a customer who paid just before the suspension
- * still sees their confirmation.
+ * The public row of the pro at this slug (the tested read `readPublicProfile`, src/lib/public/profile-reads.ts: only
+ * the columns a public page renders or needs, never the Stripe account or the Google calendar). A suspended pro's
+ * page is offline (null), except where `includeSuspended` is set: the thank-you page, so a customer who paid just
+ * before the suspension still sees their confirmation.
  */
-export async function getPublicProfile(
-  slug: string,
-  opts: { includeSuspended?: boolean } = {},
-) {
-  const rows = await db
-    .select({ pro: professional })
-    .from(professional)
-    .innerJoin(user, eq(user.id, professional.userId))
-    .where(
-      and(
-        eq(professional.slug, slug),
-        opts.includeSuspended ? undefined : userNotSuspended(),
-      ),
-    )
-    .limit(1);
-  const pro = rows[0]?.pro;
-  if (!pro) return null;
-  return { pro };
+export async function getPublicProfile(slug: string, opts: { includeSuspended?: boolean } = {}) {
+  const pro = await readPublicProfile(db, slug, opts);
+  return pro ? { pro } : null;
 }
 
 export async function getGoogleConnection(pro: {

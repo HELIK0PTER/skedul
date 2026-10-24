@@ -5,7 +5,7 @@ import { cache } from "react";
 import { minGeneratedUntil, needsHorizon } from "@/lib/booking/occurrences";
 import { db } from "@/lib/db";
 import { listBoutique, type BoutiqueType } from "@/lib/public/boutique-reads";
-import type { PublicPro } from "@/lib/public/context";
+import { publicPageProfileOfRow, type PublicPageProfile, type PublicPro } from "@/lib/public/context";
 import { getPublicOffer, type PublicOfferDetail } from "@/lib/public/offer-reads";
 import { listPublicSeances, nextPublicSeanceStart, type PublicSeance } from "@/lib/public/planning-reads";
 import { purchaseByReference, type PurchaseReference } from "@/lib/public/purchase-reads";
@@ -27,11 +27,16 @@ import { getPublicProfile } from "@/server/queries";
  */
 
 /**
- * The pro of the public page `/[slug]` with its presentation text (null for an unknown or suspended pro), memoized for
- * ONE request only (React `cache`, nothing shared between requests): generateMetadata and the page read the database
- * once. Public data only, no client data.
+ * The pro of the public page `/[slug]` (null for an unknown or suspended pro) as the page holds it: the pro the cores
+ * use, the branding fields of the shell and the presentation text, never the professional row (G4a: no Stripe
+ * account, no Google calendar, no user id outside `pro.ownerUserId`). Memoized for ONE request only (React `cache`,
+ * nothing shared between requests): generateMetadata and the page read the database once. Public data only, no client
+ * data.
  */
-export const getPublicPageProfile = cache((slug: string) => getPublicProfile(slug));
+export const getPublicPageProfile = cache(async (slug: string): Promise<PublicPageProfile | null> => {
+  const profile = await getPublicProfile(slug);
+  return profile ? publicPageProfileOfRow(profile.pro) : null;
+});
 
 /** The séances of [start, end) the public page lists for this pro (see listPublicSeances). */
 export function getPlanningPage(pro: PublicPro, range: { start: Date; end: Date }): Promise<PublicSeance[]> {

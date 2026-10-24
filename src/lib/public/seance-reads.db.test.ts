@@ -10,6 +10,7 @@ import { instantAt } from "@/lib/civil-date";
 import { booking, event, eventTicketType, occurrence, question, ticket, ticketOffer, ticketPurchase, timeOff } from "@/lib/db/schema";
 import { addMinutes, createTestPro, dbTest, deleteTestUser, testEmail, type DbHarness, type TestPro } from "@/test/db";
 import { dayIn, giveTickets, makeCustomer, makeEvent, makeOffer, makeType } from "@/test/fixtures";
+import { keyPaths, privateKeyPaths } from "@/test/key-paths";
 import {
   rowBooking,
   rowCustomer,
@@ -766,4 +767,62 @@ dbTest("livePendingHoldsOf: holds that cross two pros, built by hand, are never 
     for (const id of occurrences) await db.delete(occurrence).where(eq(occurrence.id, id));
     await deleteTestUser(db, other.userId);
   }
+});
+
+dbTest("the séance page reads carry the public fields only: the séance, its questions, its offers and the holds (G4a)", async ({ db, pro }) => {
+  const h = { db, pro };
+  const now = new Date();
+  const w = await world(h);
+  await db.insert(question).values({ professionalId: pro.proId, eventId: w.eventId, label: "Votre niveau ?", type: "text", required: false, position: 0 });
+  const got = await getPublicSeance(db, proOf(pro), w.occ.id, now);
+  assert.ok(got && got.kind === "seance", JSON.stringify(got));
+  assert.deepEqual(keyPaths(got), [
+    "acceptedTypes",
+    "acceptedTypes[].color",
+    "acceptedTypes[].id",
+    "acceptedTypes[].name",
+    "archived",
+    "bookingMode",
+    "capacity",
+    "color",
+    "description",
+    "endsAt",
+    "eventId",
+    "isPrivate",
+    "kind",
+    "location",
+    "occurrenceId",
+    "offers",
+    "offers[].covers",
+    "offers[].label",
+    "offers[].offerId",
+    "offers[].priceCents",
+    "offers[].quantity",
+    "offers[].ticketTypeId",
+    "offers[].ticketTypeName",
+    "offers[].validityText",
+    "questions",
+    "questions[].id",
+    "questions[].label",
+    "questions[].options",
+    "questions[].position",
+    "questions[].required",
+    "questions[].type",
+    "seatsLeft",
+    "startsAt",
+    "status",
+    "title",
+    "underTimeOff",
+    "window",
+    "window.bookingHorizonDays",
+    "window.cancelDeadlineHours",
+    "window.minNoticeMinutes",
+  ]);
+  assert.deepEqual(privateKeyPaths(got), []);
+
+  const started = await buyAndBook(h, w, now);
+  const holds = await livePendingHoldsOf(db, pro.proId, w.customerId, now);
+  assert.equal(holds[0]?.purchaseId, started.purchaseId);
+  assert.deepEqual(keyPaths(holds[0]), ["holdExpiresAt", "occurrenceId", "purchaseId", "startsAt", "title"]);
+  assert.deepEqual(privateKeyPaths(holds), []);
 });
