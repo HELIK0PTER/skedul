@@ -84,12 +84,14 @@ test("the sign-in page offers the client space under the form (L1391)", () => {
   assert.match(page, /INLINE_LINK_CLASS/);
 });
 
-test("the sign-in and sign-up pages carry no emoji (Global Constraints: no emoji)", () => {
-  for (const file of ["src/app/(auth)/sign-in/page.tsx", "src/app/(auth)/sign-up/page.tsx"]) {
+test("the sign-in, sign-up and onboarding pages carry no emoji (Global Constraints: no emoji)", () => {
+  for (const file of ["src/app/(auth)/sign-in/page.tsx", "src/app/(auth)/sign-up/page.tsx", "src/app/onboarding/page.tsx"]) {
     const emoji = Array.from(readFileSync(file, "utf8")).filter((char) => (char.codePointAt(0) ?? 0) >= 0x1f000);
     assert.deepEqual(emoji, [], `${file} has no character above U+1F000`);
   }
   assert.match(readFileSync("src/app/(auth)/sign-in/page.tsx", "utf8"), /<CardTitle className="text-xl">Bon retour<\/CardTitle>/);
+  // The sign-up path now sends clients here too (G3b): the greeting is the first name and nothing else (G4a).
+  assert.match(readFileSync("src/app/onboarding/page.tsx", "utf8"), /Bienvenue \{user\.name\?\.split\(" "\)\[0\]\}\r?\n\s*<\/CardTitle>/);
 });
 
 test("the sign-up page sends a signed-in visitor through signedInSignUpTarget, with the validated next and the pro page of the user (G3b)", () => {

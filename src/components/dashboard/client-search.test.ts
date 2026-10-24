@@ -67,10 +67,12 @@ test("a search answer older than the latest request or reset is ignored: a late 
   assert.ok(awaited < stale, "the answer is compared with the latest request after the await");
   assert.ok(stale < submit.indexOf("setError(res.error)") && stale < submit.indexOf("setFound({ q, rows: res.rows })"), "a stale answer sets neither the rows nor the error");
 
-  // An empty term and the reset button both forget the search: they invalidate any request still in flight.
+  // While a request is pending, submit returns first: an empty submit can only come when none is, and the reset button
+  // is what invalidates a request in flight. Both forget the search and bump the counter.
+  assert.ok(submit.indexOf("if (pending) return;") !== -1 && submit.indexOf("if (pending) return;") < submit.indexOf('if (q === "") {'), "a submit while a request is pending does nothing, before the empty term is read");
   const emptyTerm = submit.slice(submit.indexOf('if (q === "") {'), submit.indexOf("startTransition("));
-  assert.match(emptyTerm, /latest\.current \+= 1;/, "an empty submit while a search is pending");
-  assert.match(functionBody(search, "showAll"), /latest\.current \+= 1;/, "the reset button");
+  assert.match(emptyTerm, /latest\.current \+= 1;/, "an empty submit (no request is pending then) keeps the counter in step");
+  assert.match(functionBody(search, "showAll"), /latest\.current \+= 1;/, "the reset button invalidates a request still in flight");
 });
 
 test("a search that returns clients announces how many in the always-mounted status region, with the plural of the codebase (G3b)", () => {

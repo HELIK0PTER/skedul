@@ -21,7 +21,7 @@ export default async function OnboardingPage() {
         <Card>
           <CardHeader>
             <CardTitle className="text-xl">
-              Bienvenue {user.name?.split(" ")[0]} 🎉
+              Bienvenue {user.name?.split(" ")[0]}
             </CardTitle>
             <p className="text-sm text-muted-foreground">
               Configurons votre page de réservation. Vous pourrez tout modifier

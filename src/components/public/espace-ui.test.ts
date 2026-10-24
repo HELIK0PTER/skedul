@@ -167,9 +167,28 @@ function refusalBranch(source: string): string {
   return match[1];
 }
 
+/** The source of the leaf's `submit()`: from its declaration to the `return (` of the component (LF or CRLF checkouts). */
+function submitOf(source: string): string {
+  const start = source.indexOf("function submit() {");
+  assert.notEqual(start, -1, "submit() is there");
+  const end = source.slice(start).search(/\r?\n {2}return \(\r?\n/);
+  assert.notEqual(end, -1, "the component's return follows submit()");
+  return source.slice(start, start + end);
+}
+
+test("the submit() slicer finds the end of the function in an LF and in a CRLF checkout, and refuses a source without one (G4a)", () => {
+  const lf = "  function submit() {\n    setError(null);\n  }\n\n  return (\n    <>\n";
+  for (const source of [lf, lf.replace(/\n/g, "\r\n")]) {
+    const submit = submitOf(source);
+    assert.match(submit, /setError\(null\);/);
+    assert.doesNotMatch(submit, /return \(/, "the slice stops before the JSX");
+  }
+  assert.throws(() => submitOf("function submit() {\n  setError(null);\n}\n"), /the component's return follows submit/);
+  assert.throws(() => submitOf("const x = 1;"), /submit\(\) is there/);
+});
+
 test("« Annuler » clears the status line when it starts, so two successes in a row are both announced; a refusal resets the flag in the refusal branch itself (G3b)", () => {
-  const submit = CANCEL.slice(CANCEL.indexOf("function submit() {"), CANCEL.indexOf("return (\n    <>"));
-  assert.ok(submit.length > 0, "submit is found");
+  const submit = submitOf(CANCEL);
   const cleared = submit.indexOf("announce(null);");
   assert.ok(cleared !== -1 && cleared < submit.indexOf("startTransition("), "announce(null) runs before the action starts (the useSpaceStatus contract)");
   // The same message twice is one state: without the reset the second « Inscription annulée. » would not be read out.

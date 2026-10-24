@@ -58,6 +58,8 @@ export function ClientSearch({
     const q = term.trim();
     setError(null);
     if (q === "") {
+      // No request can be pending here (submit returned above while one is), so the bump only keeps the counter in
+      // step; the reset button (showAll) is what invalidates a request in flight.
       latest.current += 1;
       setFound(null);
       return;
