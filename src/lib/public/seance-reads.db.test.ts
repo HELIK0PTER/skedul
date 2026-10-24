@@ -826,3 +826,36 @@ dbTest("the séance page reads carry the public fields only: the séance, its qu
   assert.deepEqual(keyPaths(holds[0]), ["holdExpiresAt", "occurrenceId", "purchaseId", "startsAt", "title"]);
   assert.deepEqual(privateKeyPaths(holds), []);
 });
+
+dbTest("seanceVisitorFacts (owner): a purchase written under another pro's id gives neither a purchase id nor a resume URL (S6, G4a)", async ({ db, pro }) => {
+  const now = new Date();
+  const w = await world({ db, pro });
+  const other = await createTestPro(db);
+  const bookings: string[] = [];
+  const purchases: string[] = [];
+  try {
+    // A pending booking of the Owner's customer on my séance holding a purchase written under THEIR id, built by hand on
+    // purpose (every domain foreign key is single-column): activeBookingOf's join is the only thing that keeps its id and
+    // its open Checkout URL out of the Owner's facts.
+    const crossed = await rowPurchase(db, other, { customerId: w.customerId, offerId: w.offerId, ticketTypeId: w.typeId }, now);
+    purchases.push(crossed);
+    await db
+      .update(ticketPurchase)
+      .set({ checkoutSessionId: `cs_test_${crossed}`, checkoutUrl: "https://checkout.test/crossed" })
+      .where(eq(ticketPurchase.id, crossed));
+    const bookingId = await rowBooking(db, pro, { occurrenceId: w.occ.id, customerId: w.customerId, status: "pending", coverage: "ticket", purchaseId: crossed }, now);
+    bookings.push(bookingId);
+
+    for (const source of ["owner", "guest"] as const) {
+      const facts = await seanceVisitorFacts(db, pro.proId, w.occ.id, { customerId: w.customerId, source }, now);
+      assert.deepEqual(facts.booking, { bookingId, status: "pending", coverage: "ticket", purchaseId: null, resumeUrl: null }, source);
+      assert.equal(JSON.stringify(facts).includes("checkout.test"), false, source);
+      assert.equal(JSON.stringify(facts).includes(crossed), false, source);
+    }
+  } finally {
+    // The hand-built rows go before the invariant check (and before the other pro): they are not part of any model.
+    for (const id of bookings) await db.delete(booking).where(eq(booking.id, id));
+    for (const id of purchases) await db.delete(ticketPurchase).where(eq(ticketPurchase.id, id));
+    await deleteTestUser(db, other.userId);
+  }
+});

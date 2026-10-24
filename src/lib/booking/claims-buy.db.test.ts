@@ -4,10 +4,11 @@ import { eq, sql } from "drizzle-orm";
 import { setTicketTypeArchived } from "@/lib/booking/catalog";
 import { activeBookingOf, attachCheckoutSession, startBuyAndBook, type BuyAndBookInput } from "@/lib/booking/claims";
 import { startPurchase } from "@/lib/booking/fulfillment";
-import { bookingAnswer, question, ticketPurchase, timeOff } from "@/lib/db/schema";
+import { booking, bookingAnswer, question, ticketPurchase, timeOff } from "@/lib/db/schema";
 import type { OfferInput } from "@/lib/tickets";
-import { addMinutes, dbTest, inParallel, type DbHarness } from "@/test/db";
+import { addMinutes, createTestPro, dbTest, deleteTestUser, inParallel, type DbHarness } from "@/test/db";
 import { getBooking, getOccurrence, makeCustomer, makeEvent, makeOffer, makeType } from "@/test/fixtures";
+import { rowBooking, rowPurchase } from "@/test/rows";
 
 const codeOf = (r: { ok: true } | { ok: false; code: string }): string => (r.ok ? "ok" : r.code);
 
@@ -297,6 +298,51 @@ dbTest("E1 releases an elapsed hold on the same séance before taking the seat (
   assert.equal(expired.status, "expired");
   assert.equal(expired.endedBy, "system");
   assert.equal((await getOccurrence(h.db, s.occ.id)).seatsTaken, 1);
+});
+
+dbTest("activeBookingOf: a purchase written under another pro's id never surfaces, nor its Checkout URL (S6, G4a)", async (h) => {
+  const now = new Date();
+  const s = await setup(h);
+  const other = await createTestPro(h.db);
+  const bookings: string[] = [];
+  const purchases: string[] = [];
+  try {
+    const withUrl = async (purchaseId: string): Promise<void> => {
+      await h.db
+        .update(ticketPurchase)
+        .set({ checkoutSessionId: `cs_test_${purchaseId}`, checkoutUrl: `https://checkout.test/${purchaseId}` })
+        .where(eq(ticketPurchase.id, purchaseId));
+    };
+    const crossedCustomer = s.customerId;
+    const genuineCustomer = await makeCustomer(h.db, h.pro);
+
+    // A pending booking of MY customer on MY séance that holds a purchase written under THEIR id, built by hand on purpose
+    // (every domain foreign key is single-column, so only the join's own professional filter keeps it out): the purchase
+    // is pending and its Checkout session is open, so before the filter its id and its URL would both come back.
+    const crossed = await rowPurchase(h.db, other, { customerId: crossedCustomer, offerId: s.offerId, ticketTypeId: s.typeId }, now);
+    purchases.push(crossed);
+    await withUrl(crossed);
+    bookings.push(
+      await rowBooking(h.db, h.pro, { occurrenceId: s.occ.id, customerId: crossedCustomer, status: "pending", coverage: "ticket", purchaseId: crossed }, now),
+    );
+    // The same state with the purchase under MY id, for another customer: the control that the answer below is not blanket.
+    const genuine = await rowPurchase(h.db, h.pro, { customerId: genuineCustomer, offerId: s.offerId, ticketTypeId: s.typeId }, now);
+    purchases.push(genuine);
+    await withUrl(genuine);
+    bookings.push(
+      await rowBooking(h.db, h.pro, { occurrenceId: s.occ.id, customerId: genuineCustomer, status: "pending", coverage: "ticket", purchaseId: genuine }, now),
+    );
+
+    const mine = await activeBookingOf(h.db, { occurrenceId: s.occ.id, customerId: genuineCustomer }, now);
+    assert.deepEqual(mine, { bookingId: bookings[1], status: "pending", purchaseId: genuine, checkoutUrl: `https://checkout.test/${genuine}` });
+    const got = await activeBookingOf(h.db, { occurrenceId: s.occ.id, customerId: crossedCustomer }, now);
+    assert.deepEqual(got, { bookingId: bookings[0], status: "pending", purchaseId: null, checkoutUrl: null });
+  } finally {
+    // The hand-built rows go before the invariant check (and before the other pro): they are not part of any model.
+    for (const id of bookings) await h.db.delete(booking).where(eq(booking.id, id));
+    for (const id of purchases) await h.db.delete(ticketPurchase).where(eq(ticketPurchase.id, id));
+    await deleteTestUser(h.db, other.userId);
+  }
 });
 
 dbTest("attachCheckoutSession and activeBookingOf", async (h) => {

@@ -507,6 +507,8 @@ export async function attachCheckoutSession(
  * (the occurrence from the page being rendered, the customer from the
  * verified session or wallet owner), never a customerId resolved from an
  * e-mail typed by an anonymous visitor: the result exposes the Checkout URL.
+ * The purchase joined is the booking's own pro's (a purchase carrying another
+ * pro's id reads as no purchase), so the pro stays inside the booking row.
  */
 export async function activeBookingOf(
   db: Db,
@@ -523,7 +525,12 @@ export async function activeBookingOf(
       checkoutExpiresAt: ticketPurchase.checkoutExpiresAt,
     })
     .from(booking)
-    .leftJoin(ticketPurchase, eq(ticketPurchase.id, booking.purchaseId))
+    // The purchase must be the booking's own pro's: every domain foreign key is single-column, so the join says it
+    // (defence in depth, G4a): a purchase written under another pro's id never gives a purchase id or a Checkout URL.
+    .leftJoin(
+      ticketPurchase,
+      and(eq(ticketPurchase.id, booking.purchaseId), eq(ticketPurchase.professionalId, booking.professionalId)),
+    )
     .where(
       and(
         eq(booking.occurrenceId, input.occurrenceId),
