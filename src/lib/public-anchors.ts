@@ -1,7 +1,7 @@
 /**
  * The anchors of the public page `/[slug]` that other pages link to. Pure, so a server page, a client component and a
- * test can all import it. P4 gives the id to the block it builds: the « Boutique » block (offers per ticket type)
- * carries `id={BOUTIQUE_ANCHOR}`. Until then the link lands on the top of the existing page.
+ * test can all import it. The « Boutique » block of the public page (offers per ticket type) carries
+ * `id={BOUTIQUE_ANCHOR}` and mounts a leaf that scrolls to it when the URL hash names it (`scrollToHashedAnchor`).
  */
 export const BOUTIQUE_ANCHOR = "boutique";
 
@@ -16,3 +16,22 @@ export function boutiqueHref(slug: string): string {
  * needs an element outside that swap which every state of the page renders.
  */
 export const PLANNING_HEADING_ID = "planning-title";
+
+/**
+ * Scrolls to `anchor` when the URL hash names exactly it, and says whether it did. The public page streams behind
+ * loading.tsx: on a client navigation to `/{slug}#boutique` the router scrolls when the loading skeleton commits, before
+ * the Boutique exists, and never again; on a fresh load the browser's own fragment scroll can run before the streamed
+ * block is revealed. The Boutique mounts a leaf that calls this once its block is in the document, which settles both.
+ * `hash` is `window.location.hash` and `doc` the document, passed in so the rule is testable without a browser.
+ */
+export function scrollToHashedAnchor(
+  anchor: string,
+  hash: string,
+  doc: { getElementById(id: string): { scrollIntoView(): void } | null },
+): boolean {
+  if (hash !== `#${anchor}`) return false;
+  const target = doc.getElementById(anchor);
+  if (!target) return false;
+  target.scrollIntoView();
+  return true;
+}

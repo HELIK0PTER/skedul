@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { ScrollToAnchor } from "@/components/public/scroll-to-anchor";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { acceptedByLine } from "@/lib/public/messages";
@@ -11,12 +12,15 @@ import { formatMoney } from "@/lib/utils";
  * The Boutique of `/[slug]` (spec L1443, E9): the offers on sale, by ticket type, each with its « Acheter » link to the
  * offer page. It carries the anchor every « Voir la boutique » link points to (BOUTIQUE_ANCHOR, FR:UI-14) and is not
  * rendered at all when nothing is on sale. Every text of the pro (type, description, labels) can be long and unbroken,
- * hence `wrap-anywhere` and `min-w-0`; below 640 px each offer takes a row and its button the full width.
+ * hence `wrap-anywhere` and `min-w-0`; below 640 px each offer takes a row and its button the full width. The page streams
+ * behind loading.tsx, so a link to `/{slug}#boutique` (a client navigation) or a fresh load with the hash would not
+ * reach the block by itself: the leaf `ScrollToAnchor` scrolls to it once the block has mounted.
  */
 export function Boutique({ slug, currency, types }: { slug: string; currency: string; types: BoutiqueType[] }) {
   if (types.length === 0) return null;
   return (
     <section id={BOUTIQUE_ANCHOR} aria-labelledby="boutique-title" className="scroll-mt-6 space-y-4">
+      <ScrollToAnchor anchor={BOUTIQUE_ANCHOR} />
       <h2 id="boutique-title" className="text-xl font-bold tracking-tight">
         Boutique
       </h2>
