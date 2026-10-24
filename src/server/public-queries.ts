@@ -66,7 +66,10 @@ export function getSeancePage(pro: PublicPro, occurrenceId: string): Promise<Pub
 
 /**
  * What ONE server-derived customer (an Owner, or the guest cookie's customer: never a typed e-mail, never the customer
- * of a ?p= reference) holds on this séance. A guest gets the booking status only (see seanceVisitorFacts).
+ * of a ?p= reference) holds on this séance. A guest gets the booking only: its status, and also its `bookingId` and its
+ * `coverage` (Decision 63: the contract's type requires them, so the page must never hand either to a client
+ * component, seance-facts-guard.test.ts), never a `purchaseId`, a `resumeUrl`, a wallet or an ended state (see
+ * seanceVisitorFacts).
  */
 export function getSeanceVisitorFacts(
   professionalId: string,
