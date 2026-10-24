@@ -185,7 +185,7 @@ function FreeForm({ p }: { p: OccurrenceBookingProps }) {
         <CardTitle>{FREE_BOOKING_TITLE}</CardTitle>
       </CardHeader>
       <CardContent>
-        <form ref={root} onSubmit={submit} noValidate className="space-y-4">
+        <form ref={root} method="post" onSubmit={submit} noValidate className="space-y-4">
           <IdentityFields
             idPrefix={uid}
             value={effective}
@@ -254,7 +254,7 @@ function HeldForm({ p }: { p: OccurrenceBookingProps }) {
   }
 
   return (
-    <form ref={root} onSubmit={submit} noValidate className="space-y-4">
+    <form ref={root} method="post" onSubmit={submit} noValidate className="space-y-4">
       {visitor.typeName && <p className="text-sm text-zinc-600 wrap-anywhere">{ticketUsedLine(visitor.typeName)}</p>}
       <QuestionFields idPrefix={uid} questions={p.questions} value={values} onChange={setValues} errors={errors} />
       <Feedback

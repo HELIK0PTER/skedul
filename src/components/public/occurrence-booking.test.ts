@@ -70,3 +70,11 @@ test("it derives nothing from the browser clock: the séance start is the ISO st
   assert.doesNotMatch(SOURCE, /new Date\(|Date\.now\(/);
   assert.match(SOURCE, /seenStartsAt: string;/);
 });
+
+test("every form posts, so a submit before hydration never writes the typed name, e-mail or phone into the URL", () => {
+  // Server-rendered, a form with no method is a native GET of the current URL: the fields (name="name", "email",
+  // "phone", "website") would land in the address bar, the history and the platform request logs.
+  const forms = SOURCE.match(/<form\b[^>]*>/g) ?? [];
+  assert.equal(forms.length, 2, "the free form and the held-ticket form");
+  for (const tag of forms) assert.match(tag, /^<form ref=\{root\} method="post" onSubmit=/, tag);
+});
