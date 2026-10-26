@@ -15,6 +15,21 @@ test("logSafeMessage hides e-mail addresses, personal-link tokens and Checkout s
   );
 });
 
+test("logSafeMessage drops the query parameters of a Drizzle failure: names and phones are not masked, so nothing after « params: » is logged", () => {
+  const drizzle = new Error(
+    'Failed query: insert into "customer" ("id", "professional_id", "email", "name", "phone") values ($1, $2, $3, $4, $5)\n' +
+      "params: c_1,p_1,marie.dupont@example.com,Marie Dupont,+33 6 12 34 56 78",
+  );
+  const line = logSafeMessage(drizzle);
+  assert.equal(line, 'Failed query: insert into "customer" ("id", "professional_id", "email", "name", "phone") values ($1, $2, $3, $4, $5)');
+  for (const secret of ["Marie", "Dupont", "+33", "12 34", "example.com", "[email]", "params"]) assert.ok(!line.includes(secret), secret);
+  // The word in any case, wherever it sits; the SQL head before it is kept, and the 200-character cap still holds.
+  assert.equal(logSafeMessage(new Error("Failed query: select 1 PARAMS: Marie,0612345678")), "Failed query: select 1");
+  assert.equal(logSafeMessage(new Error(`Failed query: select ${"x, ".repeat(100)}\nparams: Marie`)).length, 200);
+  // Only the word itself: a column or a word that merely contains it is not a cut.
+  assert.equal(logSafeMessage(new Error("bad queryparams: value")), "bad queryparams: value");
+});
+
 test("logSafeMessage gives one short line and survives a non-Error", () => {
   assert.equal(logSafeMessage(new Error("a\n  b\tc")), "a b c");
   assert.equal(logSafeMessage(new Error("x".repeat(500))).length, 200);

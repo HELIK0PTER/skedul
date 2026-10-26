@@ -119,6 +119,27 @@ export function classifyReferrer(
     : { kind: "external", host };
 }
 
+/**
+ * What the page-view beacon may say about where the visitor came from: the
+ * referrer's ORIGIN when it is another site, else nothing. A same-origin
+ * referrer is a page of ours, and some of them carry a capability in their
+ * query (the payment return `?p=<purchase id>`, the mock checkout `?purchase=`):
+ * it never leaves the page, and another site's path or query is never sent
+ * either. `/api/track` keeps only an external host (classifyReferrer), so the
+ * origin is all it needs. Empty, malformed and opaque (`about:`, `data:`)
+ * referrers give nothing.
+ */
+export function externalReferrer(referrer: string, pageOrigin: string): string | undefined {
+  if (!referrer) return undefined;
+  let origin: string;
+  try {
+    origin = new URL(referrer).origin;
+  } catch {
+    return undefined;
+  }
+  return origin === "null" || origin === pageOrigin ? undefined : origin;
+}
+
 export function normalizeSource(utmSource: string | null | undefined): string | null {
   const value = utmSource?.trim().toLowerCase().slice(0, 64);
   return value ? value : null;

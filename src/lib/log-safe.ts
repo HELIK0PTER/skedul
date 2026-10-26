@@ -13,14 +13,22 @@ function messageOf(err: unknown): string | null {
   return null;
 }
 
+/** The first « params: » of a message (any case, the word itself): where a Drizzle « Failed query » lists its values. */
+const PARAMS = /\bparams:/i;
+
 /**
- * One line of an error for the server log: no e-mail address, no personal-link
- * token, no Checkout session id; whitespace collapsed; 200 characters at most.
- * Only the message is read: nothing else of the error (headers, request, body
- * fields) is ever logged.
+ * One line of an error for the server log: no query parameters, no e-mail
+ * address, no personal-link token, no Checkout session id; whitespace
+ * collapsed; 200 characters at most. Only the message is read: nothing else of
+ * the error (headers, request, body fields) is ever logged. A Drizzle failure
+ * reads « Failed query: <sql> params: <values> », and the values hold names and
+ * phone numbers that no mask recognises: the message is cut at the first
+ * « params: » before anything else, so only the SQL head is logged (G4b).
  */
 export function logSafeMessage(err: unknown): string {
-  const raw = messageOf(err) ?? "unknown error";
+  const message = messageOf(err) ?? "unknown error";
+  const cut = message.search(PARAMS);
+  const raw = cut === -1 ? message : message.slice(0, cut);
   return raw
     .replace(/[^\s@<>"'()]+@[^\s@<>"'()]+/g, "[email]")
     .replace(/\/api\/c\/[A-Za-z0-9._-]+/g, "/api/c/[token]")

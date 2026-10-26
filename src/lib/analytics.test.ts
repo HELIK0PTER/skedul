@@ -6,6 +6,7 @@ import {
   browserName,
   classifyDevice,
   classifyReferrer,
+  externalReferrer,
   isBot,
   isReservedSegment,
   isTrackedPath,
@@ -74,6 +75,28 @@ test("the tracker beacon carries the pathname only: a ?next=, ?token= or ?error=
   assert.match(tracker, /path: pathname,/);
   assert.equal((tracker.match(/location\.search/g) ?? []).length, 1, "the query is read once, for utm_source only");
   assert.match(tracker, /new URLSearchParams\(window\.location\.search\)\.get\("utm_source"\)/);
+});
+
+test("externalReferrer keeps the origin of another site only: a same-origin referrer (a payment return holds a purchase id) never leaves the page (G4b)", () => {
+  const own = "https://myskedul.com";
+  assert.equal(externalReferrer("https://myskedul.com/altinha-paris/seance/o1?paiement=annule&p=pur_123", own), undefined);
+  assert.equal(externalReferrer("https://myskedul.com/", own), undefined);
+  assert.equal(externalReferrer("https://www.google.com/search?q=altinha+paris", own), "https://www.google.com");
+  assert.equal(externalReferrer("https://checkout.stripe.com/c/pay/cs_test_a1#fid", own), "https://checkout.stripe.com");
+  assert.equal(externalReferrer("http://myskedul.com/x", own), "http://myskedul.com", "another scheme is another origin, sent without its path");
+  assert.equal(externalReferrer("http://localhost:3102/altinha-paris/merci?p=pur_1", "http://localhost:3102"), undefined);
+  assert.equal(externalReferrer("http://localhost:3000/x?p=1", "http://localhost:3102"), "http://localhost:3000");
+  assert.equal(externalReferrer("", own), undefined);
+  assert.equal(externalReferrer("not a url", own), undefined);
+  assert.equal(externalReferrer("about:blank", own), undefined, "an opaque origin is no referrer");
+  assert.equal(externalReferrer("data:text/html,x", own), undefined);
+});
+
+test("the tracker beacon sends externalReferrer of document.referrer, never document.referrer itself (G4b)", () => {
+  const tracker = readFileSync("src/components/analytics/page-view-tracker.tsx", "utf8");
+  assert.match(tracker, /referrer: externalReferrer\(document\.referrer, window\.location\.origin\),/);
+  assert.equal((tracker.match(/document\.referrer/g) ?? []).length, 1, "document.referrer is read once, through externalReferrer");
+  assert.match(tracker, /import \{ externalReferrer, isTrackedPath \} from "@\/lib\/analytics";/);
 });
 
 test("proSlugFromPath returns the pro slug of public pro pages only", () => {
