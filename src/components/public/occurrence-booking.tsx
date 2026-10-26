@@ -39,6 +39,7 @@ import {
 import { PUBLIC_UNEXPECTED, type PublicFail } from "@/lib/public/result";
 import { FREE_BOOKING_TITLE, SEANCE_HEADING_ID, TICKETS_BOOKING_TITLE, ticketUsedLine } from "@/lib/public/seance-copy";
 import { canOfferCodeSignIn } from "@/lib/public/sign-in-flow";
+import type { AnswerInput } from "@/lib/tickets";
 import { cn } from "@/lib/utils";
 import { bookWithHeldTicketAction, registerFreeAction, startBuyAndBookAction } from "@/server/public";
 
@@ -150,13 +151,16 @@ function Feedback({
   );
 }
 
-/** Free registration (E3): identity, questions, « S'inscrire ». The e-mail is locked for a verified session only. */
-function FreeForm({ p }: { p: OccurrenceBookingProps }) {
+/**
+ * What the two forms that ask for an identity share (free registration, buy + book): the typed identity, the honeypot,
+ * the answers, the field errors, the pending state and the focus after a refusal. The e-mail of a VERIFIED visitor is the
+ * session's, whatever was typed before the session changed under the form: that rule is written here and nowhere else.
+ */
+function useTypedIdentityForm(p: OccurrenceBookingProps) {
   const { visitor } = p;
   const uid = useId();
   const emailLocked = visitor.state === "verified" && visitor.email !== null;
   const [identity, setIdentity] = useState<IdentityInput>({ name: visitor.name ?? "", email: visitor.email ?? "", phone: "" });
-  // A verified visitor's e-mail is the session's, whatever was typed before the session changed under this form.
   const effective: IdentityInput = emailLocked && visitor.email !== null ? { ...identity, email: visitor.email } : identity;
   const [website, setWebsite] = useState("");
   const [values, setValues] = useState<Record<string, string>>({});
@@ -164,22 +168,77 @@ function FreeForm({ p }: { p: OccurrenceBookingProps }) {
   const [error, setError] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const { root, errorBox, refused } = useRefusalFocus();
+
+  return {
+    uid,
+    emailLocked,
+    effective,
+    setIdentity,
+    website,
+    setWebsite,
+    values,
+    setValues,
+    pending,
+    setPending,
+    error,
+    errors,
+    root,
+    errorBox,
+    /** The check of the browser: the answers to send and the pending state, or null once the field errors are shown (no call). */
+    begin(): AnswerInput[] | null {
+      setError(null);
+      const local = { ...identityErrors(effective), ...requiredAnswerErrors(p.questions, values) };
+      if (Object.keys(local).length > 0) {
+        setErrors(local);
+        refused();
+        return null;
+      }
+      setErrors({});
+      setPending(true);
+      return answersFromValues(p.questions, values);
+    },
+    /** A refusal: its sentence in the alert line, its field errors under the fields, the focus on the first problem. */
+    refuse(res: Pick<PublicFail, "error" | "fieldErrors">, answers: readonly AnswerInput[]) {
+      setError(res.error);
+      setErrors({ ...(res.fieldErrors ?? {}), ...answerErrorsById(answers, res.fieldErrors ?? {}) });
+      refused();
+    },
+  };
+}
+
+type TypedIdentityForm = ReturnType<typeof useTypedIdentityForm>;
+
+/** The identity fields (with the honeypot) and the event's questions of a typed form. */
+function TypedFields({ p, form }: { p: OccurrenceBookingProps; form: TypedIdentityForm }) {
+  return (
+    <>
+      <IdentityFields
+        idPrefix={form.uid}
+        value={form.effective}
+        onChange={form.setIdentity}
+        emailLocked={form.emailLocked}
+        errors={form.errors}
+        businessName={p.businessName}
+        website={form.website}
+        onWebsite={form.setWebsite}
+      />
+      <QuestionFields idPrefix={form.uid} questions={p.questions} value={form.values} onChange={form.setValues} errors={form.errors} />
+    </>
+  );
+}
+
+/** Free registration (E3): identity, questions, « S'inscrire ». The e-mail is locked for a verified session only. */
+function FreeForm({ p }: { p: OccurrenceBookingProps }) {
+  const form = useTypedIdentityForm(p);
+  const { effective, emailLocked, website, pending, setPending, error, root, errorBox } = form;
   const registered = useStatusFocus();
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (pending) return;
     registered.reset();
-    setError(null);
-    const local = { ...identityErrors(effective), ...requiredAnswerErrors(p.questions, values) };
-    if (Object.keys(local).length > 0) {
-      setErrors(local);
-      refused();
-      return;
-    }
-    setErrors({});
-    setPending(true);
-    const answers = answersFromValues(p.questions, values);
+    const answers = form.begin();
+    if (answers === null) return;
     const res = await call(() =>
       registerFreeAction({ slug: p.slug, occurrenceId: p.occurrenceId, seenStartsAt: p.seenStartsAt, identity: identityToSend(effective), answers, website }),
     );
@@ -191,9 +250,7 @@ function FreeForm({ p }: { p: OccurrenceBookingProps }) {
       registered.succeed(!emailLocked);
       return;
     }
-    setError(res.error);
-    setErrors({ ...(res.fieldErrors ?? {}), ...answerErrorsById(answers, res.fieldErrors ?? {}) });
-    refused();
+    form.refuse(res, answers);
   }
 
   return (
@@ -203,17 +260,7 @@ function FreeForm({ p }: { p: OccurrenceBookingProps }) {
       </CardHeader>
       <CardContent>
         <form ref={root} method="post" onSubmit={submit} noValidate className="space-y-4">
-          <IdentityFields
-            idPrefix={uid}
-            value={effective}
-            onChange={setIdentity}
-            emailLocked={emailLocked}
-            errors={errors}
-            businessName={p.businessName}
-            website={website}
-            onWebsite={setWebsite}
-          />
-          <QuestionFields idPrefix={uid} questions={p.questions} value={values} onChange={setValues} errors={errors} />
+          <TypedFields p={p} form={form} />
           <Feedback
             status={registered.shown ? COPY.REGISTERED : null}
             statusBox={registered.box}
@@ -290,20 +337,10 @@ function HeldForm({ p }: { p: OccurrenceBookingProps }) {
 
 /** Buy + book (E1): choose an offer, give an identity, pay on the payment page; the seat is held while the buyer pays. */
 function BuyForm({ p }: { p: OccurrenceBookingProps }) {
-  const { visitor } = p;
-  const uid = useId();
-  const emailLocked = visitor.state === "verified" && visitor.email !== null;
-  const [identity, setIdentity] = useState<IdentityInput>({ name: visitor.name ?? "", email: visitor.email ?? "", phone: "" });
-  // A verified visitor's e-mail is the session's, whatever was typed before the session changed under this form.
-  const effective: IdentityInput = emailLocked && visitor.email !== null ? { ...identity, email: visitor.email } : identity;
-  const [website, setWebsite] = useState("");
-  const [values, setValues] = useState<Record<string, string>>({});
+  const form = useTypedIdentityForm(p);
+  const { uid, effective, website, pending, setPending, error, root, errorBox } = form;
   const [offerId, setOfferId] = useState<string | null>(() => firstCoveringOfferId(p.offers));
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [errors, setErrors] = useState<Record<string, string>>({});
   const [heldId, setHeldId] = useState<string | null>(null);
-  const { root, errorBox, refused } = useRefusalFocus();
 
   // Back from the payment page through the history: the page comes back from the cache with the form still pending.
   useEffect(() => {
@@ -312,24 +349,16 @@ function BuyForm({ p }: { p: OccurrenceBookingProps }) {
     };
     window.addEventListener("pageshow", onShow);
     return () => window.removeEventListener("pageshow", onShow);
-  }, []);
+  }, [setPending]);
 
   const offer = p.offers.find((o) => o.offerId === offerId && o.covers) ?? p.offers.find((o) => o.covers) ?? null;
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (pending || offer === null) return;
-    setError(null);
     setHeldId(null);
-    const local = { ...identityErrors(effective), ...requiredAnswerErrors(p.questions, values) };
-    if (Object.keys(local).length > 0) {
-      setErrors(local);
-      refused();
-      return;
-    }
-    setErrors({});
-    setPending(true);
-    const answers = answersFromValues(p.questions, values);
+    const answers = form.begin();
+    if (answers === null) return;
     const res = await call(() =>
       startBuyAndBookAction({ slug: p.slug, occurrenceId: p.occurrenceId, offerId: offer.offerId, seenStartsAt: p.seenStartsAt, identity: identityToSend(effective), answers, website }),
     );
@@ -343,16 +372,13 @@ function BuyForm({ p }: { p: OccurrenceBookingProps }) {
         return;
       }
       setPending(false);
-      setError(COPY.CHECKOUT_FAILED);
       setHeldId(readHoldId(storage, p.occurrenceId));
-      refused();
+      form.refuse({ error: COPY.CHECKOUT_FAILED }, answers);
       return;
     }
     setPending(false);
-    setError(res.error);
-    setErrors({ ...(res.fieldErrors ?? {}), ...answerErrorsById(answers, res.fieldErrors ?? {}) });
     setHeldId(readHoldId(browserSessionStorage(), p.occurrenceId));
-    refused();
+    form.refuse(res, answers);
   }
 
   if (offer === null) return <p className="text-sm text-zinc-600">{COPY.NO_COVERING_OFFER}</p>;
@@ -400,17 +426,7 @@ function BuyForm({ p }: { p: OccurrenceBookingProps }) {
             );
           })}
         </fieldset>
-        <IdentityFields
-          idPrefix={uid}
-          value={effective}
-          onChange={setIdentity}
-          emailLocked={emailLocked}
-          errors={errors}
-          businessName={p.businessName}
-          website={website}
-          onWebsite={setWebsite}
-        />
-        <QuestionFields idPrefix={uid} questions={p.questions} value={values} onChange={setValues} errors={errors} />
+        <TypedFields p={p} form={form} />
         <Feedback status={null} statusBox={null} error={error} errorBox={errorBox} />
         {heldId !== null && (
           <p className="text-sm">

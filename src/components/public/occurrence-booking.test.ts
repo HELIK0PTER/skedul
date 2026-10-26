@@ -53,6 +53,19 @@ test("the buy block is for a visitor who cannot spend a held ticket", () => {
   assert.doesNotMatch(SOURCE, /return null;\s*return \(\s*<Card>/, "the card is no longer hidden from a visitor who can only buy");
 });
 
+test("the identity rules of the two typed forms live in one hook: the lock of a verified visitor's e-mail is written once", () => {
+  assert.equal(SOURCE.split("useTypedIdentityForm(p)").length - 1, 2, "the free form and the buy form both call it");
+  assert.equal(SOURCE.match(/visitor\.state === "verified" && visitor\.email !== null/g)?.length, 1, "one definition of the lock");
+  assert.equal(
+    SOURCE.match(/emailLocked && visitor\.email !== null \? \{ \.\.\.identity, email: visitor\.email \} : identity/g)?.length,
+    1,
+    "one override of the typed e-mail by the session's",
+  );
+  assert.equal(SOURCE.split("useState<IdentityInput>").length - 1, 1, "one identity state");
+  assert.equal(SOURCE.split("identityErrors(effective)").length - 1, 1, "one browser-side check of the identity");
+  assert.equal(SOURCE.split("<IdentityFields").length - 1, 1, "one place renders the identity fields");
+});
+
 test("it is a client component that calls the Server Actions of the public booking and nothing else of the server", () => {
   assert.match(SOURCE, /^"use client";/);
   assert.match(SOURCE, /import \{ bookWithHeldTicketAction, registerFreeAction, startBuyAndBookAction \} from "@\/server\/public";/);
