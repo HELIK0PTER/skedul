@@ -6,8 +6,8 @@
  *   of the block and the line above the form. One rule decides the block and that line: `seatGoneOf` (the seat behind a
  *   buy + book purchase), whose hold rule is `liveHoldEnd`, both in `visibility.ts`.
  * - `checkoutBlockOf`: the props of the block for one purchase (the offer page uses it for a shop purchase).
- * - `returnViewOf`, `returnTextOf`: what `CheckoutReturn` says, so its view and its sentence are tested here and not pinned
- *   by regexes on the component.
+ * - `returnViewOf`, `returnHeadingOf`, `returnTextOf`: what `CheckoutReturn` says, so its view, its heading and its sentence
+ *   are tested here and not pinned by regexes on the component.
  *
  * Client-safe (the component imports it): no database, no env, no `server-only`, type-only imports of the release core.
  * Nothing here knows a customer: a reference shows THAT purchase, never its customer (Decision 71).
@@ -158,6 +158,15 @@ export function returnViewOf(a: { status: "pending" | "paid" | "expired"; proces
   if (a.outcome === "processing") return "processing";
   if (a.status === "expired") return "expired";
   return a.processing ? "processing" : "pending";
+}
+
+/**
+ * The heading follows the view (G4c): the cancel URL of a PAID purchase, or of a payment the bank is still confirming, is
+ * not an « interrupted » payment, so those two views read « Votre paiement » above their line (« Paiement reçu »,
+ * « Paiement en cours de traitement »); every view about a seat given back or never held keeps « Paiement interrompu ».
+ */
+export function returnHeadingOf(view: ReturnView): string {
+  return view === "paid" || view === "processing" ? "Votre paiement" : "Paiement interrompu";
 }
 
 /** The sentence under the heading (null: nothing to say, e.g. a pending hold whose end the page could not read). */

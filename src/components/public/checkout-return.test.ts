@@ -12,6 +12,8 @@ const RETURN = readFileSync("src/components/public/checkout-return.tsx", "utf8")
 const HOLDS = readFileSync("src/components/public/pending-holds.tsx", "utf8");
 /** What the block says and derives (G4c): a pure module, tested by checkout-return-view.test.ts; its source is read for the contract's sentences. */
 const VIEW = readFileSync("src/lib/public/checkout-return-view.ts", "utf8");
+/** The page-level status region a release speaks through (G4c): always mounted on the séance page, so it survives the revalidation that removes the block. */
+const STATUS = readFileSync("src/components/public/release-status.tsx", "utf8");
 
 const DASH = new RegExp("[" + String.fromCharCode(0x2013, 0x2014) + "]");
 
@@ -27,7 +29,6 @@ test("both components are client components that post a slug and a purchase id a
 
 test("every sentence of the contract is in the source of the block or of its pure module", () => {
   for (const text of [
-    "Paiement interrompu",
     "Libérer votre place ?",
     "La place est rendue aux autres clients et le paiement en cours est annulé.",
     "Libérer ma place",
@@ -37,6 +38,8 @@ test("every sentence of the contract is in the source of the block or of its pur
     assert.ok(RETURN.includes(text), `checkout-return.tsx lacks: ${text}`);
   }
   for (const text of [
+    "Paiement interrompu",
+    "Votre paiement",
     "Votre place est libérée.",
     "Cette réservation n'est plus en attente de paiement.",
     "Votre place a été libérée. Vous pouvez réserver à nouveau.",
@@ -54,13 +57,22 @@ test("every sentence of the contract is in the source of the block or of its pur
   }
 });
 
-test("the release is confirmed first and a success ends on the block heading (WCAG 2.4.3)", () => {
+test("the release is confirmed first and a success ends on a heading that stays (WCAG 2.4.3)", () => {
   for (const source of [RETURN, HOLDS]) {
     assert.match(source, /<ConfirmDialog[\s\S]*?returnFocusTo=\{returnFocus\}/);
     assert.match(source, /tabIndex=\{-1\}/, "the heading can take the focus");
-    assert.match(source, /opener\.current = heading\.current;/, "a success points the dialog's focus restore at the heading");
     assert.equal(source.split("opener.current = ").length - 1, 2, "two writes: the button that opens the dialog, then the heading");
   }
+  // PendingHolds stays mounted after a release, so its own heading is the target. The block may be removed by the
+  // revalidation (the Owner's own pending purchase is gone once released): it hands the focus to the séance heading, which
+  // the page always renders, and falls back to its own heading where the page has none (G4c).
+  assert.match(HOLDS, /opener\.current = heading\.current;/, "a success points the dialog's focus restore at the heading");
+  assert.match(RETURN, /opener\.current = afterReleaseTarget\(heading\.current\);/);
+  assert.match(
+    RETURN,
+    /function afterReleaseTarget\(own: HTMLElement \| null\): HTMLElement \| null \{\s*return document\.getElementById\(SEANCE_HEADING_ID\) \?\? own;\s*\}/,
+  );
+  assert.match(RETURN, /import \{[^}]*\bSEANCE_HEADING_ID\b[^}]*\} from "@\/lib\/public\/seance-copy";/);
   // The button that opened the dialog, written by the click handler itself (G4b: a bare « opener.current = » matched any write).
   assert.match(RETURN, /function ask\(e: React\.MouseEvent<HTMLButtonElement>\) \{\s*opener\.current = e\.currentTarget;/);
   assert.match(RETURN, /onClick=\{ask\}/);
@@ -68,6 +80,39 @@ test("the release is confirmed first and a success ends on the block heading (WC
   assert.match(HOLDS, /onClick=\{\(e\) => ask\(h, e\.currentTarget\)\}/);
   assert.match(RETURN, /RELEASE_CONFIRM/);
   assert.match(RETURN, /onConfirm=\{release\}/);
+});
+
+test("the block's heading follows its view, and its status line is the page's, not its own (G4c)", () => {
+  assert.match(RETURN, /\{returnHeadingOf\(view\)\}\s*<\/h2>/);
+  assert.doesNotMatch(RETURN, /Paiement interrompu/, "the heading text is the module's");
+  assert.doesNotMatch(RETURN, /role="status"/, "one live region per release: the page-level one, which survives the block");
+  assert.match(RETURN, /<div className="space-y-1 text-sm">\s*\{text !== null && <p>\{text\}<\/p>\}\s*<\/div>/);
+});
+
+test("a release speaks through the page-level region, even when the revalidation removed the block before the answer came back (G4c)", () => {
+  // The line is emptied at the start of each release (the `announce(null)` rule of CancelBookingButton): two releases in a
+  // row say the same sentence, and a region whose text did not change announces nothing.
+  assert.match(RETURN, /setError\(null\);\s*announceRelease\(""\);\s*startTransition\(async \(\) => \{/);
+  assert.match(RETURN, /announceRelease\(releaseOutcomeText\(res\.outcome\)\);/);
+  assert.match(RETURN, /import \{ announceRelease \} from "@\/components\/public\/release-status";/);
+  // The answer can arrive after the block went (the Server Action applies the new page first): then nothing restores the
+  // focus the dialog held, so the component does, once, and only then.
+  assert.match(RETURN, /const alive = useRef\(true\);/);
+  assert.match(RETURN, /useEffect\(\(\) => \{\s*alive\.current = true;\s*return \(\) => \{\s*alive\.current = false;\s*\};\s*\}, \[\]\);/);
+  assert.match(RETURN, /if \(!alive\.current\) opener\.current\?\.focus\(\);/);
+});
+
+test("the release status region is one always-mounted status line that clears itself, and only the blocks speak through it (G4c)", () => {
+  assert.match(STATUS, /^"use client";/);
+  assert.match(STATUS, /<p role="status" className="sr-only">\{text\}<\/p>/, "always rendered, read by screen readers only (the notice above the form is the visible line)");
+  assert.match(STATUS, /useSyncExternalStore\(store\.subscribe, store\.get, \(\) => ""\)/);
+  assert.match(STATUS, /export function announceRelease\(text: string\): void \{\s*store\.set\(text\);\s*\}/);
+  // A stale line from an earlier page never shows on the next: it is cleared when the region mounts and when it goes.
+  assert.match(STATUS, /useEffect\(\(\) => \{\s*store\.set\(""\);\s*return \(\) => store\.set\(""\);\s*\}, \[\]\);/);
+  for (const source of [STATUS]) {
+    assert.doesNotMatch(source, DASH);
+    assert.doesNotMatch(source, /console\./);
+  }
 });
 
 test("the components never touch the router, never log and never mention an address", () => {
@@ -107,6 +152,15 @@ test("read-only (an impersonating admin, G4b): no « Reprendre le paiement », n
   assert.match(RETURN, /returnTextOf\(\{ view, kind, resumeUrl, holdUntilLabel, readOnly \}\)/);
 });
 
+test("PendingHolds empties its line before each release, so two releases in a row are both announced (G4c)", () => {
+  const at = HOLDS.indexOf("function release()");
+  const run = HOLDS.indexOf("startTransition(async", at);
+  assert.ok(at !== -1 && run > at, "release() is found");
+  const start = HOLDS.slice(at, run);
+  assert.match(start, /setNotice\(""\);/, "the previous line goes before the await");
+  assert.ok(HOLDS.indexOf("setNotice(releaseOutcomeText(") > run, "and the new one is set after it");
+});
+
 test("PendingHolds renders nothing without a hold and without a line, and keeps its heading while a line shows", () => {
   assert.match(HOLDS, /if \(rows\.length === 0 && notice === ""\) return null;/);
   assert.match(HOLDS, /const rows = holds\.filter\(\(h\) => !gone\.includes\(h\.purchaseId\)\);/);
@@ -114,7 +168,6 @@ test("PendingHolds renders nothing without a hold and without a line, and keeps 
 });
 
 test("the live regions are always mounted", () => {
-  assert.match(RETURN, /<div role="status" className="[^"]*">/);
   assert.match(HOLDS, /<p role="status" className=\{notice \? "[^"]*" : "sr-only"\}>/);
 });
 

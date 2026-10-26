@@ -10,6 +10,7 @@ import { OccurrenceBooking } from "@/components/public/occurrence-booking";
 import { OwnerPreviewBanner } from "@/components/public/owner-preview-banner";
 import { PendingHolds } from "@/components/public/pending-holds";
 import { PublicShell } from "@/components/public/public-shell";
+import { ReleaseStatus } from "@/components/public/release-status";
 import { WalletPanel } from "@/components/public/wallet-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -197,6 +198,8 @@ export default async function SeancePage({ params, searchParams }: Props) {
         </div>
       )}
 
+      {/* Always rendered, whatever the page shows: what a release said survives the revalidation that removes the block below (G4c). */}
+      <ReleaseStatus />
       {paymentReturn.block && (
         <div className="mb-6">
           <CheckoutReturn key={paymentReturn.block.purchaseId} {...paymentReturn.block} />
@@ -231,7 +234,7 @@ export default async function SeancePage({ params, searchParams }: Props) {
           {paymentReturn.ended === "cancelled" && <Notice>{COPY.ENDED_CANCELLED}</Notice>}
           {paymentReturn.ended === "expired" && <Notice>{COPY.ENDED_EXPIRED}</Notice>}
           <OccurrenceBooking
-            key={`${visitor.state}:${usable !== null ? "spend" : "buy"}`}
+            key={`${visitor.state}:${usable !== null ? "spend" : "buy"}:${refView?.purchaseId ?? ""}`}
             slug={pro.slug}
             occurrenceId={detail.occurrenceId}
             seenStartsAt={detail.startsAt.toISOString()}

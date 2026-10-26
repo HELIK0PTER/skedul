@@ -140,6 +140,23 @@ test("the séance page mounts the payment block for the reference or the Owner's
   assert.match(page, /getLivePendingHolds\(pro\.professionalId, owner\.customerId, now\)/, "the holds of the Owner's own customer at this pro");
 });
 
+test("the séance page mounts the release status once, outside every condition, above the payment block (G4c)", () => {
+  const page = seancePage();
+  assert.equal(inCode(page, /<ReleaseStatus \/>/g).length, 1);
+  assert.match(page, /^\s*<ReleaseStatus \/>\r?$/m, "on its own line, with no && or ternary around it: it must survive the revalidation that removes the block");
+  assert.ok(page.indexOf("<ReleaseStatus />") < page.indexOf("<CheckoutReturn"), "mounted before the block it speaks for");
+  assert.match(seance(), /import \{ ReleaseStatus \} from "@\/components\/public\/release-status";/);
+});
+
+test("the booking form starts over when the page's reference changes, so an old refusal never sits beside a new payment block (G4c)", () => {
+  const page = seancePage();
+  assert.match(
+    page,
+    /<OccurrenceBooking\s+key=\{`\$\{visitor\.state\}:\$\{usable !== null \? "spend" : "buy"\}:\$\{refView\?\.purchaseId \?\? ""\}`\}/,
+    "the visitor, the mode and the reference the URL names (the validated one, so a junk p changes nothing)",
+  );
+});
+
 test("an impersonating admin sees the payment block read-only and no Checkout URL on the séance and offer pages; merci has no payment control (G4b, G4c)", () => {
   // The holds list is already out of reach: it mounts under `visitor.owner &&` (pinned above) and an impersonated session
   // has no Owner (identity.db.test.ts, « resolveVisitor (S2, S42): an impersonated session has no owner… »).

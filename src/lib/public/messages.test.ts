@@ -220,7 +220,7 @@ test("COPY holds every fixed client sentence, word for word", () => {
     PLAIN_NAME: "Prénom et nom : n'indiquez que votre nom.",
     TEST_PAYMENT_LINE: "Paiement de test : aucun montant n'a été débité.",
     ENDED_CANCELLED: "Votre inscription est annulée.",
-    ENDED_EXPIRED: "Votre réservation a expiré.",
+    ENDED_EXPIRED: "Votre place n'est plus réservée.",
     PENDING_HOLDS_TITLE: "Paiements en attente",
     CONFIRM_EMAIL_FIRST: "Confirmez votre adresse pour voir vos réservations.",
     NO_UPCOMING: "Aucune inscription à venir.",

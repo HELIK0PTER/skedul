@@ -11,6 +11,7 @@ import {
   checkoutBlockOf,
   paymentReturnOf,
   releaseOutcomeText,
+  returnHeadingOf,
   returnTextOf,
   returnViewOf,
   type OwnerFacts,
@@ -228,6 +229,22 @@ test("the view and the sentence follow the state of the purchase", () => {
   assert.equal(returnTextOf({ ...args, kind: "shop", view: pending }), "Votre achat n'est pas payé.");
 });
 
+test("the heading follows the view: a payment that went through or is on its way is not « interrompu » (G4c)", () => {
+  for (const v of ["pending", "expired", "released", "ended"] as const) assert.equal(returnHeadingOf(v), "Paiement interrompu", v);
+  for (const v of ["paid", "processing"] as const) assert.equal(returnHeadingOf(v), "Votre paiement", v);
+  // The cancel URL of a PAID purchase: « Votre paiement » above « Paiement reçu », never « Paiement interrompu » above it.
+  const paid = returnViewOf({ status: "paid", processing: false, outcome: null });
+  assert.equal(returnHeadingOf(paid), "Votre paiement");
+  assert.equal(returnTextOf({ view: paid, kind: "buybook", resumeUrl: null, holdUntilLabel: null, readOnly: false }), "Paiement reçu");
+  // A payment the bank is confirming, on a cancel URL.
+  assert.equal(returnHeadingOf(returnViewOf({ status: "pending", processing: true, outcome: null })), "Votre paiement");
+  // A release that finds the payment turns the block into the paid / processing one, heading included.
+  assert.equal(returnHeadingOf(returnViewOf({ status: "pending", processing: false, outcome: "paid" })), "Votre paiement");
+  assert.equal(returnHeadingOf(returnViewOf({ status: "pending", processing: false, outcome: "processing" })), "Votre paiement");
+  // A release that gave the seat back keeps the seat's heading.
+  assert.equal(returnHeadingOf(returnViewOf({ status: "pending", processing: false, outcome: "released" })), "Paiement interrompu");
+});
+
 test("a release made here wins over the props, and its sentence follows it", () => {
   const args = { kind: "buybook", resumeUrl: "https://checkout.test/p1", holdUntilLabel: "19:45", readOnly: false } as const;
   const released = returnViewOf({ status: "pending", processing: false, outcome: "released" });
@@ -260,6 +277,7 @@ test("the release outcome lines are the ones the block and PendingHolds share", 
 test("nothing the module says carries a dash", () => {
   const strings: string[] = [];
   for (const v of ["pending", "paid", "processing", "expired", "released", "ended"] as const) {
+    strings.push(returnHeadingOf(v));
     for (const kind of ["buybook", "shop"] as const) {
       for (const readOnly of [true, false]) {
         const t = returnTextOf({ view: v, kind, resumeUrl: null, holdUntilLabel: "19:45", readOnly });
@@ -267,6 +285,6 @@ test("nothing the module says carries a dash", () => {
       }
     }
   }
-  assert.ok(strings.length > 8);
+  assert.ok(strings.length > 14);
   for (const s of strings) assert.equal(NO_DASH.test(s), false, s);
 });

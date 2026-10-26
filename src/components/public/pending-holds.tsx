@@ -51,6 +51,9 @@ export function PendingHolds({ slug, holds }: { slug: string; holds: PendingHold
     if (target === null || pending) return;
     const hold = target;
     setError(null);
+    // The previous line goes first (the `announce(null)` rule of CancelBookingButton, G3b): « Votre place est libérée. » set
+    // twice in a row is the same value, and an always-mounted status region announces nothing for a text that did not change.
+    setNotice("");
     startTransition(async () => {
       try {
         const res = await abandonCheckoutAction({ slug, purchaseId: hold.purchaseId });
