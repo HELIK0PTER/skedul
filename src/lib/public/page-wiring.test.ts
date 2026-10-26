@@ -11,6 +11,26 @@ import { bodyOf, rawErrorLogs } from "@/test/source-guards";
 
 const source = (path: string): string => readFileSync(path, "utf8");
 
+test("the merci page shows the purchase its ?p= names at this pro, even for a suspended pro, and nothing about its customer", () => {
+  const page = source("src/app/[slug]/merci/page.tsx");
+  assert.equal(page.split('resolvePublicPro(slug, { includeSuspended: true })').length - 1, 2, "the title and the page");
+  assert.match(page, /getPurchaseReference\(pro\.professionalId, p, now\)/);
+  assert.match(page, /if \(reference === null\) notFound\(\);/);
+  assert.match(page, /merciStateOf\(reference, pro\.timezone\)/);
+  assert.doesNotMatch(page, /currentPublicVisitor|\bgetSession\(|cookies\(/, "no identity is read: the reference is the capability");
+  assert.doesNotMatch(page, /\bcustomerId\b|reference\.customerId/, "a page never reads the customer of a purchase");
+  assert.doesNotMatch(page, /unstable_cache|"use cache"|export const revalidate/);
+});
+
+test("the merci page is noindex, sends no referrer, titles itself without personal data and refreshes only a pending state", () => {
+  const page = source("src/app/[slug]/merci/page.tsx");
+  assert.match(page, /title: `Confirmation · \$\{resolved\.pro\.businessName\}`, robots: \{ index: false \}, referrer: "no-referrer"/);
+  assert.match(page, /<MerciRefresher key=\{state\.kind\} active=\{state\.kind === "pending"\} \/>/);
+  assert.match(page, /aria-live="polite"/);
+  assert.match(page, /const testLine = paid && !reference\.livemode;/);
+  assert.match(page, /COPY\.TEST_PAYMENT_LINE/);
+});
+
 test("the offer page reads the offer of the slug's pro and says so when it is no longer sold (L1458-1459)", () => {
   const page = source("src/app/[slug]/offre/[offerId]/page.tsx");
   assert.match(page, /getOfferPage\(resolved\.pro\.professionalId, offerId\)/);
