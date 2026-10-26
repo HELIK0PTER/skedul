@@ -145,9 +145,10 @@ export default async function SeancePage({ params, searchParams }: Props) {
   const ended = booked === null ? (ownerFacts?.ended ?? refEnded) : null;
 
   let checkout: ComponentProps<typeof CheckoutReturn> | null = null;
-  // The block never promises a seat that is gone. A hold that ended, or a booking that is no longer pending while the
-  // purchase waits for its Checkout session to expire (an expired booking; one the pro cancelled, alone or with the whole
-  // séance), is shown as expired; a cancelled booking leaves no block at all, the page says COPY.ENDED_CANCELLED below.
+  // The block never promises a seat that is gone. A hold that ended, or an expired booking on a purchase still pending, is
+  // shown as expired; a booking the pro cancelled (alone or with the whole séance) leaves no block at all, whether its
+  // purchase is still pending or already expired (releasePurchase leaves a cancelled booking cancelled): the page says
+  // COPY.ENDED_CANCELLED below (refEnded), or the state card of a cancelled séance.
   const seatGone = returnView === null ? null : seatGoneOf(returnView, now);
   if (returnView !== null && seatGone !== "cancelled") {
     const holdEnd = returnView.holdExpiresAt === null ? null : new Date(returnView.holdExpiresAt);

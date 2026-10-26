@@ -284,6 +284,24 @@ test("seatGoneOf: a booking the pro cancelled is a seat gone while the purchase 
   assert.equal(seatGoneOf(view({ ...cancelled, holdExpiresAt: HOLD_ENDED }), SEAT_NOW), "cancelled", "cancelled wins over a lapsed hold");
 });
 
+test("seatGoneOf: a cancelled booking stays « cancelled » once the purchase expired (the steady state after the expiry webhook)", () => {
+  // releasePurchase only turns a PENDING booking into expired: the booking the pro cancelled stays cancelled while the
+  // purchase moves pending -> expired, so the cancel URL must keep saying COPY.ENDED_CANCELLED, not « réserver à nouveau ».
+  assert.equal(seatGoneOf(view({ status: "expired", booking: ON_O1("cancelled") }), SEAT_NOW), "cancelled");
+  assert.equal(seatGoneOf(view({ status: "expired", booking: ON_O1("cancelled"), holdExpiresAt: HOLD_ENDED }), SEAT_NOW), "cancelled");
+  assert.equal(seatGoneOf(view({ status: "expired", booking: ON_O1("cancelled"), holdExpiresAt: HOLD_LIVE }), SEAT_NOW), "cancelled");
+});
+
+test("seatGoneOf: an expired purchase otherwise says it itself, and a payment on its way still wins", () => {
+  assert.equal(seatGoneOf(view({ status: "expired", booking: ON_O1("expired") }), SEAT_NOW), null);
+  assert.equal(seatGoneOf(view({ status: "expired", booking: ON_O1("pending"), holdExpiresAt: HOLD_ENDED }), SEAT_NOW), null);
+  assert.equal(seatGoneOf(view({ status: "expired", processing: true, booking: ON_O1("cancelled") }), SEAT_NOW), null, "E10: a late payment is fulfilled from expired, the webhook decides");
+});
+
+test("seatGoneOf: a paid purchase is never judged by the seat, even with a cancelled booking", () => {
+  assert.equal(seatGoneOf(view({ status: "paid", booking: ON_O1("cancelled") }), SEAT_NOW), null);
+});
+
 test("seatGoneOf: an expired booking is a seat gone, whatever the hold end says", () => {
   assert.equal(seatGoneOf(view({ booking: ON_O1("expired"), holdExpiresAt: HOLD_LIVE }), SEAT_NOW), "expired");
   assert.equal(seatGoneOf(view({ booking: ON_O1("expired"), holdExpiresAt: null }), SEAT_NOW), "expired");

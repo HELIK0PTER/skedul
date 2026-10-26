@@ -59,6 +59,8 @@ test("the séance page never promises a seat that is gone: seatGoneOf decides, a
   assert.match(page, /const status = seatGone === "expired" \? "expired" : returnView\.status;/);
   assert.doesNotMatch(page, /\blapsed\b/, "one rule, in visibility.ts, not a second copy on the page");
   assert.match(page, /\{checkout === null && ended === "cancelled" && <Notice>\{COPY\.ENDED_CANCELLED\}<\/Notice>\}/);
+  // Whatever the purchase status says (pending, or expired once the webhook ran), a cancelled booking is « cancelled ».
+  assert.match(page, /refView\.booking\.status === "cancelled"\s*\? "cancelled"/);
 });
 
 test("/[slug] reads the visitor through currentPublicVisitor (fresh session), never the cached session, and is never cached", () => {

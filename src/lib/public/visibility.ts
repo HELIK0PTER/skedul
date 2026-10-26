@@ -97,17 +97,21 @@ export function canSeePrivateSeance(a: {
 export type PageBooking = { status: "pending" | "confirmed"; via: "owner" | "reference" } | null;
 
 /**
- * Whether the seat behind a pending buy + book purchase is gone although its Checkout session may still be open, so that
- * the payment block never promises it (Task 28). Two ways: the hold ended (a seat counts as free from `hold_expires_at`,
- * Decision 31, even before the nightly sweep; no readable hold end holds nothing), or the booking is no longer pending
- * (the pro cancelled it or the whole séance, the sweep expired it) while the purchase waits for the expiry webhook, up to
- * 31 minutes in mock mode. `"cancelled"` wins over a lapsed hold: the page then says COPY.ENDED_CANCELLED instead of the
- * « réserver à nouveau » of an expired hold. A payment on its way (`processing`: the webhook decides), a settled purchase
- * and a shop purchase (no seat) are never judged by the seat.
+ * Whether the seat behind a buy + book purchase is gone, so that the payment block never promises it (Task 28). The
+ * booking the pro cancelled (alone or with the whole séance) is `"cancelled"` for as long as the purchase is not paid and
+ * no payment is on its way: while it is still pending (its Checkout session stays open until the expiry webhook, up to 31
+ * minutes in mock mode) AND once it has expired (`releasePurchase` only expires a PENDING booking, the cancelled one stays
+ * cancelled), so the page says COPY.ENDED_CANCELLED in both windows, never the « réserver à nouveau » of an expired hold.
+ * For a PENDING purchase only, the seat is also gone when the booking expired (the sweep) or when the hold ended (a seat
+ * counts as free from `hold_expires_at`, Decision 31, even before the nightly sweep; no readable hold end holds nothing):
+ * `"expired"`. An expired purchase with a booking that is not cancelled already says so through its status. A payment on
+ * its way (`processing`: the webhook decides, a late payment is fulfilled from `expired`), a paid purchase and a shop
+ * purchase (no seat) are never judged by the seat.
  */
 export function seatGoneOf(ref: ReferenceView, now: Date): "cancelled" | "expired" | null {
-  if (ref.status !== "pending" || ref.processing || ref.booking === null) return null;
+  if (ref.processing || ref.booking === null || ref.status === "paid") return null;
   if (ref.booking.status === "cancelled") return "cancelled";
+  if (ref.status !== "pending") return null;
   if (ref.booking.status === "expired") return "expired";
   const holdEnd = ref.holdExpiresAt === null ? null : new Date(ref.holdExpiresAt).getTime();
   return holdEnd !== null && holdEnd > now.getTime() ? null : "expired";
