@@ -11,6 +11,45 @@ import { bodyOf, rawErrorLogs } from "@/test/source-guards";
 
 const source = (path: string): string => readFileSync(path, "utf8");
 
+test("the séance page reads a ?p= reference only on paiement=annule, only through the slug's pro and referenceForPage (Decision 71)", () => {
+  const page = source("src/app/[slug]/seance/[occurrenceId]/page.tsx");
+  assert.match(page, /one\(query\.paiement\) === "annule" \? one\(query\.p\) : undefined/);
+  assert.match(page, /getPurchaseReference\(pro\.professionalId, referenceId, now\)/);
+  assert.equal(page.split("referenceForPage(").length - 1, 2, "the reference of the URL and the Owner's own pending purchase");
+  assert.match(page, /seanceViewerOf\(\{ visitor, reference: refView \}\)/);
+  assert.ok(page.indexOf("referenceForPage(") < page.indexOf("seanceViewerOf("), "the viewer is derived after the reference");
+  assert.doesNotMatch(page, /\bgetSession\(/, "the fresh session through currentPublicVisitor only");
+  assert.doesNotMatch(page, /\b(customerId|ownerUserId|userId|bookingId|owner)=\{/, "no identity, no booking id and no row in a prop");
+  assert.doesNotMatch(page, /\b(reference|returnView|refView)\??\.customerId/, "a page never reads the customer of a purchase");
+});
+
+test("a private séance is also shown to the reference whose booking is on it, through the same gate", () => {
+  const page = source("src/app/[slug]/seance/[occurrenceId]/page.tsx");
+  assert.match(
+    page,
+    /canSeePrivateSeance\(\{ isPageOwner: visitor\.isPageOwner, viewer, customerHasActiveBooking: facts\?\.booking != null \}\)/,
+  );
+  assert.match(page, /referrer: "no-referrer"/, "the URL may carry p");
+  assert.match(page, /robots: \{ index: false \}/, "a private, archived or foreign séance is never indexed");
+});
+
+test("the séance page mounts the payment block for the reference or the Owner's pending purchase, and the holds for an Owner only", () => {
+  const page = source("src/app/[slug]/seance/[occurrenceId]/page.tsx");
+  assert.match(page, /<CheckoutReturn key=\{checkout\.purchaseId\} \{\.\.\.checkout\} \/>/);
+  assert.match(page, /\{visitor\.owner && \(\s*<div[^>]*>\s*<PendingHolds slug=\{pro\.slug\} holds=\{holdRows\} \/>/);
+  assert.match(page, /\.filter\(\(h\) => h\.purchaseId !== returnView\?\.purchaseId\)/, "the purchase shown by the block is not listed twice");
+  assert.match(page, /merciHref: `\/\$\{pro\.slug\}\/merci\?p=\$\{encodeURIComponent\(returnView\.purchaseId\)\}`/);
+  assert.match(page, /getLivePendingHolds\(pro\.professionalId, owner\.customerId, now\)/, "the holds of the Owner's own customer at this pro");
+});
+
+test("the séance page never lets a personal-link cookie hide the form or receive a purchase", () => {
+  const page = source("src/app/[slug]/seance/[occurrenceId]/page.tsx");
+  assert.match(page, /const guestBooked = customerViewer\?\.source === "guest" && facts\?\.booking != null;/);
+  assert.match(page, /\{guestBooked && <Notice>\{COPY\.GUEST_BOOKING_EXISTS\}<\/Notice>\}/);
+  assert.match(page, /const ownerFacts = customerViewer\?\.source === "owner" \? facts : null;/);
+  assert.match(page, /if \(ownerFacts\?\.booking\) booked = \{ status: ownerFacts\.booking\.status, via: "owner" \};/, "a guest fact never becomes a booked state");
+});
+
 const HOME = source("src/app/[slug]/page.tsx");
 
 test("/[slug] reads the visitor through currentPublicVisitor (fresh session), never the cached session, and is never cached", () => {
