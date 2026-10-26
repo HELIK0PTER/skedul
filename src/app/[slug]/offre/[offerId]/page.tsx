@@ -90,6 +90,9 @@ export default async function OfferPage({ params, searchParams }: Props) {
   const reference = referenceId ? await getPurchaseReference(pro.professionalId, referenceId, now) : null;
   const refView = referenceForPage(reference, { kind: "offer", offerId }, visitor.owner);
   let checkout: ComponentProps<typeof CheckoutReturn> | null = null;
+  // An admin impersonating someone has no client identity (Decision 19): the block is read-only and the Checkout URL
+  // stays on the server (G4b).
+  const readOnly = visitor.state === "impersonating";
   if (refView !== null) {
     checkout = {
       slug,
@@ -97,9 +100,10 @@ export default async function OfferPage({ params, searchParams }: Props) {
       kind: refView.kind,
       status: refView.status,
       processing: refView.processing,
-      resumeUrl: refView.status === "pending" ? refView.resumeUrl : null,
+      resumeUrl: !readOnly && refView.status === "pending" ? refView.resumeUrl : null,
       holdUntilLabel: null,
       merciHref: `/${slug}/merci?p=${encodeURIComponent(refView.purchaseId)}`,
+      readOnly,
     };
   }
 

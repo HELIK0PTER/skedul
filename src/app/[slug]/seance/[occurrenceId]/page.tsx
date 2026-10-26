@@ -150,6 +150,9 @@ export default async function SeancePage({ params, searchParams }: Props) {
   // purchase is still pending or already expired (releasePurchase leaves a cancelled booking cancelled): the page says
   // COPY.ENDED_CANCELLED below (refEnded), or the state card of a cancelled séance.
   const seatGone = returnView === null ? null : seatGoneOf(returnView, now);
+  // An admin impersonating someone has no client identity (Decision 19): the block shows the state of the reference's
+  // purchase, without « Reprendre le paiement » or « Libérer ma place », and the Checkout URL stays on the server (G4b).
+  const readOnly = visitor.state === "impersonating";
   if (returnView !== null && seatGone !== "cancelled") {
     const holdEnd = returnView.holdExpiresAt === null ? null : new Date(returnView.holdExpiresAt);
     const live = holdLive(returnView.holdExpiresAt);
@@ -160,9 +163,10 @@ export default async function SeancePage({ params, searchParams }: Props) {
       kind: returnView.kind,
       status,
       processing: returnView.processing,
-      resumeUrl: status === "pending" ? returnView.resumeUrl : null,
+      resumeUrl: !readOnly && status === "pending" ? returnView.resumeUrl : null,
       holdUntilLabel: status === "pending" && live && holdEnd !== null ? formatTime(holdEnd, pro.timezone) : null,
       merciHref: `/${pro.slug}/merci?p=${encodeURIComponent(returnView.purchaseId)}`,
+      readOnly,
     };
   }
   // The purchase the payment block already shows is not listed twice.

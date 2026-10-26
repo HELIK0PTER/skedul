@@ -21,6 +21,8 @@ export const RELEASE_CONFIRM: ConfirmCopy = {
 
 const RELEASED_TEXT = "Votre place est libérée.";
 const ENDED_TEXT = "Cette réservation n'est plus en attente de paiement.";
+/** Under a pending purchase an impersonating admin may look at but not act on (no client identity, SEC-M6, G4b). */
+const READ_ONLY_TEXT = "Ce paiement ne peut être ni repris ni libéré quand vous êtes connecté en tant que ce compte.";
 
 /** The line a release outcome leaves on the page (the action never fulfils: « Paiement reçu » only points to merci, Decision 33). */
 export function releaseOutcomeText(outcome: AbandonOutcome): string {
@@ -49,7 +51,13 @@ function viewOf(a: { status: "pending" | "paid" | "expired"; processing: boolean
 }
 
 /** The sentence under the heading (null: nothing to say, e.g. a pending hold whose end the page could not read). */
-function textOf(a: { view: View; kind: "buybook" | "shop"; resumeUrl: string | null; holdUntilLabel: string | null }): string | null {
+function textOf(a: {
+  view: View;
+  kind: "buybook" | "shop";
+  resumeUrl: string | null;
+  holdUntilLabel: string | null;
+  readOnly: boolean;
+}): string | null {
   switch (a.view) {
     case "paid":
       return COPY.PAYMENT_RECEIVED;
@@ -63,7 +71,8 @@ function textOf(a: { view: View; kind: "buybook" | "shop"; resumeUrl: string | n
       return a.kind === "buybook" ? "Votre place a été libérée. Vous pouvez réserver à nouveau." : "Ce paiement n'a pas abouti.";
     case "pending":
       if (a.kind === "shop") return "Votre achat n'est pas payé.";
-      if (a.resumeUrl === null) return "La page de paiement a expiré. Vous pouvez libérer votre place maintenant.";
+      // Read-only, the page passes no Checkout URL: the block says how long the seat is held, never that it can be released.
+      if (a.resumeUrl === null && !a.readOnly) return "La page de paiement a expiré. Vous pouvez libérer votre place maintenant.";
       return a.holdUntilLabel === null ? null : `Votre place est gardée jusqu'à ${a.holdUntilLabel}.`;
   }
 }
@@ -72,7 +81,9 @@ function textOf(a: { view: View; kind: "buybook" | "shop"; resumeUrl: string | n
  * The return from a Checkout page (spec L1099-1104, L1163-1168, Decisions 13, 31, 32, 33): shown for the `?p=` reference's
  * own purchase or the Owner's own pending booking, never for a guest cookie nor any other purchase id (Decisions 63, 71).
  * « Reprendre le paiement » only while the Checkout session is open (`resumeUrl`); « Libérer ma place » (buy + book only)
- * asks first, then lets the server decide: it never releases a paid, processing or unverifiable purchase.
+ * asks first, then lets the server decide: it never releases a paid, processing or unverifiable purchase. `readOnly` (an
+ * admin impersonating someone, who has no client identity) shows the state without either control, and the core refuses
+ * the release anyway (G4b).
  */
 export function CheckoutReturn({
   slug,
@@ -83,6 +94,7 @@ export function CheckoutReturn({
   resumeUrl,
   holdUntilLabel,
   merciHref,
+  readOnly,
 }: {
   slug: string;
   purchaseId: string;
@@ -92,6 +104,7 @@ export function CheckoutReturn({
   resumeUrl: string | null;
   holdUntilLabel: string | null;
   merciHref: string;
+  readOnly: boolean;
 }) {
   const headingId = useId();
   const heading = useRef<HTMLHeadingElement>(null);
@@ -104,7 +117,7 @@ export function CheckoutReturn({
   const [pending, startTransition] = useTransition();
 
   const view = viewOf({ status, processing, outcome });
-  const text = textOf({ view, kind, resumeUrl, holdUntilLabel });
+  const text = textOf({ view, kind, resumeUrl, holdUntilLabel, readOnly });
   const canRelease = kind === "buybook";
 
   function ask(e: React.MouseEvent<HTMLButtonElement>) {
@@ -159,7 +172,8 @@ export function CheckoutReturn({
             <Link href={merciHref}>Voir la confirmation</Link>
           </Button>
         )}
-        {view === "pending" && (
+        {view === "pending" && readOnly && <p className="text-sm text-zinc-600">{READ_ONLY_TEXT}</p>}
+        {view === "pending" && !readOnly && (
           <div className="flex flex-col gap-2 sm:flex-row">
             {resumeUrl !== null && (
               <Button asChild className="w-full sm:w-auto">

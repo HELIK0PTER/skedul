@@ -7,7 +7,8 @@
  * with no booking (a shop purchase) is not found: there is no seat to give
  * back. The core never fulfils (the webhook is the fulfilment path) and never
  * releases what may be paid: it asks Stripe first and releases nothing it
- * cannot prove unpaid. No `server-only`, no env, no process db.
+ * cannot prove unpaid. An impersonating admin is refused right after the parse
+ * (no client identity, SEC-M6). No `server-only`, no env, no process db.
  */
 import { z } from "zod";
 
@@ -45,6 +46,11 @@ export async function abandonCheckoutCore(
 
   const vars = { businessName: pro.businessName };
   const notFound = () => fromEngineClient({ ok: false, code: "not_found" }, "release", vars);
+
+  // An admin impersonating someone is a visitor with no client identity (no Owner, no guest cookie, SEC-M6): a reference
+  // never lets the admin act on a client's payment, even one bought from the impersonated address (G4b). Refused on the
+  // session alone, before any read, throttle key or Stripe call, whatever else the visitor carries.
+  if (visitor.session?.impersonated) return notFound();
 
   const ref = await purchaseByReference(db, pro.professionalId, parsed.data.purchaseId, now);
   if (!ref) return notFound();

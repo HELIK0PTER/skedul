@@ -118,6 +118,26 @@ test("the séance page mounts the payment block for the reference or the Owner's
   assert.match(page, /getLivePendingHolds\(pro\.professionalId, owner\.customerId, now\)/, "the holds of the Owner's own customer at this pro");
 });
 
+test("an impersonating admin sees the payment block read-only and no Checkout URL on the séance and offer pages; merci has no payment control (G4b)", () => {
+  // The holds list is already out of reach: it mounts under `visitor.owner &&` (pinned above) and an impersonated session
+  // has no Owner (identity.db.test.ts, « resolveVisitor (S2, S42): an impersonated session has no owner… »).
+  for (const [page, view, status] of [
+    [seancePage(), "returnView", "status"],
+    [source("src/app/[slug]/offre/[offerId]/page.tsx"), "refView", "refView.status"],
+  ] as const) {
+    assert.equal((page.match(/const readOnly = visitor\.state === "impersonating";/g) ?? []).length, 1);
+    const at = page.indexOf("checkout = {");
+    assert.notEqual(at, -1);
+    const block = page.slice(at, page.indexOf("};", at));
+    assert.match(block, /^\s*readOnly,\r?$/m, "the block is told");
+    const resume = new RegExp(`resumeUrl: !readOnly && ${status.replace(".", "\\.")} === "pending" \\? ${view}\\.resumeUrl : null,`);
+    assert.match(block, resume, "the Checkout URL never reaches an impersonating admin's browser");
+    assert.equal((page.match(/\.resumeUrl\b/g) ?? []).length, 1, "the only read of the Checkout URL is the gated one");
+  }
+  const merci = source("src/app/[slug]/merci/page.tsx");
+  assert.doesNotMatch(merci, /resumeUrl|abandonCheckoutAction|CheckoutReturn|PendingHolds|Reprendre le paiement|Libérer/, "merci only links to the espace and the page");
+});
+
 test("the séance page never lets a personal-link cookie hide the form or receive a purchase", () => {
   const page = source("src/app/[slug]/seance/[occurrenceId]/page.tsx");
   assert.match(page, /const guestBooked = customerViewer\?\.source === "guest" && facts\?\.booking != null;/);

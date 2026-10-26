@@ -78,6 +78,20 @@ test("a shop purchase can only be resumed, never released (Decision 13)", () => 
   assert.match(RETURN, /\{canRelease && \(/);
 });
 
+test("read-only (an impersonating admin, G4b): no « Reprendre le paiement », no « Libérer ma place », one sentence that says why", () => {
+  assert.match(RETURN, /^\s*readOnly: boolean;\r?$/m, "a required prop: every page decides it");
+  assert.equal((RETURN.match(/\{view === "pending" && /g) ?? []).length, 2, "the two pending blocks: the buttons and the read-only line");
+  assert.match(RETURN, /\{view === "pending" && !readOnly && \(\s*<div className="flex flex-col gap-2 sm:flex-row">/, "the buttons only when not read-only");
+  assert.match(RETURN, /\{view === "pending" && readOnly && <p className="text-sm text-zinc-600">\{READ_ONLY_TEXT\}<\/p>\}/);
+  assert.match(
+    RETURN,
+    /const READ_ONLY_TEXT = "Ce paiement ne peut être ni repris ni libéré quand vous êtes connecté en tant que ce compte\.";/,
+  );
+  // The page passes no resumeUrl when read-only: the sentence that invites a release must not show instead.
+  assert.match(RETURN, /if \(a\.resumeUrl === null && !a\.readOnly\) return "La page de paiement a expiré\. Vous pouvez libérer votre place maintenant\.";/);
+  assert.match(RETURN, /textOf\(\{ view, kind, resumeUrl, holdUntilLabel, readOnly \}\)/);
+});
+
 test("PendingHolds renders nothing without a hold and without a line, and keeps its heading while a line shows", () => {
   assert.match(HOLDS, /if \(rows\.length === 0 && notice === ""\) return null;/);
   assert.match(HOLDS, /const rows = holds\.filter\(\(h\) => !gone\.includes\(h\.purchaseId\)\);/);

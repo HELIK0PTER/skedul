@@ -422,6 +422,35 @@ dbTest("E11 abandon: an Owner who is not the purchase's customer gets not found,
   assert.deepEqual(fake.closed, [held.sessionId]);
 });
 
+dbTest("E11 abandon: an admin impersonating the purchase's own address releases nothing, whatever else the visitor carries (G4b, SEC-M6)", async ({ db, pro }) => {
+  const held = await heldSeat(db, pro);
+  const fake = fakeCheckout();
+  const ipHash = testIpHash();
+  const scope = { pro, ipHash, emails: [held.email] };
+  const throttleBefore = await releaseThrottleRows(db, scope);
+  // The session of the address that bought the seat, read while an admin impersonates it: no client identity (resolveVisitor
+  // gives it no Owner and no guest cookie). The core refuses it on the session alone, so a visitor built wrongly (an Owner
+  // or a cookie of the purchase's own customer) is refused too.
+  const session = sessionOf({ userId: "user-impersonated", email: held.email }, { verified: true, impersonated: true });
+  const owner = { professionalId: pro.proId, customerId: held.customerId, userId: "user-impersonated", email: held.email };
+  for (const [label, visitor] of [
+    ["as resolveVisitor builds it", { session, ipHash }],
+    ["with the purchase's customer as Owner", { session, owner, ipHash }],
+    ["with a planted cookie of the purchase's customer", { session, guestCustomerId: held.customerId, ipHash }],
+  ] as const) {
+    assertNotFound(await abandon(db, pro, visitor, { purchaseId: held.purchaseId }, fake));
+    await assertStillHeld(db, held, label);
+  }
+  assert.deepEqual(fake.closed, [], "no closeForRelease: the Checkout session stays open");
+  assert.deepEqual(fake.expired, [], "no session expired");
+  assert.deepEqual(await releaseThrottleRows(db, scope), throttleBefore, "refused before any throttle key");
+
+  // The same reference still works for the visitor it was given to (a signed-out browser holding ?p=).
+  const res = await abandon(db, pro, { ipHash }, { purchaseId: held.purchaseId }, fake);
+  assert.ok(res.ok, JSON.stringify(res));
+  assert.equal(res.outcome, "released");
+});
+
 dbTest("E11 abandon: a malformed input is refused whole, in French, with no gateway call, no write and no throttle key consumed (S43)", async ({ db, pro }) => {
   const held = await heldSeat(db, pro);
   const fake = fakeCheckout();
