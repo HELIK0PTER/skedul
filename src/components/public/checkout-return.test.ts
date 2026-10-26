@@ -53,8 +53,13 @@ test("the release is confirmed first and a success ends on the block heading (WC
     assert.match(source, /<ConfirmDialog[\s\S]*?returnFocusTo=\{returnFocus\}/);
     assert.match(source, /tabIndex=\{-1\}/, "the heading can take the focus");
     assert.match(source, /opener\.current = heading\.current;/, "a success points the dialog's focus restore at the heading");
-    assert.match(source, /opener\.current = /, "the opener is written in an event handler");
+    assert.equal(source.split("opener.current = ").length - 1, 2, "two writes: the button that opens the dialog, then the heading");
   }
+  // The button that opened the dialog, written by the click handler itself (G4b: a bare « opener.current = » matched any write).
+  assert.match(RETURN, /function ask\(e: React\.MouseEvent<HTMLButtonElement>\) \{\s*opener\.current = e\.currentTarget;/);
+  assert.match(RETURN, /onClick=\{ask\}/);
+  assert.match(HOLDS, /function ask\(hold: PendingHold, button: HTMLButtonElement\) \{\s*opener\.current = button;/);
+  assert.match(HOLDS, /onClick=\{\(e\) => ask\(h, e\.currentTarget\)\}/);
   assert.match(RETURN, /RELEASE_CONFIRM/);
   assert.match(RETURN, /onConfirm=\{release\}/);
 });

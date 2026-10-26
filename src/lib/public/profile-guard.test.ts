@@ -8,6 +8,7 @@
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { posix } from "node:path";
 import test from "node:test";
 
 import { codeView, sourceFilesUnder } from "@/test/source-guards";
@@ -32,11 +33,44 @@ function isClientSource(source: string): boolean {
   return /^(?:\s*(?:\/\/[^\n]*|\/\*[\s\S]*?\*\/))*\s*["']use client["']/.test(source);
 }
 
-/** Why this client source could hold or receive the professional's row; empty when it cannot. */
-function profileLeaksOf(source: string): string[] {
+/**
+ * The `@/` form of a module specifier written in the file at `path`: an alias stays as it is, a relative specifier is
+ * resolved against the file's folder (`../../server/queries` from `src/components/public/a.tsx` is `@/server/queries`),
+ * without a `.ts` / `.tsx` extension or an `/index` tail; a package, or a path that leaves `src`, is null (G4b).
+ */
+function aliasOf(specifier: string, path: string): string | null {
+  let target: string;
+  if (specifier.startsWith("@/")) target = specifier;
+  else if (specifier.startsWith("./") || specifier.startsWith("../")) {
+    const resolved = posix.normalize(posix.join(posix.dirname(path), specifier));
+    if (!resolved.startsWith("src/")) return null;
+    target = `@/${resolved.slice("src/".length)}`;
+  } else return null;
+  return target.replace(/\.(?:tsx?|jsx?)$/, "").replace(/\/index$/, "");
+}
+
+/** Every module specifier of a source: static imports and re-exports (`from "x"`), side-effect imports, dynamic `import("x")`. */
+function specifiersOf(source: string): string[] {
+  return [
+    ...[...source.matchAll(/\bfrom\s+["']([^"']+)["']/g)].map((m) => m[1]),
+    ...[...source.matchAll(/^\s*import\s+["']([^"']+)["']/gm)].map((m) => m[1]),
+    ...[...source.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g)].map((m) => m[1]),
+  ];
+}
+
+/**
+ * Why this client source could hold or receive the professional's row; empty when it cannot. `path` (repository
+ * relative, forward slashes) resolves its relative specifiers: one rule whatever the spelling of the import (G4b). The
+ * server modules a client component may import are its Server Actions (`@/server/public`, `@/server/pro`, ...) and the
+ * types of `@/server/support-queries`, so the refused list names the read modules, not the whole folder.
+ */
+function profileLeaksOf(source: string, path = "src/components/x.tsx"): string[] {
   const leaks: string[] = [];
-  for (const m of source.matchAll(/\bfrom\s+["']([^"']+)["']/g)) {
-    if (SERVER_ONLY_SPECIFIERS.includes(m[1])) leaks.push(`imports ${m[1]}`);
+  for (const specifier of specifiersOf(source)) {
+    const alias = aliasOf(specifier, path);
+    if (alias !== null && SERVER_ONLY_SPECIFIERS.includes(alias)) {
+      leaks.push(alias === specifier ? `imports ${specifier}` : `imports ${specifier} (${alias})`);
+    }
   }
   const named = PRIVATE_NAMES.exec(codeView(source));
   if (named) leaks.push(`names ${named[1]}`);
@@ -48,6 +82,35 @@ test("the guard can fail: it names an import of the profile modules and a privat
   assert.deepEqual(profileLeaksOf('"use client";\nimport { db } from "@/lib/db/schema";'), ["imports @/lib/db/schema"]);
   assert.deepEqual(profileLeaksOf('"use client";\nexport function A({ stripeAccountId }: { stripeAccountId: string }) { return null; }'), ["names stripeAccountId"]);
   assert.deepEqual(profileLeaksOf('"use client";\nconst x = props.ownerUserId;'), ["names ownerUserId"]);
+});
+
+test("the guard resolves a relative specifier and reads a dynamic import or a re-export, whatever the spelling (G4b)", () => {
+  const at = "src/components/public/leaf.tsx";
+  assert.deepEqual(profileLeaksOf('"use client";\nimport { x } from "../../server/public-queries";', at), [
+    "imports ../../server/public-queries (@/server/public-queries)",
+  ]);
+  assert.deepEqual(profileLeaksOf('"use client";\nimport type { A } from "../../lib/public/context.ts";', at), [
+    "imports ../../lib/public/context.ts (@/lib/public/context)",
+  ]);
+  assert.deepEqual(profileLeaksOf('"use client";\nimport { r } from "./profile-reads";', "src/lib/public/leaf.tsx"), [
+    "imports ./profile-reads (@/lib/public/profile-reads)",
+  ]);
+  assert.deepEqual(profileLeaksOf('"use client";\nconst m = await import("@/server/queries");', at), ["imports @/server/queries"]);
+  assert.deepEqual(profileLeaksOf('"use client";\nconst m = await import( "../../server/client-queries" );', at), [
+    "imports ../../server/client-queries (@/server/client-queries)",
+  ]);
+  assert.deepEqual(profileLeaksOf('"use client";\nexport { db } from "@/lib/db/schema";', at), ["imports @/lib/db/schema"]);
+  assert.deepEqual(profileLeaksOf('"use client";\nimport "../../server/public-context";', at), [
+    "imports ../../server/public-context (@/server/public-context)",
+  ]);
+  // A Server Action module, a sibling component and a package stay allowed, however they are spelt.
+  assert.deepEqual(
+    profileLeaksOf(
+      '"use client";\nimport { a } from "../../server/public";\nimport { B } from "./b";\nimport { useState } from "react";\nconst c = await import("../ui/button");',
+      at,
+    ),
+    [],
+  );
 });
 
 test("the guard lets a client component through that takes picked strings and prose that names the columns", () => {
@@ -79,7 +142,7 @@ test("no client component imports the professional's public row, its projection 
     "the public client leaves are among them",
   );
   for (const path of clients) {
-    assert.deepEqual(profileLeaksOf(readFileSync(path, "utf8")), [], `${path} holds or receives the professional's row`);
+    assert.deepEqual(profileLeaksOf(readFileSync(path, "utf8"), path), [], `${path} holds or receives the professional's row`);
   }
 });
 

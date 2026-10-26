@@ -7,9 +7,21 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { bodyOf, rawErrorLogs } from "@/test/source-guards";
+import { bodyOf, codeView, openingTags, rawErrorLogs } from "@/test/source-guards";
 
 const source = (path: string): string => readFileSync(path, "utf8");
+
+/** The matches of `re` (global) in `text` that start in code: one in a comment or inside a string literal is not counted (G4b). */
+function inCode(text: string, re: RegExp): string[] {
+  const code = codeView(text);
+  return [...text.matchAll(re)].filter((m) => code[m.index ?? 0] !== " ").map((m) => m[0]);
+}
+
+test("inCode counts code only: a comment or a string that spells the rule is not the rule (G4b)", () => {
+  const text = 'const a = x.source === "owner";\n// x.source === "owner"\nconst s = "source === owner";';
+  assert.deepEqual(inCode(text, /source === "owner"/g), ['source === "owner"']);
+  assert.deepEqual(inCode(text, /source === owner/g), [], "inside a string literal");
+});
 
 test("the merci page shows the purchase its ?p= names at this pro, even for a suspended pro, and nothing about its customer", () => {
   const page = source("src/app/[slug]/merci/page.tsx");
@@ -169,8 +181,11 @@ test("/[slug]: the wallet is the Owner's, everybody else gets the bar, and no ro
   const wallet = HOME.indexOf("<WalletPanel");
   assert.notEqual(wallet, -1, "the wallet panel is rendered");
   assert.match(HOME.slice(Math.max(0, wallet - 160), wallet), /visitor\.owner && space/, "only for an Owner with a space");
-  assert.match(HOME, /<VisitorBar[\s\S]*?hasGuestSpace=\{visitor\.guestCustomerId !== null\}/);
-  assert.doesNotMatch(HOME, /<VisitorBar[^>]*\bemail=/, "the bar gets no address: the confirmation banner is the page's");
+  // The whole tag, read with the brace-aware scan: an arrow function in an earlier prop never ends it early (G4b).
+  const bars = openingTags(HOME, "VisitorBar");
+  assert.equal(bars.length, 1, "one bar");
+  assert.match(bars[0].text, /\shasGuestSpace=\{visitor\.guestCustomerId !== null\}/);
+  assert.doesNotMatch(bars[0].text, /\b(?:email|name)=/, "the bar gets no address and no name: the confirmation banner is the page's");
   assert.doesNotMatch(HOME, /\b(ownerUserId|userId|customerId|stripeAccountId|owner)=\{/, "no identity or row in a prop");
 });
 
@@ -257,9 +272,21 @@ test("the visitor facts are read for a customer viewer only (an Owner or a guest
 
 test("a guest cookie never makes a booking « booked » and never hides the form: a notice shows above it instead (Decision 63)", () => {
   const page = seancePage();
-  assert.match(page, /source === "guest"/);
-  assert.match(page, /source === "owner"/, "a booked state comes from the Owner's own facts");
-  assert.match(page, /COPY\.GUEST_BOOKING_EXISTS/);
+  // Each source test is counted in code, once, on the line that gives it its meaning (a comment that spells it is not it, G4b).
+  assert.equal(inCode(page, /const ownerFacts = customerViewer\?\.source === "owner" \? facts : null;/g).length, 1);
+  assert.equal(inCode(page, /\bsource === "owner"/g).length, 1, "the Owner's facts are told apart once");
+  assert.equal(inCode(page, /const guestBooked = customerViewer\?\.source === "guest" && facts\?\.booking != null;/g).length, 1);
+  assert.equal(inCode(page, /\bsource === "guest"/g).length, 1);
+  assert.equal(inCode(page, /\bguestBooked\b/g).length, 2, "defined, then read by the notice only");
+  assert.match(page, /\{guestBooked && <Notice>\{COPY\.GUEST_BOOKING_EXISTS\}<\/Notice>\}/);
+  // `booked` is built from the Owner's facts and the reference, never from `facts` itself (a guest fact): three assignments.
+  const start = page.indexOf("let booked: PageBooking = null;");
+  const end = page.indexOf("const refEnded", start);
+  assert.ok(start !== -1 && end > start, "the derivation sits between its declaration and refEnded");
+  const derivation = page.slice(start, end);
+  assert.deepEqual(inCode(derivation, /\bfacts\b/g), [], "no guest fact reaches `booked`");
+  assert.equal(inCode(derivation, /\bbooked = \{/g).length, 3, "the Owner's booking, a confirmed reference, a live pending reference");
+  assert.equal(inCode(page, /\bbooked = /g).length, 3, "and nowhere else");
 });
 
 test("the séance metadata never reads the viewer: a private, archived or RDV séance carries the business name only (SEC-M10)", () => {
@@ -330,4 +357,40 @@ test("/[slug] takes one clock per request and hands it to every read and every v
   assert.match(body, /getNextSeanceStart\(pro, now, now\)/);
   assert.match(body, /toPublicSeanceVM\(s, pro\.slug, now, tz\)/);
   assert.match(body, /todayKey: todayKey\(now, tz\)/);
+});
+
+/** The props on a JSX element that would hand it the pro's projection or row whole: `pro=`, `profile=`, or a spread of them. */
+const WHOLE_PRO = /\b(?:pro|profile)=\{|\{\s*\.\.\.\s*(?:pro|profile|loaded|resolved)\b/;
+
+/** Every opening tag of a JSX source, whatever its name (the brace-aware scan of `openingTags`, G4b). */
+function allTags(text: string): { name: string; text: string }[] {
+  const names = new Set([...codeView(text).matchAll(/<([A-Za-z][\w.]*)(?=[\s/>])/g)].map((m) => m[1]));
+  return [...names].flatMap((name) => openingTags(text, name).map((t) => ({ name, text: t.text })));
+}
+
+test("the pro-detecting scan sees a whole-pro prop on any element, after an arrow function too, and lets picked props through (G4b)", () => {
+  const leaks = (jsx: string) => allTags(jsx).filter((t) => WHOLE_PRO.test(t.text)).map((t) => t.name);
+  assert.deepEqual(leaks("<A onX={() => 1} pro={pro} />"), ["A"]);
+  assert.deepEqual(leaks("<B.C profile={profile.pro} />"), ["B.C"]);
+  assert.deepEqual(leaks("<D {...pro} />\n<E { ...profile } />\n<F {...loaded} />"), ["D", "E", "F"]);
+  assert.deepEqual(leaks('<G slug={pro.slug} businessName={pro.businessName} branding={branding} {...checkout} />'), []);
+  assert.deepEqual(leaks("// <H pro={pro} />\nconst s = '<I pro={pro} />';"), [], "a comment or a string is not markup");
+});
+
+test("no element of the public pages receives the pro whole: pro=, profile= and their spreads are refused (G4b)", () => {
+  // The [slug] layout renders no markup (it returns its children), so it has nothing to scan.
+  for (const path of [
+    "src/app/[slug]/page.tsx",
+    "src/app/[slug]/seance/[occurrenceId]/page.tsx",
+    "src/app/[slug]/offre/[offerId]/page.tsx",
+    "src/app/[slug]/merci/page.tsx",
+  ]) {
+    const tags = allTags(source(path));
+    assert.ok(tags.length > 0, `${path}: the scan reads its markup`);
+    assert.deepEqual(
+      tags.filter((t) => WHOLE_PRO.test(t.text)).map((t) => t.text),
+      [],
+      `${path} hands the pro whole to an element`,
+    );
+  }
 });

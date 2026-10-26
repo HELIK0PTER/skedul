@@ -26,7 +26,15 @@ test("an impersonating admin and an unverified user see nothing from the bar: no
   // Deviation from the brief (Task 25b report): a banner held by the bar was unmounted by the verified link row once
   // the code was accepted, so « Adresse confirmée. » was never announced. The page mounts it once, outside the swap.
   assert.doesNotMatch(SOURCE, /VerifyEmailBanner|verify-email-banner/);
-  assert.doesNotMatch(SOURCE, /\bemail\b/, "the bar takes no address");
+  // Scoped to the props (G4b): what the bar takes is its parameter list and its type, so a comment that says « email »
+  // fails nothing, and any new prop (an address, a name) fails this list.
+  const props = /export function VisitorBar\(\{([^}]*)\}: \{([^}]*)\}\) \{/.exec(SOURCE);
+  assert.ok(props, "the props are destructured with an inline type");
+  const names = props[1].split(",").map((s) => s.trim()).filter(Boolean);
+  const typed = [...props[2].matchAll(/(\w+)\??:/g)].map((m) => m[1]);
+  const expected = ["state", "slug", "returnTo", "googleEnabled", "hasGuestSpace"];
+  assert.deepEqual(names, expected, "the bar takes no address");
+  assert.deepEqual(typed, expected, "and its type declares no other prop");
 });
 
 test("the labels come from the shared copy and « Mon espace » leads to the espace of this pro", () => {

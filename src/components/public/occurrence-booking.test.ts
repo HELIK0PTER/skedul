@@ -7,6 +7,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { openingTags } from "@/test/source-guards";
+
 const SOURCE = readFileSync("src/components/public/occurrence-booking.tsx", "utf8");
 
 test("buy + book posts the slug, the séance, the chosen offer, the typed identity, the answers and the honeypot, never a price", () => {
@@ -37,6 +39,15 @@ test("the offers are a fieldset with a legend; an offer that does not cover the 
 
 test("the pay button shows its price, then the pending label, and is disabled while pending", () => {
   assert.match(SOURCE, /\{pending \? COPY\.PENDING_PAY : payLabel\(offer, p\.currency\)\}/);
+  // BuyForm is private (`bodyOf` reads exports only): its source runs from its declaration to the next top-level one (G4b).
+  const start = SOURCE.indexOf("\nfunction BuyForm(");
+  assert.notEqual(start, -1, "BuyForm is declared at the top level");
+  const next = SOURCE.slice(start + 1).search(/\n(?:export |function |const |async function )/);
+  const buy = next === -1 ? SOURCE.slice(start) : SOURCE.slice(start, start + 1 + next);
+  const submits = openingTags(buy, "Button").filter((t) => /\stype="submit"/.test(t.topLevel));
+  assert.equal(submits.length, 1, "one submit button in BuyForm");
+  assert.match(submits[0].text, /\sdisabled=\{pending\}/, "a second click while the Checkout session starts does nothing");
+  assert.match(buy, /\{pending \? COPY\.PENDING_PAY : payLabel\(offer, p\.currency\)\}/, "the label is BuyForm's own");
   assert.match(SOURCE, /<TestPaymentsBanner mode=\{p\.testMode\} \/>/);
   assert.match(SOURCE, /\{p\.testMode && <TestPaymentsBanner/);
 });
