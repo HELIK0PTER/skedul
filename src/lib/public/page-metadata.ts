@@ -11,13 +11,12 @@ export function notFoundMetadata(): Metadata {
 }
 
 /**
- * The offer page. No page (an unknown slug, an unknown offer or another pro's: the page answers notFound()) gets the
- * 404's metadata, never the business name; an offer on sale is « {label} · {business} »; an offer the Boutique no longer
- * sells is the business name, not indexed (the page says so and leads back to the Boutique). The referrer is never sent.
+ * The offer page. Only an offer on sale is titled, « {label} · {business} », and indexable. Every other case gets the
+ * 404's metadata, never the business name (G4b brief, Item 6): an unknown slug, an unknown offer or another pro's (the
+ * page answers notFound()), and an offer the Boutique no longer sells (archived, paused, its type archived: the page
+ * answers « Cette offre n'est plus proposée » and leads back to the Boutique). The referrer is never sent.
  */
 export function offerMetadata(loaded: { pro: { businessName: string }; offer: PublicOfferDetail | null } | null): Metadata {
-  if (!loaded || !loaded.offer) return notFoundMetadata();
-  const { pro, offer } = loaded;
-  if (offer.kind === "on_sale") return { title: `${offer.label} · ${pro.businessName}`, referrer: "no-referrer" };
-  return { title: pro.businessName, referrer: "no-referrer", robots: { index: false } };
+  if (loaded?.offer?.kind !== "on_sale") return notFoundMetadata();
+  return { title: `${loaded.offer.label} · ${loaded.pro.businessName}`, referrer: "no-referrer" };
 }

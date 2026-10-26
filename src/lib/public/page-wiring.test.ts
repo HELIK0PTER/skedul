@@ -362,7 +362,7 @@ test("the [slug] layout refuses a segment that is no slug before any read, then 
   assert.doesNotMatch(body, /\.suspended|publicPageExists|getPublicProfile|resolvePublicPro/, "a suspended pro still exists here (merci keeps working)");
 });
 
-test("the offer metadata comes from offerMetadata: a page that 404s is titled as the 404 (G4b)", () => {
+test("the offer metadata comes from offerMetadata: a page that 404s or whose offer is no longer sold is titled as the 404 (G4b)", () => {
   const metadata = bodyOf(source("src/app/[slug]/offre/[offerId]/page.tsx"), "generateMetadata");
   assert.match(metadata, /const loaded = await loadOffer\(slug, offerId\);\s*return offerMetadata\(loaded\);/);
   assert.doesNotMatch(codeView(metadata), /businessName|title:/, "no title is built here");

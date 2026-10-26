@@ -23,7 +23,9 @@ test("offerMetadata: an offer on sale is « label · business », indexable, wit
   assert.deepEqual(offerMetadata({ pro, offer: onSale }), { title: "Carnet de 4 · Altinha Paris", referrer: "no-referrer" });
 });
 
-test("offerMetadata: an offer no longer sold (archived, paused, its type archived) is the business name, not indexed (G4b)", () => {
-  // The page answers it: « Cette offre n'est plus proposée » and a way back to the Boutique; nothing there to index.
-  assert.deepEqual(offerMetadata({ pro, offer: unavailable }), { title: "Altinha Paris", referrer: "no-referrer", robots: { index: false } });
+test("offerMetadata: an offer no longer sold (archived, paused, its type archived) gets the unknown-slug metadata, never the business name (G4b brief, Item 6)", () => {
+  // The page body says « Cette offre n'est plus proposée » and leads back to the Boutique; its metadata is the 404's, so
+  // an archived offer id and an unknown one carry the same title.
+  assert.deepEqual(offerMetadata({ pro, offer: unavailable }), NOT_FOUND);
+  assert.doesNotMatch(String(offerMetadata({ pro, offer: unavailable }).title), /Altinha Paris/, "no business name");
 });
