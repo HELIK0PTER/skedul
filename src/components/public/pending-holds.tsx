@@ -3,9 +3,10 @@
 import { useCallback, useId, useRef, useState, useTransition } from "react";
 
 import { ConfirmDialog } from "@/components/dashboard/confirm-dialog";
-import { RELEASE_CONFIRM, releaseOutcomeText } from "@/components/public/checkout-return";
+import { RELEASE_CONFIRM } from "@/components/public/checkout-return";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { releaseOutcomeText } from "@/lib/public/checkout-return-view";
 import { COPY } from "@/lib/public/messages";
 import { PUBLIC_UNEXPECTED } from "@/lib/public/result";
 import { abandonCheckoutAction } from "@/server/public";

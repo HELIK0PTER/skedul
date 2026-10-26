@@ -97,6 +97,17 @@ export function canSeePrivateSeance(a: {
 export type PageBooking = { status: "pending" | "confirmed"; via: "owner" | "reference" } | null;
 
 /**
+ * The end of a hold that is still running, else null: THE hold rule, written once (G4c). A seat counts as free from
+ * `hold_expires_at` (Decision 31), even before the nightly sweep, so a hold ending at `now` or earlier is over, and no
+ * readable hold end holds nothing. `seatGoneOf`, the booked state of a reference and the « gardée jusqu'à » line all ask here.
+ */
+export function liveHoldEnd(holdExpiresAt: string | null, now: Date): Date | null {
+  if (holdExpiresAt === null) return null;
+  const end = new Date(holdExpiresAt);
+  return end.getTime() > now.getTime() ? end : null;
+}
+
+/**
  * Whether the seat behind a buy + book purchase is gone, so that the payment block never promises it (Task 28). The
  * booking the pro cancelled (alone or with the whole séance) is `"cancelled"` for as long as the purchase is not paid and
  * no payment is on its way: while it is still pending (its Checkout session stays open until the expiry webhook, up to 31
@@ -113,8 +124,7 @@ export function seatGoneOf(ref: ReferenceView, now: Date): "cancelled" | "expire
   if (ref.booking.status === "cancelled") return "cancelled";
   if (ref.status !== "pending") return null;
   if (ref.booking.status === "expired") return "expired";
-  const holdEnd = ref.holdExpiresAt === null ? null : new Date(ref.holdExpiresAt).getTime();
-  return holdEnd !== null && holdEnd > now.getTime() ? null : "expired";
+  return liveHoldEnd(ref.holdExpiresAt, now) === null ? "expired" : null;
 }
 
 export type SeancePageMode =

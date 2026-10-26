@@ -10,6 +10,8 @@ import test from "node:test";
 
 const RETURN = readFileSync("src/components/public/checkout-return.tsx", "utf8");
 const HOLDS = readFileSync("src/components/public/pending-holds.tsx", "utf8");
+/** What the block says and derives (G4c): a pure module, tested by checkout-return-view.test.ts; its source is read for the contract's sentences. */
+const VIEW = readFileSync("src/lib/public/checkout-return-view.ts", "utf8");
 
 const DASH = new RegExp("[" + String.fromCharCode(0x2013, 0x2014) + "]");
 
@@ -23,12 +25,18 @@ test("both components are client components that post a slug and a purchase id a
   }
 });
 
-test("every sentence of the contract is in the source of the block", () => {
+test("every sentence of the contract is in the source of the block or of its pure module", () => {
   for (const text of [
     "Paiement interrompu",
     "Libérer votre place ?",
     "La place est rendue aux autres clients et le paiement en cours est annulé.",
     "Libérer ma place",
+    "Reprendre le paiement",
+    "Voir la confirmation",
+  ]) {
+    assert.ok(RETURN.includes(text), `checkout-return.tsx lacks: ${text}`);
+  }
+  for (const text of [
     "Votre place est libérée.",
     "Cette réservation n'est plus en attente de paiement.",
     "Votre place a été libérée. Vous pouvez réserver à nouveau.",
@@ -36,12 +44,10 @@ test("every sentence of the contract is in the source of the block", () => {
     "Votre achat n'est pas payé.",
     "La page de paiement a expiré. Vous pouvez libérer votre place maintenant.",
     "Votre place est gardée jusqu'à",
-    "Reprendre le paiement",
-    "Voir la confirmation",
     "COPY.PAYMENT_RECEIVED",
     "COPY.PROCESSING",
   ]) {
-    assert.ok(RETURN.includes(text), `checkout-return.tsx lacks: ${text}`);
+    assert.ok(VIEW.includes(text), `checkout-return-view.ts lacks: ${text}`);
   }
   for (const text of ["COPY.PENDING_HOLDS_TITLE", "Place gardée jusqu'à", "Libérer ma place", "RELEASE_CONFIRM", "releaseOutcomeText("]) {
     assert.ok(HOLDS.includes(text), `pending-holds.tsx lacks: ${text}`);
@@ -84,17 +90,21 @@ test("a shop purchase can only be resumed, never released (Decision 13)", () => 
 });
 
 test("read-only (an impersonating admin, G4b): no « Reprendre le paiement », no « Libérer ma place », one sentence that says why", () => {
-  assert.match(RETURN, /^\s*readOnly: boolean;\r?$/m, "a required prop: every page decides it");
+  assert.match(RETURN, /\}: CheckoutReturnProps\) \{/, "the props are the module's type (G4c)");
+  const propsAt = VIEW.indexOf("export type CheckoutReturnProps = {");
+  const props = VIEW.slice(propsAt, VIEW.indexOf("};", propsAt));
+  assert.match(props, /^\s*readOnly: boolean;\r?$/m, "a required prop: every page decides it");
   assert.equal((RETURN.match(/\{view === "pending" && /g) ?? []).length, 2, "the two pending blocks: the buttons and the read-only line");
   assert.match(RETURN, /\{view === "pending" && !readOnly && \(\s*<div className="flex flex-col gap-2 sm:flex-row">/, "the buttons only when not read-only");
   assert.match(RETURN, /\{view === "pending" && readOnly && <p className="text-sm text-zinc-600">\{READ_ONLY_TEXT\}<\/p>\}/);
   assert.match(
-    RETURN,
-    /const READ_ONLY_TEXT = "Ce paiement ne peut être ni repris ni libéré quand vous êtes connecté en tant que ce compte\.";/,
+    VIEW,
+    /export const READ_ONLY_TEXT = "Ce paiement ne peut être ni repris ni libéré quand vous êtes connecté en tant que ce compte\.";/,
   );
-  // The page passes no resumeUrl when read-only: the sentence that invites a release must not show instead.
-  assert.match(RETURN, /if \(a\.resumeUrl === null && !a\.readOnly\) return "La page de paiement a expiré\. Vous pouvez libérer votre place maintenant\.";/);
-  assert.match(RETURN, /textOf\(\{ view, kind, resumeUrl, holdUntilLabel, readOnly \}\)/);
+  assert.match(RETURN, /READ_ONLY_TEXT/);
+  // The page passes no resumeUrl when read-only: the sentence that invites a release must not show instead (a unit case in checkout-return-view.test.ts).
+  assert.match(VIEW, /if \(a\.resumeUrl === null && !a\.readOnly\) return "La page de paiement a expiré\. Vous pouvez libérer votre place maintenant\.";/);
+  assert.match(RETURN, /returnTextOf\(\{ view, kind, resumeUrl, holdUntilLabel, readOnly \}\)/);
 });
 
 test("PendingHolds renders nothing without a hold and without a line, and keeps its heading while a line shows", () => {
@@ -108,8 +118,8 @@ test("the live regions are always mounted", () => {
   assert.match(HOLDS, /<p role="status" className=\{notice \? "[^"]*" : "sr-only"\}>/);
 });
 
-test("no dash and no brand-coloured text in the two components", () => {
-  for (const source of [RETURN, HOLDS]) {
+test("no dash and no brand-coloured text in the two components and their module", () => {
+  for (const source of [RETURN, HOLDS, VIEW]) {
     assert.doesNotMatch(source, DASH);
     assert.doesNotMatch(source, /text-primary([^-a-zA-Z]|$)/);
   }

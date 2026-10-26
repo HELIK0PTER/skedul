@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { cache, type ComponentProps } from "react";
+import { cache } from "react";
 import { MapPin } from "lucide-react";
 
 import { VerifyEmailBanner } from "@/components/dashboard/verify-email-banner";
@@ -17,17 +17,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { formatWhen, formatWhenShort } from "@/lib/back-office/format";
 import { formatTime } from "@/lib/datetime";
 import { env } from "@/lib/env";
+import { ownerPendingPurchaseId, paymentReturnOf } from "@/lib/public/checkout-return-view";
 import { COPY, seatsLeftLabel } from "@/lib/public/messages";
 import { seanceState, stateLabel } from "@/lib/public/planning-view";
 import { BOOKED_CONFIRMED, BOOKED_PENDING, SEE_MY_SPACE, stateLine } from "@/lib/public/seance-copy";
-import {
-  canSeePrivateSeance,
-  referenceForPage,
-  seancePageMode,
-  seanceViewerOf,
-  seatGoneOf,
-  type PageBooking,
-} from "@/lib/public/visibility";
+import { canSeePrivateSeance, referenceForPage, seancePageMode, seanceViewerOf } from "@/lib/public/visibility";
 import { paymentMode } from "@/lib/stripe";
 import { getCustomerSpacePage } from "@/server/client-queries";
 import { resolvePublicPro } from "@/server/public-context";
@@ -115,63 +109,21 @@ export default async function SeancePage({ params, searchParams }: Props) {
   const usable = ownerFacts?.usable ?? null;
   const guestBooked = customerViewer?.source === "guest" && facts?.booking != null;
 
-  // The purchase the payment block describes: the reference of the URL, else the Owner's own pending purchase (its id
-  // comes from her own booking, never from the URL).
-  const ownerPurchaseId = ownerFacts?.booking?.status === "pending" ? ownerFacts.booking.purchaseId : null;
-  const returnView =
-    refView ??
-    (ownerPurchaseId !== null
-      ? referenceForPage(await getPurchaseReference(pro.professionalId, ownerPurchaseId, now), seancePage, owner)
-      : null);
-
-  const holdLive = (iso: string | null): boolean => iso !== null && new Date(iso).getTime() > now.getTime();
-  let booked: PageBooking = null;
-  if (ownerFacts?.booking) booked = { status: ownerFacts.booking.status, via: "owner" };
-  else if (refView?.booking) {
-    if (refView.booking.status === "confirmed") booked = { status: "confirmed", via: "reference" };
-    else if (refView.booking.status === "pending" && refView.status === "pending" && holdLive(refView.holdExpiresAt)) {
-      booked = { status: "pending", via: "reference" };
-    }
-  }
-  const refEnded: "cancelled" | "expired" | null =
-    refView?.booking == null
+  // The Owner's own pending purchase is read once more only when the URL names another one (its id comes from her own
+  // booking, never from the URL). Which purchase the block describes, whether the visitor is booked, the block's props and
+  // the line above the form are one pure derivation (checkout-return-view.ts): the page holds no copy of its rules.
+  // An admin impersonating someone has no client identity (Decision 19): the block is read-only and the Checkout URL
+  // stays on the server (G4b).
+  const ownerPurchaseId = ownerPendingPurchaseId(ownerFacts);
+  const ownerPending =
+    ownerPurchaseId === null || ownerPurchaseId === refView?.purchaseId
       ? null
-      : refView.booking.status === "cancelled"
-        ? "cancelled"
-        : refView.booking.status === "expired" ||
-            (refView.booking.status === "pending" && !refView.processing && !holdLive(refView.holdExpiresAt))
-          ? "expired"
-          : null;
-  const ended = booked === null ? (ownerFacts?.ended ?? refEnded) : null;
-
-  let checkout: ComponentProps<typeof CheckoutReturn> | null = null;
-  // The block never promises a seat that is gone. A hold that ended, or an expired booking on a purchase still pending, is
-  // shown as expired; a booking the pro cancelled (alone or with the whole séance) leaves no block at all, whether its
-  // purchase is still pending or already expired (releasePurchase leaves a cancelled booking cancelled): the page says
-  // COPY.ENDED_CANCELLED below (refEnded), or the state card of a cancelled séance.
-  const seatGone = returnView === null ? null : seatGoneOf(returnView, now);
-  // An admin impersonating someone has no client identity (Decision 19): the block shows the state of the reference's
-  // purchase, without « Reprendre le paiement » or « Libérer ma place », and the Checkout URL stays on the server (G4b).
+      : referenceForPage(await getPurchaseReference(pro.professionalId, ownerPurchaseId, now), seancePage, owner);
   const readOnly = visitor.state === "impersonating";
-  if (returnView !== null && seatGone !== "cancelled") {
-    const holdEnd = returnView.holdExpiresAt === null ? null : new Date(returnView.holdExpiresAt);
-    const live = holdLive(returnView.holdExpiresAt);
-    const status = seatGone === "expired" ? "expired" : returnView.status;
-    checkout = {
-      slug: pro.slug,
-      purchaseId: returnView.purchaseId,
-      kind: returnView.kind,
-      status,
-      processing: returnView.processing,
-      resumeUrl: !readOnly && status === "pending" ? returnView.resumeUrl : null,
-      holdUntilLabel: status === "pending" && live && holdEnd !== null ? formatTime(holdEnd, pro.timezone) : null,
-      merciHref: `/${pro.slug}/merci?p=${encodeURIComponent(returnView.purchaseId)}`,
-      readOnly,
-    };
-  }
+  const paymentReturn = paymentReturnOf({ slug: pro.slug, tz: pro.timezone, now, readOnly, reference: refView, ownerFacts, ownerPending });
   // The purchase the payment block already shows is not listed twice.
   const holdRows = liveHolds
-    .filter((h) => h.purchaseId !== returnView?.purchaseId)
+    .filter((h) => h.purchaseId !== paymentReturn.shownPurchaseId)
     .map((h) => ({
       purchaseId: h.purchaseId,
       title: h.title,
@@ -183,7 +135,7 @@ export default async function SeancePage({ params, searchParams }: Props) {
     state,
     archived: detail.archived,
     isPrivate: detail.isPrivate,
-    booked,
+    booked: paymentReturn.booked,
     mode: detail.bookingMode,
     canSpend: usable !== null,
     coveringOffers: detail.offers.filter((o) => o.covers).length,
@@ -245,9 +197,9 @@ export default async function SeancePage({ params, searchParams }: Props) {
         </div>
       )}
 
-      {checkout && (
+      {paymentReturn.block && (
         <div className="mb-6">
-          <CheckoutReturn key={checkout.purchaseId} {...checkout} />
+          <CheckoutReturn key={paymentReturn.block.purchaseId} {...paymentReturn.block} />
         </div>
       )}
       {visitor.owner && (
@@ -276,8 +228,8 @@ export default async function SeancePage({ params, searchParams }: Props) {
       ) : (
         <>
           {guestBooked && <Notice>{COPY.GUEST_BOOKING_EXISTS}</Notice>}
-          {checkout === null && ended === "cancelled" && <Notice>{COPY.ENDED_CANCELLED}</Notice>}
-          {checkout === null && ended === "expired" && <Notice>{COPY.ENDED_EXPIRED}</Notice>}
+          {paymentReturn.ended === "cancelled" && <Notice>{COPY.ENDED_CANCELLED}</Notice>}
+          {paymentReturn.ended === "expired" && <Notice>{COPY.ENDED_EXPIRED}</Notice>}
           <OccurrenceBooking
             key={`${visitor.state}:${usable !== null ? "spend" : "buy"}`}
             slug={pro.slug}

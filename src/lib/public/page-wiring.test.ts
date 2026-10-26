@@ -123,29 +123,38 @@ test("a private séance is also shown to the reference whose booking is on it, t
 
 test("the séance page mounts the payment block for the reference or the Owner's pending purchase, and the holds for an Owner only", () => {
   const page = source("src/app/[slug]/seance/[occurrenceId]/page.tsx");
-  assert.match(page, /<CheckoutReturn key=\{checkout\.purchaseId\} \{\.\.\.checkout\} \/>/);
+  assert.match(page, /<CheckoutReturn key=\{paymentReturn\.block\.purchaseId\} \{\.\.\.paymentReturn\.block\} \/>/);
   assert.match(page, /\{visitor\.owner && \(\s*<div[^>]*>\s*<PendingHolds slug=\{pro\.slug\} holds=\{holdRows\} \/>/);
-  assert.match(page, /\.filter\(\(h\) => h\.purchaseId !== returnView\?\.purchaseId\)/, "the purchase shown by the block is not listed twice");
-  assert.match(page, /merciHref: `\/\$\{pro\.slug\}\/merci\?p=\$\{encodeURIComponent\(returnView\.purchaseId\)\}`/);
+  assert.match(page, /\.filter\(\(h\) => h\.purchaseId !== paymentReturn\.shownPurchaseId\)/, "the purchase shown by the block is not listed twice");
+  assert.equal(inCode(page, /\bpaymentReturnOf\(/g).length, 1, "the block, the booked state and the ended line come from one derivation (G4c)");
+  assert.match(
+    page,
+    /paymentReturnOf\(\{ slug: pro\.slug, tz: pro\.timezone, now, readOnly, reference: refView, ownerFacts, ownerPending \}\)/,
+    "the pro's zone and the request's one clock",
+  );
+  assert.match(
+    page,
+    /ownerPurchaseId === null \|\| ownerPurchaseId === refView\?\.purchaseId\s*\? null\s*: referenceForPage\(await getPurchaseReference\(pro\.professionalId, ownerPurchaseId, now\), seancePage, owner\)/,
+    "the Owner's own pending purchase, read by the id of her own booking, only when the URL names another one",
+  );
   assert.match(page, /getLivePendingHolds\(pro\.professionalId, owner\.customerId, now\)/, "the holds of the Owner's own customer at this pro");
 });
 
-test("an impersonating admin sees the payment block read-only and no Checkout URL on the séance and offer pages; merci has no payment control (G4b)", () => {
+test("an impersonating admin sees the payment block read-only and no Checkout URL on the séance and offer pages; merci has no payment control (G4b, G4c)", () => {
   // The holds list is already out of reach: it mounts under `visitor.owner &&` (pinned above) and an impersonated session
   // has no Owner (identity.db.test.ts, « resolveVisitor (S2, S42): an impersonated session has no owner… »).
-  for (const [page, view, status] of [
-    [seancePage(), "returnView", "status"],
-    [source("src/app/[slug]/offre/[offerId]/page.tsx"), "refView", "refView.status"],
+  for (const [page, call] of [
+    [seancePage(), /paymentReturnOf\(\{ slug: pro\.slug, tz: pro\.timezone, now, readOnly, reference: refView, ownerFacts, ownerPending \}\)/],
+    [bodyOf(source("src/app/[slug]/offre/[offerId]/page.tsx"), "OfferPage"), /checkoutBlockOf\(refView, \{ slug, tz: pro\.timezone, now, readOnly \}\)/],
   ] as const) {
-    assert.equal((page.match(/const readOnly = visitor\.state === "impersonating";/g) ?? []).length, 1);
-    const at = page.indexOf("checkout = {");
-    assert.notEqual(at, -1);
-    const block = page.slice(at, page.indexOf("};", at));
-    assert.match(block, /^\s*readOnly,\r?$/m, "the block is told");
-    const resume = new RegExp(`resumeUrl: !readOnly && ${status.replace(".", "\\.")} === "pending" \\? ${view}\\.resumeUrl : null,`);
-    assert.match(block, resume, "the Checkout URL never reaches an impersonating admin's browser");
-    assert.equal((page.match(/\.resumeUrl\b/g) ?? []).length, 1, "the only read of the Checkout URL is the gated one");
+    assert.equal(inCode(page, /const readOnly = visitor\.state === "impersonating";/g).length, 1);
+    assert.match(page, call, "the block is told");
+    assert.deepEqual(inCode(page, /\.resumeUrl\b/g), [], "a page never reads the Checkout URL: the pure module hands it over, gated");
   }
+  // The one read of the Checkout URL, in the module, is the gated one (checkout-return-view.test.ts runs it both ways).
+  const blockModule = source("src/lib/public/checkout-return-view.ts");
+  assert.equal(inCode(blockModule, /\bview\.resumeUrl\b/g).length, 1, "the only read of the purchase's Checkout URL");
+  assert.match(blockModule, /resumeUrl: !ctx\.readOnly && status === "pending" \? view\.resumeUrl : null,/, "never to an impersonating admin's browser");
   const merci = source("src/app/[slug]/merci/page.tsx");
   assert.doesNotMatch(merci, /resumeUrl|abandonCheckoutAction|CheckoutReturn|PendingHolds|Reprendre le paiement|Libérer/, "merci only links to the espace and the page");
 });
@@ -155,20 +164,29 @@ test("the séance page never lets a personal-link cookie hide the form or receiv
   assert.match(page, /const guestBooked = customerViewer\?\.source === "guest" && facts\?\.booking != null;/);
   assert.match(page, /\{guestBooked && <Notice>\{COPY\.GUEST_BOOKING_EXISTS\}<\/Notice>\}/);
   assert.match(page, /const ownerFacts = customerViewer\?\.source === "owner" \? facts : null;/);
-  assert.match(page, /if \(ownerFacts\?\.booking\) booked = \{ status: ownerFacts\.booking\.status, via: "owner" \};/, "a guest fact never becomes a booked state");
+  // A guest fact never becomes a booked state: pinned where `booked` is built, with the guest-cookie case below.
 });
 
 const HOME = source("src/app/[slug]/page.tsx");
 
-test("the séance page never promises a seat that is gone: seatGoneOf decides, a cancelled booking leaves no block (Task 28 review)", () => {
-  const page = source("src/app/[slug]/seance/[occurrenceId]/page.tsx");
-  assert.match(page, /const seatGone = returnView === null \? null : seatGoneOf\(returnView, now\);/);
-  assert.match(page, /if \(returnView !== null && seatGone !== "cancelled"\) \{/, "a cancelled booking leaves the Notice, not a block that says « réserver à nouveau »");
-  assert.match(page, /const status = seatGone === "expired" \? "expired" : returnView\.status;/);
-  assert.doesNotMatch(page, /\blapsed\b/, "one rule, in visibility.ts, not a second copy on the page");
-  assert.match(page, /\{checkout === null && ended === "cancelled" && <Notice>\{COPY\.ENDED_CANCELLED\}<\/Notice>\}/);
-  // Whatever the purchase status says (pending, or expired once the webhook ran), a cancelled booking is « cancelled ».
-  assert.match(page, /refView\.booking\.status === "cancelled"\s*\? "cancelled"/);
+test("the séance page never promises a seat that is gone: seatGoneOf decides, in the pure module, for the block AND the line above the form (Task 28 review, G4c)", () => {
+  const page = seancePage();
+  // The page holds no copy of the seat or hold rules: no hold test, no `lapsed`, no second reading of a booking's status.
+  assert.deepEqual(inCode(page, /\b(?:seatGoneOf|liveHoldEnd|holdLive|refEnded|lapsed|returnView|PageBooking)\b/g), [], "one rule, in visibility.ts");
+  assert.deepEqual(inCode(page, /\bnew Date\(/g), [], "the clock is the loader's");
+  assert.deepEqual(inCode(page, /\bbooking\.status\b/g), []);
+  // A cancelled booking leaves the line, not a block that says « réserver à nouveau »; an expired one the block's own words.
+  assert.match(page, /\{paymentReturn\.ended === "cancelled" && <Notice>\{COPY\.ENDED_CANCELLED\}<\/Notice>\}/);
+  assert.match(page, /\{paymentReturn\.ended === "expired" && <Notice>\{COPY\.ENDED_EXPIRED\}<\/Notice>\}/);
+  // The module asks the seat rule twice (the block, and the reason the block is absent) and the hold rule twice (the end time
+  // of the block, and the booked state of a reference); neither is written again with a clock.
+  const derivation = source("src/lib/public/checkout-return-view.ts");
+  assert.equal(inCode(derivation, /\bseatGoneOf\(/g).length, 2);
+  assert.equal(inCode(derivation, /\bliveHoldEnd\(/g).length, 2);
+  assert.deepEqual(inCode(derivation, /\bnew Date\(/g), [], "the hold rule is written in visibility.ts only");
+  assert.deepEqual(inCode(derivation, /\bbooking\.status === "cancelled"/g), [], "the cancelled seat is seatGoneOf's alone");
+  const hold = source("src/lib/public/visibility.ts");
+  assert.equal(inCode(hold, /\.getTime\(\) > now\.getTime\(\)/g).length, 1, "the hold rule, once");
 });
 
 test("/[slug] reads the visitor through currentPublicVisitor (fresh session), never the cached session, and is never cached", () => {
@@ -279,14 +297,24 @@ test("a guest cookie never makes a booking « booked » and never hides the form
   assert.equal(inCode(page, /\bsource === "guest"/g).length, 1);
   assert.equal(inCode(page, /\bguestBooked\b/g).length, 2, "defined, then read by the notice only");
   assert.match(page, /\{guestBooked && <Notice>\{COPY\.GUEST_BOOKING_EXISTS\}<\/Notice>\}/);
-  // `booked` is built from the Owner's facts and the reference, never from `facts` itself (a guest fact): three assignments.
-  const start = page.indexOf("let booked: PageBooking = null;");
-  const end = page.indexOf("const refEnded", start);
-  assert.ok(start !== -1 && end > start, "the derivation sits between its declaration and refEnded");
-  const derivation = page.slice(start, end);
-  assert.deepEqual(inCode(derivation, /\bfacts\b/g), [], "no guest fact reaches `booked`");
-  assert.equal(inCode(derivation, /\bbooked = \{/g).length, 3, "the Owner's booking, a confirmed reference, a live pending reference");
-  assert.equal(inCode(page, /\bbooked = /g).length, 3, "and nowhere else");
+  // The derivation gets the Owner's facts and the reference, never `facts` itself (a guest fact may be among them) ...
+  const at = page.indexOf("paymentReturnOf({");
+  assert.notEqual(at, -1);
+  const call = page.slice(at, page.indexOf("});", at));
+  assert.deepEqual(inCode(call, /\bfacts\b/g), [], "no guest fact reaches the derivation");
+  assert.match(call, /\bownerFacts\b/);
+  assert.deepEqual(inCode(page, /\bbooked = /g), [], "the page assigns no booked state");
+  // ... and `booked` is built there from them alone: three assignments (the Owner's booking, a confirmed reference, a live pending one).
+  const text = source("src/lib/public/checkout-return-view.ts");
+  const start = text.indexOf("let booked: PageBooking = null;");
+  const end = text.indexOf("const block =", start);
+  assert.ok(start !== -1 && end > start, "the derivation sits between its declaration and the block");
+  const derivation = text.slice(start, end);
+  assert.equal(inCode(derivation, /\bbooked = \{/g).length, 3);
+  assert.equal(inCode(text, /\bbooked = /g).length, 3, "and nowhere else");
+  assert.equal(inCode(derivation, /\bvia: "owner"/g).length, 1);
+  assert.match(derivation, /if \(active !== null\) booked = \{ status: active\.status, via: "owner" \};/);
+  assert.match(derivation, /else if \(a\.reference\?\.booking\)/, "a reference only: no other source");
 });
 
 test("the séance metadata never reads the viewer: a private, archived or RDV séance carries the business name only (SEC-M10)", () => {

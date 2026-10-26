@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { cache, type ComponentProps } from "react";
+import { cache } from "react";
 import { Ticket } from "lucide-react";
 
 import { EmptyState } from "@/components/dashboard/empty-state";
@@ -12,6 +12,7 @@ import { PublicShell } from "@/components/public/public-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { plural } from "@/lib/back-office/format";
+import { checkoutBlockOf } from "@/lib/public/checkout-return-view";
 import { COPY, acceptedByLine } from "@/lib/public/messages";
 import { offerMetadata } from "@/lib/public/page-metadata";
 import { referenceForPage } from "@/lib/public/visibility";
@@ -89,23 +90,10 @@ export default async function OfferPage({ params, searchParams }: Props) {
   const referenceId = one(query.paiement) === "annule" ? one(query.p) : undefined;
   const reference = referenceId ? await getPurchaseReference(pro.professionalId, referenceId, now) : null;
   const refView = referenceForPage(reference, { kind: "offer", offerId }, visitor.owner);
-  let checkout: ComponentProps<typeof CheckoutReturn> | null = null;
   // An admin impersonating someone has no client identity (Decision 19): the block is read-only and the Checkout URL
-  // stays on the server (G4b).
+  // stays on the server (G4b). The block's props come from the same pure module as the séance page's (G4c).
   const readOnly = visitor.state === "impersonating";
-  if (refView !== null) {
-    checkout = {
-      slug,
-      purchaseId: refView.purchaseId,
-      kind: refView.kind,
-      status: refView.status,
-      processing: refView.processing,
-      resumeUrl: !readOnly && refView.status === "pending" ? refView.resumeUrl : null,
-      holdUntilLabel: null,
-      merciHref: `/${slug}/merci?p=${encodeURIComponent(refView.purchaseId)}`,
-      readOnly,
-    };
-  }
+  const checkout = refView === null ? null : checkoutBlockOf(refView, { slug, tz: pro.timezone, now, readOnly });
 
   const priceLabel = formatMoney(offer.priceCents, pro.currency);
   const accepted = offer.acceptedBy.length > 0 ? acceptedByLine(offer.acceptedBy) : null;

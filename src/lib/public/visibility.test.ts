@@ -6,6 +6,7 @@ import type { PublicSeanceState } from "./planning-view";
 import type { PurchaseReference } from "./purchase-reads";
 import {
   canSeePrivateSeance,
+  liveHoldEnd,
   referenceForPage,
   seancePageMode,
   seanceViewerOf,
@@ -265,6 +266,13 @@ const SEAT_NOW = new Date("2026-10-12T17:30:00Z");
 const HOLD_LIVE = "2026-10-12T17:45:00.000Z";
 const HOLD_ENDED = "2026-10-12T17:29:59.000Z";
 const ON_O1 = (status: "pending" | "confirmed" | "cancelled" | "expired") => ({ occurrenceId: "o1", status });
+
+test("liveHoldEnd: the hold rule written once: a hold that ends after now is live, at its end instant or before it is not", () => {
+  assert.equal(liveHoldEnd(HOLD_LIVE, SEAT_NOW)?.toISOString(), HOLD_LIVE);
+  assert.equal(liveHoldEnd(HOLD_ENDED, SEAT_NOW), null);
+  assert.equal(liveHoldEnd(SEAT_NOW.toISOString(), SEAT_NOW), null, "a seat counts as free from hold_expires_at (Decision 31)");
+  assert.equal(liveHoldEnd(null, SEAT_NOW), null, "no readable hold end holds nothing");
+});
 
 test("seatGoneOf: a pending buy + book purchase keeps its seat while its hold is live", () => {
   assert.equal(seatGoneOf(view({ holdExpiresAt: HOLD_LIVE, resumeUrl: "https://checkout.test/p1" }), SEAT_NOW), null);
