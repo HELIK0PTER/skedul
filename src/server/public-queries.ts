@@ -8,6 +8,7 @@ import { listBoutique, type BoutiqueType } from "@/lib/public/boutique-reads";
 import { publicPageProfileOfRow, type PublicPageProfile, type PublicPro } from "@/lib/public/context";
 import { getPublicOffer, type PublicOfferDetail } from "@/lib/public/offer-reads";
 import { listPublicSeances, nextPublicSeanceStart, type PublicSeance } from "@/lib/public/planning-reads";
+import { readPublicPage } from "@/lib/public/profile-reads";
 import { purchaseByReference, type PurchaseReference } from "@/lib/public/purchase-reads";
 import {
   getPublicSeance,
@@ -17,27 +18,31 @@ import {
   type PublicSeanceDetail,
   type SeanceVisitorFacts,
 } from "@/lib/public/seance-reads";
-import { getPublicProfile } from "@/server/queries";
 
 /*
  * Server-side readers of the public pages: thin wrappers that bind the db to the testable cores in src/lib/public
  * (planning, boutique, séance, offer, purchase reference). The clock is the page's: it reads `new Date()` once per
  * request and hands that instant to every read that depends on it and to the view functions (`seanceState`,
  * `toPublicSeanceVM`, `planningEmptyState`), so a read and the page never disagree about « now » (G4a,
- * public-queries.test.ts). The pro always comes from the page slug (resolvePublicPro or getPublicPageProfile), never
+ * public-queries.test.ts). The pro always comes from the page slug (resolvePublicPro or getPublicPage), never
  * from input; every client prop is built by the page from picked fields.
  */
 
+/** The pro of a `[slug]` page: a live pro as the page holds it, or the bare fact that it is suspended. */
+export type PublicPage = ({ suspended: false } & PublicPageProfile) | { suspended: true };
+
 /**
- * The pro of the public page `/[slug]` (null for an unknown or suspended pro) as the page holds it: the pro the cores
- * use, the branding fields of the shell and the presentation text, never the professional row (G4a: no Stripe
- * account, no Google calendar, no user id outside `pro.ownerUserId`). Memoized for ONE request only (React `cache`,
- * nothing shared between requests): generateMetadata and the page read the database once. Public data only, no client
- * data.
+ * The one read of the pro behind `/[slug]` (G4b, Item 6; null for an unknown slug): a live pro as the page holds it,
+ * the pro the cores use, the branding fields of the shell and the presentation text, never the professional row (G4a:
+ * no Stripe account, no Google calendar, no user id outside `pro.ownerUserId`); a suspended pro as `{ suspended: true }`
+ * and nothing else. Memoized for ONE request only (React `cache`, nothing shared between requests): the layout (which
+ * only needs the pro to exist, so the thank-you page of a suspended pro still works), generateMetadata and the page
+ * (which take a suspended pro for an unknown one) run one professional query. Public data only, no client data.
  */
-export const getPublicPageProfile = cache(async (slug: string): Promise<PublicPageProfile | null> => {
-  const profile = await getPublicProfile(slug);
-  return profile ? publicPageProfileOfRow(profile.pro) : null;
+export const getPublicPage = cache(async (slug: string): Promise<PublicPage | null> => {
+  const found = await readPublicPage(db, slug);
+  if (!found) return null;
+  return found.suspended ? { suspended: true } : { suspended: false, ...publicPageProfileOfRow(found.row) };
 });
 
 /** The séances of [start, end) the public page lists for this pro (see listPublicSeances). */
@@ -95,6 +100,3 @@ export function getOfferPage(professionalId: string, offerId: string): Promise<P
 export function getPurchaseReference(professionalId: string, purchaseId: string, now: Date): Promise<PurchaseReference | null> {
   return purchaseByReference(db, professionalId, purchaseId, now);
 }
-
-/** True when a pro page exists at this slug, suspended or not, memoized for ONE request (see the layout of the public segment). */
-export const publicPageExists = cache(async (slug: string): Promise<boolean> => (await getPublicProfile(slug, { includeSuspended: true })) !== null);

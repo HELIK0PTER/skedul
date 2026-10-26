@@ -70,7 +70,7 @@ test("the offer page passes the form what a visitor may know of themselves, form
   assert.match(page, /visitor=\{\{ state: visitor\.state, email: visitor\.state === "verified" \? visitor\.email : null, name: visitor\.name \}\}/);
   assert.match(page, /formatMoney\(offer\.priceCents, pro\.currency\)/);
   assert.match(page, /const testMode = payment === "live" \? null : payment;/);
-  assert.match(page, /referrer: "no-referrer"/, "the URL may carry p");
+  assert.match(page, /return offerMetadata\(loaded\);/, "the URL may carry p: offerMetadata never sends the referrer (page-metadata.test.ts)");
   assert.doesNotMatch(page, /\b(customerId|ownerUserId|userId)=\{/, "no identity in a prop");
 });
 
@@ -333,15 +333,39 @@ test("the séance page takes one clock per request: loadSeance reads it once and
   assert.match(page, /getSeanceVisitorFacts\(pro\.professionalId, detail\.occurrenceId, customerViewer, now\)/);
 });
 
-test("/[slug] holds the public projection of the pro, never the professional row (G4a)", () => {
-  assert.match(HOME, /const profile = await getPublicPageProfile\(slug\);/);
-  assert.match(HOME, /const \{ pro, branding, bio \} = profile;/);
+test("/[slug] holds the public projection of the pro, never the professional row (G4a), through the one cached read of the layout (G4b)", () => {
+  const page = bodyOf(HOME, "PublicProfilePage");
+  assert.match(page, /const page = await getPublicPage\(slug\);\s*if \(!page \|\| page\.suspended\) notFound\(\);\s*const \{ pro, branding, bio \} = page;/, "a suspended pro is offline here");
   assert.match(HOME, /<PublicShell branding=\{branding\}>/, "the shell gets the nine branding fields, not the row");
   assert.match(HOME, /\{bio && <p /, "the presentation text comes from the projection");
-  assert.doesNotMatch(HOME, /publicProOfRow|profile\.pro\.(?:bio|headline)|branding=\{profile\.pro\}|\.\.\.profile\.pro/, "the row mapper and the row spread are gone from the page");
+  assert.doesNotMatch(HOME, /publicProOfRow|page\.pro\.(?:bio|headline)|branding=\{page\.pro\}|\.\.\.page\.pro/, "the row mapper and the row spread are gone from the page");
   const metadata = bodyOf(HOME, "generateMetadata");
-  assert.match(metadata, /title: profile\.pro\.businessName/);
-  assert.match(metadata, /description: profile\.branding\.headline \?\? undefined/);
+  assert.match(metadata, /const page = await getPublicPage\(slug\);\s*if \(!page \|\| page\.suspended\) return \{ title: "Page introuvable" \};/);
+  assert.match(metadata, /title: page\.pro\.businessName/);
+  assert.match(metadata, /description: page\.branding\.headline \?\? undefined/);
+  // The layout, generateMetadata and the page share the request-cached getPublicPage: one professional query per render.
+  assert.equal(inCode(HOME, /\bgetPublicPage\(/g).length, 2, "generateMetadata and the page, nothing else");
+  assert.deepEqual(inCode(HOME, /\b(?:getPublicPageProfile|publicPageExists|getPublicProfile|readPublicProfile|resolvePublicPro)\b/g), [], "no second read of the pro");
+});
+
+test("the [slug] layout refuses a segment that is no slug before any read, then reads the pro through the page's cached read (G4b)", () => {
+  const layout = source("src/app/[slug]/layout.tsx");
+  assert.match(layout, /^import \{ SLUG_PARAM_RE \} from "@\/lib\/public\/context";\r?$/m);
+  assert.match(layout, /^import \{ getPublicPage \} from "@\/server\/public-queries";\r?$/m);
+  const body = codeView(bodyOf(layout, "SlugLayout"));
+  const shape = body.indexOf("if (!SLUG_PARAM_RE.test(slug)) notFound();");
+  const read = body.indexOf("if (!(await getPublicPage(slug))) notFound();");
+  assert.ok(shape !== -1, "the shape check is in the layout");
+  assert.ok(read > shape, "and runs before the read: /.env or /wp-login.php costs no query");
+  assert.equal(body.slice(0, shape).split("await").length - 1, 1, "only the params are awaited before the shape check");
+  assert.equal(body.split("await").length - 1, 2, "the params, then the one read");
+  assert.doesNotMatch(body, /\.suspended|publicPageExists|getPublicProfile|resolvePublicPro/, "a suspended pro still exists here (merci keeps working)");
+});
+
+test("the offer metadata comes from offerMetadata: a page that 404s is titled as the 404 (G4b)", () => {
+  const metadata = bodyOf(source("src/app/[slug]/offre/[offerId]/page.tsx"), "generateMetadata");
+  assert.match(metadata, /const loaded = await loadOffer\(slug, offerId\);\s*return offerMetadata\(loaded\);/);
+  assert.doesNotMatch(codeView(metadata), /businessName|title:/, "no title is built here");
 });
 
 test("/[slug] takes one clock per request and hands it to every read and every view function (G4a)", () => {
@@ -360,7 +384,7 @@ test("/[slug] takes one clock per request and hands it to every read and every v
 });
 
 /** The props on a JSX element that would hand it the pro's projection or row whole: `pro=`, `profile=`, or a spread of them. */
-const WHOLE_PRO = /\b(?:pro|profile)=\{|\{\s*\.\.\.\s*(?:pro|profile|loaded|resolved)\b/;
+const WHOLE_PRO = /\b(?:pro|profile)=\{|\{\s*\.\.\.\s*(?:pro|profile|page|loaded|resolved)\b/;
 
 /** Every opening tag of a JSX source, whatever its name (the brace-aware scan of `openingTags`, G4b). */
 function allTags(text: string): { name: string; text: string }[] {
@@ -372,7 +396,7 @@ test("the pro-detecting scan sees a whole-pro prop on any element, after an arro
   const leaks = (jsx: string) => allTags(jsx).filter((t) => WHOLE_PRO.test(t.text)).map((t) => t.name);
   assert.deepEqual(leaks("<A onX={() => 1} pro={pro} />"), ["A"]);
   assert.deepEqual(leaks("<B.C profile={profile.pro} />"), ["B.C"]);
-  assert.deepEqual(leaks("<D {...pro} />\n<E { ...profile } />\n<F {...loaded} />"), ["D", "E", "F"]);
+  assert.deepEqual(leaks("<D {...pro} />\n<E { ...profile } />\n<F {...loaded} />\n<J {...page} />"), ["D", "E", "F", "J"], "page: the cached read of /[slug] (G4b)");
   assert.deepEqual(leaks('<G slug={pro.slug} businessName={pro.businessName} branding={branding} {...checkout} />'), []);
   assert.deepEqual(leaks("// <H pro={pro} />\nconst s = '<I pro={pro} />';"), [], "a comment or a string is not markup");
 });

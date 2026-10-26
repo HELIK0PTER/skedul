@@ -15,8 +15,11 @@ export type ReferrerKind =
 
 const UNTRACKED_PREFIXES = ["/dashboard", "/onboarding", "/admin", "/api", "/_next", "/aide/demandes", "/mon-espace"];
 
-/** Top-level segments that are app routes, never a pro's public slug. */
-const RESERVED_SEGMENTS = new Set([
+/**
+ * Top-level segments that are app routes, never a pro's public slug. Read-only for its readers: the address rules
+ * (src/lib/slug.ts) and the redirects of next.config.ts, which never take one of them for a slug (G4b).
+ */
+export const RESERVED_SEGMENTS: ReadonlySet<string> = new Set([
   "aide",
   "admin",
   "api",

@@ -26,7 +26,7 @@ const SERVER_ONLY_SPECIFIERS = [
 
 /** The names of the projection, its mapper and its readers, and the private columns of the professional row. */
 const PRIVATE_NAMES =
-  /\b(PublicPageProfile|PublicPro|PublicProfileRow|publicProOfRow|publicPageProfileOfRow|getPublicPageProfile|getPublicProfile|readPublicProfile|PUBLIC_PROFILE_COLUMNS|ownerUserId|stripeAccountId|googleCalendarId)\b/;
+  /\b(PublicPageProfile|PublicPage|PublicPageRow|PublicPro|PublicProfileRow|publicProOfRow|publicPageProfileOfRow|getPublicPage|getPublicPageProfile|getPublicProfile|readPublicPage|readPublicProfile|PUBLIC_PROFILE_COLUMNS|ownerUserId|stripeAccountId|googleCalendarId)\b/;
 
 /** True when the source starts with the `"use client"` directive (comments may come first). */
 function isClientSource(source: string): boolean {
@@ -146,10 +146,12 @@ test("no client component imports the professional's public row, its projection 
   }
 });
 
-test("the page profile is built from the selected columns only, and the page reads it through the wrapper (G4a)", () => {
+test("the page profile is built from the selected columns only, and the page reads it through the wrapper (G4a, G4b)", () => {
   const queries = readFileSync("src/server/public-queries.ts", "utf8");
-  assert.match(queries, /export const getPublicPageProfile = cache\(/);
-  assert.match(queries, /publicPageProfileOfRow\(profile\.pro\)/);
+  assert.match(queries, /export const getPublicPage = cache\(/);
+  assert.match(queries, /const found = await readPublicPage\(db, slug\);/, "the tested core");
+  assert.match(queries, /found\.suspended \? \{ suspended: true \} : \{ suspended: false, \.\.\.publicPageProfileOfRow\(found\.row\) \}/);
+  assert.doesNotMatch(queries, /\b(?:getPublicPageProfile|publicPageExists)\b/, "the two reads it replaced are gone");
   const queriesTs = readFileSync("src/server/queries.ts", "utf8");
   assert.match(queriesTs, /readPublicProfile\(db, slug, opts\)/, "getPublicProfile is the thin wrapper of the tested read");
   assert.doesNotMatch(queriesTs.slice(queriesTs.indexOf("export async function getPublicProfile")), /\.select\(\{ pro: professional \}\)/, "no whole-row select");

@@ -6,11 +6,13 @@
  * detection, built into `ownerUserId` by `publicProOfRow`); `publicPageProfileOfRow` (context.ts) drops it from what
  * the page holds, and profile-guard.test.ts keeps the row out of every client component.
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/atomic";
 import { professional, user } from "@/lib/db/schema";
-import { userNotSuspended } from "@/lib/suspension";
+import { userIsSuspended, userNotSuspended } from "@/lib/suspension";
+
+import { SLUG_PARAM_RE } from "./context";
 
 /** The columns of `professional` a public page reads: the select and the type of the row are the same list. */
 export const PUBLIC_PROFILE_COLUMNS = {
@@ -54,3 +56,26 @@ export async function readPublicProfile(
 
 /** One row of PUBLIC_PROFILE_COLUMNS, as the select types it. */
 export type PublicProfileRow = NonNullable<Awaited<ReturnType<typeof readPublicProfile>>>;
+
+/** The pro at a slug as the `[slug]` segment reads it: a live pro's public row, or the bare fact that the pro is suspended. */
+export type PublicPageRow = { suspended: false; row: PublicProfileRow } | { suspended: true };
+
+/**
+ * The one read of the `[slug]` layout and page (G4b, Item 6): the same public row as `readPublicProfile`, and whether
+ * the pro is suspended, in one query without the suspension filter. The layout only needs the pro to exist (a suspended
+ * pro still does: the thank-you page keeps working), the page needs it live; a suspended pro's row is never handed out.
+ * Null for an unknown slug, and without a query for a segment that cannot be a pro address (SLUG_PARAM_RE): Next
+ * resolves the page's generateMetadata alongside the layout, so the layout's own check does not spare that read.
+ */
+export async function readPublicPage(db: Db, slug: string): Promise<PublicPageRow | null> {
+  if (!SLUG_PARAM_RE.test(slug)) return null;
+  const [found] = await db
+    .select({ ...PUBLIC_PROFILE_COLUMNS, suspended: sql<boolean>`${userIsSuspended()}` })
+    .from(professional)
+    .innerJoin(user, eq(user.id, professional.userId))
+    .where(eq(professional.slug, slug))
+    .limit(1);
+  if (!found) return null;
+  const { suspended, ...row } = found;
+  return suspended ? { suspended: true } : { suspended: false, row };
+}

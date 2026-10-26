@@ -32,7 +32,7 @@ import {
   getHorizonNeed,
   getNextSeanceStart,
   getPlanningPage,
-  getPublicPageProfile,
+  getPublicPage,
 } from "@/server/public-queries";
 import { currentPublicVisitor } from "@/server/visitor";
 
@@ -43,9 +43,9 @@ type Props = {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
-  const profile = await getPublicPageProfile(slug);
-  if (!profile) return { title: "Page introuvable" };
-  return { title: profile.pro.businessName, description: profile.branding.headline ?? undefined };
+  const page = await getPublicPage(slug);
+  if (!page || page.suspended) return { title: "Page introuvable" };
+  return { title: page.pro.businessName, description: page.branding.headline ?? undefined };
 }
 
 /**
@@ -56,9 +56,10 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
  */
 export default async function PublicProfilePage({ params, searchParams }: Props) {
   const { slug } = await params;
-  const profile = await getPublicPageProfile(slug);
-  if (!profile) notFound();
-  const { pro, branding, bio } = profile;
+  // The layout's read, from the request cache; a suspended pro is offline here (the layout lets it through for merci).
+  const page = await getPublicPage(slug);
+  if (!page || page.suspended) notFound();
+  const { pro, branding, bio } = page;
   const { semaine, view } = parsePlanningParams(await searchParams);
 
   // The one clock of this request: every read below and every view function takes it, so that a séance the planning

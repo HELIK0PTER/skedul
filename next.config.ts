@@ -1,5 +1,8 @@
 import type { NextConfig } from "next";
 
+// A pure module (no import of its own, no Node API): the config can load it.
+import { RESERVED_SEGMENTS } from "./src/lib/analytics";
+
 /**
  * Public pages refuse framing (SEC-M11, P4 contract § 5 Framing): a pro's page, a séance, an offer, the thank-you page, the espace
  * and /mon-espace must not be embeddable in another site (clickjacking on a form that books or pays). The two headers
@@ -15,8 +18,11 @@ const NOT_API_OR_ASSETS = "(?!(?:api|_next)(?:/|$))[^/]+";
  * A redirect copies the matched segment into its Location header as it came: only a slug-shaped segment (the
  * SLUG_PARAM_RE shape of src/lib/public/context.ts) is ever copied, so no encoded slash, backslash or host can become
  * an open redirect. Any other segment falls through to the page, which encodes it, under the layout that answers 404.
+ * An app route is never a slug (G4b): the lookahead refuses every RESERVED_SEGMENTS entry as a whole segment, so
+ * /api/book/x or /dashboard/pack/x stay on their own routes instead of a 308 to /api or /dashboard, while a slug that
+ * only starts like one (/apiary) is still a slug. Next matches a source without case, so /API/book/x is left alone too.
  */
-const SLUG_SEGMENT = "[a-z0-9-]{1,60}";
+const SLUG_SEGMENT = `(?!(?:${[...RESERVED_SEGMENTS].join("|")})(?:/|$))[a-z0-9-]{1,60}`;
 
 const nextConfig: NextConfig = {
   experimental: {

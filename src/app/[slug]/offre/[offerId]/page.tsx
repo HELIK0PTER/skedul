@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { plural } from "@/lib/back-office/format";
 import { COPY, acceptedByLine } from "@/lib/public/messages";
+import { offerMetadata } from "@/lib/public/page-metadata";
 import { referenceForPage } from "@/lib/public/visibility";
 import { boutiqueHref } from "@/lib/public-anchors";
 import { paymentMode } from "@/lib/stripe";
@@ -42,16 +43,14 @@ const loadOffer = cache(async (slug: string, offerId: string) => {
 });
 
 /**
- * « {label} · {business} » for an offer on sale, the business name when it is no longer sold. The URL may carry `p`
- * (the cancel URL of a Checkout), so the referrer is not sent.
+ * « {label} · {business} » for an offer on sale, the business name (not indexed) when it is no longer sold, the 404's
+ * title when the page answers notFound() (an unknown slug, an unknown or another pro's offer, G4b). The URL may carry
+ * `p` (the cancel URL of a Checkout), so the referrer is not sent (offerMetadata, page-metadata.test.ts).
  */
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug, offerId } = await params;
   const loaded = await loadOffer(slug, offerId);
-  if (!loaded) return { title: "Page introuvable", referrer: "no-referrer", robots: { index: false } };
-  const { pro, offer } = loaded;
-  const title = offer?.kind === "on_sale" ? `${offer.label} · ${pro.businessName}` : pro.businessName;
-  return { title, referrer: "no-referrer" };
+  return offerMetadata(loaded);
 }
 
 /**
