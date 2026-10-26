@@ -11,6 +11,57 @@ import { bodyOf, rawErrorLogs } from "@/test/source-guards";
 
 const source = (path: string): string => readFileSync(path, "utf8");
 
+test("the offer page reads the offer of the slug's pro and says so when it is no longer sold (L1458-1459)", () => {
+  const page = source("src/app/[slug]/offre/[offerId]/page.tsx");
+  assert.match(page, /getOfferPage\(resolved\.pro\.professionalId, offerId\)/);
+  assert.match(page, /if \(!loaded\) notFound\(\);/);
+  assert.match(page, /if \(!offer\) notFound\(\);/);
+  assert.match(page, /offer\.kind === "unavailable"/);
+  assert.match(page, /title=\{COPY\.OFFER_GONE\}/);
+  assert.match(page, /href=\{boutiqueHref\(slug\)\}/);
+  assert.match(page, /COPY\.SEE_SHOP/);
+  assert.doesNotMatch(page, /\bgetSession\(/, "the fresh session through currentPublicVisitor only");
+  assert.doesNotMatch(page, /unstable_cache|"use cache"|export const revalidate/);
+});
+
+test("the offer page shows a ?p= reference only on paiement=annule and only a shop purchase of this very offer", () => {
+  const page = source("src/app/[slug]/offre/[offerId]/page.tsx");
+  assert.match(page, /one\(query\.paiement\) === "annule" \? one\(query\.p\) : undefined/);
+  assert.match(page, /getPurchaseReference\(pro\.professionalId, referenceId, now\)/);
+  assert.match(page, /referenceForPage\(reference, \{ kind: "offer", offerId \}, visitor\.owner\)/);
+  assert.match(page, /<CheckoutReturn key=\{checkout\.purchaseId\} \{\.\.\.checkout\} \/>/);
+  assert.doesNotMatch(page, /\b(reference|refView)\??\.customerId/, "a page never reads the customer of a purchase");
+});
+
+test("the offer page passes the form what a visitor may know of themselves, formats money and never indexes the reference", () => {
+  const page = source("src/app/[slug]/offre/[offerId]/page.tsx");
+  assert.match(page, /visitor=\{\{ state: visitor\.state, email: visitor\.state === "verified" \? visitor\.email : null, name: visitor\.name \}\}/);
+  assert.match(page, /formatMoney\(offer\.priceCents, pro\.currency\)/);
+  assert.match(page, /const testMode = payment === "live" \? null : payment;/);
+  assert.match(page, /referrer: "no-referrer"/, "the URL may carry p");
+  assert.doesNotMatch(page, /\b(customerId|ownerUserId|userId)=\{/, "no identity in a prop");
+});
+
+test("the offer page mounts one VerifyEmailBanner for every signed-in visitor, above the checkout, so it survives a code being accepted (G1b carry)", () => {
+  const page = source("src/app/[slug]/offre/[offerId]/page.tsx");
+  assert.equal((page.match(/<VerifyEmailBanner/g) ?? []).length, 1, "one instance");
+  assert.match(page, /\{visitor\.email !== null && <VerifyEmailBanner email=\{visitor\.email\} verified=\{visitor\.state === "verified"\} \/>\}/);
+  assert.ok(page.indexOf("<VerifyEmailBanner") < page.indexOf("<OfferCheckoutForm"), "above the checkout form");
+});
+
+test("the offer page takes one clock per request: loadOffer reads it once and returns it, the page uses that one (G4a)", () => {
+  const text = source("src/app/[slug]/offre/[offerId]/page.tsx");
+  const start = text.indexOf("const loadOffer = cache(");
+  const end = text.indexOf("export async function generateMetadata");
+  assert.ok(start !== -1 && end > start, "the loader sits above generateMetadata");
+  const loader = text.slice(start, end);
+  assert.equal((loader.match(/new Date\(\)/g) ?? []).length, 1, "the loader reads the clock once");
+  assert.match(loader, /return \{ \.\.\.resolved, offer, now \};/);
+  const page = bodyOf(text, "OfferPage");
+  assert.doesNotMatch(page, /new Date\(\)/, "the page never reads the clock itself");
+  assert.match(page, /const \{ pro, branding, offer, now \} = loaded;/);
+});
+
 test("the séance page reads a ?p= reference only on paiement=annule, only through the slug's pro and referenceForPage (Decision 71)", () => {
   const page = source("src/app/[slug]/seance/[occurrenceId]/page.tsx");
   assert.match(page, /one\(query\.paiement\) === "annule" \? one\(query\.p\) : undefined/);
