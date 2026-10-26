@@ -52,6 +52,15 @@ test("the séance page never lets a personal-link cookie hide the form or receiv
 
 const HOME = source("src/app/[slug]/page.tsx");
 
+test("the séance page never promises a seat that is gone: seatGoneOf decides, a cancelled booking leaves no block (Task 28 review)", () => {
+  const page = source("src/app/[slug]/seance/[occurrenceId]/page.tsx");
+  assert.match(page, /const seatGone = returnView === null \? null : seatGoneOf\(returnView, now\);/);
+  assert.match(page, /if \(returnView !== null && seatGone !== "cancelled"\) \{/, "a cancelled booking leaves the Notice, not a block that says « réserver à nouveau »");
+  assert.match(page, /const status = seatGone === "expired" \? "expired" : returnView\.status;/);
+  assert.doesNotMatch(page, /\blapsed\b/, "one rule, in visibility.ts, not a second copy on the page");
+  assert.match(page, /\{checkout === null && ended === "cancelled" && <Notice>\{COPY\.ENDED_CANCELLED\}<\/Notice>\}/);
+});
+
 test("/[slug] reads the visitor through currentPublicVisitor (fresh session), never the cached session, and is never cached", () => {
   assert.match(HOME, /currentPublicVisitor\(pro\.professionalId, pro\.ownerUserId\)/);
   assert.doesNotMatch(HOME, /\bgetSession\(/);

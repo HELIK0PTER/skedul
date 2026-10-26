@@ -9,6 +9,7 @@ import {
   referenceForPage,
   seancePageMode,
   seanceViewerOf,
+  seatGoneOf,
   type PageBooking,
   type ReferenceView,
   type SeanceViewer,
@@ -258,6 +259,42 @@ test("seancePageMode: a guest cookie's booking is never a PageBooking, so it nev
   // The page passes booked: null for a guest viewer (PageBooking has no "guest" via): the form stays.
   assert.deepEqual(seancePageMode({ ...base, booked: null }), { kind: "tickets", canSpend: false, coveringOffers: 2 });
   assert.deepEqual(seancePageMode({ ...base, booked: null, state: FREE, mode: "free" }), { kind: "free" });
+});
+
+const SEAT_NOW = new Date("2026-10-12T17:30:00Z");
+const HOLD_LIVE = "2026-10-12T17:45:00.000Z";
+const HOLD_ENDED = "2026-10-12T17:29:59.000Z";
+const ON_O1 = (status: "pending" | "confirmed" | "cancelled" | "expired") => ({ occurrenceId: "o1", status });
+
+test("seatGoneOf: a pending buy + book purchase keeps its seat while its hold is live", () => {
+  assert.equal(seatGoneOf(view({ holdExpiresAt: HOLD_LIVE, resumeUrl: "https://checkout.test/p1" }), SEAT_NOW), null);
+});
+
+test("seatGoneOf: a hold that ended frees the seat even before the nightly sweep (Decision 31)", () => {
+  assert.equal(seatGoneOf(view({ holdExpiresAt: HOLD_ENDED }), SEAT_NOW), "expired");
+  assert.equal(seatGoneOf(view({ holdExpiresAt: SEAT_NOW.toISOString() }), SEAT_NOW), "expired", "the hold ends at its end instant");
+  assert.equal(seatGoneOf(view({ holdExpiresAt: null }), SEAT_NOW), "expired", "a pending booking with no readable hold end holds nothing");
+});
+
+test("seatGoneOf: a booking the pro cancelled is a seat gone while the purchase still waits for its session to expire", () => {
+  // The purchase stays pending until the expiry webhook (up to 31 minutes in mock mode): the block must not promise the seat.
+  const cancelled = { booking: ON_O1("cancelled"), resumeUrl: "https://checkout.test/p1" };
+  assert.equal(seatGoneOf(view({ ...cancelled, holdExpiresAt: null }), SEAT_NOW), "cancelled");
+  assert.equal(seatGoneOf(view({ ...cancelled, holdExpiresAt: HOLD_LIVE }), SEAT_NOW), "cancelled", "whatever the hold end says");
+  assert.equal(seatGoneOf(view({ ...cancelled, holdExpiresAt: HOLD_ENDED }), SEAT_NOW), "cancelled", "cancelled wins over a lapsed hold");
+});
+
+test("seatGoneOf: an expired booking is a seat gone, whatever the hold end says", () => {
+  assert.equal(seatGoneOf(view({ booking: ON_O1("expired"), holdExpiresAt: HOLD_LIVE }), SEAT_NOW), "expired");
+  assert.equal(seatGoneOf(view({ booking: ON_O1("expired"), holdExpiresAt: null }), SEAT_NOW), "expired");
+});
+
+test("seatGoneOf: a payment on its way, a settled purchase and a shop purchase are not judged by the seat", () => {
+  assert.equal(seatGoneOf(view({ processing: true, booking: ON_O1("cancelled"), holdExpiresAt: HOLD_ENDED }), SEAT_NOW), null, "the webhook decides");
+  assert.equal(seatGoneOf(view({ processing: true, holdExpiresAt: HOLD_ENDED }), SEAT_NOW), null);
+  assert.equal(seatGoneOf(view({ status: "paid", booking: ON_O1("confirmed") }), SEAT_NOW), null);
+  assert.equal(seatGoneOf(view({ status: "expired", booking: ON_O1("expired") }), SEAT_NOW), null, "the status already says it");
+  assert.equal(seatGoneOf(view({ kind: "shop", booking: null }), SEAT_NOW), null, "a shop purchase holds no seat");
 });
 
 test("no module string carries a dash", () => {

@@ -96,6 +96,23 @@ export function canSeePrivateSeance(a: {
  */
 export type PageBooking = { status: "pending" | "confirmed"; via: "owner" | "reference" } | null;
 
+/**
+ * Whether the seat behind a pending buy + book purchase is gone although its Checkout session may still be open, so that
+ * the payment block never promises it (Task 28). Two ways: the hold ended (a seat counts as free from `hold_expires_at`,
+ * Decision 31, even before the nightly sweep; no readable hold end holds nothing), or the booking is no longer pending
+ * (the pro cancelled it or the whole séance, the sweep expired it) while the purchase waits for the expiry webhook, up to
+ * 31 minutes in mock mode. `"cancelled"` wins over a lapsed hold: the page then says COPY.ENDED_CANCELLED instead of the
+ * « réserver à nouveau » of an expired hold. A payment on its way (`processing`: the webhook decides), a settled purchase
+ * and a shop purchase (no seat) are never judged by the seat.
+ */
+export function seatGoneOf(ref: ReferenceView, now: Date): "cancelled" | "expired" | null {
+  if (ref.status !== "pending" || ref.processing || ref.booking === null) return null;
+  if (ref.booking.status === "cancelled") return "cancelled";
+  if (ref.booking.status === "expired") return "expired";
+  const holdEnd = ref.holdExpiresAt === null ? null : new Date(ref.holdExpiresAt).getTime();
+  return holdEnd !== null && holdEnd > now.getTime() ? null : "expired";
+}
+
 export type SeancePageMode =
   | { kind: "state"; state: PublicSeanceState }
   | { kind: "booked"; status: "pending" | "confirmed"; via: "owner" | "reference" }

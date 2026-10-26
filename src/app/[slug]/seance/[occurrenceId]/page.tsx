@@ -20,7 +20,14 @@ import { env } from "@/lib/env";
 import { COPY, seatsLeftLabel } from "@/lib/public/messages";
 import { seanceState, stateLabel } from "@/lib/public/planning-view";
 import { BOOKED_CONFIRMED, BOOKED_PENDING, SEE_MY_SPACE, stateLine } from "@/lib/public/seance-copy";
-import { canSeePrivateSeance, referenceForPage, seancePageMode, seanceViewerOf, type PageBooking } from "@/lib/public/visibility";
+import {
+  canSeePrivateSeance,
+  referenceForPage,
+  seancePageMode,
+  seanceViewerOf,
+  seatGoneOf,
+  type PageBooking,
+} from "@/lib/public/visibility";
 import { paymentMode } from "@/lib/stripe";
 import { getCustomerSpacePage } from "@/server/client-queries";
 import { resolvePublicPro } from "@/server/public-context";
@@ -138,12 +145,14 @@ export default async function SeancePage({ params, searchParams }: Props) {
   const ended = booked === null ? (ownerFacts?.ended ?? refEnded) : null;
 
   let checkout: ComponentProps<typeof CheckoutReturn> | null = null;
-  if (returnView !== null) {
+  // The block never promises a seat that is gone. A hold that ended, or a booking that is no longer pending while the
+  // purchase waits for its Checkout session to expire (an expired booking; one the pro cancelled, alone or with the whole
+  // séance), is shown as expired; a cancelled booking leaves no block at all, the page says COPY.ENDED_CANCELLED below.
+  const seatGone = returnView === null ? null : seatGoneOf(returnView, now);
+  if (returnView !== null && seatGone !== "cancelled") {
     const holdEnd = returnView.holdExpiresAt === null ? null : new Date(returnView.holdExpiresAt);
     const live = holdLive(returnView.holdExpiresAt);
-    // A pending purchase whose hold has ended frees its seat (Decision 31) even before the nightly sweep: say so.
-    const lapsed = returnView.status === "pending" && !returnView.processing && returnView.booking !== null && !live;
-    const status = lapsed ? "expired" : returnView.status;
+    const status = seatGone === "expired" ? "expired" : returnView.status;
     checkout = {
       slug: pro.slug,
       purchaseId: returnView.purchaseId,
