@@ -15,9 +15,11 @@ export default function DashboardError({
   error: Error & { digest?: string };
   unstable_retry: () => void;
 }) {
+  // The digest Next gives an error, never the error itself: a page error can carry what the page was reading (G4b).
+  const digest = error.digest;
   useEffect(() => {
-    console.error(error);
-  }, [error]);
+    console.error("[dashboard] page error", digest ?? "no digest");
+  }, [digest]);
 
   return (
     <Card role="alert" className="mx-auto flex max-w-lg flex-col items-center gap-3 px-6 py-12 text-center">
