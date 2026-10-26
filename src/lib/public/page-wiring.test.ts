@@ -49,6 +49,11 @@ test("the offer page mounts one VerifyEmailBanner for every signed-in visitor, a
   assert.ok(page.indexOf("<VerifyEmailBanner") < page.indexOf("<OfferCheckoutForm"), "above the checkout form");
 });
 
+test("the offer form is keyed on the visitor state, so a code accepted under the banner remounts it on the session's e-mail (review round 1)", () => {
+  const page = source("src/app/[slug]/offre/[offerId]/page.tsx");
+  assert.match(page, /<OfferCheckoutForm\s+key=\{visitor\.state\}\s/);
+});
+
 test("the offer page takes one clock per request: loadOffer reads it once and returns it, the page uses that one (G4a)", () => {
   const text = source("src/app/[slug]/offre/[offerId]/page.tsx");
   const start = text.indexOf("const loadOffer = cache(");

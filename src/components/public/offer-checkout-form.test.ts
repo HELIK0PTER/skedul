@@ -14,13 +14,13 @@ const DASH = new RegExp("[" + String.fromCharCode(0x2013, 0x2014) + "]");
 
 test("the form posts the slug, the offer id, the typed identity and the honeypot, and nothing else", () => {
   assert.match(SOURCE, /^"use client";/);
-  assert.match(SOURCE, /startShopPurchaseAction\(\{ slug, offerId, identity: identityToSend\(identity\), website \}\)/);
+  assert.match(SOURCE, /startShopPurchaseAction\(\{ slug, offerId, identity: identityToSend\(effective\), website \}\)/);
   assert.doesNotMatch(SOURCE, /customerId|ownerUserId|userId|priceCents|amountCents/, "no identity, no price from the browser");
   assert.doesNotMatch(SOURCE, /^import (?!type)[^;]*(?:-actions|-reads)";/m, "no core and no read is imported at run time");
 });
 
 test("an identity the server would refuse is said under its field before any call", () => {
-  const check = SOURCE.indexOf("const local = identityErrors(identity);");
+  const check = SOURCE.indexOf("const local = identityErrors(effective);");
   assert.notEqual(check, -1);
   assert.ok(check < SOURCE.indexOf("startShopPurchaseAction({"), "the local check comes first");
   assert.match(SOURCE, /if \(Object\.keys\(local\)\.length > 0\) \{\s*refused\(\);\s*return;\s*\}/);
@@ -47,6 +47,22 @@ test("only a verified session locks the e-mail field and only the session e-mail
   assert.match(SOURCE, /const emailLocked = visitor\.state === "verified" && visitor\.email !== null;/);
   assert.match(SOURCE, /email: emailLocked \? \(visitor\.email \?\? ""\) : ""/);
   assert.match(SOURCE, /emailLocked=\{emailLocked\}/);
+});
+
+test("the session's e-mail replaces whatever was typed once the session turns verified under the mounted form (review round 1)", () => {
+  assert.match(
+    SOURCE,
+    /const effective: IdentityInput = emailLocked && visitor\.email !== null \? \{ \.\.\.identity, email: visitor\.email \} : identity;/,
+    "the same override as the typed forms of the séance page",
+  );
+  assert.match(SOURCE, /value=\{effective\}/);
+  assert.equal(SOURCE.split("useState<IdentityInput>").length - 1, 1, "one identity state");
+  assert.equal(SOURCE.split("identityErrors(effective)").length - 1, 1, "one browser-side check of the identity");
+  assert.doesNotMatch(
+    SOURCE,
+    /identityErrors\(identity\)|identityToSend\(identity\)|value=\{identity\}/,
+    "the typed state alone reaches neither a check, nor a call, nor a field",
+  );
 });
 
 test("the test-payments banner shows above the fields whenever a test mode runs, and the form posts (no identity in a URL before hydration) and lets the server speak French", () => {

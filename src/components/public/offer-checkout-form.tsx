@@ -44,6 +44,9 @@ export function OfferCheckoutForm({
     email: emailLocked ? (visitor.email ?? "") : "",
     phone: "",
   });
+  // The session can turn verified under this mounted form (a code accepted in the banner above, then a refresh of the
+  // page): from then on the session's address replaces whatever was typed, in the field, in the check and in the call.
+  const effective: IdentityInput = emailLocked && visitor.email !== null ? { ...identity, email: visitor.email } : identity;
   const [website, setWebsite] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -69,7 +72,7 @@ export function OfferCheckoutForm({
     if (busy) return;
     setFormError(null);
     // What the server's parse would refuse is said at once, under its field, without a call.
-    const local = identityErrors(identity);
+    const local = identityErrors(effective);
     setErrors(local);
     if (Object.keys(local).length > 0) {
       refused();
@@ -77,7 +80,7 @@ export function OfferCheckoutForm({
     }
     startTransition(async () => {
       try {
-        const res = await startShopPurchaseAction({ slug, offerId, identity: identityToSend(identity), website });
+        const res = await startShopPurchaseAction({ slug, offerId, identity: identityToSend(effective), website });
         if (!res.ok) {
           const fields = res.fieldErrors ?? {};
           setErrors(fields);
@@ -100,7 +103,7 @@ export function OfferCheckoutForm({
       {testMode && <TestPaymentsBanner mode={testMode} />}
       <IdentityFields
         idPrefix="offer"
-        value={identity}
+        value={effective}
         onChange={setIdentity}
         emailLocked={emailLocked}
         errors={errors}

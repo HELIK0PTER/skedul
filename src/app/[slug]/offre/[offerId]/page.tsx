@@ -110,7 +110,7 @@ export default async function OfferPage({ params, searchParams }: Props) {
 
   return (
     <PublicShell branding={branding} backHref={`/${slug}`}>
-      {/* One instance for every signed-in visitor, at a stable position above the checkout the refresh may swap: it keeps its state across the unverified -> verified flip, so « Adresse confirmée. » is announced and takes the focus (WCAG 2.4.3). */}
+      {/* One instance for every signed-in visitor, at a stable position above the checkout the refresh may swap: it keeps its state across the unverified -> verified flip, so « Adresse confirmée. » is announced and takes the focus (WCAG 2.4.3). The form below is keyed on the state, so it starts over from the session's e-mail on that flip. */}
       {visitor.email !== null && <VerifyEmailBanner email={visitor.email} verified={visitor.state === "verified"} />}
       <div className="space-y-6">
         {checkout && <CheckoutReturn key={checkout.purchaseId} {...checkout} />}
@@ -136,6 +136,7 @@ export default async function OfferPage({ params, searchParams }: Props) {
         <Card>
           <CardContent className="p-6">
             <OfferCheckoutForm
+              key={visitor.state}
               slug={slug}
               offerId={offerId}
               businessName={pro.businessName}
