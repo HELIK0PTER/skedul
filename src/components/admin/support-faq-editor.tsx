@@ -236,6 +236,7 @@ function CategoryDialog({
   return (
     <Dialog open onClose={onClose} title={category ? "Modifier la rubrique" : "Nouvelle rubrique"}>
       <form
+        method="post"
         onSubmit={(e) => {
           e.preventDefault();
           onSave({ title, icon });
@@ -309,6 +310,7 @@ function ArticleDialog({
   return (
     <Dialog open onClose={onClose} title={article ? "Modifier l’article" : "Nouvel article"}>
       <form
+        method="post"
         onSubmit={(e) => {
           e.preventDefault();
           onSave({ categoryId: category, question, answer, published });

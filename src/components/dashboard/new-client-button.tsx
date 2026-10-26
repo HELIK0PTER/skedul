@@ -110,7 +110,7 @@ export function NewClientButton() {
         Nouveau client
       </Button>
       <Dialog open={open} onClose={closeDialog} title="Nouveau client">
-        <form ref={formRef} onSubmit={submit} noValidate className="space-y-4">
+        <form ref={formRef} method="post" onSubmit={submit} noValidate className="space-y-4">
           {/* FormField wires aria-describedby (helper, then error) and aria-invalid into the input. */}
           <FormField label="Nom" htmlFor="new-client-name" error={fieldErrors.name}>
             <Input

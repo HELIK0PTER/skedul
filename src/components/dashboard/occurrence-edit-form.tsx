@@ -302,6 +302,7 @@ export function OccurrenceEditForm({
 
   return (
     <form
+      method="post"
       ref={formRef}
       noValidate
       onSubmit={(e) => {

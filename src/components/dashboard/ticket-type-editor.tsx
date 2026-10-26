@@ -83,7 +83,7 @@ export function TicketTypeInfoForm({
   }
 
   return (
-    <form ref={root} onSubmit={onSubmit} noValidate className="space-y-4">
+    <form ref={root} method="post" onSubmit={onSubmit} noValidate className="space-y-4">
       <FormField label="Nom" htmlFor={`${uid}-name`} error={under("Nom :")}>
         <Input
           id={`${uid}-name`}
@@ -200,7 +200,7 @@ export function RdvSettingsForm({
   }
 
   return (
-    <form ref={root} onSubmit={onSubmit} noValidate className="space-y-5">
+    <form ref={root} method="post" onSubmit={onSubmit} noValidate className="space-y-5">
       <Switch
         id={`${uid}-enabled`}
         checked={values.enabled}
@@ -316,7 +316,7 @@ export function TypeQuestionsForm({ ticketTypeId, questions }: { ticketTypeId: s
   }
 
   return (
-    <form ref={root} onSubmit={onSubmit} noValidate className="space-y-4">
+    <form ref={root} method="post" onSubmit={onSubmit} noValidate className="space-y-4">
       <p className="text-sm text-muted-foreground">{QUESTIONS_HELP}</p>
       <QuestionsEditor
         idPrefix={`${uid}-questions`}

@@ -266,6 +266,7 @@ export function RegisterAttendeeDialog({
   return (
     <Dialog open onClose={pending ? noop : onClose} title={`Inscrire à « ${item.title} »`}>
       <form
+        method="post"
         ref={formRef}
         noValidate
         onSubmit={(e) => {

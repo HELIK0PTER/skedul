@@ -79,6 +79,7 @@ export function MessageComposer({
 
   return (
     <form
+      method="post"
       onSubmit={submit}
       className={cn(
         "rounded-2xl border border-border bg-card p-3 shadow-(--shadow-card) transition-[border-color,box-shadow] focus-within:border-primary/50 focus-within:ring-4 focus-within:ring-primary/10",

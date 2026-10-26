@@ -103,6 +103,7 @@ export function SessionCapacityControl({
   const helpId = `${inputId}-help`;
   return (
     <form
+      method="post"
       className="grid gap-2"
       onSubmit={(e) => {
         e.preventDefault();

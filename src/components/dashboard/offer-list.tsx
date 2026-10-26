@@ -341,7 +341,7 @@ function OfferDialog({
 
   return (
     <Dialog open onClose={() => (pending ? undefined : onClose())} title={offerId === null ? "Nouvelle offre" : "Modifier l'offre"}>
-      <form ref={root} onSubmit={onSubmit} noValidate className="space-y-4">
+      <form ref={root} method="post" onSubmit={onSubmit} noValidate className="space-y-4">
         {/* FormField wires aria-describedby (helper, then error) and aria-invalid into each control. */}
         <FormField label="Quantité" htmlFor={`${uid}-quantity`} help={QUANTITY_HELP} error={under("quantity")}>
           <Input

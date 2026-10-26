@@ -420,6 +420,7 @@ export function UnavailabilityManager({
         <Card>
           <CardContent className="p-4">
             <form
+              method="post"
               noValidate
               onSubmit={(e) => {
                 e.preventDefault();

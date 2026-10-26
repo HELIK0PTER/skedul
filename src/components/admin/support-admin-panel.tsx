@@ -134,6 +134,7 @@ export function SupportAdminPanel({ request }: { request: PanelRequest }) {
           </CardHeader>
           <CardContent>
             <form
+              method="post"
               onSubmit={(e) => {
                 e.preventDefault();
                 run(() => setSupportEta({ id: request.id, eta: eta || null }));
@@ -203,6 +204,7 @@ export function SupportAdminPanel({ request }: { request: PanelRequest }) {
 
       <Dialog open={dialog === "accept"} onClose={closeDialog} title="Accepter en développement">
         <form
+          method="post"
           onSubmit={(e) => {
             e.preventDefault();
             run(() => acceptForDevelopment({ id: request.id, eta: eta || null }));
@@ -234,6 +236,7 @@ export function SupportAdminPanel({ request }: { request: PanelRequest }) {
         title={dialog === "declined" ? "Ne pas retenir la demande" : "Fermer la demande"}
       >
         <form
+          method="post"
           onSubmit={(e) => {
             e.preventDefault();
             if (dialog !== "declined" && dialog !== "closed") return;

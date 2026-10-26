@@ -134,7 +134,7 @@ export function BookingSettingsForm({ initial }: { initial: BookingSettings }) {
   }
 
   return (
-    <form ref={formRef} noValidate onSubmit={onSubmit} className="space-y-5">
+    <form ref={formRef} noValidate method="post" onSubmit={onSubmit} className="space-y-5">
       <FormField
         label="Réservable jusqu'à"
         htmlFor={`${uid}-horizon`}

@@ -57,7 +57,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
   if (expired) return <ExpiredLink />;
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4">
+    <form method="post" onSubmit={onSubmit} className="space-y-4">
       <p className="text-sm text-muted-foreground">
         {`Au moins ${MIN_LENGTH} caractères. Vous serez déconnecté de tous vos appareils.`}
       </p>

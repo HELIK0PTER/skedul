@@ -52,7 +52,7 @@ export function ForgotPasswordForm() {
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4">
+    <form method="post" onSubmit={onSubmit} className="space-y-4">
       <div className="space-y-1.5">
         <Label htmlFor="email">Email</Label>
         <Input

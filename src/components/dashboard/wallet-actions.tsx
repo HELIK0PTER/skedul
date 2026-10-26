@@ -342,7 +342,7 @@ function OfferDialog({
 
   return (
     <Dialog open onClose={pending ? noop : onClose} title="Offrir des tickets">
-      <form ref={formRef} onSubmit={onSubmit} noValidate className="space-y-4">
+      <form ref={formRef} method="post" onSubmit={onSubmit} noValidate className="space-y-4">
         {options.length === 0 ? (
           <p className="rounded-lg bg-muted px-3 py-2 text-sm text-zinc-600">
             {NO_ACTIVE_TYPE}{" "}
@@ -591,7 +591,7 @@ function PointDialog({ customerId, groupName, ids, onClose, onDone }: GroupDialo
 
   return (
     <Dialog open onClose={pending ? noop : onClose} title={`Pointer des tickets « ${groupName} »`}>
-      <form ref={formRef} onSubmit={onSubmit} noValidate className="space-y-4">
+      <form ref={formRef} method="post" onSubmit={onSubmit} noValidate className="space-y-4">
         <p className="text-sm text-zinc-600">Le ticket est consommé sur place, sans inscription.</p>
         <QuantityField
           id="point-quantity"
@@ -646,7 +646,7 @@ function UnpointDialog({ customerId, groupName, ids, onClose, onDone }: GroupDia
 
   return (
     <Dialog open onClose={pending ? noop : onClose} title={`Annuler le pointage « ${groupName} »`}>
-      <form ref={formRef} onSubmit={onSubmit} noValidate className="space-y-4">
+      <form ref={formRef} method="post" onSubmit={onSubmit} noValidate className="space-y-4">
         <p className="text-sm text-zinc-600">
           Les derniers tickets pointés redeviennent disponibles, ou expirés si leur date est passée.
         </p>
@@ -705,7 +705,7 @@ function ConvertDialog({
 
   return (
     <Dialog open onClose={pending ? noop : onClose} title={`Convertir des tickets « ${groupName} »`}>
-      <form ref={formRef} onSubmit={onSubmit} noValidate className="space-y-4">
+      <form ref={formRef} method="post" onSubmit={onSubmit} noValidate className="space-y-4">
         {target === null ? (
           <p className="rounded-lg bg-muted px-3 py-2 text-sm text-zinc-600">
             {NO_OTHER_TYPE}{" "}
@@ -813,7 +813,7 @@ function CloseDialog({ customerId, groupName, ids, onClose, onDone }: GroupDialo
   return (
     <>
       <Dialog open onClose={confirming !== null ? noop : onClose} title={`Clore des tickets « ${groupName} »`}>
-        <form ref={formRef} onSubmit={onReview} noValidate className="space-y-4">
+        <form ref={formRef} method="post" onSubmit={onReview} noValidate className="space-y-4">
           <fieldset className="space-y-2">
             <legend className="text-sm font-medium">Motif</legend>
             {hasPaid && (
@@ -932,7 +932,7 @@ function RetireDialog({ customerId, groupName, ids, onClose, onDone }: GroupDial
   return (
     <>
       <Dialog open onClose={confirming !== null ? noop : onClose} title={`Retirer des tickets « ${groupName} »`}>
-        <form ref={formRef} onSubmit={onReview} noValidate className="space-y-4">
+        <form ref={formRef} method="post" onSubmit={onReview} noValidate className="space-y-4">
           <p className="text-sm text-zinc-600">Seuls les tickets offerts peuvent être retirés.</p>
           <QuantityField
             id="retire-quantity"

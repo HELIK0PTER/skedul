@@ -63,7 +63,7 @@ export function NewTicketTypeButton({ label = "Nouveau type de ticket" }: { labe
         {label}
       </Button>
       <Dialog open={open} onClose={close} title="Nouveau type de ticket">
-        <form onSubmit={onSubmit} noValidate className="space-y-4">
+        <form method="post" onSubmit={onSubmit} noValidate className="space-y-4">
           {/* FormField wires aria-describedby (helper, then error) and aria-invalid into the input. */}
           <FormField label="Nom" htmlFor={nameId} help={NAME_HELP} error={nameError}>
             <Input

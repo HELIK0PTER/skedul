@@ -76,7 +76,7 @@ export function NewRequestForm({
   }
 
   return (
-    <form onSubmit={submit} className="mt-8 space-y-8">
+    <form method="post" onSubmit={submit} className="mt-8 space-y-8">
       <fieldset>
         <legend className="font-display text-lg font-bold tracking-tight">De quoi s’agit-il ?</legend>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">

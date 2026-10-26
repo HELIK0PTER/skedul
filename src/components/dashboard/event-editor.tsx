@@ -538,7 +538,7 @@ export function EventCreateForm({
   }
 
   return (
-    <form ref={formRef} noValidate onSubmit={submit} className="max-w-3xl space-y-6">
+    <form ref={formRef} noValidate method="post" onSubmit={submit} className="max-w-3xl space-y-6">
       <Card>
         <CardHeader>
           <CardTitle>Informations</CardTitle>
@@ -692,7 +692,7 @@ export function EventInfoForm({
   }
 
   return (
-    <form ref={formRef} noValidate onSubmit={submit} className="space-y-5">
+    <form ref={formRef} noValidate method="post" onSubmit={submit} className="space-y-5">
       <EventInfoFields
         idPrefix={`event-${eventId}`}
         value={value}

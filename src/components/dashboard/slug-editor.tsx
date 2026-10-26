@@ -83,7 +83,7 @@ export function SlugEditor({ appUrl, slug }: { appUrl: string; slug: string }) {
   const unchanged = draft.replace(/-+$/, "") === current;
 
   return (
-    <form onSubmit={onSubmit} className="space-y-2 pt-2">
+    <form method="post" onSubmit={onSubmit} className="space-y-2 pt-2">
       <Label htmlFor="slug">Adresse de votre page</Label>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <div

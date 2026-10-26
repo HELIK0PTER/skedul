@@ -207,7 +207,7 @@ export function VerifyEmailBanner({ email, verified }: { email: string; verified
             title="Confirmer votre adresse"
             describedBy="verify-email-intro"
           >
-            <form onSubmit={verify} noValidate className="space-y-4">
+            <form method="post" onSubmit={verify} noValidate className="space-y-4">
               <div>
                 <p id="verify-email-intro" className="text-sm text-zinc-600 wrap-anywhere">
                   {`Saisissez le code à 6 chiffres envoyé à ${email}.`}

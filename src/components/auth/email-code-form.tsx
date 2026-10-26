@@ -169,7 +169,7 @@ export function EmailCodeForm({
   }
 
   return (
-    <form ref={root} onSubmit={step === "email" ? onSend : onVerify} noValidate className="space-y-4">
+    <form ref={root} method="post" onSubmit={step === "email" ? onSend : onVerify} noValidate className="space-y-4">
       {step === "email" ? (
         <>
           <FormField label="Email" htmlFor={`${idPrefix}-email`} error={emailError}>

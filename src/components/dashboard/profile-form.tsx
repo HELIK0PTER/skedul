@@ -54,7 +54,7 @@ export function ProfileForm({ values, timezoneLocked }: { values: ProfileValues;
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4">
+    <form method="post" onSubmit={onSubmit} className="space-y-4">
       <div className="space-y-1.5">
         <Label htmlFor="businessName">Nom de l&apos;activité</Label>
         <Input id="businessName" name="businessName" defaultValue={values.businessName} required />

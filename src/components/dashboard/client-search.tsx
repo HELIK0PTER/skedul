@@ -88,7 +88,7 @@ export function ClientSearch({
   return (
     <>
       <div className="mb-5 space-y-3">
-        <form role="search" onSubmit={submit} className="flex max-w-md items-end gap-2">
+        <form role="search" method="post" onSubmit={submit} className="flex max-w-md items-end gap-2">
           <div className="min-w-0 flex-1">
             <FormField label="Rechercher" htmlFor="client-search">
               <Input

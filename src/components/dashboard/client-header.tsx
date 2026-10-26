@@ -150,7 +150,7 @@ export function ClientHeader({ customer }: { customer: HeaderCustomer }) {
       </CardHeader>
       <CardContent>
         {editing ? (
-          <form ref={formRef} onSubmit={save} noValidate className="space-y-4">
+          <form ref={formRef} method="post" onSubmit={save} noValidate className="space-y-4">
             {/* FormField wires aria-describedby and aria-invalid into the input. */}
             <FormField label="Nom" htmlFor="client-name" error={fieldErrors.name}>
               <Input

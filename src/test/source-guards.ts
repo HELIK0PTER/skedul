@@ -269,3 +269,49 @@ export function rawErrorLogs(source: string): string[] {
   }
   return found.sort((x, y) => x.at - y.at).map((hit) => hit.text);
 }
+
+/** One opening tag read by `openingTags`: its offset, its text as written, and its text at brace depth 0. */
+export type OpeningTag = { at: number; text: string; topLevel: string };
+
+/**
+ * Every opening tag `<name ...>` of a JSX source, read with a brace-aware scan over `codeView` (comments and string text
+ * are not code, so a `<form` in a comment or a `>` in a string attribute is never read as markup): the tag ends at the
+ * first `>` outside every `{ ... }`, so an arrow function (`onSubmit={(e) => go(e)}`) or a comparison inside an attribute
+ * expression never ends it early. `text` is the tag as written; `topLevel` keeps only the characters at brace depth 0
+ * (attribute names, string values, the braces themselves), so an attribute spelled inside an expression
+ * (`onSubmit={() => log('method="post"')}`) is not one of the tag's own. A tag that never closes is read to the end of
+ * the source. Not seen (pinned in `form-method.test.ts`): a tag that starts after a closing tag on the same line when a
+ * later `/` sits on that line (`</p><form action="/x">`: `codeView` reads `</` as the start of a regular expression);
+ * the repository guard cross-checks the count of every `<form` it reads against a plain text search, so such a tag fails
+ * it instead of passing unseen.
+ */
+export function openingTags(source: string, name: string): OpeningTag[] {
+  const code = codeView(source);
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const head = new RegExp(`<${escaped}(?=[\\s/>])`, "g");
+  const tags: OpeningTag[] = [];
+  for (let m = head.exec(code); m !== null; m = head.exec(code)) {
+    let depth = 0;
+    let end = code.length;
+    let top = "";
+    for (let k = m.index; k < code.length; k++) {
+      const c = code[k];
+      if (c === "{") {
+        if (depth === 0) top += source[k];
+        depth++;
+      } else if (c === "}") {
+        depth = Math.max(0, depth - 1);
+        if (depth === 0) top += source[k];
+      } else if (depth === 0) {
+        top += source[k];
+        if (c === ">") {
+          end = k + 1;
+          break;
+        }
+      }
+    }
+    tags.push({ at: m.index, text: source.slice(m.index, end), topLevel: top });
+    head.lastIndex = Math.max(end, m.index + m[0].length);
+  }
+  return tags;
+}

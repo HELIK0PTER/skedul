@@ -68,7 +68,7 @@ export function MyNameForm({ initialName }: { initialName: string }) {
   }
 
   return (
-    <form ref={root} onSubmit={save} noValidate className="space-y-3">
+    <form ref={root} method="post" onSubmit={save} noValidate className="space-y-3">
       <FormField label="Votre nom" htmlFor="my-name" error={fieldError}>
         <Input
           id="my-name"

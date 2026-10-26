@@ -135,7 +135,7 @@ export function AuthForm({
           </div>
         </div>
       )}
-      <form onSubmit={onSubmit} className="space-y-4">
+      <form method="post" onSubmit={onSubmit} className="space-y-4">
         {isSignUp && (
           <div className="space-y-1.5">
             <Label htmlFor="name">Nom complet</Label>
