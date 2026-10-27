@@ -34,12 +34,17 @@ test("the leaf scrolls once on mount from the real URL hash, drops the fragment 
   assert.match(LEAF, /^"use client";/);
   assert.match(LEAF, /import \{ scrollToHashedAnchor \} from "@\/lib\/public-anchors";/);
   // Once it has scrolled the fragment goes, so that a Back or Forward traversal, or a reload, that mounts the Boutique again
-  // does not scroll to it a second time (G4c). `history.state` is passed back as it is: it holds Next's router state.
+  // does not scroll to it a second time (G4c). The first argument is `null`, the form Next documents: Next's patched
+  // `replaceState` then copies its own state onto the entry and tells the router the new URL, so its `canonicalUrl` loses the
+  // fragment too. Handing `window.history.state` back (it carries `__NA: true`) makes the patch pass the call straight through:
+  // the browser's entry changes, the router's `canonicalUrl` keeps `#boutique`, and the next `router.refresh()` (the end of a
+  // sign-in by code) writes the fragment back into the URL (G4c review, round 1).
   assert.match(
     LEAF,
-    /useEffect\(\(\) => \{\s*if \(!scrollToHashedAnchor\(anchor, window\.location\.hash, document\)\) return;\s*window\.history\.replaceState\(window\.history\.state, "", window\.location\.pathname \+ window\.location\.search\);\s*\}, \[anchor\]\);/,
+    /useEffect\(\(\) => \{\s*if \(!scrollToHashedAnchor\(anchor, window\.location\.hash, document\)\) return;\s*window\.history\.replaceState\(null, "", window\.location\.pathname \+ window\.location\.search\);\s*\}, \[anchor\]\);/,
+    "one write after a scroll that happened, state argument null (never `history.state`: its `__NA` makes Next skip its router update)",
   );
-  assert.equal((LEAF.match(/replaceState\(/g) ?? []).length, 1, "one write to the history, after a scroll that happened");
+  assert.equal((LEAF.match(/replaceState\(/g) ?? []).length, 1, "one write to the history");
   assert.doesNotMatch(LEAF, /pushState|location\.hash\s*=|location\.replace|router\./, "no new entry, no navigation, no router");
   assert.match(LEAF, /return null;/);
 });

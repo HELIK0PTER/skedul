@@ -13,13 +13,16 @@ import { scrollToHashedAnchor } from "@/lib/public-anchors";
  *
  * The scroll answers the link that was followed, not the entry in the history: once it has happened the fragment is
  * dropped from the URL of the current entry (`replaceState`, no new entry), so a Back or Forward traversal to this entry,
- * or a reload, that mounts the Boutique again does not pull the visitor to it a second time. `history.state` is handed
- * back as it is: it holds the router's own state.
+ * or a reload, that mounts the Boutique again does not pull the visitor to it a second time. The state argument is
+ * `null`, the form Next documents (linking-and-navigating, `window.history.replaceState`): Next patches the call, copies
+ * its own state onto the entry and tells the app router the new URL, so the app router's canonical URL loses the fragment
+ * too. Passing `window.history.state` back would be taken for one of Next's internal writes (it carries `__NA`), the
+ * app router would keep `#boutique`, and its next refresh (the end of a sign-in by code) would write it back into the URL.
  */
 export function ScrollToAnchor({ anchor }: { anchor: string }) {
   useEffect(() => {
     if (!scrollToHashedAnchor(anchor, window.location.hash, document)) return;
-    window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
   }, [anchor]);
   return null;
 }
