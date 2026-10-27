@@ -151,7 +151,7 @@ export async function ownedCustomerId(
 export type SpaceIdentity =
   | { kind: "customer"; customerId: string; via: "session" | "guest" }
   | { kind: "no_record"; email: string }
-  /** signed in, address not confirmed: the banner, never the code form (a code sign-in would purge the password, risk 7); the cookie customer is shown read-only when set */
+  /** signed in, address not confirmed: the banner, never the code form (a code sign-in would purge the password, risk 7); the cookie customer is shown when set, to read and cancel, never spend */
   | { kind: "unverified"; email: string; guestCustomerId: string | null }
   | { kind: "impersonating" }
   | { kind: "anonymous" };
@@ -163,9 +163,9 @@ export type SpaceSession = { userId: string; email: string; emailVerified: boole
  * Who is looking at this pro's espace (spec § 12, Decision 36). An impersonating admin is `impersonating` (checked
  * first; the cookie is ignored). A VERIFIED session wins: its owned customer at this pro (ownedCustomerId) or
  * no_record, and the cookie is ignored (L1370). An unverified session counts for nothing (anyone can sign up with
- * someone else's address) but is never anonymous: `unverified` carries the cookie's customer, shown read-only next to
- * the confirmation banner. With no session at all: the guest cookie, checked against this pro and the customer's
- * current link version, else anonymous.
+ * someone else's address) but is never anonymous: `unverified` carries the cookie's customer, shown next to the
+ * confirmation banner to read and cancel, never spend (contract § 3.23). With no session at all: the guest cookie,
+ * checked against this pro and the customer's current link version, else anonymous.
  */
 export async function resolveSpaceIdentity(
   db: Db,

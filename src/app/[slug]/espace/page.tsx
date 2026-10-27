@@ -32,11 +32,11 @@ type Props = {
  * fresh session, suspended user = no session, personal-link cookie checked against this pro and its current version):
  * an impersonating admin sees a notice; the Owner and the personal link's customer see their space; a verified session
  * without a record sees « Aucun ticket … » and can use another address; an unverified one sees the link's customer
- * read-only, or « Confirmez votre adresse pour voir vos réservations. » when there is none, never the code form; only
- * an anonymous visitor is offered the code form. Every signed-in, non-impersonated visitor gets the confirmation
- * banner, rendered once in the shell so that it stays mounted when a code is accepted. Never indexed, never counted
- * in the page-view stats (isTrackedPath), rendered per request. Client leaves get strings and booleans, never an id
- * of a row.
+ * to read and cancel, never spend (contract § 3.23), or « Confirmez votre adresse pour voir vos réservations. » when
+ * there is none, never the code form; only an anonymous visitor is offered the code form. Every signed-in,
+ * non-impersonated visitor gets the confirmation banner, rendered once in the shell so that it stays mounted when a
+ * code is accepted. Never indexed, never counted in the page-view stats (isTrackedPath), rendered per request. Client
+ * leaves get strings and booleans, never an id of a row.
  */
 export default async function EspacePage({ params, searchParams }: Props) {
   const { slug } = await params;
@@ -54,7 +54,7 @@ export default async function EspacePage({ params, searchParams }: Props) {
   const returnTo = `/${pro.slug}/espace`;
 
   // The customer whose space is shown: the Owner's or the personal link's. An unverified session shows the link's
-  // customer read-only under the banner (COV-C1).
+  // customer under the banner, to read and cancel, never spend (COV-C1; contract § 3.23).
   const shownCustomerId =
     identity.kind === "customer"
       ? identity.customerId

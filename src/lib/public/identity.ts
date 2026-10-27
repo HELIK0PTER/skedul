@@ -149,9 +149,9 @@ export async function customerEmailOf(db: Db, professionalId: string, customerId
 
 /**
  * The espace identity of a visitor, in this order: impersonating; the Owner; verified without a record
- * (no_record); unverified (+ the cookie's customer, read-only); the cookie's customer; anonymous. A signed-in
- * visitor, verified or not, never maps to anonymous (COV-C1). Pure twin of resolveSpaceIdentity (guest-access.ts),
- * used by resolveSpaceCustomer in src/server/client-queries.ts.
+ * (no_record); unverified (+ the cookie's customer: read and cancel, never spend); the cookie's customer;
+ * anonymous. A signed-in visitor, verified or not, never maps to anonymous (COV-C1). Pure twin of
+ * resolveSpaceIdentity (guest-access.ts), used by resolveSpaceCustomer in src/server/client-queries.ts.
  */
 export function spaceIdentityOf(visitor: PublicVisitor): SpaceIdentity {
   if (visitor.state === "impersonating") return { kind: "impersonating" };
