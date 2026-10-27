@@ -38,13 +38,16 @@ export const PUBLIC_PROFILE_COLUMNS = {
 
 /**
  * The public row of the pro at `slug`. A suspended pro's page is offline (null), except where `includeSuspended` is
- * set: the thank-you page, so a customer who paid just before the suspension still sees their confirmation.
+ * set: the thank-you page, so a customer who paid just before the suspension still sees their confirmation. A segment
+ * that cannot be a pro address (SLUG_PARAM_RE) is null without a query, like `readPublicPage` (G4c): the metadata of the
+ * sub-pages and of the espace resolve before the layout's 404 is known, so a probe of `/.env/merci` would cost one.
  */
 export async function readPublicProfile(
   db: Db,
   slug: string,
   opts: { includeSuspended?: boolean } = {},
 ) {
+  if (!SLUG_PARAM_RE.test(slug)) return null;
   const [row] = await db
     .select(PUBLIC_PROFILE_COLUMNS)
     .from(professional)

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { merciCopy, merciStateOf } from "@/lib/public/merci-view";
 import { COPY } from "@/lib/public/messages";
+import { notFoundMetadata } from "@/lib/public/page-metadata";
 import { resolvePublicPro } from "@/server/public-context";
 import { getPurchaseReference } from "@/server/public-queries";
 
@@ -24,7 +25,7 @@ type Props = {
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   const resolved = await resolvePublicPro(slug, { includeSuspended: true });
-  if (!resolved) return { title: "Page introuvable" };
+  if (!resolved) return notFoundMetadata();
   return { title: `Confirmation · ${resolved.pro.businessName}`, robots: { index: false }, referrer: "no-referrer" };
 }
 

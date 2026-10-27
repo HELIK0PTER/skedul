@@ -106,6 +106,26 @@ export function publicPageProfileOfRow(row: PublicPageFields): PublicPageProfile
   };
 }
 
+/**
+ * The pro and its branding for a page that shares the `[slug]` layout's one request-cached read (G4c): `page` is what
+ * `getPublicPage(slug)` answered (null for an unknown slug, `{ suspended: true }` for a suspended pro, else the public
+ * projection). A live pro is that read's own pro and branding, so the sub-pages (séance, offer, thank-you, espace) run no
+ * professional query of their own. A suspended pro is offline for every page except the thank-you page (`includeSuspended`,
+ * so a customer who paid just before the suspension still sees the confirmation): the cached projection never hands out a
+ * suspended pro's row, so that one case reads it through `readSuspended`, once, and nothing else does.
+ */
+export async function proOfPublicPage(
+  page: ({ suspended: false } & PublicPageProfile) | { suspended: true } | null,
+  opts: { includeSuspended?: boolean },
+  readSuspended: () => Promise<PublicPageProfile | null>,
+): Promise<{ pro: PublicPro; branding: PublicBranding } | null> {
+  if (page === null) return null;
+  if (!page.suspended) return { pro: page.pro, branding: page.branding };
+  if (!opts.includeSuspended) return null;
+  const profile = await readSuspended();
+  return profile === null ? null : { pro: profile.pro, branding: profile.branding };
+}
+
 /** True for an object literal or a null-prototype object: what a Server Action argument is once decoded. */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;

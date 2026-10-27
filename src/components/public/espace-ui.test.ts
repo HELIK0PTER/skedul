@@ -126,7 +126,7 @@ test("the confirmation banner is rendered once, outside the identity switch, as 
   assert.match(PAGE, /const banner = bannerOfIdentity\(identity, space\?\.customer\.email \?\? null\);/);
   assert.match(
     PAGE,
-    /<PublicShell branding=\{pro\} backHref=\{`\/\$\{slug\}`\}>\s*\{banner && <VerifyEmailBanner email=\{banner\.email\} verified=\{banner\.verified\} \/>\}\s*\{children\}\s*\{canSignOutIn\(identity\) && \([\s\S]*?\)\}\s*<\/PublicShell>/,
+    /<PublicShell branding=\{branding\} backHref=\{`\/\$\{slug\}`\}>\s*\{banner && <VerifyEmailBanner email=\{banner\.email\} verified=\{banner\.verified\} \/>\}\s*\{children\}\s*\{canSignOutIn\(identity\) && \([\s\S]*?\)\}\s*<\/PublicShell>/,
   );
   assert.ok(PAGE.indexOf("<VerifyEmailBanner") < PAGE.indexOf('if (identity.kind === "impersonating") {'), "defined before the branches, which all go through the shell");
 });

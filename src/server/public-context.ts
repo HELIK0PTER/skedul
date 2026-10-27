@@ -7,24 +7,38 @@ import { after } from "next/server";
 import type { PublicBranding } from "@/components/public/public-shell";
 import type { Effect } from "@/lib/booking/types";
 import { env } from "@/lib/env";
-import { publicPageProfileOfRow, type ActionVisitor, type PublicDeps, type PublicPro } from "@/lib/public/context";
+import {
+  proOfPublicPage,
+  publicPageProfileOfRow,
+  type ActionVisitor,
+  type PublicDeps,
+  type PublicPro,
+} from "@/lib/public/context";
 import type { SessionFacts } from "@/lib/public/identity";
 import { PUBLIC_REVALIDATE, type PublicCoreResult, type PublicResult } from "@/lib/public/result";
 import { runClientActionWith, runPublicActionWith } from "@/lib/public/run-action";
 import { checkoutGateway, mockCheckoutEnabled } from "@/lib/stripe";
 import { runEffects } from "@/server/notify";
+import { getPublicPage } from "@/server/public-queries";
 import { getPublicProfile } from "@/server/queries";
 import { currentPublicVisitor, currentSessionFacts, visitorIpHashes } from "@/server/visitor";
 
-/** getPublicProfile(slug, opts) → { pro, branding } of publicPageProfileOfRow(profile.pro), the projection the /[slug] page holds (a suspended pro is null unless includeSuspended). */
+/**
+ * { pro, branding } of the projection the /[slug] page holds, from the request-cached `getPublicPage(slug)` the
+ * `[slug]` layout already ran: a séance, offer or thank-you page (and its generateMetadata) runs no professional query
+ * of its own (G4c). A suspended pro is null, unless includeSuspended (the thank-you page): the cached projection never
+ * hands out a suspended pro's row, so that one case reads it through `getPublicProfile`, once. The decision is
+ * `proOfPublicPage` (src/lib/public/context.ts, pure and tested); the Server Actions resolve their pro here too, in
+ * their own request, so a suspended pro is refused by the very same rule.
+ */
 export async function resolvePublicPro(
   slug: string,
-  opts?: { includeSuspended?: boolean },
+  opts: { includeSuspended?: boolean } = {},
 ): Promise<{ pro: PublicPro; branding: PublicBranding } | null> {
-  const profile = await getPublicProfile(slug, opts);
-  if (!profile) return null;
-  const { pro, branding } = publicPageProfileOfRow(profile.pro);
-  return { pro, branding };
+  return proOfPublicPage(await getPublicPage(slug), opts, async () => {
+    const profile = await getPublicProfile(slug, { includeSuspended: true });
+    return profile ? publicPageProfileOfRow(profile.pro) : null;
+  });
 }
 
 /** { appUrl: env.APP_URL, checkout: checkoutGateway, mockAllowed: mockCheckoutEnabled(), env: env.APP_ENV }. */

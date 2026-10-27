@@ -5,7 +5,7 @@ import { IP_HASH_RE } from "@/lib/throttle";
 import { keyPaths, privateKeyPaths } from "@/test/key-paths";
 import { actionVisitorOf, fakeCheckout, publicDepsOf, sessionOf } from "@/test/public";
 
-import { SLUG_PARAM_RE, publicPageProfileOfRow, publicProOfRow, splitActionInput } from "./context";
+import { SLUG_PARAM_RE, proOfPublicPage, publicPageProfileOfRow, publicProOfRow, splitActionInput } from "./context";
 
 const ROW = {
   id: "pro_1",
@@ -216,3 +216,42 @@ test("test helpers: actionVisitorOf, fakeCheckout and publicDepsOf behave as the
     env: "preview",
   });
 });
+
+test("proOfPublicPage (G4c): a page shares the layout's one cached read; only a suspended pro asked for by the thank-you page costs a second", async () => {
+  const live = { suspended: false as const, ...publicPageProfileOfRow(PROFILE_ROW) };
+  let reads = 0;
+  const readSuspended = async () => {
+    reads += 1;
+    return publicPageProfileOfRow(PROFILE_ROW);
+  };
+
+  // An unknown slug is nobody, with or without the option.
+  assert.equal(await proOfPublicPage(null, {}, readSuspended), null);
+  assert.equal(await proOfPublicPage(null, { includeSuspended: true }, readSuspended), null);
+  // A live pro is the cached read's pro and branding, and nothing else of its projection (no bio, no suspension flag).
+  for (const opts of [{}, { includeSuspended: false }, { includeSuspended: true }]) {
+    const resolved = await proOfPublicPage(live, opts, readSuspended);
+    assert.deepEqual(resolved, { pro: live.pro, branding: live.branding }, JSON.stringify(opts));
+  }
+  assert.equal(reads, 0, "a live pro never costs a second read");
+  // A suspended pro is offline for every page...
+  for (const opts of [{}, { includeSuspended: false }]) {
+    assert.equal(await proOfPublicPage({ suspended: true }, opts, readSuspended), null, JSON.stringify(opts));
+  }
+  assert.equal(reads, 0, "...without a read");
+  // ...except the thank-you page, which reads the row the cached projection never hands out.
+  const kept = await proOfPublicPage({ suspended: true }, { includeSuspended: true }, readSuspended);
+  assert.deepEqual(kept, { pro: live.pro, branding: live.branding });
+  assert.equal(reads, 1);
+  assert.equal(await proOfPublicPage({ suspended: true }, { includeSuspended: true }, async () => null), null, "gone in between: nobody");
+});
+
+test("proOfPublicPage (G4c): the pro it hands out carries no private field of the row", async () => {
+  const wide = { ...PROFILE_ROW, stripeAccountId: "acct_1", googleCalendarId: "cal_1" };
+  const resolved = await proOfPublicPage({ suspended: true }, { includeSuspended: true }, async () => publicPageProfileOfRow(wide));
+  assert.ok(resolved);
+  const plain = await proOfPublicPage({ suspended: true }, { includeSuspended: true }, async () => publicPageProfileOfRow(PROFILE_ROW));
+  assert.deepEqual(keyPaths(resolved), keyPaths(plain), "a wider row gives the same keys");
+  assert.deepEqual(Object.keys(resolved).sort(), ["branding", "pro"], "the pro and its branding, not the bio nor the flag");
+});
+

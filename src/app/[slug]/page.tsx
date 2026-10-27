@@ -16,6 +16,7 @@ import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { logSafeMessage } from "@/lib/log-safe";
 import { paramForWeek, weekBounds, weekStartFromParam } from "@/lib/planning";
+import { notFoundMetadata } from "@/lib/public/page-metadata";
 import {
   groupByDay,
   parsePlanningParams,
@@ -44,7 +45,7 @@ type Props = {
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   const page = await getPublicPage(slug);
-  if (!page || page.suspended) return { title: "Page introuvable" };
+  if (!page || page.suspended) return notFoundMetadata();
   return { title: page.pro.businessName, description: page.branding.headline ?? undefined };
 }
 

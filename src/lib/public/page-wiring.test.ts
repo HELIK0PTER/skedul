@@ -421,7 +421,7 @@ test("/[slug] holds the public projection of the pro, never the professional row
   assert.match(HOME, /\{bio && <p /, "the presentation text comes from the projection");
   assert.doesNotMatch(HOME, /publicProOfRow|page\.pro\.(?:bio|headline)|branding=\{page\.pro\}|\.\.\.page\.pro/, "the row mapper and the row spread are gone from the page");
   const metadata = bodyOf(HOME, "generateMetadata");
-  assert.match(metadata, /const page = await getPublicPage\(slug\);\s*if \(!page \|\| page\.suspended\) return \{ title: "Page introuvable" \};/);
+  assert.match(metadata, /const page = await getPublicPage\(slug\);\s*if \(!page \|\| page\.suspended\) return notFoundMetadata\(\);/);
   assert.match(metadata, /title: page\.pro\.businessName/);
   assert.match(metadata, /description: page\.branding\.headline \?\? undefined/);
   // The layout, generateMetadata and the page share the request-cached getPublicPage: one professional query per render.
@@ -515,9 +515,51 @@ test("the espace wrappers take the page's clock as their last parameter and neve
   assert.match(seancePage(), /getCustomerSpacePage\(pro\.professionalId, owner\.customerId, now\)/);
   const espace = source("src/app/[slug]/espace/page.tsx");
   assert.equal(inCode(espace, /new Date\(\)/g).length, 1, "the espace page reads the clock once");
-  assert.match(espace, /getCustomerSpacePage\(pro\.id, shownCustomerId, now\)/);
-  assert.match(espace, /getSpendableSeances\(pro\.id, shownCustomerId, now\)/);
+  assert.match(espace, /getCustomerSpacePage\(pro\.professionalId, shownCustomerId, now\)/);
+  assert.match(espace, /getSpendableSeances\(pro\.professionalId, shownCustomerId, now\)/);
   const mine = source("src/app/mon-espace/page.tsx");
   assert.equal(inCode(mine, /new Date\(\)/g).length, 1, "/mon-espace reads the clock once");
   assert.match(mine, /getMySpacePage\(session, new Date\(\)\)/, "its one read takes the instant it reads once");
+});
+
+test("the séance, offer, thank-you and espace pages read the pro through the layout's one cached read, and keep their own suspension rule (G4c)", () => {
+  // resolvePublicPro (pinned in public-context.test.ts) is that read for the three sub-pages; the espace pair uses it directly.
+  const layout = source("src/app/[slug]/espace/layout.tsx");
+  assert.match(layout, /^import \{ getPublicPage \} from "@\/server\/public-queries";\r?$/m);
+  assert.match(codeView(bodyOf(layout, "EspaceLayout")), /const page = await getPublicPage\(slug\);\s*if \(!page \|\| page\.suspended\) notFound\(\);/);
+  const espace = source("src/app/[slug]/espace/page.tsx");
+  assert.match(espace, /const page = await getPublicPage\(slug\);\s*if \(!page \|\| page\.suspended\) notFound\(\);\s*const \{ pro, branding \} = page;/);
+  assert.match(espace, /<PublicShell branding=\{branding\} backHref=\{`\/\$\{slug\}`\}>/, "the shell gets the nine branding fields, not the row");
+  assert.match(espace, /getCustomerSpacePage\(pro\.professionalId, shownCustomerId, now\)/);
+  for (const [name, text] of [["layout", layout], ["page", espace]] as const) {
+    assert.deepEqual(inCode(text, /\b(?:getSpaceProfile|getPublicProfile|readPublicProfile|resolvePublicPro)\b/g), [], `espace ${name}: no second read of the pro`);
+  }
+  assert.doesNotMatch(codeView(espace), /branding=\{pro\}|\bpro\.(?:id|userId)\b/, "no professional row field: the projection's names only");
+  const queries = source("src/server/client-queries.ts");
+  assert.deepEqual(inCode(queries, /\bgetSpaceProfile\b/g), [], "the espace's own profile read is gone");
+  assert.match(queries, /export async function resolveSpaceCustomer\(pro: \{ professionalId: string; ownerUserId: string \}\): Promise<SpaceIdentity>/);
+  assert.match(queries, /currentPublicVisitor\(pro\.professionalId, pro\.ownerUserId\)/);
+  // The suspension rule of each page is as it was: the merci page asks for a suspended pro, no other page does.
+  assert.equal(inCode(source("src/app/[slug]/merci/page.tsx"), /resolvePublicPro\(slug, \{ includeSuspended: true \}\)/g).length, 2, "the title and the page");
+  for (const path of ["src/app/[slug]/seance/[occurrenceId]/page.tsx", "src/app/[slug]/offre/[offerId]/page.tsx"]) {
+    assert.deepEqual(inCode(source(path), /includeSuspended/g), [], `${path}: a suspended pro is offline`);
+    assert.equal(inCode(source(path), /\bresolvePublicPro\(slug\)/g).length, 1, `${path}: one read, memoized for the metadata and the page`);
+  }
+});
+
+test("every not-found metadata of a public page is notFoundMetadata(): noindex and no referrer, never a bare title (G4c)", () => {
+  for (const path of [
+    "src/app/[slug]/page.tsx",
+    "src/app/[slug]/merci/page.tsx",
+    "src/app/[slug]/seance/[occurrenceId]/page.tsx",
+    "src/app/[slug]/offre/[offerId]/page.tsx",
+  ]) {
+    const text = source(path);
+    assert.doesNotMatch(text, /title: "Page introuvable"/, `${path}: the 404's title comes from notFoundMetadata`);
+    if (!path.includes("offre")) {
+      assert.match(text, /return notFoundMetadata\(\);/, `${path}: its unknown-pro branch`);
+      assert.match(text, /^import \{ notFoundMetadata \} from "@\/lib\/public\/page-metadata";\r?$/m, path);
+    }
+  }
+  assert.match(bodyOf(HOME, "generateMetadata"), /if \(!page \|\| page\.suspended\) return notFoundMetadata\(\);/);
 });

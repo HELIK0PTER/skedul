@@ -20,6 +20,7 @@ import { formatTime } from "@/lib/datetime";
 import { env } from "@/lib/env";
 import { ownerPendingPurchaseId, paymentReturnOf } from "@/lib/public/checkout-return-view";
 import { COPY, seatsLeftLabel } from "@/lib/public/messages";
+import { notFoundMetadata } from "@/lib/public/page-metadata";
 import { seanceState, stateBadgeVariant, stateLabel } from "@/lib/public/planning-view";
 import { BOOKED_CONFIRMED, BOOKED_PENDING, SEE_MY_SPACE, stateLine } from "@/lib/public/seance-copy";
 import { canSeePrivateSeance, referenceForPage, seancePageMode, seanceViewerOf } from "@/lib/public/visibility";
@@ -53,7 +54,7 @@ const loadSeance = cache(async (slug: string, occurrenceId: string) => {
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug, occurrenceId } = await params;
   const loaded = await loadSeance(slug, occurrenceId);
-  if (!loaded) return { title: "Page introuvable", referrer: "no-referrer", robots: { index: false } };
+  if (!loaded) return notFoundMetadata();
   const { pro, detail } = loaded;
   // The metadata never depends on the viewer: a private, archived, RDV, unknown or foreign séance carries the business name only.
   if (!detail || detail.kind === "rdv" || detail.isPrivate || detail.archived) {

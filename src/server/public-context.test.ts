@@ -88,7 +88,18 @@ test("publicDeps takes the app URL, the gateway, the one mock rule and APP_ENV f
 
 test("resolvePublicPro hands a pro and its branding fields only: no user id, Stripe id or Google id reaches the branding", () => {
   const body = sectionOf("export async function resolvePublicPro");
-  assert.match(body, /getPublicProfile\(slug, opts\)/);
   assert.match(body, /publicPageProfileOfRow\(profile\.pro\)/, "the same projection as the /[slug] page (G4a)");
   assert.doesNotMatch(body, /\b(userId|stripeAccountId|googleCalendarId)\b/, "the row's private fields are not named here at all");
+});
+
+test("resolvePublicPro shares the [slug] layout's one cached read; only a suspended pro asked for by merci costs a second (G4c)", () => {
+  const body = sectionOf("export async function resolvePublicPro");
+  assert.match(body, /return proOfPublicPage\(await getPublicPage\(slug\), opts, async \(\) => \{/, "the decision is the tested pure function's");
+  assert.equal(body.match(/\bgetPublicPage\(/g)?.length, 1, "the request-cached read, once");
+  assert.equal(body.match(/\bgetPublicProfile\(/g)?.length, 1, "the uncached read, once, inside the suspended fallback");
+  assert.match(body, /getPublicProfile\(slug, \{ includeSuspended: true \}\)/, "the fallback asks for the suspended row itself, whatever the caller's option");
+  assert.match(SOURCE, /^import \{ getPublicPage \} from "@\/server\/public-queries";\r?$/m);
+  assert.match(SOURCE, /proOfPublicPage[^;]*from "@\/lib\/public\/context"/);
+  // The wrapper of the public actions goes through it too: a suspended pro is refused by the very same rule.
+  assert.match(sectionOf("export async function runPublicAction"), /resolvePro: async \(slug\) => \(await resolvePublicPro\(slug\)\)\?\.pro \?\? null/);
 });
