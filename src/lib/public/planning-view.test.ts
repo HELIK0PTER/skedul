@@ -11,6 +11,7 @@ import {
   planningEmptyState,
   planningNav,
   seanceState,
+  stateBadgeVariant,
   stateLabel,
   toPublicSeanceVM,
   type PublicSeanceState,
@@ -149,6 +150,35 @@ test("stateLabel is the public label of the state, null for open", () => {
   for (const state of states) assert.equal(stateLabel(state), PUBLIC_STATE_LABELS[state.kind as keyof typeof PUBLIC_STATE_LABELS]);
 });
 
+test("stateBadgeVariant: one colour per state, whoever draws the label (the planning row and the séance page, G4c)", () => {
+  const kinds: PublicSeanceState["kind"][] = ["cancelled", "past", "ongoing", "onsite", "notYet", "closed", "full", "free", "open"];
+  assert.deepEqual(
+    kinds.map((kind) => [kind, stateBadgeVariant(kind)]),
+    [
+      ["cancelled", "destructive"],
+      ["past", "neutral"],
+      ["ongoing", "neutral"],
+      ["onsite", "neutral"],
+      ["notYet", "neutral"],
+      ["closed", "neutral"],
+      ["full", "neutral"],
+      ["free", "success"],
+      ["open", "neutral"],
+    ],
+  );
+});
+
+test("a row carries the kind of its state, so its badge colour never depends on the wording of its label", () => {
+  const now = new Date("2026-10-10T10:00:00Z");
+  const day = "2026-10-12";
+  const kindOf = (over: Partial<PublicSeance>) => toPublicSeanceVM(seance(PARIS, day, 19 * 60, over), "s", now, PARIS).stateKind;
+  assert.equal(kindOf({}), "open");
+  assert.equal(kindOf({ bookingMode: "free" }), "free");
+  assert.equal(kindOf({ status: "cancelled" }), "cancelled");
+  assert.equal(kindOf({ seatsLeft: 0 }), "full");
+  assert.equal(stateBadgeVariant(kindOf({ bookingMode: "free" })), "success", "« Inscription libre » is the one good news");
+});
+
 test("toPublicSeanceVM: the row of an open séance in Paris", () => {
   const now = new Date("2026-10-10T10:00:00Z");
   const s = seance(PARIS, "2026-10-12", 19 * 60, { location: "Gymnase Jean Bouin" });
@@ -162,6 +192,7 @@ test("toPublicSeanceVM: the row of an open séance in Paris", () => {
     timeLabel: "19:00 à 20:00",
     location: "Gymnase Jean Bouin",
     stateText: null,
+    stateKind: "open",
     seatsText: seatsLeftLabel(12),
     muted: false,
     badges: [{ name: "Cours collectif", color: "#22c55e" }],

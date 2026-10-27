@@ -23,8 +23,8 @@ import {
 } from "@/lib/payments/checkout";
 import type { ActionVisitor, PublicDeps, PublicPro } from "@/lib/public/context";
 import { linkCustomerUser, upsertUserIdFor, type SessionFacts } from "@/lib/public/identity";
+import { identityInputSchema, type IdentityInput } from "@/lib/public/identity-schema";
 import { COPY } from "@/lib/public/messages";
-import { plainNameSchema } from "@/lib/public/plain-name";
 import {
   fromEngineClient,
   fromParse,
@@ -33,27 +33,11 @@ import {
   type PublicCoreResult,
 } from "@/lib/public/result";
 import { checkActionThrottle, type ThrottleSubject } from "@/lib/throttle";
-import {
-  ENGINE_ERROR_MESSAGES,
-  answersInputSchema,
-  customerInputSchema,
-  idSchema,
-  normalizeEmail,
-  type AnswerInput,
-} from "@/lib/tickets";
+import { ENGINE_ERROR_MESSAGES, answersInputSchema, idSchema, normalizeEmail, type AnswerInput } from "@/lib/tickets";
 import { parseFr } from "@/lib/zod-fr";
 
-/** What the client sends as its identity (parsed by the strict schema below). */
-export type IdentityInput = { name: string; email: string; phone?: string };
-
-/** Strict typed identity (SEC-M15, SEC-M9, OUT:91): name plainNameSchema; email z.string().trim().pipe(customerInputSchema.shape.email); phone customerInputSchema.shape.phone; no other key. */
-export const identityInputSchema = z
-  .object({
-    name: plainNameSchema,
-    email: z.string().trim().pipe(customerInputSchema.shape.email),
-    phone: customerInputSchema.shape.phone,
-  })
-  .strict();
+/** The typed identity: its schema and type live in identity-schema.ts, which the browser's own check shares (G4c); re-exported for the cores and their tests. */
+export { identityInputSchema, type IdentityInput };
 
 /** The séance the client saw and its answers: the part every claim on a séance shares. */
 export const claimTargetSchema = z.object({

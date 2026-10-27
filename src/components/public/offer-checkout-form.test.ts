@@ -73,7 +73,8 @@ test("the test-payments banner shows above the fields whenever a test mode runs,
 
 test("a failure goes to an always-mounted alert line, unless an identity field owns the refusal, and the focus follows", () => {
   assert.match(SOURCE, /const \{ root, errorBox, refused \} = useRefusalFocus\(\);/);
-  assert.match(SOURCE, /<p role="alert" ref=\{errorBox\} tabIndex=\{-1\} className=\{formError \? ERROR_CLASS : "sr-only"\}>/);
+  assert.match(SOURCE, /<FormError alwaysMounted message=\{formError\} ref=\{errorBox\} tabIndex=\{-1\} \/>/);
+  assert.doesNotMatch(SOURCE, /ERROR_CLASS|role="alert"/, "the line is the shared primitive's: no class string and no alert of its own (G4c)");
   assert.match(SOURCE, /Object\.keys\(fields\)\.some\(\(key\) => key\.startsWith\("identity\."\)\)/);
   assert.match(SOURCE, /setFormError\(PUBLIC_UNEXPECTED\);\s*refused\(\);/);
   assert.equal(SOURCE.split("refused();").length - 1, 3, "the local check, a server refusal and a failed call");

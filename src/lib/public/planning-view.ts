@@ -54,6 +54,20 @@ export function stateLabel(state: PublicSeanceState): string | null {
   return state.kind === "open" ? null : PUBLIC_STATE_LABELS[state.kind];
 }
 
+/** The colours of a state badge (the `Badge` variants it uses). */
+export type StateBadgeVariant = "destructive" | "success" | "neutral";
+
+/**
+ * The colour of a state's label, one for the planning row and the séance page alike (G4c): cancelled stands out,
+ * « Inscription libre » is the one good news, every other state is neutral. Keyed on the state's kind, never on the wording
+ * of its label.
+ */
+export function stateBadgeVariant(kind: PublicSeanceState["kind"]): StateBadgeVariant {
+  if (kind === "cancelled") return "destructive";
+  if (kind === "free") return "success";
+  return "neutral";
+}
+
 export type PublicSeanceVM = {
   occurrenceId: string;
   href: string;
@@ -64,6 +78,8 @@ export type PublicSeanceVM = {
   timeLabel: string;
   location: string | null;
   stateText: string | null;
+  /** the kind of the state: what the badge colour (`stateBadgeVariant`) and the strike-through of a cancelled row read, never the label's wording */
+  stateKind: PublicSeanceState["kind"];
   /** seatsLeftLabel for open / free */
   seatsText: string | null;
   /** cancelled, past, closed, full */
@@ -93,6 +109,7 @@ export function toPublicSeanceVM(s: PublicSeance, slug: string, now: Date, tz: s
     timeLabel,
     location: s.location,
     stateText,
+    stateKind: state.kind,
     seatsText,
     muted: state.kind === "cancelled" || state.kind === "past" || state.kind === "closed" || state.kind === "full",
     badges: s.acceptedTypes.map((t) => ({ name: t.name, color: t.color })),

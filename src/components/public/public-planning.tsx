@@ -6,17 +6,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { INLINE_LINK_CLASS } from "@/components/ui/link-class";
-import { COPY, PUBLIC_STATE_LABELS } from "@/lib/public/messages";
-import type { PlanningNav, PlanningView, PublicDay, PublicSeanceVM } from "@/lib/public/planning-view";
+import { COPY } from "@/lib/public/messages";
+import { stateBadgeVariant, type PlanningNav, type PlanningView, type PublicDay, type PublicSeanceVM } from "@/lib/public/planning-view";
 import { PLANNING_HEADING_ID } from "@/lib/public-anchors";
 import { cn } from "@/lib/utils";
-
-/** The state badge: cancelled stands out, « Inscription libre » is the one good news, everything else is neutral. */
-function stateBadgeVariant(stateText: string): "destructive" | "success" | "neutral" {
-  if (stateText === PUBLIC_STATE_LABELS.cancelled) return "destructive";
-  if (stateText === PUBLIC_STATE_LABELS.free) return "success";
-  return "neutral";
-}
 
 function ViewLink({ href, current, children }: { href: string; current: boolean; children: React.ReactNode }) {
   return (
@@ -35,7 +28,7 @@ function ViewLink({ href, current, children }: { href: string; current: boolean;
 
 /** One séance of the « Liste » view: a single link whose accessible name is the view model's `ariaLabel` (COV-M12). */
 function SeanceRow({ vm }: { vm: PublicSeanceVM }) {
-  const cancelled = vm.stateText === PUBLIC_STATE_LABELS.cancelled;
+  const cancelled = vm.stateKind === "cancelled";
   return (
     <Link
       href={vm.href}
@@ -68,7 +61,7 @@ function SeanceRow({ vm }: { vm: PublicSeanceVM }) {
         </span>
       </span>
       <span className="flex shrink-0 flex-col items-end gap-1 text-right">
-        {vm.stateText && <Badge variant={stateBadgeVariant(vm.stateText)}>{vm.stateText}</Badge>}
+        {vm.stateText && <Badge variant={stateBadgeVariant(vm.stateKind)}>{vm.stateText}</Badge>}
         {vm.seatsText && <span className="text-xs text-zinc-600">{vm.seatsText}</span>}
       </span>
     </Link>
@@ -77,7 +70,7 @@ function SeanceRow({ vm }: { vm: PublicSeanceVM }) {
 
 /** One séance of the « Semaine » view: a chip in its day column, named by `ariaLabel`. */
 function SeanceChip({ vm }: { vm: PublicSeanceVM }) {
-  const cancelled = vm.stateText === PUBLIC_STATE_LABELS.cancelled;
+  const cancelled = vm.stateKind === "cancelled";
   const tail = vm.stateText ?? vm.seatsText;
   return (
     <Link

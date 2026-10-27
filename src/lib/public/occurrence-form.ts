@@ -4,11 +4,8 @@
  * reads the answers, so a typo caught here costs no rate-limit hit. Client-safe: no server module. The server parses
  * the whole input again; nothing here authorises anything.
  */
-import { z } from "zod";
-
-import type { IdentityInput } from "@/lib/public/booking-actions";
-import { plainNameSchema } from "@/lib/public/plain-name";
-import { customerInputSchema, type AnswerInput, type QuestionType } from "@/lib/tickets";
+import { identityInputSchema, type IdentityInput } from "@/lib/public/identity-schema";
+import type { AnswerInput, QuestionType } from "@/lib/tickets";
 import { parseFr } from "@/lib/zod-fr";
 
 /** A registration question as the forms need it (the page picks these fields from the engine's question rows). */
@@ -20,17 +17,10 @@ export type QuestionFieldDef = {
   required: boolean;
 };
 
-/** The server's identity rules (plain name, e-mail, phone) as one schema; the same building blocks as the action's. */
-const identityCheck = z.object({
-  name: plainNameSchema,
-  email: z.string().trim().pipe(customerInputSchema.shape.email),
-  phone: customerInputSchema.shape.phone,
-});
-
-/** Field messages the server would refuse (keys `identity.name`, `identity.email`, `identity.phone`, as parseFr on the whole input). */
+/** Field messages the server would refuse, from the very schema the server parses (identity-schema.ts) (keys `identity.name`, `identity.email`, `identity.phone`, as parseFr on the whole input). */
 export function identityErrors(identity: IdentityInput): Record<string, string> {
   const phone = (identity.phone ?? "").trim();
-  const parsed = parseFr(identityCheck, {
+  const parsed = parseFr(identityInputSchema, {
     name: identity.name,
     email: identity.email,
     ...(phone === "" ? {} : { phone }),

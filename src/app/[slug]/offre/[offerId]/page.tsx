@@ -127,13 +127,18 @@ export default async function OfferPage({ params, searchParams }: Props) {
         </Card>
         <Card>
           <CardContent className="p-6">
+            {/* The séance page's rule: the session name prefills a field only for a verified visitor, like the address. */}
             <OfferCheckoutForm
               key={visitor.state}
               slug={slug}
               offerId={offerId}
               businessName={pro.businessName}
               priceLabel={priceLabel}
-              visitor={{ state: visitor.state, email: visitor.state === "verified" ? visitor.email : null, name: visitor.name }}
+              visitor={{
+                state: visitor.state,
+                email: visitor.state === "verified" ? visitor.email : null,
+                name: visitor.state === "verified" ? visitor.name : null,
+              }}
               testMode={testMode}
             />
           </CardContent>

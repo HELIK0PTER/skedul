@@ -5,6 +5,7 @@ import { useEffect, useId, useRef, useState, type Ref } from "react";
 import { CheckCircle2, Loader2 } from "lucide-react";
 
 import { OtpDialog } from "@/components/auth/otp-dialog";
+import { FormError } from "@/components/dashboard/form-error";
 import { useRefusalFocus } from "@/components/dashboard/use-refusal-focus";
 import { IdentityFields } from "@/components/public/identity-fields";
 import { QuestionFields } from "@/components/public/question-fields";
@@ -12,7 +13,7 @@ import { TestPaymentsBanner } from "@/components/public/test-payments-banner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { INLINE_LINK_CLASS } from "@/components/ui/link-class";
-import type { IdentityInput } from "@/lib/public/booking-actions";
+import type { IdentityInput } from "@/lib/public/identity-schema";
 import {
   BUY_TITLE,
   OFFERS_LEGEND,
@@ -136,19 +137,35 @@ function Feedback({
           </p>
         )}
       </div>
-      <div role="alert">
-        {error && (
-          <p
-            ref={errorBox}
-            tabIndex={-1}
-            className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {error}
-          </p>
-        )}
-      </div>
+      <FormError alwaysMounted message={error} ref={errorBox} tabIndex={-1} />
     </>
   );
+}
+
+/**
+ * What the three forms share when something is refused: the alert line, the field errors under the fields, the focus on
+ * the first problem and the mapping of a server refusal onto them (the sentence of the refusal in the line, the errors of
+ * its fields and of its answers under them), written once.
+ */
+function useRefusalState() {
+  const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const { root, errorBox, refused } = useRefusalFocus();
+  return {
+    error,
+    setError,
+    errors,
+    setErrors,
+    root,
+    errorBox,
+    refused,
+    /** A refusal: its sentence in the alert line, its field errors under the fields, the focus on the first problem. */
+    refuse(res: Pick<PublicFail, "error" | "fieldErrors">, answers: readonly AnswerInput[]) {
+      setError(res.error);
+      setErrors({ ...(res.fieldErrors ?? {}), ...answerErrorsById(answers, res.fieldErrors ?? {}) });
+      refused();
+    },
+  };
 }
 
 /**
@@ -165,9 +182,7 @@ function useTypedIdentityForm(p: OccurrenceBookingProps) {
   const [website, setWebsite] = useState("");
   const [values, setValues] = useState<Record<string, string>>({});
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const { root, errorBox, refused } = useRefusalFocus();
+  const { error, setError, errors, setErrors, root, errorBox, refused, refuse } = useRefusalState();
 
   return {
     uid,
@@ -197,12 +212,7 @@ function useTypedIdentityForm(p: OccurrenceBookingProps) {
       setPending(true);
       return answersFromValues(p.questions, values);
     },
-    /** A refusal: its sentence in the alert line, its field errors under the fields, the focus on the first problem. */
-    refuse(res: Pick<PublicFail, "error" | "fieldErrors">, answers: readonly AnswerInput[]) {
-      setError(res.error);
-      setErrors({ ...(res.fieldErrors ?? {}), ...answerErrorsById(answers, res.fieldErrors ?? {}) });
-      refused();
-    },
+    refuse,
   };
 }
 
@@ -283,9 +293,7 @@ function HeldForm({ p }: { p: OccurrenceBookingProps }) {
   const uid = useId();
   const [values, setValues] = useState<Record<string, string>>({});
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const { root, errorBox, refused } = useRefusalFocus();
+  const { error, setError, errors, setErrors, root, errorBox, refused, refuse } = useRefusalState();
   const booked = useStatusFocus();
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
@@ -312,9 +320,7 @@ function HeldForm({ p }: { p: OccurrenceBookingProps }) {
       booked.succeed(false);
       return;
     }
-    setError(res.error);
-    setErrors({ ...(res.fieldErrors ?? {}), ...answerErrorsById(answers, res.fieldErrors ?? {}) });
-    refused();
+    refuse(res, answers);
   }
 
   return (

@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { openingTags } from "@/test/source-guards";
+import { codeView, openingTags } from "@/test/source-guards";
 
 const SOURCE = readFileSync("src/components/public/occurrence-booking.tsx", "utf8");
 
@@ -119,7 +119,19 @@ test("every submit shows its pending label and is disabled while pending", () =>
 
 test("success lines go to an always-mounted status region and failures to an always-mounted alert region", () => {
   assert.match(SOURCE, /<div role="status">\s*\{status && \(/);
-  assert.match(SOURCE, /<div role="alert">\s*\{error && \(/);
+  assert.match(SOURCE, /<FormError alwaysMounted message=\{error\} ref=\{errorBox\} tabIndex=\{-1\} \/>/, "the shared primitive, kept mounted (G4c)");
+  assert.doesNotMatch(SOURCE, /role="alert"|bg-destructive/, "no alert and no class string of its own");
+});
+
+test("the three forms map a refusal through one hook: the line, the field errors of the fields and of the answers, the focus (G4c)", () => {
+  const code = codeView(SOURCE);
+  assert.equal(code.split("useRefusalFocus()").length - 1, 1, "the focus hook is called in one place");
+  assert.equal(code.split("answerErrorsById(").length - 1, 1, "the mapping of the answers' errors is written once");
+  assert.equal(code.split("= useRefusalState();").length - 1, 2, "the typed forms' hook and the held-ticket form call it");
+  // The held-ticket form hands its refusal to it and keeps no state of its own for an error.
+  const held = SOURCE.slice(SOURCE.indexOf("\nfunction HeldForm("), SOURCE.indexOf("\n/** Buy + book (E1)"));
+  assert.match(held, /refuse\(res, answers\);/);
+  assert.doesNotMatch(held, /useState<string \| null>|const \[errors?, setErrors?\]/, "no error state of its own");
 });
 
 test("a success that books the signed-in visitor gives the focus to the séance heading, which stays when the form goes (WCAG 2.4.3)", () => {

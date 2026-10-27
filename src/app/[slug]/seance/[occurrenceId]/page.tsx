@@ -20,7 +20,7 @@ import { formatTime } from "@/lib/datetime";
 import { env } from "@/lib/env";
 import { ownerPendingPurchaseId, paymentReturnOf } from "@/lib/public/checkout-return-view";
 import { COPY, seatsLeftLabel } from "@/lib/public/messages";
-import { seanceState, stateLabel } from "@/lib/public/planning-view";
+import { seanceState, stateBadgeVariant, stateLabel } from "@/lib/public/planning-view";
 import { BOOKED_CONFIRMED, BOOKED_PENDING, SEE_MY_SPACE, stateLine } from "@/lib/public/seance-copy";
 import { canSeePrivateSeance, referenceForPage, seancePageMode, seanceViewerOf } from "@/lib/public/visibility";
 import { paymentMode } from "@/lib/stripe";
@@ -164,7 +164,7 @@ export default async function SeancePage({ params, searchParams }: Props) {
           >
             {detail.title}
           </h2>
-          {label && <Badge variant={state.kind === "cancelled" ? "destructive" : state.kind === "free" ? "default" : "neutral"}>{label}</Badge>}
+          {label && <Badge variant={stateBadgeVariant(state.kind)}>{label}</Badge>}
         </div>
         <p className="mt-1 text-sm text-zinc-600">{when}</p>
         {detail.location && (

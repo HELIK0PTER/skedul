@@ -2,7 +2,7 @@
 
 import { FormField } from "@/components/dashboard/form-field";
 import { Input } from "@/components/ui/input";
-import type { IdentityInput } from "@/lib/public/booking-actions";
+import type { IdentityInput } from "@/lib/public/identity-schema";
 import { dataUseLine } from "@/lib/public/messages";
 import { BOUNDS } from "@/lib/tickets-vocab";
 

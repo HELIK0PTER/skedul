@@ -67,11 +67,23 @@ test("the offer page shows a ?p= reference only on paiement=annule and only a sh
 
 test("the offer page passes the form what a visitor may know of themselves, formats money and never indexes the reference", () => {
   const page = source("src/app/[slug]/offre/[offerId]/page.tsx");
-  assert.match(page, /visitor=\{\{ state: visitor\.state, email: visitor\.state === "verified" \? visitor\.email : null, name: visitor\.name \}\}/);
+  assert.match(
+    page,
+    /visitor=\{\{\s*state: visitor\.state,\s*email: visitor\.state === "verified" \? visitor\.email : null,\s*name: visitor\.state === "verified" \? visitor\.name : null,?\s*\}\}/,
+    "the session name prefills a field only for a verified visitor, like the address (G4c)",
+  );
   assert.match(page, /formatMoney\(offer\.priceCents, pro\.currency\)/);
   assert.match(page, /const testMode = payment === "live" \? null : payment;/);
   assert.match(page, /return offerMetadata\(loaded\);/, "the URL may carry p: offerMetadata never sends the referrer (page-metadata.test.ts)");
   assert.doesNotMatch(page, /\b(customerId|ownerUserId|userId)=\{/, "no identity in a prop");
+});
+
+test("both public forms prefill the name by one rule: the session name for a verified visitor only, never an unverified or impersonated one (G4c)", () => {
+  const rule = /name: visitor\.state === "verified" \? visitor\.name : null/g;
+  for (const path of ["src/app/[slug]/seance/[occurrenceId]/page.tsx", "src/app/[slug]/offre/[offerId]/page.tsx"]) {
+    assert.equal(inCode(source(path), rule).length, 1, path);
+    assert.doesNotMatch(codeView(source(path)), /name: visitor\.name\b/, `${path}: no other way to prefill a name`);
+  }
 });
 
 test("the offer page mounts one VerifyEmailBanner for every signed-in visitor, above the checkout, so it survives a code being accepted (G1b carry)", () => {
@@ -350,6 +362,21 @@ test("no row, user or customer identifier reaches a client prop, and the séance
   assert.doesNotMatch(page, /\b(ownerUserId|userId|customerId|bookingId|owner)=\{/, "no identity, no booking id and no row in a prop");
   assert.match(page, /seenStartsAt=\{detail\.startsAt\.toISOString\(\)\}/);
   assert.match(page, /returnTo=\{`\/\$\{(?:pro\.)?slug\}\/seance\/\$\{(?:detail\.)?occurrenceId\}`\}/);
+});
+
+test("a state label has one colour: the planning row and the séance page both read stateBadgeVariant of the state's kind (G4c)", () => {
+  const planning = source("src/components/public/public-planning.tsx");
+  const page = seancePage();
+  assert.equal(inCode(planning, /<Badge variant=\{stateBadgeVariant\(vm\.stateKind\)\}>/g).length, 1, "the row");
+  assert.equal(inCode(page, /<Badge variant=\{stateBadgeVariant\(state\.kind\)\}>/g).length, 1, "the séance page");
+  assert.match(planning, /import \{[^}]*\bstateBadgeVariant\b[^}]*\} from "@\/lib\/public\/planning-view";/);
+  assert.match(seance(), /import \{[^}]*\bstateBadgeVariant\b[^}]*\} from "@\/lib\/public\/planning-view";/);
+  for (const [name, text] of [["planning", planning], ["séance page", seance()]] as const) {
+    const code = codeView(text);
+    assert.doesNotMatch(code, /function stateBadgeVariant\b|const stateBadgeVariant\b/, `${name}: no local copy of the mapping`);
+    assert.doesNotMatch(code, /variant=\{[^}]*(?:"destructive"|"success"|"default")/, `${name}: a badge colour is never chosen inline`);
+    assert.doesNotMatch(code, /stateText\s*===|PUBLIC_STATE_LABELS/, `${name}: no decision keyed on the wording of a label`);
+  }
 });
 
 test("the séance page mounts one VerifyEmailBanner for every signed-in visitor, so it survives a code being accepted (Task 25b lesson)", () => {

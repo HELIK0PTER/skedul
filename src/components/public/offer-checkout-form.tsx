@@ -3,19 +3,17 @@
 import { useEffect, useState, useTransition } from "react";
 import { Loader2 } from "lucide-react";
 
+import { FormError } from "@/components/dashboard/form-error";
 import { useRefusalFocus } from "@/components/dashboard/use-refusal-focus";
 import { IdentityFields } from "@/components/public/identity-fields";
 import { TestPaymentsBanner } from "@/components/public/test-payments-banner";
 import { Button } from "@/components/ui/button";
-import type { IdentityInput } from "@/lib/public/booking-actions";
+import type { IdentityInput } from "@/lib/public/identity-schema";
 import type { VisitorState } from "@/lib/public/identity";
 import { COPY } from "@/lib/public/messages";
 import { identityErrors, identityToSend } from "@/lib/public/occurrence-form";
 import { PUBLIC_UNEXPECTED } from "@/lib/public/result";
 import { startShopPurchaseAction } from "@/server/public";
-
-const ERROR_CLASS =
-  "rounded-lg bg-destructive/10 px-3 py-2 text-sm text-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 /**
  * The identity form of a shop purchase (E9, spec L1099-1104, contract § 3.23): « Prénom et nom », « Email », « Téléphone »,
@@ -112,9 +110,7 @@ export function OfferCheckoutForm({
         onWebsite={setWebsite}
       />
       {/* Always mounted, so that a screen reader announces a failure when it appears. */}
-      <p role="alert" ref={errorBox} tabIndex={-1} className={formError ? ERROR_CLASS : "sr-only"}>
-        {formError}
-      </p>
+      <FormError alwaysMounted message={formError} ref={errorBox} tabIndex={-1} />
       <Button type="submit" size="lg" className="w-full sm:w-auto" disabled={busy}>
         {busy && <Loader2 className="animate-spin" aria-hidden />}
         {busy ? COPY.PENDING_PAY : `Payer ${priceLabel}`}
