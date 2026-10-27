@@ -5,6 +5,7 @@
  * under two host zones too (PowerShell `$env:TZ`).
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
@@ -287,4 +288,52 @@ test("nothing the module says carries a dash", () => {
   }
   assert.ok(strings.length > 14);
   for (const s of strings) assert.equal(NO_DASH.test(s), false, s);
+});
+
+/** The specifiers of a source's imports, split into runtime ones (a value is bound) and type-only ones (`import type`, or only `type X` bindings). */
+function importsOf(source: string): { runtime: string[]; typeOnly: string[] } {
+  const runtime: string[] = [];
+  const typeOnly: string[] = [];
+  for (const m of source.matchAll(/^import\s+(type\s+)?([\s\S]*?)\s+from\s+["']([^"']+)["'];?/gm)) {
+    const braces = /\{([\s\S]*)\}/.exec(m[2]);
+    const values =
+      braces === null
+        ? [m[2].trim()]
+        : braces[1]
+            .split(",")
+            .map((binding) => binding.trim())
+            .filter((binding) => binding !== "" && !binding.startsWith("type "));
+    (m[1] || values.length === 0 ? typeOnly : runtime).push(m[3]);
+  }
+  for (const m of source.matchAll(/^import\s+["']([^"']+)["'];?/gm)) runtime.push(m[1]);
+  return { runtime: runtime.sort(), typeOnly: typeOnly.sort() };
+}
+
+const FORBIDDEN = /server-only|next\/|@\/lib\/db|@\/lib\/booking|@\/lib\/env/;
+/** The source without its comments (the header says « no `server-only` » in prose; the import specifiers, strings, stay). */
+const withoutComments = (source: string): string => source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+// G4c deferred minor: CheckoutReturn and PendingHolds ("use client") import this module at runtime, so every runtime
+// import it holds lands in the browser bundle. The pattern of identity-schema.test.ts: the list is exact, the release
+// core (which reaches the engine and the db) is type-only, and nothing server-side is named at all.
+test("the module is client-safe: runtime imports of the date formatter, the copy and visibility only; the release core as a type", () => {
+  const source = readFileSync("src/lib/public/checkout-return-view.ts", "utf8");
+  const { runtime, typeOnly } = importsOf(source);
+  assert.deepEqual(runtime, ["./visibility", "@/lib/datetime", "@/lib/public/messages"]);
+  assert.deepEqual(typeOnly, ["@/lib/public/release-actions"]);
+  assert.doesNotMatch(withoutComments(source), FORBIDDEN);
+  // Its one local runtime import is read too: visibility.ts names the reads and the identity module as types only.
+  const visibility = readFileSync("src/lib/public/visibility.ts", "utf8");
+  assert.deepEqual(importsOf(visibility).runtime, [], "visibility.ts has no runtime import");
+  assert.doesNotMatch(withoutComments(visibility), FORBIDDEN);
+});
+
+test("the import reader can fail: a value import of the release core is a runtime import, a type binding is not", () => {
+  assert.deepEqual(importsOf('import { abandonCheckoutCore } from "@/lib/public/release-actions";').runtime, ["@/lib/public/release-actions"]);
+  assert.deepEqual(importsOf('import { type AbandonOutcome } from "@/lib/public/release-actions";').typeOnly, ["@/lib/public/release-actions"]);
+  assert.deepEqual(
+    importsOf('import type { X } from "a";\nimport { y, type Z } from "b";\nimport c from "c";\nimport "server-only";').runtime,
+    ["b", "c", "server-only"],
+  );
+  assert.deepEqual(importsOf('import {\n  liveHoldEnd,\n  type PageBooking,\n} from "./visibility";').runtime, ["./visibility"]);
 });
