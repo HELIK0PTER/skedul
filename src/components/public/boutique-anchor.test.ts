@@ -30,9 +30,16 @@ test("the Boutique stays a server component: the browser code lives in the leaf"
   assert.doesNotMatch(BOUTIQUE, /\buse(State|Effect|Router|Ref)\b|window\.|document\./);
 });
 
-test("the leaf scrolls once on mount from the real URL hash, and renders nothing", () => {
+test("the leaf scrolls once on mount from the real URL hash, drops the fragment it has used, and renders nothing", () => {
   assert.match(LEAF, /^"use client";/);
   assert.match(LEAF, /import \{ scrollToHashedAnchor \} from "@\/lib\/public-anchors";/);
-  assert.match(LEAF, /useEffect\(\(\) => \{\s*scrollToHashedAnchor\(anchor, window\.location\.hash, document\);\s*\}, \[anchor\]\);/);
+  // Once it has scrolled the fragment goes, so that a Back or Forward traversal, or a reload, that mounts the Boutique again
+  // does not scroll to it a second time (G4c). `history.state` is passed back as it is: it holds Next's router state.
+  assert.match(
+    LEAF,
+    /useEffect\(\(\) => \{\s*if \(!scrollToHashedAnchor\(anchor, window\.location\.hash, document\)\) return;\s*window\.history\.replaceState\(window\.history\.state, "", window\.location\.pathname \+ window\.location\.search\);\s*\}, \[anchor\]\);/,
+  );
+  assert.equal((LEAF.match(/replaceState\(/g) ?? []).length, 1, "one write to the history, after a scroll that happened");
+  assert.doesNotMatch(LEAF, /pushState|location\.hash\s*=|location\.replace|router\./, "no new entry, no navigation, no router");
   assert.match(LEAF, /return null;/);
 });

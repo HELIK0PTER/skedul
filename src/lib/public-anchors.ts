@@ -1,7 +1,9 @@
 /**
  * The anchors of the public page `/[slug]` that other pages link to. Pure, so a server page, a client component and a
- * test can all import it. The « Boutique » block of the public page (offers per ticket type) carries
- * `id={BOUTIQUE_ANCHOR}` and mounts a leaf that scrolls to it when the URL hash names it (`scrollToHashedAnchor`).
+ * test can all import it. The « Boutique » section of the public page (offers per ticket type) carries
+ * `id={BOUTIQUE_ANCHOR}` and mounts a leaf that scrolls to it once when the URL hash names it (`scrollToHashedAnchor`),
+ * then drops the fragment from the current history entry: `boutiqueHref` lands on the section, and only the visit that
+ * followed the link scrolls (a Back traversal or a reload to the entry does not).
  */
 export const BOUTIQUE_ANCHOR = "boutique";
 

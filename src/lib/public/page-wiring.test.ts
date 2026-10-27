@@ -43,6 +43,15 @@ test("the merci page is noindex, sends no referrer, titles itself without person
   assert.match(page, /COPY\.TEST_PAYMENT_LINE/);
 });
 
+test("the merci page counts every paid state as paid: the green icon and the test-payment line, the cancelled booking included (G4c)", () => {
+  const page = source("src/app/[slug]/merci/page.tsx");
+  assert.match(
+    page,
+    /const paid = state\.kind === "booked" \|\| state\.kind === "paid_shop" \|\| state\.kind === "paid_late" \|\| state\.kind === "paid_cancelled";/,
+  );
+  assert.match(page, /const testLine = paid && !reference\.livemode;/);
+});
+
 test("the offer page reads the offer of the slug's pro and says so when it is no longer sold (L1458-1459)", () => {
   const page = source("src/app/[slug]/offre/[offerId]/page.tsx");
   assert.match(page, /getOfferPage\(resolved\.pro\.professionalId, offerId\)/);
@@ -489,4 +498,26 @@ test("no element of the public pages receives the pro whole: pro=, profile= and 
       `${path} hands the pro whole to an element`,
     );
   }
+});
+
+test("the espace wrappers take the page's clock as their last parameter and never read their own; every page hands them its one instant (G4c)", () => {
+  const queries = source("src/server/client-queries.ts");
+  for (const [name, signature] of [
+    ["getCustomerSpacePage", /export function getCustomerSpacePage\(professionalId: string, customerId: string, now: Date\)/],
+    ["getSpendableSeances", /export function getSpendableSeances\(professionalId: string, customerId: string, now: Date\)/],
+    ["getMySpacePage", /export function getMySpacePage\(session: SessionFacts \| null, now: Date\)/],
+  ] as const) {
+    assert.match(queries, signature, `${name} takes the instant last`);
+    assert.doesNotMatch(codeView(bodyOf(queries, name)), /new Date\(/, `${name} never reads the clock itself`);
+  }
+  // /[slug] and the séance page already hold their one clock; the espace and /mon-espace pages read theirs once.
+  assert.match(HOME, /getCustomerSpacePage\(pro\.professionalId, visitor\.owner\.customerId, now\)/);
+  assert.match(seancePage(), /getCustomerSpacePage\(pro\.professionalId, owner\.customerId, now\)/);
+  const espace = source("src/app/[slug]/espace/page.tsx");
+  assert.equal(inCode(espace, /new Date\(\)/g).length, 1, "the espace page reads the clock once");
+  assert.match(espace, /getCustomerSpacePage\(pro\.id, shownCustomerId, now\)/);
+  assert.match(espace, /getSpendableSeances\(pro\.id, shownCustomerId, now\)/);
+  const mine = source("src/app/mon-espace/page.tsx");
+  assert.equal(inCode(mine, /new Date\(\)/g).length, 1, "/mon-espace reads the clock once");
+  assert.match(mine, /getMySpacePage\(session, new Date\(\)\)/, "its one read takes the instant it reads once");
 });

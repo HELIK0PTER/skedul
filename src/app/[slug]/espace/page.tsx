@@ -64,9 +64,11 @@ export default async function EspacePage({ params, searchParams }: Props) {
       : identity.kind === "unverified"
         ? identity.guestCustomerId
         : null;
+  // The one clock of this render: the space and the séances a held ticket can book agree about « now ».
+  const now = new Date();
   const [space, spendable] = await Promise.all([
-    shownCustomerId ? getCustomerSpacePage(pro.id, shownCustomerId) : Promise.resolve(null),
-    shownCustomerId ? getSpendableSeances(pro.id, shownCustomerId) : Promise.resolve([]),
+    shownCustomerId ? getCustomerSpacePage(pro.id, shownCustomerId, now) : Promise.resolve(null),
+    shownCustomerId ? getSpendableSeances(pro.id, shownCustomerId, now) : Promise.resolve([]),
   ]);
 
   // The confirmation banner sits in ONE place of the tree, the first child of the shell, whatever the branch below:

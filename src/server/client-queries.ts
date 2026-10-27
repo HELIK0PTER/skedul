@@ -57,9 +57,13 @@ export async function resolveSpaceCustomer(pro: { id: string; userId: string }):
   return spaceIdentityOf(await currentPublicVisitor(pro.id, pro.userId));
 }
 
-/** The read-only espace of one customer of the pro (null when the customer is not this pro's). */
-export function getCustomerSpacePage(professionalId: string, customerId: string): Promise<CustomerSpace | null> {
-  return getCustomerSpace(db, professionalId, customerId, new Date());
+/**
+ * The read-only espace of one customer of the pro (null when the customer is not this pro's). `now` is the page's one
+ * instant (contract Revision 3.9): the wallet, the cards and the séances a page draws agree about « now », and the
+ * wrapper reads no clock of its own.
+ */
+export function getCustomerSpacePage(professionalId: string, customerId: string, now: Date): Promise<CustomerSpace | null> {
+  return getCustomerSpace(db, professionalId, customerId, now);
 }
 
 /**
@@ -67,17 +71,18 @@ export function getCustomerSpacePage(professionalId: string, customerId: string)
  * whose espace it renders (`resolveSpaceCustomer`): the Owner's, or the personal link's customer for the read-only list
  * (the cookie proves nothing about who holds the browser, so for it the list is information only). Never an id from
  * the request. What books is the control `canSpendIn` offers to the Owner alone, and the engine reads the Owner's own
- * customer again when the booking is made.
+ * customer again when the booking is made. `now` is the page's one instant, like `getCustomerSpacePage`'s.
  */
-export function getSpendableSeances(professionalId: string, customerId: string): Promise<SpendableSeance[]> {
-  return spendableSeances(db, professionalId, customerId, new Date());
+export function getSpendableSeances(professionalId: string, customerId: string, now: Date): Promise<SpendableSeance[]> {
+  return spendableSeances(db, professionalId, customerId, now);
 }
 
 /**
  * The cards of /mon-espace (L1377-1378, Decision 5): one per pro, the row the session OWNS. It takes the session facts
  * (the fresh, not suspended session of `currentSessionFacts`, or null) and the read itself answers nothing unless they
  * are verified and not impersonated: the page checks the visitor state too, but a data read does not rely on a caller.
+ * `now` is the page's instant.
  */
-export function getMySpacePage(session: SessionFacts | null): Promise<MySpaceCard[]> {
-  return getMySpace(db, session, new Date());
+export function getMySpacePage(session: SessionFacts | null, now: Date): Promise<MySpaceCard[]> {
+  return getMySpace(db, session, now);
 }

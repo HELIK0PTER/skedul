@@ -66,14 +66,28 @@ test("the same instant reads in the zone of the pro, never in the host's zone", 
   assert.equal(label("2026-11-01T18:00:00Z", "2026-11-01T19:00:00Z", "Europe/Paris"), "dim. 1er novembre 2026 · 19:00 à 20:00");
 });
 
-test("a paid purchase whose booking ended is « paid_late »: the place was released before the payment landed", () => {
-  for (const status of ["cancelled", "expired"] as const) {
+test("a paid purchase whose booking EXPIRED is « paid_late »: only a hold expires, so the place was released before the payment landed", () => {
+  const state = merciStateOf(
+    ref({ quantity: 4, ticketCount: 4, booking: booking("2026-10-25T09:00:00Z", "2026-10-25T10:00:00Z", "expired") }),
+    "Europe/Paris",
+  );
+  assert.deepEqual(state, { kind: "paid_late", count: 4 });
+});
+
+test("a paid purchase whose booking was CANCELLED is « paid_cancelled »: it cannot tell a late payment from a booking cancelled after it was confirmed, so it gives no reason (G4c)", () => {
+  for (const [quantity, ticketCount] of [[4, 4], [1, 0], [1, 1]] as const) {
     const state = merciStateOf(
-      ref({ quantity: 4, ticketCount: 4, booking: booking("2026-10-25T09:00:00Z", "2026-10-25T10:00:00Z", status) }),
+      ref({ quantity, ticketCount, booking: booking("2026-10-25T09:00:00Z", "2026-10-25T10:00:00Z", "cancelled") }),
       "Europe/Paris",
     );
-    assert.deepEqual(state, { kind: "paid_late", count: 4 }, status);
+    assert.deepEqual(state, { kind: "paid_cancelled" }, `${quantity} / ${ticketCount}`);
   }
+  // Only the paid purchase: an unpaid one whose booking was cancelled is still « expired », whatever its booking says.
+  const unpaid = merciStateOf(
+    ref({ status: "expired", booking: booking("2026-10-25T09:00:00Z", "2026-10-25T10:00:00Z", "cancelled") }),
+    "Europe/Paris",
+  );
+  assert.deepEqual(unpaid, { kind: "expired", withBooking: true });
 });
 
 test("a paid purchase whose booking is still pending is a transient moment: « pending », so the page keeps looking", () => {
@@ -142,6 +156,10 @@ test("merciCopy: every title and body, exact", () => {
     title: "Paiement reçu",
     body: "Paiement reçu, votre place n'était plus réservée : vos 4 tickets sont dans votre portefeuille.",
   });
+  assert.deepEqual(merciCopy({ kind: "paid_cancelled" }), {
+    title: "Paiement reçu",
+    body: "Paiement reçu. Cette réservation a été annulée.",
+  });
   assert.deepEqual(merciCopy({ kind: "processing" }), {
     title: "Paiement en cours de traitement",
     body: "Votre banque confirme le paiement. Vous recevrez un email dès qu'il sera validé.",
@@ -167,6 +185,7 @@ test("no copy of any state contains a dash or a « tu » form, and a type name i
     { kind: "paid_shop", count: 4, typeName: "Cours d'essai" },
     { kind: "paid_late", count: 1 },
     { kind: "paid_late", count: 4 },
+    { kind: "paid_cancelled" },
     { kind: "processing" },
     { kind: "pending" },
     { kind: "expired", withBooking: true },

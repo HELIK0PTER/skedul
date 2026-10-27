@@ -1,6 +1,6 @@
 /**
  * What the thank-you page says about a purchase (spec L1460-1461, contract § 3.22). Pure: it maps the purchase reference
- * to one of six states and a state to its copy; the page adds the test-payment line and the buttons. A state carries only
+ * to one of seven states and a state to its copy; the page adds the test-payment line and the buttons. A state carries only
  * what the sentence needs (a title, a date, a count, a type name): never the purchase, the customer or an address
  * (Decision 71).
  */
@@ -12,12 +12,15 @@ export type MerciState =
   | { kind: "booked"; title: string; whenLabel: string }
   | { kind: "paid_shop"; count: number; typeName: string }
   | { kind: "paid_late"; count: number }
+  | { kind: "paid_cancelled" }
   | { kind: "processing" }
   | { kind: "pending" }
   | { kind: "expired"; withBooking: boolean };
 
 /**
- * paid + confirmed booking → booked; paid + ended booking → paid_late; paid without booking → paid_shop; pending +
+ * paid + confirmed booking → booked; paid + expired booking → paid_late (only a hold expires: the place was released
+ * before the payment landed); paid + cancelled booking → paid_cancelled (G4c: a late payment and a booking cancelled after
+ * it was confirmed leave the same row, so this state gives no reason); paid without booking → paid_shop; pending +
  * processing → processing; pending → pending; expired → expired (L1460-1461). A paid purchase whose booking is still
  * pending is a transient moment (fulfilment confirms both in one batch): it reads pending, and the page keeps looking.
  */
@@ -30,6 +33,7 @@ export function merciStateOf(ref: PurchaseReference, tz: string): MerciState {
       return { kind: "booked", title: booking.title, whenLabel: formatWhen(booking.startsAt, booking.endsAt, tz) };
     }
     if (booking.status === "pending") return { kind: "pending" };
+    if (booking.status === "cancelled") return { kind: "paid_cancelled" };
     return { kind: "paid_late", count };
   }
   if (ref.status === "pending") return ref.processing ? { kind: "processing" } : { kind: "pending" };
@@ -60,6 +64,8 @@ export function merciCopy(state: MerciState): { title: string; body: string } {
             ? "Paiement reçu, votre place n'était plus réservée : votre ticket est dans votre portefeuille."
             : `Paiement reçu, votre place n'était plus réservée : vos ${formatCount(state.count)} tickets sont dans votre portefeuille.`,
       };
+    case "paid_cancelled":
+      return { title: COPY.PAYMENT_RECEIVED, body: "Paiement reçu. Cette réservation a été annulée." };
     case "processing":
       return {
         title: COPY.PROCESSING,

@@ -46,7 +46,7 @@ export default async function MerciPage({ params, searchParams }: Props) {
 
   const state = merciStateOf(reference, pro.timezone);
   const { title, body } = merciCopy(state);
-  const paid = state.kind === "booked" || state.kind === "paid_shop" || state.kind === "paid_late";
+  const paid = state.kind === "booked" || state.kind === "paid_shop" || state.kind === "paid_late" || state.kind === "paid_cancelled";
   const waiting = state.kind === "pending" || state.kind === "processing";
   const testLine = paid && !reference.livemode;
   const Icon = paid ? CheckCircle2 : waiting ? Clock : TriangleAlert;

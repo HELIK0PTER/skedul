@@ -22,9 +22,9 @@ import {
 /*
  * Server-side readers of the public pages: thin wrappers that bind the db to the testable cores in src/lib/public
  * (planning, boutique, séance, offer, purchase reference). The clock is the page's: it reads `new Date()` once per
- * request and hands that instant to every read that depends on it and to the view functions (`seanceState`,
- * `toPublicSeanceVM`, `planningEmptyState`), so a read and the page never disagree about « now » (G4a,
- * public-queries.test.ts). The pro always comes from the page slug (resolvePublicPro or getPublicPage), never
+ * request and hands that instant to every read that depends on it and to the view functions that do (`seanceState`,
+ * `toPublicSeanceVM`; `planningEmptyState` takes no instant), so a read and the page never disagree about « now » (G4a,
+ * public-queries.test.ts). The espace wrappers of client-queries.ts take it the same way (G4c). The pro always comes from the page slug (resolvePublicPro or getPublicPage), never
  * from input; every client prop is built by the page from picked fields.
  */
 

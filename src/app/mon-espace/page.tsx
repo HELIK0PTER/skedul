@@ -33,7 +33,7 @@ export default async function MySpacePage() {
   const session = await currentSessionFacts();
   const state = visitorState(session);
   // The page keeps its own gate; the read refuses a session that is not verified or is impersonated by itself as well.
-  const cards = state === "verified" && session ? await getMySpacePage(session) : [];
+  const cards = state === "verified" && session ? await getMySpacePage(session, new Date()) : [];
   const banner = session && state !== "impersonating" ? { email: session.email, verified: state === "verified" } : null;
 
   return (

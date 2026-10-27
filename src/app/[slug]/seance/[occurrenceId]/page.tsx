@@ -96,7 +96,7 @@ export default async function SeancePage({ params, searchParams }: Props) {
   const customerViewer = viewer?.kind === "customer" ? viewer : null;
   const [facts, space, liveHolds] = await Promise.all([
     customerViewer ? getSeanceVisitorFacts(pro.professionalId, detail.occurrenceId, customerViewer, now) : Promise.resolve(null),
-    owner ? getCustomerSpacePage(pro.professionalId, owner.customerId) : Promise.resolve(null),
+    owner ? getCustomerSpacePage(pro.professionalId, owner.customerId, now) : Promise.resolve(null),
     // SEC-I6: the live holds of the Owner at this pro (strangers typing her address park seats on her row).
     owner ? getLivePendingHolds(pro.professionalId, owner.customerId, now) : Promise.resolve([]),
   ]);

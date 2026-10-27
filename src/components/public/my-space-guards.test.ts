@@ -32,10 +32,10 @@ test("/mon-espace reads the fresh session, never redirects, and mounts the code 
   assert.match(page, /returnTo="\/mon-espace"/);
   assert.match(page, /title: "Mon espace"/);
   assert.match(page, /robots: \{ index: false \}/);
-  assert.match(page, /state === "verified" && session \? await getMySpacePage\(session\) : \[\]/, "the facts of the fresh session, nothing from the request, behind the page's own gate");
+  assert.match(page, /state === "verified" && session \? await getMySpacePage\(session, new Date\(\)\) : \[\]/, "the facts of the fresh session, nothing from the request, behind the page's own gate");
   const queries = source("src/server/client-queries.ts");
-  assert.match(queries, /export function getMySpacePage\(session: SessionFacts \| null\)/);
-  assert.match(queries, /return getMySpace\(db, session, new Date\(\)\);/, "the read gets the facts, which it checks itself (verified, not impersonated)");
+  assert.match(queries, /export function getMySpacePage\(session: SessionFacts \| null, now: Date\)/);
+  assert.match(queries, /return getMySpace\(db, session, now\);/, "the read gets the facts, which it checks itself (verified, not impersonated)");
   assert.match(page, /COPY\.CONFIRM_EMAIL_FIRST/);
   assert.match(page, /COPY\.IMPERSONATING/);
   assert.doesNotMatch(page, /unstable_cache|"use cache"|export const revalidate|export const dynamic/);

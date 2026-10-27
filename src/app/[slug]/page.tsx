@@ -62,8 +62,10 @@ export default async function PublicProfilePage({ params, searchParams }: Props)
   const { pro, branding, bio } = page;
   const { semaine, view } = parsePlanningParams(await searchParams);
 
-  // The one clock of this request: every read below and every view function takes it, so that a séance the planning
-  // lists and the label it gets never disagree about « now » (the only other clock is the one of the after() block).
+  // The one clock of this request: every read and every view function that depends on the time takes it (the planning,
+  // the horizon, the next séance, the wallet, the row labels), so that a séance the planning lists and the label it gets
+  // never disagree about « now ». The Boutique read and `planningEmptyState` depend on no instant; the only other clock is
+  // the one of the after() block.
   const now = new Date();
   const tz = pro.timezone;
   const weekStart = weekStartFromParam(semaine, tz, now);
@@ -78,7 +80,7 @@ export default async function PublicProfilePage({ params, searchParams }: Props)
     getBoutiquePage(pro.professionalId),
     getHorizonNeed(pro, now),
     // The wallet is the Owner's only: never a typed address, a purchase reference or a personal-link cookie (Decision 61).
-    visitor.owner ? getCustomerSpacePage(pro.professionalId, visitor.owner.customerId) : Promise.resolve(null),
+    visitor.owner ? getCustomerSpacePage(pro.professionalId, visitor.owner.customerId, now) : Promise.resolve(null),
   ]);
   // Only an empty week asks where the next séance is, and only a week with nothing after it asks if there is any at all.
   const nextStart = seances.length === 0 ? await getNextSeanceStart(pro, range.end, now) : null;
