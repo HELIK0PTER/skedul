@@ -4,11 +4,18 @@
  * none of them should have to load the database or the e-mail templates for it.
  */
 
-/** The message of an Error, or of the plain `{ message }` object Resend returns; null for anything else. */
+/**
+ * The message of an Error, or of the plain `{ message }` object Resend returns, when it is a string; null for anything
+ * else, and for a value that throws when read (a getter, a revoked proxy): a logger called from a `catch` must never
+ * throw in its turn (P4 final review RND-1).
+ */
 function messageOf(err: unknown): string | null {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "object" && err !== null && "message" in err && typeof err.message === "string") {
-    return err.message;
+  try {
+    if (typeof err === "object" && err !== null && "message" in err && typeof err.message === "string") {
+      return err.message;
+    }
+  } catch {
+    // Unreadable: no message.
   }
   return null;
 }

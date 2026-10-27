@@ -39,18 +39,36 @@ function safeErrorOf(err: Error): Error {
   return safe;
 }
 
+/** What an argument is printed as when not even its safe error can be built (a revoked proxy): nothing of it. */
+const UNREADABLE = "[unreadable log argument]";
+
+function scrubArg(arg: unknown): unknown {
+  if (arg instanceof Error) return errorHoldsSecret(arg, 0) ? safeErrorOf(arg) : arg;
+  if (typeof arg === "string") return holdsSecret(arg) ? scrubLogText(arg) : arg;
+  return arg;
+}
+
 /**
  * The arguments of one console call as they may be printed: an Error that holds a secret (message, stack, own field or
  * cause) is replaced by `safeErrorOf(err)`; a string that holds one loses its « params: » tail and has its addresses,
  * tokens and session ids masked (`scrubLogText`: lines and spacing kept). A secret is what `holdsLogSecret` names, so
  * the `pkg@1.2.3` of a stack frame's package path changes nothing. Everything else is handed over as it came, the
- * same values.
+ * same values. Never throws, since it runs inside every `console.error` / `console.warn` (Next's logError among
+ * them): an argument it cannot read (a getter or a stack that throws, a field with no string form, a message that is
+ * not a string, a revoked proxy) is never printed as it came, but as its safe error, or `UNREADABLE` when even that
+ * cannot be built.
  */
 export function scrubLogArgs(args: readonly unknown[]): unknown[] {
   return args.map((arg) => {
-    if (arg instanceof Error) return errorHoldsSecret(arg, 0) ? safeErrorOf(arg) : arg;
-    if (typeof arg === "string") return holdsSecret(arg) ? scrubLogText(arg) : arg;
-    return arg;
+    try {
+      return scrubArg(arg);
+    } catch {
+      try {
+        return arg instanceof Error ? safeErrorOf(arg) : UNREADABLE;
+      } catch {
+        return UNREADABLE;
+      }
+    }
   });
 }
 

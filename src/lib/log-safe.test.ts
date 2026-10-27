@@ -57,6 +57,17 @@ test("logSafeMessage reads the message of the plain error object Resend returns,
   assert.equal(logSafeMessage(null), "unknown error");
 });
 
+test("logSafeMessage never throws: an Error whose message is not a string, or a value it cannot read, is « unknown error » (P4 final review RND-1)", () => {
+  assert.equal(logSafeMessage(Object.assign(new Error("x"), { message: 42 })), "unknown error");
+  assert.equal(logSafeMessage({ message: 42 }), "unknown error");
+  const revoked = Proxy.revocable(new Error("marie@example.com"), {});
+  revoked.revoke();
+  assert.equal(logSafeMessage(revoked.proxy), "unknown error");
+  const getter = {};
+  Object.defineProperty(getter, "message", { get: () => assert.fail("a message that throws") });
+  assert.equal(logSafeMessage(getter), "unknown error");
+});
+
 test("scrubLogText makes the same cut and masks as logSafeMessage, and keeps the lines and the spacing (P4 final review RND-1)", () => {
   const stack = "DrizzleQueryError: Failed query: select 1 where email = $1\nparams: marie@example.com,Marie\n    at x (a.js:1:2)";
   assert.equal(scrubLogText(stack), "DrizzleQueryError: Failed query: select 1 where email = $1\n");

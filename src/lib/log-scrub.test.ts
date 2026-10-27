@@ -135,6 +135,57 @@ test("the scrub installs once: a second install leaves the wrapped methods as th
   assert.deepEqual(calls, [["console", "mail to [email]"]], "scrubbed once, not twice, with the console as `this`");
 });
 
+/** Errors and values the scrub cannot read as it reads an ordinary error: each made fresh, so no case sees another's state. */
+function unreadableArgs(): { name: string; arg: unknown; safe: string | null }[] {
+  // The message and the head of each holds no secret, so the scrub reads on to the part that throws.
+  const withGetter = Object.assign(new Error("boom"), { digest: "77" });
+  Object.defineProperty(withGetter, "detail", { enumerable: true, get: () => assert.fail("a getter that throws") });
+  const withStack = new Error("Failed query: select 1");
+  Object.defineProperty(withStack, "stack", { get: () => assert.fail("a stack that throws") });
+  const revoked = Proxy.revocable(new Error("alice@example.com"), {});
+  revoked.revoke();
+  return [
+    // `safe`: the message of the safe Error printed instead; null: a value with nothing readable, printed as a fixed line.
+    { name: "a message that is not a string", arg: Object.assign(new Error("x"), { message: 42 }), safe: "unknown error" },
+    { name: "a field with a Symbol", arg: Object.assign(new Error("Failed query: select 1"), { params: [Symbol("tok_123")] }), safe: "Failed query: select 1" },
+    { name: "a field with no string form", arg: Object.assign(new Error("Failed query: select 1"), { params: [Object.create(null)] }), safe: "Failed query: select 1" },
+    { name: "a field whose getter throws", arg: withGetter, safe: "boom" },
+    { name: "a stack that throws", arg: withStack, safe: "Failed query: select 1" },
+    { name: "a revoked proxy", arg: revoked.proxy, safe: null },
+  ];
+}
+
+test("the scrub never throws: what it cannot read is printed as its safe error, or as a fixed line, and the console call goes on", () => {
+  for (const { name, arg, safe } of unreadableArgs()) {
+    let out: unknown[] = [];
+    assert.doesNotThrow(() => {
+      out = scrubLogArgs(["before", arg, "after"]);
+    }, name);
+    assert.equal(out.length, 3, name);
+    assert.equal(out[0], "before", name);
+    assert.equal(out[2], "after", `${name}: the other arguments are untouched`);
+    if (safe === null) {
+      assert.equal(out[1], "[unreadable log argument]", name);
+    } else {
+      assert.ok(out[1] instanceof Error && out[1] !== arg, `${name}: a new error is printed instead`);
+      assert.equal(out[1].message, safe, name);
+      assert.equal(out[1].cause, undefined, name);
+      assertClean(printed([out[1]]));
+    }
+  }
+  const digest = scrubLogArgs([unreadableArgs()[3].arg])[0] as Error & { digest?: string };
+  assert.equal(digest.digest, "77", "the digest is kept when it can be read");
+  // Through the installed wrap: the call reaches the console, never throws back at the caller (Next's logError).
+  const seen: unknown[][] = [];
+  const target = { error: (...args: unknown[]) => void seen.push(args), warn: (...args: unknown[]) => void seen.push(args) };
+  installLogScrub(target);
+  for (const { name, arg } of unreadableArgs()) {
+    assert.doesNotThrow(() => target.error("⨯", arg), name);
+    assert.doesNotThrow(() => target.warn(arg), name);
+  }
+  assert.equal(seen.length, 2 * unreadableArgs().length);
+});
+
 test("src/instrumentation.ts installs the scrub on the console once, at boot, in the Node.js runtime only", () => {
   // Comments out, string text kept (the runtime name and the module path are string literals).
   const source = readFileSync("src/instrumentation.ts", "utf8");
