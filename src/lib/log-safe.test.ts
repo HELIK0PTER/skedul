@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 
 import { rawErrorLogs, sourceFilesUnder } from "@/test/source-guards";
 
-import { logSafeMessage } from "./log-safe";
+import { holdsLogSecret, logSafeMessage, scrubLogText } from "./log-safe";
 
 test("logSafeMessage hides e-mail addresses, personal-link tokens and Checkout session ids", () => {
   assert.equal(logSafeMessage(new Error("boom for marie@example.com")), "boom for [email]");
@@ -55,6 +55,37 @@ test("logSafeMessage reads the message of the plain error object Resend returns,
   assert.equal(logSafeMessage({ message: 42 }), "unknown error");
   assert.equal(logSafeMessage({ name: "validation_error" }), "unknown error");
   assert.equal(logSafeMessage(null), "unknown error");
+});
+
+test("scrubLogText makes the same cut and masks as logSafeMessage, and keeps the lines and the spacing (P4 final review RND-1)", () => {
+  const stack = "DrizzleQueryError: Failed query: select 1 where email = $1\nparams: marie@example.com,Marie\n    at x (a.js:1:2)";
+  assert.equal(scrubLogText(stack), "DrizzleQueryError: Failed query: select 1 where email = $1\n");
+  assert.equal(scrubLogText("to  marie@example.com\n  via /api/c/abc.1.def\tcs_live_9Z"), "to  [email]\n  via /api/c/[token]\t[session]");
+  assert.equal(scrubLogText("nothing\n  here"), "nothing\n  here");
+});
+
+test("holdsLogSecret names a params tail, a real address, a personal link or a session id, and not a package path", () => {
+  for (const text of [
+    "Failed query: select 1\nparams: Marie",
+    "x PARAMS: y",
+    "mail to marie@example.com",
+    "Key (email)=(marie@sub.example.co.uk) already exists.",
+    "GET /api/c/abc.1.def",
+    "cs_test_a1B2c3",
+  ]) {
+    assert.equal(holdsLogSecret(text), true, text);
+  }
+  for (const text of [
+    "    at f (/var/task/node_modules/.pnpm/next@16.2.9_react-dom@19.2.0/node_modules/next/dist/x.js:1:2)",
+    "node_modules/@better-auth+core@1.6.19_@b_55/node_modules/@better-auth/core/dist/env/logger.mjs",
+    "queryparams: x",
+    "plain line",
+  ]) {
+    assert.equal(holdsLogSecret(text), false, text);
+  }
+  // No state is kept between calls (the patterns are shared): the same text answers the same twice.
+  assert.equal(holdsLogSecret("GET /api/c/abc"), true);
+  assert.equal(holdsLogSecret("GET /api/c/abc"), true);
 });
 
 // The whole app, not only the files a plan touched (Task 31 sweep, S31): a raw error object can carry an address, a

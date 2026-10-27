@@ -94,7 +94,11 @@ test("resolvePublicPro hands a pro and its branding fields only: no user id, Str
 
 test("resolvePublicPro shares the [slug] layout's one cached read; only a suspended pro asked for by merci costs a second (G4c)", () => {
   const body = sectionOf("export async function resolvePublicPro");
-  assert.match(body, /return proOfPublicPage\(await getPublicPage\(slug\), opts, async \(\) => \{/, "the decision is the tested pure function's");
+  assert.match(
+    body,
+    /return safeRead\(async \(\) =>\s*proOfPublicPage\(await getPublicPage\(slug\), opts, async \(\) => \{/,
+    "the decision is the tested pure function's, and the whole read goes through safeRead (RND-1)",
+  );
   assert.equal(body.match(/\bgetPublicPage\(/g)?.length, 1, "the request-cached read, once");
   assert.equal(body.match(/\bgetPublicProfile\(/g)?.length, 1, "the uncached read, once, inside the suspended fallback");
   assert.match(body, /getPublicProfile\(slug, \{ includeSuspended: true \}\)/, "the fallback asks for the suspended row itself, whatever the caller's option");

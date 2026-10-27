@@ -15,15 +15,21 @@ import { bodyOf, codeView } from "@/test/source-guards";
 
 const SOURCE = readFileSync("src/server/public-queries.ts", "utf8");
 
-/** Each wrapper that reads with the clock, and the core call that receives the instant it was given. */
+/**
+ * Each wrapper that reads with the clock, and the core call that receives the instant it was given, as the one
+ * statement of its body: `return safeRead(() => <core>(…, now));` (P4 final review RND-1, src/server/safe-read.test.ts).
+ */
 const WITH_CLOCK: readonly { name: string; passes: RegExp }[] = [
-  { name: "getPlanningPage", passes: /listPublicSeances\(db, pro, range, now\)/ },
-  { name: "getNextSeanceStart", passes: /nextPublicSeanceStart\(db, pro, after, now\)/ },
-  { name: "getHorizonNeed", passes: /needsHorizon\(await minGeneratedUntil\(db, pro\.professionalId, now\), now, pro\.timezone\)/ },
-  { name: "getSeancePage", passes: /getPublicSeance\(db, pro, occurrenceId, now\)/ },
-  { name: "getSeanceVisitorFacts", passes: /seanceVisitorFacts\(db, professionalId, occurrenceId, viewer, now\)/ },
-  { name: "getLivePendingHolds", passes: /livePendingHoldsOf\(db, professionalId, customerId, now\)/ },
-  { name: "getPurchaseReference", passes: /purchaseByReference\(db, professionalId, purchaseId, now\)/ },
+  { name: "getPlanningPage", passes: /return safeRead\(\(\) => listPublicSeances\(db, pro, range, now\)\);/ },
+  { name: "getNextSeanceStart", passes: /return safeRead\(\(\) => nextPublicSeanceStart\(db, pro, after, now\)\);/ },
+  {
+    name: "getHorizonNeed",
+    passes: /return safeRead\(async \(\) => needsHorizon\(await minGeneratedUntil\(db, pro\.professionalId, now\), now, pro\.timezone\)\);/,
+  },
+  { name: "getSeancePage", passes: /return safeRead\(\(\) => getPublicSeance\(db, pro, occurrenceId, now\)\);/ },
+  { name: "getSeanceVisitorFacts", passes: /return safeRead\(\(\) => seanceVisitorFacts\(db, professionalId, occurrenceId, viewer, now\)\);/ },
+  { name: "getLivePendingHolds", passes: /return safeRead\(\(\) => livePendingHoldsOf\(db, professionalId, customerId, now\)\);/ },
+  { name: "getPurchaseReference", passes: /return safeRead\(\(\) => purchaseByReference\(db, professionalId, purchaseId, now\)\);/ },
 ];
 
 /** The wrappers that read nothing time-dependent and take no instant. */

@@ -13,16 +13,22 @@ import { db } from "@/lib/db";
 import { spaceIdentityOf, type SessionFacts } from "@/lib/public/identity";
 import { getMySpace, type MySpaceCard } from "@/lib/public/my-space";
 import { spendableSeances, type SpendableSeance } from "@/lib/public/spendable";
+import { safeRead } from "@/server/safe-read";
 import { currentPublicVisitor } from "@/server/visitor";
 
 export type { SpaceIdentity };
+
+/*
+ * Every export's whole body goes through `safeRead` (P4 final review RND-1, src/server/safe-read.test.ts): a query that
+ * fails during a render reaches Next's log as its SQL head only, never with the e-mail or the ids it was bound to.
+ */
 
 /** The clients page: listed clients matching the filter and the search, plus the count of every filter. */
 export async function getClientsPage(
   professionalId: string,
   opts: { q: string; filter: ClientFilter },
 ): Promise<{ rows: ClientListRow[]; counts: Record<ClientFilter, number> }> {
-  return listClients(db, professionalId, new Date(), opts);
+  return safeRead(() => listClients(db, professionalId, new Date(), opts));
 }
 
 /** The client record page (null for another pro's or an unknown customer: the page answers notFound()). */
@@ -30,7 +36,7 @@ export async function getClientRecordPage(
   professionalId: string,
   customerId: string,
 ): Promise<ClientRecordData | null> {
-  return getClientRecord(db, professionalId, customerId, new Date());
+  return safeRead(() => getClientRecord(db, professionalId, customerId, new Date()));
 }
 
 /* ───────────────────────────── Client space (/[slug]/espace) ───────────────────────────── */
@@ -43,7 +49,7 @@ export async function getClientRecordPage(
  * else anonymous. A signed-in visitor never maps to anonymous (COV-C1).
  */
 export async function resolveSpaceCustomer(pro: { professionalId: string; ownerUserId: string }): Promise<SpaceIdentity> {
-  return spaceIdentityOf(await currentPublicVisitor(pro.professionalId, pro.ownerUserId));
+  return safeRead(async () => spaceIdentityOf(await currentPublicVisitor(pro.professionalId, pro.ownerUserId)));
 }
 
 /**
@@ -52,7 +58,7 @@ export async function resolveSpaceCustomer(pro: { professionalId: string; ownerU
  * wrapper reads no clock of its own.
  */
 export function getCustomerSpacePage(professionalId: string, customerId: string, now: Date): Promise<CustomerSpace | null> {
-  return getCustomerSpace(db, professionalId, customerId, now);
+  return safeRead(() => getCustomerSpace(db, professionalId, customerId, now));
 }
 
 /**
@@ -63,7 +69,7 @@ export function getCustomerSpacePage(professionalId: string, customerId: string,
  * customer again when the booking is made. `now` is the page's one instant, like `getCustomerSpacePage`'s.
  */
 export function getSpendableSeances(professionalId: string, customerId: string, now: Date): Promise<SpendableSeance[]> {
-  return spendableSeances(db, professionalId, customerId, now);
+  return safeRead(() => spendableSeances(db, professionalId, customerId, now));
 }
 
 /**
@@ -73,5 +79,5 @@ export function getSpendableSeances(professionalId: string, customerId: string, 
  * `now` is the page's instant.
  */
 export function getMySpacePage(session: SessionFacts | null, now: Date): Promise<MySpaceCard[]> {
-  return getMySpace(db, session, now);
+  return safeRead(() => getMySpace(db, session, now));
 }

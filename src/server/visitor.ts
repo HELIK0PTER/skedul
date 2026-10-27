@@ -14,12 +14,22 @@ import { actingSession } from "@/lib/suspension";
 import { ipHash } from "@/lib/visitor-hash";
 import { getDailySalt } from "@/server/analytics-salt";
 import { guestKey } from "@/server/guest-key";
+import { safeRead } from "@/server/safe-read";
+
+/*
+ * Every export's whole body goes through `safeRead` (P4 final review RND-1, src/server/safe-read.test.ts): these reads
+ * run during the render of every public page, and the visitor's own read binds the session e-mail
+ * (ownedCustomerRows); a failure reaches Next's log as its SQL head only. A dynamic-usage bailout of headers() or
+ * cookies() still reaches Next unchanged.
+ */
 
 /** ipHash(daily salt, bucket) of both ipBuckets(clientIpFrom(await headers())) entries; wideIpHash null when the wide bucket is null. */
 export async function visitorIpHashes(now: Date): Promise<{ ipHash: string; wideIpHash: string | null }> {
-  const { narrow, wide } = ipBuckets(clientIpFrom(await headers()));
-  const salt = await getDailySalt(dayKeyInTz(now, ADMIN_TZ));
-  return { ipHash: ipHash(salt, narrow), wideIpHash: wide === null ? null : ipHash(salt, wide) };
+  return safeRead(async () => {
+    const { narrow, wide } = ipBuckets(clientIpFrom(await headers()));
+    const salt = await getDailySalt(dayKeyInTz(now, ADMIN_TZ));
+    return { ipHash: ipHash(salt, narrow), wideIpHash: wide === null ? null : ipHash(salt, wide) };
+  });
 }
 
 /**
@@ -27,7 +37,7 @@ export async function visitorIpHashes(now: Date): Promise<{ ipHash: string; wide
  * suspended user is no session (FR:SEC-2, as requireProContext).
  */
 export async function currentSessionFacts(): Promise<SessionFacts | null> {
-  return sessionFactsOf(actingSession(await getFreshSession()));
+  return safeRead(async () => sessionFactsOf(actingSession(await getFreshSession())));
 }
 
 /**
@@ -37,13 +47,15 @@ export async function currentSessionFacts(): Promise<SessionFacts | null> {
  */
 export const currentPublicVisitor: (professionalId: string, ownerUserId: string) => Promise<PublicVisitor> = cache(
   async (professionalId: string, ownerUserId: string): Promise<PublicVisitor> =>
-    resolveVisitor(
-      db,
-      {
-        session: await currentSessionFacts(),
-        guestToken: (await cookies()).get(GUEST_COOKIE)?.value,
-        key: guestKey(),
-      },
-      { professionalId, ownerUserId },
+    safeRead(async () =>
+      resolveVisitor(
+        db,
+        {
+          session: await currentSessionFacts(),
+          guestToken: (await cookies()).get(GUEST_COOKIE)?.value,
+          key: guestKey(),
+        },
+        { professionalId, ownerUserId },
+      ),
     ),
 );

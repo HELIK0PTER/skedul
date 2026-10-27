@@ -21,6 +21,7 @@ import { checkoutGateway, mockCheckoutEnabled } from "@/lib/stripe";
 import { runEffects } from "@/server/notify";
 import { getPublicPage } from "@/server/public-queries";
 import { getPublicProfile } from "@/server/queries";
+import { safeRead } from "@/server/safe-read";
 import { currentPublicVisitor, currentSessionFacts, visitorIpHashes } from "@/server/visitor";
 
 /**
@@ -29,16 +30,19 @@ import { currentPublicVisitor, currentSessionFacts, visitorIpHashes } from "@/se
  * of its own (G4c). A suspended pro is null, unless includeSuspended (the thank-you page): the cached projection never
  * hands out a suspended pro's row, so that one case reads it through `getPublicProfile`, once. The decision is
  * `proOfPublicPage` (src/lib/public/context.ts, pure and tested); the Server Actions resolve their pro here too, in
- * their own request, so a suspended pro is refused by the very same rule.
+ * their own request, so a suspended pro is refused by the very same rule. The whole read goes through `safeRead` (P4
+ * final review RND-1): the sub-pages and their generateMetadata run it during the render.
  */
 export async function resolvePublicPro(
   slug: string,
   opts: { includeSuspended?: boolean } = {},
 ): Promise<{ pro: PublicPro; branding: PublicBranding } | null> {
-  return proOfPublicPage(await getPublicPage(slug), opts, async () => {
-    const profile = await getPublicProfile(slug, { includeSuspended: true });
-    return profile ? publicPageProfileOfRow(profile.pro) : null;
-  });
+  return safeRead(async () =>
+    proOfPublicPage(await getPublicPage(slug), opts, async () => {
+      const profile = await getPublicProfile(slug, { includeSuspended: true });
+      return profile ? publicPageProfileOfRow(profile.pro) : null;
+    }),
+  );
 }
 
 /** { appUrl: env.APP_URL, checkout: checkoutGateway, mockAllowed: mockCheckoutEnabled(), env: env.APP_ENV }. */

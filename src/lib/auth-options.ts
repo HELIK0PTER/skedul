@@ -199,6 +199,24 @@ async function dropSessionWithoutPassword(db: Db, session: { id: string; userId:
   return gone.rows.length > 0;
 }
 
+/** The levels Better Auth hands a custom logger (it maps its own « success » to « info »). */
+type AuthLogLevel = "debug" | "info" | "warn" | "error";
+
+/**
+ * Better Auth's log lines (P4 final review RND-1): its default logger prints the raw arguments, and getSession logs
+ * « INTERNAL_SERVER_ERROR » with the adapter's raw error, a failed query whose parameters hold the session token; an
+ * adapter debug line carries `{ where }` objects with the values. Printed here: « [auth] » + the message, then each
+ * Error argument, each through logSafeMessage (no parameters, no address, no token, no cause); every other argument
+ * is dropped. Better Auth filters the level before it calls this (its default, warn, is kept).
+ */
+export function writeAuthLog(level: AuthLogLevel, message: string, ...args: unknown[]): void {
+  const parts = [logSafeMessage({ message }), ...args.filter((arg) => arg instanceof Error).map((arg) => logSafeMessage(arg))];
+  const line = `[auth] ${parts.join(" ")}`;
+  if (level === "error") console.error(line);
+  else if (level === "warn") console.warn(line);
+  else console.info(line);
+}
+
 export function buildAuthOptions(deps: AuthDeps) {
   const { db } = deps;
   const now = deps.now ?? (() => new Date());
@@ -212,6 +230,7 @@ export function buildAuthOptions(deps: AuthDeps) {
     appName: "Skedul",
     baseURL: deps.baseURL,
     secret: deps.secret,
+    logger: { log: writeAuthLog },
     database: drizzleAdapter(db, {
       provider: "pg",
       schema: {

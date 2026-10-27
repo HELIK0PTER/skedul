@@ -151,16 +151,18 @@ function build(db: Db, sendEmail?: (mail: AuthMail) => Promise<unknown>, logRese
   return { options, sent };
 }
 
-/** Runs `fn` with console.info / console.error captured, so the test output stays clean. */
-async function captureConsole(fn: () => Promise<void>): Promise<{ info: unknown[][]; error: unknown[][] }> {
-  const captured = { info: [] as unknown[][], error: [] as unknown[][] };
-  const { info, error } = console;
+/** Runs `fn` with console.info / console.warn / console.error captured, so the test output stays clean. */
+async function captureConsole(fn: () => Promise<void>): Promise<{ info: unknown[][]; warn: unknown[][]; error: unknown[][] }> {
+  const captured = { info: [] as unknown[][], warn: [] as unknown[][], error: [] as unknown[][] };
+  const { info, warn, error } = console;
   console.info = (...args: unknown[]) => void captured.info.push(args);
+  console.warn = (...args: unknown[]) => void captured.warn.push(args);
   console.error = (...args: unknown[]) => void captured.error.push(args);
   try {
     await fn();
   } finally {
     console.info = info;
+    console.warn = warn;
     console.error = error;
   }
   return captured;
@@ -527,6 +529,38 @@ test("the best-effort auth logs carry the step and a scrubbed message, never the
 
 test("no console call of the auth options receives a raw error object (shared guard, whatever the binding)", () => {
   assert.deepEqual(rawErrorLogs(readFileSync("src/lib/auth-options.ts", "utf8")), []);
+});
+
+// P4 final review RND-1: Better Auth's default logger prints the raw adapter error (getSession logs
+// « INTERNAL_SERVER_ERROR » with the failed query, whose parameters hold the session token), and an adapter debug line
+// carries `{ where }` objects with the values. Our logger keeps the message and the Error arguments, each through
+// logSafeMessage, and drops every other argument.
+test("Better Auth's own log lines print no address, no query parameter and no token: the message and Error arguments only, each scrubbed", async () => {
+  const { options } = build(stubDb([]).db);
+  const adapterFailure = Object.assign(
+    new Error('Failed query: select "id" from "session" where "token" = $1\nparams: tok_123'),
+    { cause: new Error("fetch failed for alice@example.com") },
+  );
+  const logged = await captureConsole(async () => {
+    options.logger.log("error", "INTERNAL_SERVER_ERROR", adapterFailure);
+    options.logger.log("warn", "no user for alice@example.com", { where: [{ field: "email", value: "alice@example.com" }] }, "alice@example.com", 42);
+    options.logger.log("info", "linked account for bob@example.com", new Error("state cs_test_a1B2c3 at /api/c/abc.1.def"));
+  });
+  assert.deepEqual(logged.error, [['[auth] INTERNAL_SERVER_ERROR Failed query: select "id" from "session" where "token" = $1']]);
+  assert.deepEqual(logged.warn, [["[auth] no user for [email]"]], "the where object, the string and the number are dropped");
+  assert.deepEqual(logged.info, [["[auth] linked account for [email] state [session] at /api/c/[token]"]]);
+  const all = JSON.stringify(logged);
+  for (const secret of ["tok_123", "params", "alice", "fetch failed", "bob@"]) assert.ok(!all.includes(secret), secret);
+});
+
+test("buildAuthOptions declares its logger and keeps Better Auth's default level (warn and error only reach it)", () => {
+  const { options } = build(stubDb([]).db);
+  assert.equal(typeof options.logger.log, "function");
+  assert.equal("level" in options.logger, false, "no level of our own: Better Auth's default (warn) filters first");
+  assert.equal("disabled" in options.logger, false, "the lines are scrubbed, not silenced");
+  const source = readFileSync("src/lib/auth-options.ts", "utf8");
+  const body = source.slice(source.indexOf("export function buildAuthOptions"));
+  assert.match(body, /\n {4}logger: \{ log: writeAuthLog \},\r?\n/, "the returned options carry the logger");
 });
 
 test("the confirmation-code hook reads the session fresh, never from the 5-minute cookie cache (Identity)", () => {
