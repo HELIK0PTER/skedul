@@ -8,6 +8,7 @@ import { db } from "@/lib/db";
 import { supportAttachment, supportMessage, supportRequest, user } from "@/lib/db/schema";
 import { sendEmail } from "@/lib/email";
 import { env } from "@/lib/env";
+import { logSafeMessage } from "@/lib/log-safe";
 import { isSuspended } from "@/lib/suspension";
 import {
   ATTACHMENT_EXTENSIONS,
@@ -113,7 +114,7 @@ export async function storeAttachments(
       });
     } catch (err) {
       failed += 1;
-      console.error("[support] image upload failed", err);
+      console.error(`[support] image upload failed: ${logSafeMessage(err)}`);
     }
   }
   return failed;
@@ -143,7 +144,7 @@ export async function deleteSupportFiles(userId: string): Promise<void> {
       cursor = page.hasMore ? page.cursor : undefined;
     } while (cursor);
   } catch (err) {
-    console.error(`[support] could not delete the images of ${userId}`, err);
+    console.error(`[support] could not delete the images of ${userId}: ${logSafeMessage(err)}`);
   }
 }
 
@@ -172,7 +173,7 @@ export async function emailAdmins(mail: { subject: string; html: string }): Prom
       admins.filter((a) => !isSuspended(a)).map((a) => sendEmail({ to: a.email, ...mail })),
     );
   } catch (err) {
-    console.error("[support] admin notification failed", err);
+    console.error(`[support] admin notification failed: ${logSafeMessage(err)}`);
   }
 }
 

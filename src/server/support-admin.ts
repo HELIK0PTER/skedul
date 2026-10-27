@@ -9,6 +9,7 @@ import { db } from "@/lib/db";
 import { helpArticle, helpCategory, supportRequest, user } from "@/lib/db/schema";
 import { sendEmail } from "@/lib/email";
 import { env } from "@/lib/env";
+import { logSafeMessage } from "@/lib/log-safe";
 import {
   HELP_ICONS,
   MAX_BODY,
@@ -68,7 +69,7 @@ function refresh(id: string) {
 }
 
 function failure(err: unknown): AdminSupportResult {
-  console.error("[support-admin] action failed", err);
+  console.error(`[support-admin] action failed: ${logSafeMessage(err)}`);
   return { ok: false, error: "Action impossible. Réessayez." };
 }
 

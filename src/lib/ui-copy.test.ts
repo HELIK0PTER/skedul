@@ -93,6 +93,8 @@ const OPTIONAL = [
   "src/components/auth/forgot-password-form.tsx",
   // the shared P4 test helper (Task 5 creates it, Task 7 extends it)
   "src/test/public.ts",
+  // Task 31: the root metadata, whose default title is the tab title of every page that sets none (the root 404)
+  "src/app/layout.tsx",
 ];
 
 /** 1-based numbers of the lines holding a dash (LF or CRLF). */
@@ -173,6 +175,7 @@ test("the scan covers the existing files P4 turns into client copy (COV-I13)", (
     "src/app/api/stripe/webhook/route.ts",
     "vercel.ts",
     "next.config.ts",
+    "src/app/layout.tsx",
   ]) {
     assert.ok(scanned.has(file), `${file} is not scanned`);
   }

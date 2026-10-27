@@ -91,7 +91,7 @@ export function LinkGoogleForm({
           Relier mon compte Google
         </Button>
         <p className="text-center text-sm">
-          <Link href="/sign-in" className="font-medium text-primary hover:underline">
+          <Link href="/sign-in" className="font-medium text-accent-foreground hover:underline">
             Continuer sans Google
           </Link>
         </p>
@@ -117,7 +117,7 @@ export function LinkGoogleForm({
           <Label htmlFor="password">Mot de passe</Label>
           <Link
             href="/forgot-password"
-            className="text-xs font-medium text-primary hover:underline"
+            className="text-xs font-medium text-accent-foreground hover:underline"
           >
             Mot de passe oublié ?
           </Link>
@@ -144,7 +144,7 @@ export function LinkGoogleForm({
         Google vous demandera de confirmer une dernière fois.
       </p>
       <p className="text-center text-sm">
-        <Link href="/sign-in" className="font-medium text-primary hover:underline">
+        <Link href="/sign-in" className="font-medium text-accent-foreground hover:underline">
           Annuler
         </Link>
       </p>

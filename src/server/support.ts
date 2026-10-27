@@ -7,6 +7,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { supportRequest } from "@/lib/db/schema";
 import { env } from "@/lib/env";
+import { logSafeMessage } from "@/lib/log-safe";
 import { getSession } from "@/lib/session";
 import {
   MAX_BODY,
@@ -125,7 +126,7 @@ export async function createSupportRequest(formData: FormData): Promise<CreateRe
     revalidatePath("/admin/support");
     return { ok: true, id: created.id, warning: uploadWarning(failed) };
   } catch (err) {
-    console.error("[support] request creation failed", err);
+    console.error(`[support] request creation failed: ${logSafeMessage(err)}`);
     return { ok: false, error: "Impossible d’envoyer la demande. Réessayez." };
   }
 }
@@ -213,7 +214,7 @@ export async function replyToSupportRequest(formData: FormData): Promise<Support
     revalidatePath("/admin/support");
     return { ok: true, warning: uploadWarning(failed) };
   } catch (err) {
-    console.error("[support] reply failed", err);
+    console.error(`[support] reply failed: ${logSafeMessage(err)}`);
     return { ok: false, error: "Impossible d’envoyer le message. Réessayez." };
   }
 }

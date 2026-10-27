@@ -18,6 +18,7 @@ import {
   type UserRole,
 } from "@/lib/admin-params";
 import { env } from "@/lib/env";
+import { logSafeMessage } from "@/lib/log-safe";
 import { getSession } from "@/lib/session";
 import { expireCheckoutSession } from "@/lib/stripe";
 import { isSuspended } from "@/lib/suspension";
@@ -76,7 +77,7 @@ function refresh(userId: string) {
 }
 
 function failure(err: unknown): AdminActionResult {
-  console.error("[admin] action failed", err);
+  console.error(`[admin] action failed: ${logSafeMessage(err)}`);
   return {
     ok: false,
     error: err instanceof Error ? err.message : "Action impossible.",
@@ -269,7 +270,7 @@ async function deleteBrandingImages(professionalId: string) {
       cursor = page.hasMore ? page.cursor : undefined;
     } while (cursor);
   } catch (err) {
-    console.error(`[admin] could not delete branding images of ${professionalId}`, err);
+    console.error(`[admin] could not delete branding images of ${professionalId}: ${logSafeMessage(err)}`);
   }
 }
 
@@ -285,7 +286,7 @@ export async function stopImpersonation(): Promise<void> {
     await auth.api.stopImpersonating({ headers: await headers() });
   } catch (err) {
     // Admin session gone (expired or signed out elsewhere): sign out cleanly.
-    console.error("[admin] could not stop impersonation", err);
+    console.error(`[admin] could not stop impersonation: ${logSafeMessage(err)}`);
     await auth.api.signOut({ headers: await headers() });
     redirect("/sign-in");
   }

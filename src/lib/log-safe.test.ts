@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { readFileSync } from "node:fs";
+
+import { rawErrorLogs, sourceFilesUnder } from "@/test/source-guards";
+
 import { logSafeMessage } from "./log-safe";
 
 test("logSafeMessage hides e-mail addresses, personal-link tokens and Checkout session ids", () => {
@@ -51,4 +55,15 @@ test("logSafeMessage reads the message of the plain error object Resend returns,
   assert.equal(logSafeMessage({ message: 42 }), "unknown error");
   assert.equal(logSafeMessage({ name: "validation_error" }), "unknown error");
   assert.equal(logSafeMessage(null), "unknown error");
+});
+
+// The whole app, not only the files a plan touched (Task 31 sweep, S31): a raw error object can carry an address, a
+// token or the parameters of a failed query in its message, its stack or its cause, so every console call of src/
+// logs `logSafeMessage(err)` and ids only (an error boundary logs its digest). scripts/ are developer commands that
+// print to the developer's own terminal, not request logs: they are not read.
+test("no console call of any source file under src/ prints a raw error object", () => {
+  const hits = sourceFilesUnder("src").flatMap((file) =>
+    rawErrorLogs(readFileSync(file, "utf8")).map((call) => `${file}: ${call.replace(/\s+/g, " ")}`),
+  );
+  assert.deepEqual(hits, []);
 });

@@ -5,6 +5,7 @@ import { eq, lt, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { analyticsSalt, pageView } from "@/lib/db/schema";
+import { logSafeMessage } from "@/lib/log-safe";
 
 /** Per server instance, holding only the current day (see getDailySalt). */
 const cache = new Map<string, string>();
@@ -26,7 +27,7 @@ async function purgeExpired() {
         .where(lt(pageView.createdAt, sql`now() - interval '25 months'`)),
     ]);
   } catch (err) {
-    console.error("[analytics] could not purge expired data", err);
+    console.error(`[analytics] could not purge expired data: ${logSafeMessage(err)}`);
   }
 }
 

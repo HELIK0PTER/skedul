@@ -13,6 +13,7 @@ import { EntryChooser } from "@/components/auth/entry-chooser";
 import { GoogleLogo } from "@/components/auth/google-logo";
 import { useGoogleRedirect } from "@/components/auth/use-google-redirect";
 import { Button } from "@/components/ui/button";
+import { INLINE_LINK_CLASS } from "@/components/ui/link-class";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -159,7 +160,7 @@ export function AuthForm({
             {!isSignUp && (
               <Link
                 href="/forgot-password"
-                className="text-xs font-medium text-primary hover:underline"
+                className="text-xs font-medium text-accent-foreground hover:underline"
               >
                 Mot de passe oublié ?
               </Link>
@@ -191,14 +192,14 @@ export function AuthForm({
           {isSignUp ? (
             <>
               Déjà un compte ?{" "}
-              <Link href={`/sign-in${nextQuery}`} className="font-medium text-primary hover:underline">
+              <Link href={`/sign-in${nextQuery}`} className={INLINE_LINK_CLASS}>
                 Se connecter
               </Link>
             </>
           ) : (
             <>
               Pas encore de compte ?{" "}
-              <Link href={`/sign-up${nextQuery}`} className="font-medium text-primary hover:underline">
+              <Link href={`/sign-up${nextQuery}`} className={INLINE_LINK_CLASS}>
                 Créer un compte
               </Link>
             </>

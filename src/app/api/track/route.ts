@@ -13,6 +13,7 @@ import {
 import { dayKeyInTz } from "@/lib/datetime";
 import { db } from "@/lib/db";
 import { pageView, professional } from "@/lib/db/schema";
+import { logSafeMessage } from "@/lib/log-safe";
 import { visitorHash } from "@/lib/visitor-hash";
 import { getDailySalt } from "@/server/analytics-salt";
 
@@ -76,7 +77,7 @@ export async function POST(request: Request) {
       visitorHash: visitorHash({ salt, ip, userAgent }),
     });
   } catch (err) {
-    console.error("[track] could not record page view", err);
+    console.error(`[track] could not record page view: ${logSafeMessage(err)}`);
   }
   return noContent();
 }

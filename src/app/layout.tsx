@@ -21,7 +21,7 @@ const bricolage = Bricolage_Grotesque({
 
 export const metadata: Metadata = {
   title: {
-    default: "Skedul — Réservations & packs prépayés",
+    default: "Skedul · Réservations & packs prépayés",
     template: "%s · Skedul",
   },
   description:

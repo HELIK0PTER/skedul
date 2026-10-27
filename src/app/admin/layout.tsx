@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { AdminSidebar } from "@/components/admin/admin-sidebar";
 import { requireAdmin } from "@/lib/admin";
 import { ENTRY_COOKIE, parseEntryChoice } from "@/lib/entry";
+import { logSafeMessage } from "@/lib/log-safe";
 import { countSupportToHandle } from "@/server/support-queries";
 
 export const metadata: Metadata = {
@@ -19,7 +20,7 @@ export default async function AdminLayout({
   const admin = await requireAdmin();
   const remembered = parseEntryChoice((await cookies()).get(ENTRY_COOKIE)?.value);
   const supportToHandle = await countSupportToHandle().catch((err) => {
-    console.error("[admin] support counter lookup failed", err);
+    console.error(`[admin] support counter lookup failed: ${logSafeMessage(err)}`);
     return 0;
   });
 

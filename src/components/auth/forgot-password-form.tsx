@@ -76,7 +76,7 @@ export function ForgotPasswordForm() {
         Envoyer le lien
       </Button>
       <p className="text-center text-sm">
-        <Link href="/sign-in" className="font-medium text-primary hover:underline">
+        <Link href="/sign-in" className="font-medium text-accent-foreground hover:underline">
           Retour à la connexion
         </Link>
       </p>
