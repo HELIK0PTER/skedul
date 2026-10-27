@@ -4,7 +4,8 @@
  * `server-only`, no env, no process db.
  *
  * Every statement filters `professional_id` AND `customer_id`: the id of the customer comes from a link or a
- * session, so it is only a claim until this read has checked that the customer is this pro's.
+ * session, so it is only a claim until this read has checked that the customer is this pro's. Every join filters
+ * `professional_id` too (the event and the type of a booking included, pinned by a crossed-row test).
  */
 import { and, asc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 
@@ -110,14 +111,17 @@ export async function getCustomerSpace(
         endsAt: occurrence.endsAt,
         changedAt: occurrence.changedAt,
         eventId: occurrence.eventId,
-        title: sql<string>`coalesce(${event.title}, ${ticketType.name})`,
+        title: sql<string | null>`coalesce(${event.title}, ${ticketType.name})`,
         location: sql<string | null>`coalesce(${occurrence.locationOverride}, ${event.location})`,
         cancelHours: sql<number | null>`coalesce(${event.cancelDeadlineHours}, ${ticketType.rdvCancelDeadlineHours})`,
       })
       .from(booking)
       .innerJoin(occurrence, eq(occurrence.id, booking.occurrenceId))
-      .leftJoin(event, eq(event.id, occurrence.eventId))
-      .leftJoin(ticketType, eq(ticketType.id, occurrence.ticketTypeId))
+      // The pro's predicate sits in the join conditions, not the where: an event or a type of another pro (a crossed row,
+      // every domain foreign key being single-column) blanks its own columns but never drops the client's booking, which
+      // stays listed under the generic label, with this pro's own deadline (ID-2).
+      .leftJoin(event, and(eq(event.id, occurrence.eventId), eq(event.professionalId, professionalId)))
+      .leftJoin(ticketType, and(eq(ticketType.id, occurrence.ticketTypeId), eq(ticketType.professionalId, professionalId)))
       .where(
         and(
           eq(booking.professionalId, professionalId),
@@ -177,10 +181,11 @@ export async function getCustomerSpace(
     businessName: owner.businessName,
     customer: { id: owner.id, name: owner.name, email: owner.email },
     upcoming: bookings.map((b) => {
-      const hint = cancelTextOf(b, b.cancelHours ?? owner.cancelHours, now, owner.tz, b.eventId === null ? "rdv" : "seance");
+      const kind = b.eventId === null ? "rdv" : "seance";
+      const hint = cancelTextOf(b, b.cancelHours ?? owner.cancelHours, now, owner.tz, kind);
       return {
         bookingId: b.bookingId,
-        title: b.title,
+        title: b.title ?? (kind === "rdv" ? "Rendez-vous" : "Séance"),
         whenLabel: formatWhen(b.startsAt, b.endsAt, owner.tz),
         location: b.location && b.location.trim() !== "" ? b.location : null,
         coverage: b.coverage,

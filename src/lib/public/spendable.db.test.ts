@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
 import { formatWhen } from "@/lib/back-office/format";
@@ -244,6 +244,96 @@ dbTest("spendableSeances: another pro's customer, tickets and séances never mix
     assert.deepEqual(await spendableSeances(db, other.proId, mine.customerId, now), [], "my customer at their pro");
     assert.deepEqual(await spendableSeances(db, pro.proId, "unknown-customer", now), []);
   } finally {
+    await deleteTestUser(db, other.userId);
+  }
+});
+
+dbTest("spendableSeances: each séance is named after the ticket its own accepted types would spend, whatever the other séances accept", async ({ db, pro }) => {
+  const now = new Date();
+  const customerId = await rowCustomer(db, pro, { name: "Beatriz" });
+  const typeX = await rowType(db, pro, { name: "Carte X" });
+  const typeY = await rowType(db, pro, { name: "Carte Y" });
+  await rowTicket(db, pro, { customerId, ticketTypeId: typeX, expiresAt: addDaysMs(now, 20) });
+  await rowTicket(db, pro, { customerId, ticketTypeId: typeY });
+  /** A séance `days` ahead of a new event that accepts `typeIds`. */
+  const seanceOf = async (days: number, typeIds: string[]) => {
+    const eventId = await rowEvent(db, pro);
+    for (const typeId of typeIds) await rowLink(db, pro, eventId, typeId);
+    return rowSeance(db, pro, eventId, { startsAt: addDaysMs(now, days) });
+  };
+  // Séances that accept different types: the link set of one séance never decides another's (the read once named a
+  // séance after the link set of the first séance it scanned: Postgres 17 kept a hashed form of the link EXISTS from
+  // one séance to the next in the join filter, so a ticket that fits only the second séance was dropped).
+  const onlyX = await seanceOf(3, [typeX]);
+  const onlyY = await seanceOf(4, [typeY]);
+  const both = await seanceOf(5, [typeX, typeY]);
+
+  assert.deepEqual(
+    (await spendableSeances(db, pro.proId, customerId, now)).map((s) => [s.occurrenceId, s.ticketTypeName]),
+    [
+      [onlyX, "Carte X"],
+      [onlyY, "Carte Y"],
+      [both, "Carte X"],
+    ],
+    "the X ticket expires first, so a séance that takes both is named after X",
+  );
+});
+
+dbTest("spendableSeances: a séance or a ticket of this pro that points at another pro's event or type is never listed nor named (ID-1)", async ({ db, pro }) => {
+  const now = new Date();
+  const other = await createTestPro(db);
+  const handBuilt: { links: [string, string][]; tickets: string[]; occurrences: string[] } = { links: [], tickets: [], occurrences: [] };
+  /** A link of this pro that may cross (its event or its type of the other pro), deleted with the hand-built rows. */
+  const crossedLink = async (eventId: string, ticketTypeId: string) => {
+    await rowLink(db, pro, eventId, ticketTypeId);
+    handBuilt.links.push([eventId, ticketTypeId]);
+  };
+  try {
+    const mine = await rowCustomer(db, pro, { name: "Beatriz" });
+    const myType = await rowType(db, pro, { name: "Carte maison" });
+    await rowTicket(db, pro, { customerId: mine, ticketTypeId: myType });
+    const theirType = await rowType(db, other, { name: "Carte de l'autre pro" });
+    const theirEvent = await rowEvent(db, other);
+    await db.update(schema.event).set({ title: "Capoeira roda" }).where(eq(schema.event.id, theirEvent));
+
+    // Rows that crossed two pros, built by hand on purpose (every domain foreign key is single-column, so only the read's
+    // own professional filters keep them out).
+    // 1. A séance of MINE that carries the other pro's event, which accepts my type: my ticket fits it, the event does not.
+    handBuilt.occurrences.push(await rowSeance(db, pro, theirEvent, { startsAt: addDaysMs(now, 3) }));
+    await crossedLink(theirEvent, myType);
+    // 2. A ticket of MINE, held by my customer, of the other pro's type (expiring soonest: the order would spend it first),
+    //    on my event that accepts that type only: no ticket of mine fits it.
+    handBuilt.tickets.push(
+      await rowTicket(db, pro, { customerId: mine, ticketTypeId: theirType, expiresAt: addDaysMs(now, 20), movements: false }),
+    );
+    const onlyTheirs = await rowEvent(db, pro);
+    await rowSeance(db, pro, onlyTheirs, { startsAt: addDaysMs(now, 4) });
+    await crossedLink(onlyTheirs, theirType);
+    // 3. My event that accepts both types: listed (my own ticket fits), and named after my type, the crossed one skipped.
+    const both = await rowEvent(db, pro);
+    await db.update(schema.event).set({ title: "Altinha débutants" }).where(eq(schema.event.id, both));
+    const listed = await rowSeance(db, pro, both, { startsAt: addDaysMs(now, 5) });
+    await rowLink(db, pro, both, myType);
+    await crossedLink(both, theirType);
+
+    const seances = await spendableSeances(db, pro.proId, mine, now);
+    assert.deepEqual(
+      seances.map((s) => [s.occurrenceId, s.title, s.ticketTypeName]),
+      [[listed, "Altinha débutants", "Carte maison"]],
+    );
+    const json = JSON.stringify(seances);
+    for (const theirs of ["Capoeira roda", "Carte de l'autre pro"]) {
+      assert.equal(json.includes(theirs), false, `${theirs} does not reach my client's list`);
+    }
+  } finally {
+    // The hand-built rows go before the invariant check (and before the other pro): they are not part of any model.
+    for (const [eventId, ticketTypeId] of handBuilt.links) {
+      await db
+        .delete(schema.eventTicketType)
+        .where(and(eq(schema.eventTicketType.eventId, eventId), eq(schema.eventTicketType.ticketTypeId, ticketTypeId)));
+    }
+    for (const id of handBuilt.tickets) await db.delete(schema.ticket).where(eq(schema.ticket.id, id));
+    for (const id of handBuilt.occurrences) await db.delete(schema.occurrence).where(eq(schema.occurrence.id, id));
     await deleteTestUser(db, other.userId);
   }
 });

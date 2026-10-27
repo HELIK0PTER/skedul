@@ -309,3 +309,55 @@ dbTest("getCustomerSpace: nothing of another customer, of this pro or of another
     await deleteTestUser(db, other.userId);
   }
 });
+
+dbTest("getCustomerSpace: a booking on a séance or a rendez-vous of this pro that points at another pro's event or type stays listed, with nothing of theirs (ID-2)", async ({ db, pro }) => {
+  const now = new Date();
+  await db
+    .update(schema.professional)
+    .set({ cancelDeadlineHours: 24, businessName: BUSINESS })
+    .where(eq(schema.professional.id, pro.proId));
+  const mine = await rowCustomer(db, pro, { name: "Beatriz" });
+  const other = await createTestPro(db);
+  const handBuilt: { bookings: string[]; occurrences: string[] } = { bookings: [], occurrences: [] };
+  try {
+    const theirEvent = await rowEvent(db, other);
+    await db
+      .update(schema.event)
+      .set({ title: "Capoeira roda", location: "Quai Saint-Antoine", cancelDeadlineHours: 1 })
+      .where(eq(schema.event.id, theirEvent));
+    const theirType = await rowRdvType(db, other, { name: "Coaching de l'autre pro", rdvCancelDeadlineHours: 1 });
+    // Rows that crossed two pros, built by hand on purpose (every domain foreign key is single-column, so only the read's
+    // own professional filters keep them out): a séance and a rendez-vous of MINE that carry the other pro's event and
+    // type, each booked by my customer. The booking is mine and stays listed (the client can still cancel it); the
+    // other pro's title, place and deadline do not reach it: the label is the generic one and the deadline is mine.
+    const seanceAt = addDaysMs(now, 3);
+    const rdvAt = addDaysMs(now, 4);
+    handBuilt.occurrences.push(await rowSeance(db, pro, theirEvent, { startsAt: seanceAt, seatsTaken: 1 }));
+    handBuilt.occurrences.push(await rowRdv(db, pro, theirType, { startsAt: rdvAt }, now));
+    const [seance, rdv] = handBuilt.occurrences;
+    handBuilt.bookings.push(await rowBooking(db, pro, { occurrenceId: seance, customerId: mine }));
+    handBuilt.bookings.push(await rowBooking(db, pro, { occurrenceId: rdv, customerId: mine }));
+    const [seanceBooking, rdvBooking] = handBuilt.bookings;
+
+    const space = await getCustomerSpace(db, pro.proId, mine, now);
+    assert.ok(space);
+    const deadlineText = (startsAt: Date) =>
+      `Annulation en ligne possible jusqu'au ${formatWhenShort(clientCancelDeadline(startsAt, 24), pro.tz)}.`;
+    assert.deepEqual(
+      space.upcoming.map((u) => [u.bookingId, u.title, u.location, u.cancellable, u.cancelText]),
+      [
+        [seanceBooking, "Séance", null, true, deadlineText(seanceAt)],
+        [rdvBooking, "Rendez-vous", null, true, deadlineText(rdvAt)],
+      ],
+    );
+    const json = JSON.stringify(space);
+    for (const theirs of ["Capoeira roda", "Quai Saint-Antoine", "Coaching de l'autre pro"]) {
+      assert.equal(json.includes(theirs), false, `${theirs} does not reach my client's space`);
+    }
+  } finally {
+    // The hand-built rows go before the invariant check (and before the other pro): they are not part of any model.
+    for (const id of handBuilt.bookings) await db.delete(schema.booking).where(eq(schema.booking.id, id));
+    for (const id of handBuilt.occurrences) await db.delete(schema.occurrence).where(eq(schema.occurrence.id, id));
+    await deleteTestUser(db, other.userId);
+  }
+});
