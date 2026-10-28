@@ -18,6 +18,7 @@ const entry = (over: Partial<Wallet[number]> = {}): Wallet[number] => ({
   typeClass: "ok",
   usable: 2,
   expiries: ["2 valables jusqu'au 30/11 inclus"],
+  rdvBookable: false,
   ...over,
 });
 

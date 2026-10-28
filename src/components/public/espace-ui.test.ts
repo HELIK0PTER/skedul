@@ -21,14 +21,14 @@ test("« Annuler » asks first, calls the action through callOrFail, announces t
   assert.match(CANCEL, /import \{ cancelMyBookingAction \} from "@\/server\/client";/);
   assert.match(CANCEL, /callOrFail\(\(\) => cancelMyBookingAction\(\{ slug, bookingId \}\)\)/);
   assert.match(CANCEL, /<ConfirmDialog/);
-  assert.match(CANCEL, /cancelBookingCopy\(coverage, businessName\)/);
+  assert.match(CANCEL, /cancelBookingCopy\(coverage, businessName, kind\)/, "an RDV is worded as one (P5 copy rule)");
   assert.match(CANCEL, /returnFocusTo=\{focusAfterClose\}/);
   assert.match(CANCEL, /useCallback\(\(\) => \(leaving\.current \? upcomingHeading\(\) : null\), \[\]\)/, "the heading after a confirmed cancellation, else the opener");
   const flag = CANCEL.indexOf("leaving.current = true;");
   assert.ok(flag !== -1 && flag < CANCEL.indexOf("await callOrFail("), "the flag is set before the answer is awaited");
   assert.match(refusalBranch(CANCEL), /leaving\.current = false;/, "a refusal keeps the focus in the dialog's own flow: the reset sits in the refusal branch itself (G3b)");
-  assert.match(CANCEL, /announce\(COPY\.CANCELLED_OK\)/);
-  assert.ok(CANCEL.indexOf("if (!res.ok)") < CANCEL.indexOf("announce(COPY.CANCELLED_OK)"), "announced on success only");
+  assert.match(CANCEL, /announce\(cancelDoneText\(kind\)\)/);
+  assert.ok(CANCEL.indexOf("if (!res.ok)") < CANCEL.indexOf("announce(cancelDoneText(kind))"), "announced on success only");
   assert.doesNotMatch(CANCEL, /router\.refresh|useRouter/, "the action revalidates the page itself");
 });
 

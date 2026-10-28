@@ -9,6 +9,7 @@ import { and, asc, eq, gt, gte, inArray, isNull, sql, type SQL } from "drizzle-o
 
 import { listActiveTypeOptions, readProWindow, type TypeOption } from "@/lib/back-office/catalog-reads";
 import { loadQuestions, type QuestionRow } from "@/lib/booking/answers";
+import { lapsedHold } from "@/lib/booking/holds";
 import { ruleOf, type EventRow } from "@/lib/booking/occurrences";
 import type { BookingWindow } from "@/lib/booking-window";
 import type { DateKey } from "@/lib/civil-date";
@@ -468,11 +469,16 @@ export async function getEventEditor(
 
 /* ───────────────────────────── RDV conflicts ───────────────────────────── */
 
-/** Scheduled RDV (event_id null) whose block (buffers included) overlaps any of the ranges. */
+/**
+ * Scheduled RDV (event_id null) whose block (buffers included) overlaps any of the ranges, phantoms left out (P5 § 3.14):
+ * an RDV counts only while a confirmed booking or a pending one whose hold is still live holds it, the slot loader's
+ * rule (`loadRdvBusy`, `lapsedHold`), so an abandoned checkout no longer reads as a conflict in the event editor.
+ */
 export async function countRdvConflicts(
   db: Db,
   professionalId: string,
   ranges: readonly { startsAt: Date; endsAt: Date }[],
+  now: Date,
 ): Promise<number> {
   if (ranges.length === 0) return 0;
   const starts = ranges.map((r) => r.startsAt);
@@ -485,7 +491,10 @@ export async function countRdvConflicts(
       and o.block_end > ${ts(first)} and o.block_start < ${ts(last)}
       and exists (
         select 1 from unnest(${tsArray(starts)}, ${tsArray(ends)}) as r(s, e)
-        where o.block_start < r.e and o.block_end > r.s)`);
+        where o.block_start < r.e and o.block_end > r.s)
+      and exists (
+        select 1 from booking b
+        where b.occurrence_id = o.id and b.status in ('pending', 'confirmed') and not ${lapsedHold(now, sql`b`)})`);
   return Number(res.rows[0]?.n ?? 0);
 }
 

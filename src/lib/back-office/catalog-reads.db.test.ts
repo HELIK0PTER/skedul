@@ -281,6 +281,49 @@ dbTest("catalog reads: orphan follows the wallet classes (linked event, private,
   assert.equal(orphanIn(after.active, rdvFree), true);
 });
 
+dbTest("catalog reads: rdvIssues says why an RDV type offers no slot online: no hours, a notice above its horizon, or nothing on sale (P5 T13, O14)", async ({ db, pro }) => {
+  const hours = async (ticketTypeId: string | null) =>
+    must(
+      await setAvailabilityRules(db, { professionalId: pro.proId, ticketTypeId, rules: [{ dayOfWeek: 2, startMinute: 600, endMinute: 720 }] }),
+      `hours of ${ticketTypeId ?? "the pro"}`,
+    );
+  const ready = await makeType(db, pro, { name: "Prêt", rdvEnabled: true, rdvDurationMin: 60 });
+  await makeOffer(db, pro, ready);
+  await hours(ready);
+  const noHours = await makeType(db, pro, { name: "Sans horaires", rdvEnabled: true, rdvDurationMin: 60 });
+  await makeOffer(db, pro, noHours);
+  const late = await makeType(db, pro, { name: "Trop tard", rdvEnabled: true, rdvDurationMin: 60 });
+  await makeOffer(db, pro, late);
+  await hours(late);
+  // The back-office refuses this pair (settingsWouldClose); a horizon lowered later produces it, hence the raw update.
+  await db.execute(sql`update ticket_type set rdv_booking_horizon_days = 1, rdv_min_notice_minutes = 2000 where id = ${late}`);
+  const unsold = await makeType(db, pro, { name: "Rien en vente", rdvEnabled: true, rdvDurationMin: 60 });
+  await makeOffer(db, pro, unsold, { isActive: false });
+  await hours(unsold);
+  const free = await makeType(db, pro, { name: "Gratuit", rdvEnabled: true, rdvFree: true, rdvDurationMin: 15 });
+  await hours(free);
+  await makeType(db, pro, { name: "Cours collectif" });
+
+  const issues = async () => {
+    const { active } = await listTicketTypes(db, pro.proId, new Date());
+    return Object.fromEntries(active.map((t) => [t.name, t.rdvIssues]));
+  };
+  assert.deepEqual(await issues(), {
+    "Prêt": [],
+    "Sans horaires": ["no_hours"],
+    "Trop tard": ["notice_over_horizon"],
+    "Rien en vente": ["no_offer"],
+    "Gratuit": [],
+    "Cours collectif": [],
+  });
+  const detail = found(await getTicketTypeDetail(db, pro.proId, noHours, new Date()), "detail");
+  assert.deepEqual(detail.rdvIssues, ["no_hours"], "the type page reads the same facts");
+
+  await hours(null);
+  assert.deepEqual((await issues())["Sans horaires"], [], "global hours open a type without its own");
+  assert.deepEqual((await issues())["Cours collectif"], []);
+});
+
 dbTest("catalog reads: getTicketTypeDetail returns RDV settings, own and global hours, questions", async ({ db, pro }) => {
   const typeId = await makeType(db, pro, {
     name: "Cours particulier",

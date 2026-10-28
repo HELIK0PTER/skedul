@@ -9,6 +9,7 @@ import test from "node:test";
 import { formatMoney } from "@/lib/utils";
 
 import {
+  RDV_CARDS_TITLE,
   RDV_CHOSEN_LABEL,
   RDV_DAYS_LABEL,
   RDV_PICK_TITLE,
@@ -17,9 +18,11 @@ import {
   lowestPriceCents,
   offersCoveringAt,
   rdvBookedLine,
+  rdvCardVM,
   rdvDayChipLabel,
   rdvDaysVM,
   rdvDurationLabel,
+  rdvPagePath,
   rdvPriceLabel,
   rdvSignInHint,
   rdvSlotCountLabel,
@@ -263,10 +266,56 @@ test("the RDV booking copy: counts, the booked line and the labels", () => {
   assert.equal(rdvBookedLine(when, true), `Rendez-vous confirmé avec 1 ticket : ${when}. Un email de confirmation vous a été envoyé.`);
 });
 
+const CARD = {
+  ticketTypeId: "type-1",
+  name: "Cours particulier",
+  description: "Un cours rien que pour vous.",
+  durationMin: 60,
+  isFree: false,
+  fromPriceCents: 5000,
+};
+
+test("rdvCardVM: « Gratuit » or « À partir de » the lowest price through formatMoney, the duration, the link and its name (§ 3.11, O8)", () => {
+  assert.deepEqual(rdvCardVM(CARD, "altinha-paris", "eur"), {
+    ticketTypeId: "type-1",
+    name: "Cours particulier",
+    description: "Un cours rien que pour vous.",
+    durationLabel: "1 heure",
+    priceLabel: `À partir de ${formatMoney(5000, "eur")}`,
+    isFree: false,
+    href: "/altinha-paris/rdv/type-1",
+    ctaLabel: "Réserver un rendez-vous",
+    ctaAriaLabel: "Réserver un rendez-vous : Cours particulier",
+  });
+  const free = rdvCardVM({ ...CARD, isFree: true, fromPriceCents: null, durationMin: 15, description: null }, "altinha-paris", "eur");
+  assert.equal(free.priceLabel, "Gratuit");
+  assert.equal(free.isFree, true);
+  assert.equal(free.durationLabel, "15 minutes", "plural");
+  assert.equal(free.description, null);
+  assert.equal(rdvCardVM({ ...CARD, durationMin: 1 }, "s", "eur").durationLabel, "1 minute", "singular");
+  assert.equal(rdvCardVM({ ...CARD, durationMin: 120 }, "s", "eur").durationLabel, "2 heures", "plural hours");
+  assert.equal(rdvCardVM({ ...CARD, fromPriceCents: 1250 }, "s", "usd").priceLabel, `À partir de ${formatMoney(1250, "usd")}`, "the pro's currency");
+  assert.equal(rdvCardVM({ ...CARD, fromPriceCents: null }, "s", "eur").priceLabel, null, "a paid type with nothing on sale shows no price");
+  assert.equal(rdvCardVM({ ...CARD, ticketTypeId: "a/b" }, "mon slug", "eur").href, "/mon%20slug/rdv/a%2Fb", "every segment encoded");
+  assert.equal(RDV_CARDS_TITLE, "Prendre rendez-vous");
+});
+
+test("rdvPagePath: the RDV page of a type (cards, espace, back office), every segment encoded, no query", () => {
+  assert.equal(rdvPagePath("altinha-paris", "EvtfIcW2lCiYuM7GZEbHh"), "/altinha-paris/rdv/EvtfIcW2lCiYuM7GZEbHh");
+  assert.equal(rdvPagePath("mon slug", "a/b"), "/mon%20slug/rdv/a%2Fb");
+  assert.equal(rdvWeekHref("s", "t", "2026-11-02"), `${rdvPagePath("s", "t")}?semaine=2026-11-02`);
+});
+
 test("no RDV text names a séance, an inscription or a place, and none holds a dash (P5 copy rule)", () => {
   const SEANCE_WORDS = /[Ss][ée]ance|[Ii]nscri|(^|[^a-zà-ÿ])place([^a-zà-ÿ]|$)/;
   const dash = new RegExp("[" + String.fromCharCode(0x2013, 0x2014) + "]");
+  const card = rdvCardVM(CARD, "s", "eur");
   const texts = [
+    RDV_CARDS_TITLE,
+    card.ctaLabel,
+    card.ctaAriaLabel,
+    card.durationLabel,
+    card.priceLabel ?? "",
     RDV_PICK_TITLE,
     RDV_DAYS_LABEL,
     RDV_PREV_WEEK,

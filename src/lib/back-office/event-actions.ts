@@ -332,7 +332,7 @@ export async function previewScheduleCore(
 
   const today = todayKey(now, ctx.timezone);
   const dates = expand({ ...rule, durationMin }, ctx.timezone, maxKey(fromDate, today), addDays(today, MATERIALIZE_DAYS));
-  const rdvConflicts = await countRdvConflicts(db, ctx.professionalId, dates);
+  const rdvConflicts = await countRdvConflicts(db, ctx.professionalId, dates, now);
   return {
     ok: true,
     preview: {
@@ -487,6 +487,6 @@ export async function previewNewEventCore(
   const last = lastSeriesDate(full);
   const end = horizonEnd(now, ctx.timezone);
   const dates = expand(full, ctx.timezone, rule.startDate, last === null ? end : minKey(last, end)).slice(0, MATERIALIZE_MAX_ROWS);
-  const rdvConflicts = await countRdvConflicts(db, ctx.professionalId, dates);
+  const rdvConflicts = await countRdvConflicts(db, ctx.professionalId, dates, now);
   return { ok: true, rdvConflicts, occurrenceCount: dates.length };
 }

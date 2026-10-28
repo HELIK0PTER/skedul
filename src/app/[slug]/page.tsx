@@ -7,6 +7,7 @@ import { Boutique } from "@/components/public/boutique";
 import { OwnerPreviewBanner } from "@/components/public/owner-preview-banner";
 import { PublicPlanning } from "@/components/public/public-planning";
 import { PublicShell } from "@/components/public/public-shell";
+import { RdvCards } from "@/components/public/rdv-cards";
 import { TestPaymentsBanner } from "@/components/public/test-payments-banner";
 import { VisitorBar } from "@/components/public/visitor-bar";
 import { WalletPanel } from "@/components/public/wallet-panel";
@@ -24,6 +25,7 @@ import {
   planningNav,
   toPublicSeanceVM,
 } from "@/lib/public/planning-view";
+import { rdvCardVM } from "@/lib/public/rdv-view";
 import { BOUTIQUE_ANCHOR } from "@/lib/public-anchors";
 import { paymentMode } from "@/lib/stripe";
 import { consumeThrottle } from "@/lib/throttle";
@@ -34,6 +36,7 @@ import {
   getNextSeanceStart,
   getPlanningPage,
   getPublicPage,
+  getRdvCards,
 } from "@/server/public-queries";
 import { currentPublicVisitor } from "@/server/visitor";
 
@@ -50,7 +53,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 /**
- * The public page of a pro: its planning (« Liste » or « Semaine », one week at a time), its Boutique, and what the
+ * The public page of a pro: its planning (« Liste » or « Semaine », one week at a time), its RDV libre cards, its Boutique, and what the
  * visitor is (the owner banner, the bar or the Owner's wallet, the test-payments note). Dynamic by construction: it
  * reads the search parameters, the fresh session and the personal-link cookie. A render never writes; the one write,
  * the horizon refresh, runs after the response (spec § 13.2, contract § 4 row 12 and § 5).
@@ -76,9 +79,11 @@ export default async function PublicProfilePage({ params, searchParams }: Props)
 
   // Who the visitor is: the fresh session (a suspended user counts as none) and the personal-link cookie, read only.
   const visitor = await currentPublicVisitor(pro.professionalId, pro.ownerUserId);
-  const [seances, boutique, needsHorizon, space] = await Promise.all([
+  const [seances, boutique, rdvCards, needsHorizon, space] = await Promise.all([
     getPlanningPage(pro, range, now),
     getBoutiquePage(pro.professionalId),
+    // The bookable RDV types (P5 § 3.11, O8): facts of the type only, no slot is computed for a card.
+    getRdvCards(pro.professionalId),
     getHorizonNeed(pro, now),
     // The wallet is the Owner's only: never a typed address, a purchase reference or a personal-link cookie (Decision 61).
     visitor.owner ? getCustomerSpacePage(pro.professionalId, visitor.owner.customerId, now) : Promise.resolve(null),
@@ -136,6 +141,7 @@ export default async function PublicProfilePage({ params, searchParams }: Props)
           nextWeekHref={nextWeekHref}
           shopHref={boutique.length > 0 ? `#${BOUTIQUE_ANCHOR}` : null}
         />
+        <RdvCards cards={rdvCards.map((card) => rdvCardVM(card, pro.slug, pro.currency))} />
         {boutique.length > 0 && (
           <div className="space-y-4">
             {testMode && <TestPaymentsBanner mode={testMode} />}

@@ -6,7 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import type { TicketTypeSummary } from "@/lib/back-office/catalog-reads";
 import { plural } from "@/lib/back-office/format";
-import { acceptedByText, emptyOffersText, offerLine, rdvBadgeLabel, showOrphanMark } from "@/lib/back-office/type-view";
+import {
+  RDV_NOT_BOOKABLE,
+  acceptedByText,
+  emptyOffersText,
+  offerLine,
+  rdvBadgeLabel,
+  showOrphanMark,
+} from "@/lib/back-office/type-view";
 
 /** One ticket type: colour, badges, offers, who accepts it, tickets in circulation. */
 export function TicketTypeCard({ type, currency }: { type: TicketTypeSummary; currency: string }) {
@@ -37,6 +44,13 @@ export function TicketTypeCard({ type, currency }: { type: TicketTypeSummary; cu
           <p className="flex items-center gap-2 text-xs font-medium text-warning">
             <StatusMark tone="orange" />
             Lié à aucun événement à venir
+          </p>
+        )}
+        {/* O14: a type its RDV page would show closed (no hours, a notice above its horizon); the reasons are on its page. */}
+        {type.rdvIssues.some((issue) => issue !== "no_offer") && (
+          <p className="flex items-center gap-2 text-xs font-medium text-warning">
+            <StatusMark tone="orange" />
+            {RDV_NOT_BOOKABLE}
           </p>
         )}
       </CardHeader>

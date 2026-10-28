@@ -42,6 +42,17 @@ test("the wallet says when a type is archived and when no upcoming séance accep
   assert.match(SOURCE, /\{COPY\.ORPHAN_TYPE\}/);
 });
 
+test("a ticket of a bookable paid RDV type links to its RDV page with « Réserver un rendez-vous », named after the type (P5 § 3.13)", () => {
+  assert.match(SOURCE, /\{w\.rdvBookable && \(/);
+  assert.match(SOURCE, /<Link href=\{rdvPagePath\(slug, w\.ticketTypeId\)\} aria-label=\{`\$\{COPY\.RDV_CARD_CTA\} : \$\{w\.name\}`\}>/);
+  assert.match(SOURCE, /\{COPY\.RDV_CARD_CTA\}/);
+  assert.doesNotMatch(SOURCE, /Réserver un rendez-vous/, "the label comes from COPY, one source");
+});
+
+test("an RDV row's « Annuler » is told it is an RDV, so its dialog and its success line say « rendez-vous »", () => {
+  assert.match(SOURCE, /kind=\{b\.kind\}/);
+});
+
 test("the « Vos prochaines inscriptions » heading can take the focus after a success removes the control that held it (WCAG 2.4.3)", () => {
   assert.match(SOURCE, /<CardTitle[^>]*id=\{UPCOMING_HEADING_ID\}/);
   assert.match(SOURCE, /<CardTitle[^>]*tabIndex=\{-1\}/);

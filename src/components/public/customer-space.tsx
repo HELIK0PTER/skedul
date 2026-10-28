@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { MapPin } from "lucide-react";
+import { CalendarClock, MapPin } from "lucide-react";
 
 import { CancelBookingButton } from "@/components/public/cancel-booking-button";
 import { SpaceStatusLine, SpaceStatusProvider } from "@/components/public/space-status";
@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { CustomerSpace } from "@/lib/back-office/customer-space";
 import type { VisitorState } from "@/lib/public/identity";
 import { COPY } from "@/lib/public/messages";
+import { rdvPagePath } from "@/lib/public/rdv-view";
 import { SPEND_TITLE, UPCOMING_HEADING_ID, UPCOMING_TITLE } from "@/lib/public/space-view";
 import type { SpendableSeance } from "@/lib/public/spendable";
 import { boutiqueHref } from "@/lib/public-anchors";
@@ -91,6 +92,7 @@ export function CustomerSpaceView({
                         <CancelBookingButton
                           slug={slug}
                           bookingId={b.bookingId}
+                          kind={b.kind}
                           title={b.title}
                           whenLabel={b.whenLabel}
                           coverage={b.coverage}
@@ -138,6 +140,21 @@ export function CustomerSpaceView({
                       <p className="text-xs text-zinc-600 wrap-anywhere">{`Ce type n'est plus proposé par ${businessName}.`}</p>
                     )}
                     {w.typeClass === "orphan" && <p className="text-xs text-zinc-600 wrap-anywhere">{COPY.ORPHAN_TYPE}</p>}
+                    {w.rdvBookable && (
+                      <div className="pt-2">
+                        <Button
+                          asChild
+                          variant="secondary"
+                          size="sm"
+                          className="h-auto min-h-8 w-full max-w-full whitespace-normal py-1.5 wrap-anywhere sm:w-auto"
+                        >
+                          <Link href={rdvPagePath(slug, w.ticketTypeId)} aria-label={`${COPY.RDV_CARD_CTA} : ${w.name}`}>
+                            <CalendarClock aria-hidden />
+                            {COPY.RDV_CARD_CTA}
+                          </Link>
+                        </Button>
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>

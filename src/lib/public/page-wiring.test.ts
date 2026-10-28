@@ -293,6 +293,18 @@ test("/[slug] warns the owner of the page", () => {
   assert.match(HOME, /\{visitor\.isPageOwner && <OwnerPreviewBanner \/>\}/);
 });
 
+test("/[slug] lists the RDV libre cards between the planning and the Boutique, read in the page's one Promise.all (P5 § 3.11, T13)", () => {
+  const body = bodyOf(HOME, "PublicProfilePage");
+  const all = body.indexOf("await Promise.all([");
+  const read = body.indexOf("getRdvCards(pro.professionalId)");
+  assert.ok(all !== -1 && read > all && read < body.indexOf("]);", all), "one round trip with the other reads");
+  assert.equal(inCode(HOME, /\bgetRdvCards\(/g).length, 1);
+  assert.match(HOME, /<RdvCards cards=\{rdvCards\.map\(\(card\) => rdvCardVM\(card, pro\.slug, pro\.currency\)\)\} \/>/);
+  const cards = body.indexOf("<RdvCards");
+  assert.ok(body.indexOf("<PublicPlanning") < cards && cards < body.indexOf("<Boutique"), "between the planning and the Boutique");
+  assert.doesNotMatch(HOME, /loadRdvWeek|getRdvWeek|computeSlots/, "no slot is computed for a card (O8)");
+});
+
 /* ───────────────────────── /[slug]/seance/[occurrenceId] ───────────────────────── */
 
 test("the séance page passes the picked fields of the offers and the test mode of the payment gateway", () => {

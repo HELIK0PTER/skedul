@@ -25,6 +25,8 @@ export type CustomerSpace = {
   customer: { id: string; name: string; email: string };
   upcoming: {
     bookingId: string;
+    /** an RDV (no event) is worded as a rendez-vous by its « Annuler » (P5 copy rule) */
+    kind: "seance" | "rdv";
     title: string;
     whenLabel: string;
     location: string | null;
@@ -44,6 +46,8 @@ export type CustomerSpace = {
     typeClass: TypeClass;
     usable: number;
     expiries: string[];
+    /** a paid RDV type that is not archived and has a duration: the espace links its tickets to the type's RDV page (P5 § 3.13) */
+    rdvBookable: boolean;
   }[];
 };
 
@@ -164,10 +168,22 @@ export async function getCustomerSpace(
     typeIds.length === 0
       ? []
       : await db
-          .select({ id: ticketType.id, name: ticketType.name, color: ticketType.color, archivedAt: ticketType.archivedAt })
+          .select({
+            id: ticketType.id,
+            name: ticketType.name,
+            color: ticketType.color,
+            archivedAt: ticketType.archivedAt,
+            rdvEnabled: ticketType.rdvEnabled,
+            rdvFree: ticketType.rdvFree,
+            rdvDurationMin: ticketType.rdvDurationMin,
+          })
           .from(ticketType)
           .where(and(eq(ticketType.professionalId, professionalId), inArray(ticketType.id, typeIds)))
           .orderBy(asc(ticketType.position), asc(ticketType.createdAt), asc(ticketType.id));
+  // The public RDV page's own 404 rules (an RDV type, a duration, not archived), for a paid type: its tickets book there.
+  const rdvBookable = new Set(
+    typeRows.filter((t) => t.rdvEnabled && !t.rdvFree && t.rdvDurationMin !== null && t.archivedAt === null).map((t) => t.id),
+  );
   // Archived types are passed too: a client still holds their tickets (flagged "archived").
   const types: WalletTypeRow[] = typeRows.map((t) => ({
     id: t.id,
@@ -185,6 +201,7 @@ export async function getCustomerSpace(
       const hint = cancelTextOf(b, b.cancelHours ?? owner.cancelHours, now, owner.tz, kind);
       return {
         bookingId: b.bookingId,
+        kind,
         title: b.title ?? (kind === "rdv" ? "Rendez-vous" : "Séance"),
         whenLabel: formatWhen(b.startsAt, b.endsAt, owner.tz),
         location: b.location && b.location.trim() !== "" ? b.location : null,
@@ -202,6 +219,7 @@ export async function getCustomerSpace(
       typeClass: classes.get(g.ticketTypeId) ?? (g.archived ? "archived" : "ok"),
       usable: g.usableCount,
       expiries: g.expirySummary,
+      rdvBookable: rdvBookable.has(g.ticketTypeId),
     })),
   };
 }

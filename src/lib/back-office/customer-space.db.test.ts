@@ -95,6 +95,7 @@ dbTest("getCustomerSpace: confirmed future bookings only, soonest first, with pl
   assert.equal(space.businessName, BUSINESS, "the pro's business name travels with the space");
   assert.deepEqual(byId.get(bTwoDays), {
     bookingId: bTwoDays,
+    kind: "seance",
     title: "Altinha débutants",
     whenLabel: two.label,
     location: "Gymnase Jean Bouin",
@@ -124,6 +125,7 @@ dbTest("getCustomerSpace: confirmed future bookings only, soonest first, with pl
   const rdvWhen = await when(rdv);
   assert.deepEqual(byId.get(bRdv), {
     bookingId: bRdv,
+    kind: "rdv",
     title: "Cours particulier",
     whenLabel: rdvWhen.label,
     location: null,
@@ -167,6 +169,25 @@ dbTest("getCustomerSpace: a locked rendez-vous says who can still cancel it, and
       "Ancien stage": "archived",
     },
   );
+});
+
+dbTest("getCustomerSpace: only a ticket of a bookable paid RDV type is rdvBookable (the espace link to its RDV page, P5 T13)", async ({ db, pro }) => {
+  const now = new Date();
+  const customerId = await rowCustomer(db, pro);
+  const paidRdv = await makeType(db, pro, { name: "Cours particulier", rdvEnabled: true, rdvDurationMin: 60 });
+  const plain = await makeType(db, pro, { name: "Cours collectif" });
+  const oldRdv = await makeType(db, pro, { name: "Ancien coaching", rdvEnabled: true, rdvDurationMin: 30 });
+  for (const typeId of [paidRdv, plain, oldRdv]) await giveTickets(db, pro, customerId, typeId, 1);
+  const archived = await setTicketTypeArchived(db, { professionalId: pro.proId, ticketTypeId: oldRdv, archived: true });
+  assert.ok(archived.ok, JSON.stringify(archived));
+
+  const space = await getCustomerSpace(db, pro.proId, customerId, now);
+  assert.ok(space);
+  assert.deepEqual(Object.fromEntries(space.wallet.map((w) => [w.name, w.rdvBookable])), {
+    "Cours particulier": true,
+    "Cours collectif": false, // not an RDV type
+    "Ancien coaching": false, // archived: its RDV page is a 404
+  });
 });
 
 dbTest("getCustomerSpace: a lapsed or live hold, an expired booking and a cancelled séance are not upcoming bookings", async ({ db, pro }) => {

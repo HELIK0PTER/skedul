@@ -6,8 +6,7 @@ import { ConfirmDialog } from "@/components/dashboard/confirm-dialog";
 import { upcomingHeading, useSpaceStatus } from "@/components/public/space-status";
 import { Button } from "@/components/ui/button";
 import { callOrFail } from "@/lib/pro-messages";
-import { COPY } from "@/lib/public/messages";
-import { CANCEL_LABEL, cancelBookingCopy, cancelButtonName } from "@/lib/public/space-view";
+import { CANCEL_LABEL, cancelBookingCopy, cancelButtonName, cancelDoneText } from "@/lib/public/space-view";
 import type { BookingCoverage } from "@/lib/tickets-vocab";
 import { cancelMyBookingAction } from "@/server/client";
 
@@ -17,11 +16,13 @@ import { cancelMyBookingAction } from "@/server/client";
  * focus goes to the section heading: the row, and this component with it, is gone once the page revalidates, and
  * Dialog calls `returnFocusTo` when it closes or unmounts. A refusal (« Seul(e) … peut annuler maintenant. », a booking
  * that changed, the throttle) stays in the dialog. Closed without cancelling (« Retour », Escape, « Fermer »), the
- * dialog gives the focus back to this button.
+ * dialog gives the focus back to this button. `kind` words an RDV as a rendez-vous (« Annuler le rendez-vous »,
+ * « Rendez-vous annulé. »), never an inscription (P5 copy rule).
  */
 export function CancelBookingButton({
   slug,
   bookingId,
+  kind,
   title,
   whenLabel,
   coverage,
@@ -29,6 +30,7 @@ export function CancelBookingButton({
 }: {
   slug: string;
   bookingId: string;
+  kind: "seance" | "rdv";
   title: string;
   whenLabel: string;
   coverage: BookingCoverage;
@@ -57,7 +59,7 @@ export function CancelBookingButton({
         setError(res.error);
         return;
       }
-      announce(COPY.CANCELLED_OK);
+      announce(cancelDoneText(kind));
       setOpen(false);
     });
   }
@@ -79,7 +81,7 @@ export function CancelBookingButton({
       </Button>
       <ConfirmDialog
         open={open}
-        copy={cancelBookingCopy(coverage, businessName)}
+        copy={cancelBookingCopy(coverage, businessName, kind)}
         pending={pending}
         error={error}
         onConfirm={submit}

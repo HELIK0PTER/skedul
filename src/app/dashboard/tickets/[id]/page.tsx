@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ExternalLink, TriangleAlert } from "lucide-react";
 
+import { CopyLinkButton } from "@/components/dashboard/copy-link-button";
 import { OfferList } from "@/components/dashboard/offer-list";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { RdvSettingsForm, TicketTypeInfoForm, TypeQuestionsForm } from "@/components/dashboard/ticket-type-editor";
@@ -12,6 +13,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { freeLockReasons } from "@/lib/back-office/rdv-form";
+import { rdvIssueNote } from "@/lib/back-office/type-view";
+import { env } from "@/lib/env";
+import { rdvPagePath } from "@/lib/public/rdv-view";
 import { getTicketTypePage } from "@/server/catalog-queries";
 import { requireProfessional } from "@/server/pro-context";
 
@@ -24,6 +28,9 @@ export default async function TicketTypePage({ params }: { params: Promise<{ id:
   if (!type) notFound();
 
   const used = type.usage.tickets + type.usage.purchases + type.usage.rdvs > 0;
+  // The public RDV page exists for an RDV type with a duration that is not archived (its 404 rules, P5 § 3.11).
+  const publicPath = type.rdvEnabled && type.rdvDurationMin !== null && !type.archived ? rdvPagePath(pro.slug, type.id) : null;
+  const note = rdvIssueNote(type.rdvIssues);
 
   return (
     <div className="max-w-3xl">
@@ -111,6 +118,42 @@ export default async function TicketTypePage({ params }: { params: Promise<{ id:
             <CardTitle>RDV libre</CardTitle>
           </CardHeader>
           <CardContent className="space-y-8">
+            {publicPath !== null && (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-accent px-4 py-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-accent-foreground">Page de réservation</p>
+                    <p className="truncate text-sm text-zinc-600">{`${env.APP_URL}${publicPath}`}</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <CopyLinkButton url={`${env.APP_URL}${publicPath}`} />
+                    <Button asChild size="sm">
+                      <Link href={publicPath} target="_blank">
+                        <ExternalLink />
+                        Voir la page de réservation
+                      </Link>
+                    </Button>
+                  </div>
+                </div>
+                {note && (
+                  <div
+                    className={
+                      note.tone === "closed"
+                        ? "flex gap-3 rounded-xl bg-amber-100 px-4 py-3 text-sm text-warning"
+                        : "flex gap-3 rounded-xl bg-muted px-4 py-3 text-sm text-zinc-700"
+                    }
+                  >
+                    <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+                    <div className="min-w-0 space-y-1">
+                      <p className="font-semibold">{note.title}</p>
+                      {note.lines.map((line) => (
+                        <p key={line}>{line}</p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             <RdvSettingsForm
               ticketTypeId={type.id}
               initial={{

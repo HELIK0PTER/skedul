@@ -14,6 +14,7 @@ import {
   canSpendIn,
   cancelBookingCopy,
   cancelButtonName,
+  cancelDoneText,
   spendButtonName,
   spendControlOf,
   visitorStateOfIdentity,
@@ -52,6 +53,26 @@ test("cancelBookingCopy: a ticket comes back and the pro is told; every case pro
   for (const coverage of ["ticket", "free", "guest"] as const) {
     const copy = cancelBookingCopy(coverage, "Altinha Paris");
     assert.doesNotMatch(`${copy.title} ${copy.body} ${copy.confirm}`, DASHES);
+  }
+});
+
+test("cancelBookingCopy and cancelDoneText: an RDV row says « rendez-vous », never « inscription » (P5 copy rule); a séance keeps its words", () => {
+  for (const coverage of ["ticket", "free", "guest"] as const) {
+    const seance = cancelBookingCopy(coverage, "Altinha Paris");
+    assert.deepEqual(cancelBookingCopy(coverage, "Altinha Paris", "seance"), seance, "seance is the default");
+    assert.deepEqual(cancelBookingCopy(coverage, "Altinha Paris", "rdv"), {
+      title: "Annuler votre rendez-vous ?",
+      body: seance.body,
+      confirm: "Annuler le rendez-vous",
+    });
+  }
+  assert.equal(cancelDoneText("seance"), "Inscription annulée.");
+  assert.equal(cancelDoneText("rdv"), "Rendez-vous annulé.");
+  const SEANCE_WORDS = /[Ss][ée]ance|[Ii]nscri|(^|[^a-zà-ÿ])place([^a-zà-ÿ]|$)/;
+  for (const coverage of ["ticket", "free", "guest"] as const) {
+    const copy = cancelBookingCopy(coverage, "Altinha Paris", "rdv");
+    assert.doesNotMatch(`${copy.title} ${copy.body} ${copy.confirm} ${cancelDoneText("rdv")}`, SEANCE_WORDS);
+    assert.doesNotMatch(`${copy.title} ${copy.body} ${copy.confirm} ${cancelDoneText("rdv")}`, DASHES);
   }
 });
 

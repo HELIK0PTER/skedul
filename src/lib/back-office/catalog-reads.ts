@@ -13,7 +13,7 @@ import { and, asc, eq, gt, inArray, isNotNull, isNull, or, sql } from "drizzle-o
 import { loadQuestions, type QuestionRow } from "@/lib/booking/answers";
 import { freeBlockerCounts } from "@/lib/booking/catalog";
 import { loadTypeFacts } from "@/lib/booking/wallet";
-import type { BookingWindow } from "@/lib/booking-window";
+import { effectiveWindow, type BookingWindow } from "@/lib/booking-window";
 import type { Db } from "@/lib/db/atomic";
 import { availabilityRule, professional, ticket, ticketOffer, ticketPurchase, ticketType } from "@/lib/db/schema";
 import type { AvailabilityRuleInput, WindowOverrides } from "@/lib/tickets";
@@ -21,6 +21,7 @@ import { offerLabel, validityLabel, type ValidityUnit } from "@/lib/tickets-voca
 import { classifyTypes } from "@/lib/wallet-rules";
 
 import { inProCustomers } from "./pro-scope";
+import { rdvIssuesOf, type RdvIssue } from "./type-view";
 
 export type OfferView = {
   id: string;
@@ -62,6 +63,8 @@ export type TicketTypeSummary = {
   usableTickets: number;
   /** classifyTypes(loadTypeFacts()) === "orphan" */
   orphan: boolean;
+  /** rdvIssuesOf(): why the type offers no slot online (no hours, notice above horizon) or only to ticket holders; [] when bookable or not an RDV type */
+  rdvIssues: RdvIssue[];
 };
 
 export type TicketTypeDetail = TicketTypeSummary & {
@@ -297,7 +300,7 @@ async function loadSummaries(
   now: Date,
   onlyTypeId?: string,
 ): Promise<{ row: TypeRow; summary: TicketTypeSummary }[]> {
-  const [rows, offers, accepted, usable, facts] = await Promise.all([
+  const [rows, offers, accepted, usable, facts, ruleOwners, proWindow] = await Promise.all([
     db
       .select()
       .from(ticketType)
@@ -307,10 +310,35 @@ async function loadSummaries(
     readAcceptedBy(db, professionalId, onlyTypeId),
     readUsableCounts(db, professionalId, now, onlyTypeId),
     loadTypeFacts(db, professionalId, now),
+    // Who has hours: a type's own rules replace the global ones (ticket_type_id null), so a type has hours when it has its
+    // own or the pro has global ones: the public loader's rule (rdvRules(...).length > 0).
+    db
+      .selectDistinct({ ticketTypeId: availabilityRule.ticketTypeId })
+      .from(availabilityRule)
+      .where(eq(availabilityRule.professionalId, professionalId)),
+    readProWindow(db, professionalId),
   ]);
   const classes = classifyTypes(facts);
   const offersByType = new Map<string, OfferView[]>();
   for (const o of offers) pushTo(offersByType, o.ticketTypeId, o);
+  const globalHours = ruleOwners.some((r) => r.ticketTypeId === null);
+  const ownHours = new Set(ruleOwners.flatMap((r) => (r.ticketTypeId === null ? [] : [r.ticketTypeId])));
+  const rdvIssues = (row: TypeRow, typeOffers: OfferView[]): RdvIssue[] =>
+    proWindow === null
+      ? []
+      : rdvIssuesOf({
+          rdvEnabled: row.rdvEnabled,
+          rdvFree: row.rdvFree,
+          rdvDurationMin: row.rdvDurationMin,
+          archived: row.archivedAt !== null,
+          hasHours: globalHours || ownHours.has(row.id),
+          window: effectiveWindow(proWindow, {
+            bookingHorizonDays: row.rdvBookingHorizonDays,
+            minNoticeMinutes: row.rdvMinNoticeMinutes,
+            cancelDeadlineHours: row.rdvCancelDeadlineHours,
+          }),
+          offersOnSale: typeOffers.filter((o) => o.isActive).length,
+        });
   return rows.map((row) => ({
     row,
     summary: {
@@ -327,6 +355,7 @@ async function loadSummaries(
       acceptedBy: accepted.get(row.id) ?? [],
       usableTickets: usable.get(row.id) ?? 0,
       orphan: classes.get(row.id) === "orphan",
+      rdvIssues: rdvIssues(row, offersByType.get(row.id) ?? []),
     },
   }));
 }

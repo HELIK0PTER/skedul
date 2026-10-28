@@ -12,6 +12,7 @@ import { lastBookableDate, type BookingWindow } from "@/lib/booking-window";
 import { addDays, mondayOf, parseKey, todayKey, type DateKey } from "@/lib/civil-date";
 import { formatTime } from "@/lib/datetime";
 import type { VisitorState } from "@/lib/public/identity";
+import { COPY } from "@/lib/public/messages";
 import { canOfferCodeSignIn } from "@/lib/public/sign-in-flow";
 import { formatMoney } from "@/lib/utils";
 
@@ -63,9 +64,14 @@ export function rdvWeekKey(param: string | undefined, now: Date, tz: string, win
   return monday < bounds.current || monday > bounds.horizon ? bounds.fallback : monday;
 }
 
+/** /{slug}/rdv/{ticketTypeId}, every segment encoded: the RDV page of a type (its cards, the espace, the back office). */
+export function rdvPagePath(slug: string, ticketTypeId: string): string {
+  return `/${encodeURIComponent(slug)}/rdv/${encodeURIComponent(ticketTypeId)}`;
+}
+
 /** /{slug}/rdv/{ticketTypeId}?semaine={monday}: the only query a week carries (no personal data), every segment encoded. */
 export function rdvWeekHref(slug: string, ticketTypeId: string, monday: DateKey): string {
-  return `/${encodeURIComponent(slug)}/rdv/${encodeURIComponent(ticketTypeId)}?semaine=${monday}`;
+  return `${rdvPagePath(slug, ticketTypeId)}?semaine=${monday}`;
 }
 
 export type RdvWeekNav = {
@@ -214,6 +220,47 @@ export function rdvDurationLabel(minutes: number): string {
 export function rdvPriceLabel(type: { isFree: boolean; fromPriceCents: number | null }, currency: string): string | null {
   if (type.isFree) return "Gratuit";
   return type.fromPriceCents === null ? null : `À partir de ${formatMoney(type.fromPriceCents, currency)}`;
+}
+
+/** The heading of the RDV cards of `/[slug]`. */
+export const RDV_CARDS_TITLE = "Prendre rendez-vous";
+
+export type RdvCardVM = {
+  ticketTypeId: string;
+  name: string;
+  description: string | null;
+  /** « 15 minutes », « 1 heure » */
+  durationLabel: string;
+  /** « Gratuit », « À partir de 50 € », null for a paid type with nothing on sale (only ticket holders can book) */
+  priceLabel: string | null;
+  isFree: boolean;
+  href: string;
+  /** COPY.RDV_CARD_CTA, the visible label of the link */
+  ctaLabel: string;
+  /** « Réserver un rendez-vous : {name} »: starts with the visible label (WCAG 2.5.3) and tells the cards apart */
+  ctaAriaLabel: string;
+};
+
+/**
+ * One RDV card of `/[slug]` (§ 3.11, O8): the name, the duration, « Gratuit » or « À partir de » the lowest price on
+ * sale, the description and the link to the type's page. No next-slot is computed: the card is facts of the type only.
+ */
+export function rdvCardVM(
+  card: { ticketTypeId: string; name: string; description: string | null; durationMin: number; isFree: boolean; fromPriceCents: number | null },
+  slug: string,
+  currency: string,
+): RdvCardVM {
+  return {
+    ticketTypeId: card.ticketTypeId,
+    name: card.name,
+    description: card.description,
+    durationLabel: rdvDurationLabel(card.durationMin),
+    priceLabel: rdvPriceLabel(card, currency),
+    isFree: card.isFree,
+    href: rdvPagePath(slug, card.ticketTypeId),
+    ctaLabel: COPY.RDV_CARD_CTA,
+    ctaAriaLabel: `${COPY.RDV_CARD_CTA} : ${card.name}`,
+  };
 }
 
 /** The lowest price of the offers on sale (the « À partir de » of the page), null without any. */

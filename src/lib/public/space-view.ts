@@ -7,6 +7,7 @@
 import type { ConfirmCopy } from "@/lib/back-office/confirm-copy";
 import type { SpaceIdentity } from "@/lib/back-office/guest-access";
 import type { VisitorState } from "@/lib/public/identity";
+import { COPY } from "@/lib/public/messages";
 import type { BookingCoverage } from "@/lib/tickets-vocab";
 
 /** DOM id of the « Vos prochaines inscriptions » heading: the focus lands there when a success removes the control that held it (WCAG 2.4.3). */
@@ -19,14 +20,22 @@ export const SPEND_LINK_LABEL = "Réserver";
 export const SPEND_DONE = "Réservation confirmée.";
 export const CANCEL_LABEL = "Annuler";
 
-/** The confirmation of « Annuler » (COV-M12): the ticket comes back for a ticket booking, the pro is told, the client gets a confirmation e-mail. */
-export function cancelBookingCopy(coverage: BookingCoverage, businessName: string): ConfirmCopy {
+/**
+ * The confirmation of « Annuler » (COV-M12): the ticket comes back for a ticket booking, the pro is told, the client gets a
+ * confirmation e-mail. A rendez-vous is called a rendez-vous, never an inscription (P5 copy rule).
+ */
+export function cancelBookingCopy(coverage: BookingCoverage, businessName: string, kind: "seance" | "rdv" = "seance"): ConfirmCopy {
   const told = `${businessName} est prévenu par email. Vous recevez un email de confirmation.`;
   return {
-    title: "Annuler votre inscription ?",
+    title: kind === "rdv" ? "Annuler votre rendez-vous ?" : "Annuler votre inscription ?",
     body: coverage === "ticket" ? `Votre ticket vous est rendu et ${told}` : told,
-    confirm: "Annuler l'inscription",
+    confirm: kind === "rdv" ? "Annuler le rendez-vous" : "Annuler l'inscription",
   };
+}
+
+/** The line a successful « Annuler » leaves in the espace's status region. */
+export function cancelDoneText(kind: "seance" | "rdv"): string {
+  return kind === "rdv" ? "Rendez-vous annulé." : COPY.CANCELLED_OK;
 }
 
 /** The accessible name of a row's « Annuler »: starts with the visible label (WCAG 2.5.3) and says which booking. */

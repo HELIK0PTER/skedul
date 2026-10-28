@@ -489,13 +489,49 @@ dbTest("countRdvConflicts: scheduled RDV overlapping a range, buffers included; 
     .where(eq(occurrence.id, b));
   await rowRdv(db, pro, typeId, { startsAt: at(840), durationMin: 60, status: "cancelled", seatsTaken: 0 });
 
-  assert.equal(await countRdvConflicts(db, pro.proId, []), 0);
-  assert.equal(await countRdvConflicts(db, pro.proId, [range(630, 690)]), 1, "inside A");
-  assert.equal(await countRdvConflicts(db, pro.proId, [range(660, 690)]), 0, "starts where A ends");
-  assert.equal(await countRdvConflicts(db, pro.proId, [range(660, 710)]), 1, "reaches B's buffer, not B");
-  assert.equal(await countRdvConflicts(db, pro.proId, [range(840, 900)]), 0, "the cancelled RDV");
-  assert.equal(await countRdvConflicts(db, pro.proId, [range(630, 690), range(750, 780)]), 2, "A and B");
-  assert.equal(await countRdvConflicts(db, pro.proId, [range(630, 640), range(640, 650)]), 1, "one RDV hit by two ranges counts once");
+  const now = new Date();
+  assert.equal(await countRdvConflicts(db, pro.proId, [], now), 0);
+  assert.equal(await countRdvConflicts(db, pro.proId, [range(630, 690)], now), 1, "inside A");
+  assert.equal(await countRdvConflicts(db, pro.proId, [range(660, 690)], now), 0, "starts where A ends");
+  assert.equal(await countRdvConflicts(db, pro.proId, [range(660, 710)], now), 1, "reaches B's buffer, not B");
+  assert.equal(await countRdvConflicts(db, pro.proId, [range(840, 900)], now), 0, "the cancelled RDV");
+  assert.equal(await countRdvConflicts(db, pro.proId, [range(630, 690), range(750, 780)], now), 2, "A and B");
+  assert.equal(await countRdvConflicts(db, pro.proId, [range(630, 640), range(640, 650)], now), 1, "one RDV hit by two ranges counts once");
+});
+
+dbTest("countRdvConflicts: a phantom RDV (an abandoned checkout, its hold lapsed) is ignored, a live hold counts (P5 T13, the slot loader's rule)", async ({ db, pro }) => {
+  const typeId = await rowRdvType(db, pro);
+  const now = new Date();
+  const base = new Date(now.getTime() + 6 * DAY);
+  base.setUTCMinutes(0, 0, 0);
+  const at = (minutes: number) => new Date(base.getTime() + minutes * 60_000);
+  const range = (fromMin: number, toMin: number) => ({ startsAt: at(fromMin), endsAt: at(toMin) });
+  const customerId = await rowCustomer(db, pro);
+  const offerId = await rowOffer(db, pro, typeId);
+
+  // P 10:00 an abandoned checkout (its hold ended a minute ago); L 12:00 a checkout in progress
+  const phantom = await rowRdv(db, pro, typeId, { startsAt: at(600), durationMin: 60 });
+  await rowBooking(db, pro, {
+    occurrenceId: phantom,
+    customerId,
+    status: "pending",
+    purchaseId: await rowPurchase(db, pro, { customerId, offerId, ticketTypeId: typeId }),
+    holdExpiresAt: new Date(now.getTime() - 60_000),
+  });
+  const live = await rowRdv(db, pro, typeId, { startsAt: at(720), durationMin: 60 });
+  await rowBooking(db, pro, {
+    occurrenceId: live,
+    customerId,
+    status: "pending",
+    purchaseId: await rowPurchase(db, pro, { customerId, offerId, ticketTypeId: typeId }),
+    holdExpiresAt: new Date(now.getTime() + 30 * 60_000),
+  });
+
+  assert.equal(await countRdvConflicts(db, pro.proId, [range(600, 660)], now), 0, "the abandoned checkout frees its slot");
+  assert.equal(await countRdvConflicts(db, pro.proId, [range(720, 780)], now), 1, "a hold still live blocks it");
+  assert.equal(await countRdvConflicts(db, pro.proId, [range(600, 900)], now), 1);
+  const lapsed = new Date(now.getTime() + 31 * 60_000);
+  assert.equal(await countRdvConflicts(db, pro.proId, [range(720, 780)], lapsed), 0, "the same hold once it has lapsed");
 });
 
 dbTest("another pro sees none of it: list, editor, delete preview and RDV conflicts", async ({ db, pro }) => {
@@ -511,8 +547,8 @@ dbTest("another pro sees none of it: list, editor, delete preview and RDV confli
     assert.deepEqual(await listEvents(db, other.proId, now), { live: [], ended: [] });
     assert.equal(await getEventEditor(db, other.proId, eventId, now), null);
     assert.equal(await deleteFromPreview(db, other.proId, eventId, occurrences[0].seriesDate ?? "", now), null);
-    assert.equal(await countRdvConflicts(db, other.proId, [{ startsAt, endsAt }]), 0);
-    assert.equal(await countRdvConflicts(db, pro.proId, [{ startsAt, endsAt }]), 1);
+    assert.equal(await countRdvConflicts(db, other.proId, [{ startsAt, endsAt }], now), 0);
+    assert.equal(await countRdvConflicts(db, pro.proId, [{ startsAt, endsAt }], now), 1);
     assert.equal(await getEventEditor(db, pro.proId, "unknown-id", now), null);
     assert.equal(editorOf(await getEventEditor(db, pro.proId, eventId, now)).event.title, "Événement du pro A");
   } finally {
