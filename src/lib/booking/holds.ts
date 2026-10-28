@@ -42,6 +42,19 @@ export function assertHoldQuota(c: BatchCtx, customerId: string): Query {
 }
 
 /**
+ * The lapsed-hold rule, in ONE place (P3OUT:151): a pending booking whose
+ * hold ended strictly before `now`. A hold whose hold_expires_at equals `now`
+ * is still live. `b` is the booking table alias (sql`b`); without it the
+ * columns are unqualified (a statement on the booking table itself). Used by
+ * expireElapsedHolds (the engine releases these) and by the P5 slot loader
+ * (src/lib/slots.ts: an RDV held only by these is a phantom, not busy).
+ */
+export function lapsedHold(now: Date, b?: SQL): SQL {
+  const col = (name: string): SQL => (b ? sql`${b}.${sql.identifier(name)}` : sql`${sql.identifier(name)}`);
+  return sql`(${col("status")} = 'pending' and ${col("hold_expires_at")} < ${ts(now)})`;
+}
+
+/**
  * R over many occurrences: expires the elapsed holds of every booking whose
  * occurrence is returned by `occurrenceIds`, a subquery (`select id from …`;
  * for a JS list: sql`select unnest(${textArray(ids)})`), marking them with
@@ -52,7 +65,7 @@ export function expireElapsedHolds(c: BatchCtx, occurrenceIds: SQL): Query {
   return c.db.execute(sql`
     update booking set status = 'expired', ended_at = ${ts(c.now)}, ended_by = 'system',
       ended_action_id = ${c.aid}, updated_at = ${ts(c.now)}
-    where occurrence_id in (${occurrenceIds}) and status = 'pending' and hold_expires_at < ${ts(c.now)}`);
+    where occurrence_id in (${occurrenceIds}) and ${lapsedHold(c.now)}`);
 }
 
 /** Seats a visitor sees (spec § 7): capacity − seats taken + elapsed holds not yet released, never below 0. */
