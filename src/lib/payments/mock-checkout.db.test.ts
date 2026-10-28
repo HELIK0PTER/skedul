@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
-import { attachCheckoutSession, startBuyAndBook } from "@/lib/booking/claims";
+import { setAvailabilityRules } from "@/lib/booking/catalog";
+import { attachCheckoutSession, bookRdv, startBuyAndBook } from "@/lib/booking/claims";
 import { fulfillPurchase, startPurchase } from "@/lib/booking/fulfillment";
 import { releasePurchase } from "@/lib/booking/release";
+import { instantAt } from "@/lib/civil-date";
 import type { Db } from "@/lib/db/atomic";
 import * as schema from "@/lib/db/schema";
 import { mockSessionId } from "@/lib/payments/checkout";
@@ -13,7 +15,7 @@ import { mockCheckoutState, mockPay } from "@/lib/payments/mock-checkout";
 import { HEALTH_KEYS, readHealth } from "@/lib/throttle";
 import { formatMoney } from "@/lib/utils";
 import { createTestPro, dbTest, deleteTestUser, testEmail, type TestPro } from "@/test/db";
-import { getBooking, getOccurrence, makeCustomer, makeEvent, makeOffer, makeType, ticketsOf } from "@/test/fixtures";
+import { dayIn, getBooking, getOccurrence, makeCustomer, makeEvent, makeOffer, makeType, ticketsOf } from "@/test/fixtures";
 import { rowBooking, rowCustomer, rowOffer, rowPurchase, rowSeance, rowType } from "@/test/rows";
 
 type Session = "mock" | "none" | "stripe";
@@ -67,6 +69,29 @@ async function shop(db: Db, pro: TestPro, kind: Session = "mock") {
   return { purchaseId: started.purchaseId, offerId, customerId, sessionId };
 }
 
+/** An RDV buy of « Massage sportif » (one ticket, 60 eur), its seat held, three days ahead at 10:00 in the pro's zone. */
+async function rdvBuy(db: Db, pro: TestPro, kind: Session = "mock") {
+  const now = new Date();
+  const typeId = await makeType(db, pro, { name: "Massage sportif", rdvEnabled: true, rdvDurationMin: 60 });
+  const offerId = await makeOffer(db, pro, typeId, { quantity: 1, priceCents: 6000 });
+  const hours = await setAvailabilityRules(db, {
+    professionalId: pro.proId,
+    ticketTypeId: null,
+    rules: [0, 1, 2, 3, 4, 5, 6].map((dayOfWeek) => ({ dayOfWeek, startMinute: 480, endMinute: 1200 })),
+  });
+  assert.ok(hours.ok, JSON.stringify(hours));
+  const customerId = await makeCustomer(db, pro);
+  const startsAt = instantAt(dayIn(pro, 3, now), 600, pro.tz);
+  const res = await bookRdv(
+    db,
+    { professionalId: pro.proId, ticketTypeId: typeId, startsAt, customerId, actorUserId: null, mode: "buy", offerId },
+    now,
+  );
+  assert.ok(res.ok && res.purchaseId, JSON.stringify(res));
+  const sessionId = await attach(db, res.purchaseId, kind);
+  return { purchaseId: res.purchaseId, bookingId: res.bookingId, occurrenceId: res.occurrenceId, typeId, offerId, customerId, sessionId };
+}
+
 async function purchaseRow(db: Db, purchaseId: string) {
   const [row] = await db.select().from(schema.ticketPurchase).where(eq(schema.ticketPurchase.id, purchaseId));
   return row;
@@ -112,6 +137,36 @@ dbTest("mockCheckoutState: a pending simulated purchase shows its view, the canc
   // A purchase with no session attached yet (the window between the engine and the gateway) is simulated too.
   const unattached = await shop(db, pro, "none");
   assert.equal((await mockCheckoutState(db, unattached.purchaseId))?.kind, "pending");
+});
+
+dbTest("mockCheckoutState: an RDV buy comes back to its RDV type page (rdv/), never the séance page; the séance buy + book is unchanged (P5 T8)", async ({ db, pro }) => {
+  const businessName = await businessNameOf(db, pro);
+  const r = await rdvBuy(db, pro);
+  assert.deepEqual(await mockCheckoutState(db, r.purchaseId), {
+    kind: "pending",
+    view: {
+      purchaseId: r.purchaseId,
+      businessName,
+      productLabel: "Massage sportif · À l'unité",
+      amountLabel: formatMoney(6000, "eur"),
+      cancelPath: `/${pro.slug}/rdv/${r.typeId}?paiement=annule&p=${r.purchaseId}`,
+    },
+  });
+  const state = await mockCheckoutState(db, r.purchaseId);
+  assert.ok(state?.kind === "pending");
+  assert.equal(state.view.cancelPath.includes("/seance/"), false, "an RDV occurrence is never sent to the séance page");
+  assert.equal(state.view.cancelPath.includes(r.occurrenceId), false);
+
+  const b = await buyBook(db, pro);
+  const seance = await mockCheckoutState(db, b.purchaseId);
+  assert.ok(seance?.kind === "pending");
+  assert.equal(seance.view.cancelPath, `/${pro.slug}/seance/${b.occurrenceId}?paiement=annule&p=${b.purchaseId}`);
+
+  // The RDV is paid by the mock like any simulated buy: the merci page of its own pro.
+  const paid = await mockPay(db, r.purchaseId, new Date());
+  assert.ok(paid.kind === "paid");
+  assert.equal(paid.merciPath, `/${pro.slug}/merci?p=${r.purchaseId}`);
+  assert.equal((await getBooking(db, r.bookingId)).status, "confirmed");
 });
 
 dbTest("mockCheckoutState writes nothing: a GET is safe for prefetchers and link scanners (S15)", async ({ db, pro }) => {

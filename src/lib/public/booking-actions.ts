@@ -183,7 +183,8 @@ export async function createCheckoutAndAttach(
   db: Db,
   deps: PublicDeps,
   request: CheckoutRequest,
-  context: "buybook" | "shop",
+  // The client wording of a refused attachment: the séance buy + book, the shop, or an RDV buy (P5 T8).
+  context: "buybook" | "shop" | "rdv",
   businessName: string,
   now: Date,
 ): Promise<PublicCoreResult<{ purchaseId: string; checkoutUrl: string }>> {

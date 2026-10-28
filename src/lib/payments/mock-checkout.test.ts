@@ -76,17 +76,31 @@ test("mockCheckoutHtml: a hostile purchase id or cancel path cannot break out of
   assert.equal(html.includes('" onclick="'), false);
 });
 
-test("mockCancelPath: the séance of a buy + book, else the offer of the shop, else the page", () => {
+test("mockCancelPath: the RDV type of an RDV purchase, else the séance of a buy + book, else the offer of the shop, else the page", () => {
   const base = { slug: "altinha-paris", purchaseId: "p1" };
   assert.equal(
-    mockCancelPath({ ...base, occurrenceId: "o1", offerId: "of1" }),
+    mockCancelPath({ ...base, occurrenceId: null, offerId: "of1", rdvTypeId: "tt1" }),
+    "/altinha-paris/rdv/tt1?paiement=annule&p=p1",
+  );
+  assert.equal(
+    mockCancelPath({ ...base, occurrenceId: "o1", offerId: "of1", rdvTypeId: "tt1" }),
+    "/altinha-paris/rdv/tt1?paiement=annule&p=p1",
+    "an RDV type wins over any occurrence id",
+  );
+  assert.equal(
+    mockCancelPath({ ...base, occurrenceId: "o1", offerId: "of1", rdvTypeId: null }),
     "/altinha-paris/seance/o1?paiement=annule&p=p1",
   );
   assert.equal(
-    mockCancelPath({ ...base, occurrenceId: null, offerId: "of1" }),
+    mockCancelPath({ ...base, occurrenceId: null, offerId: "of1", rdvTypeId: null }),
     "/altinha-paris/offre/of1?paiement=annule&p=p1",
   );
-  assert.equal(mockCancelPath({ ...base, occurrenceId: null, offerId: null }), "/altinha-paris");
+  assert.equal(mockCancelPath({ ...base, occurrenceId: null, offerId: null, rdvTypeId: null }), "/altinha-paris");
+  assert.equal(
+    mockCancelPath({ ...base, occurrenceId: null, offerId: null, rdvTypeId: "a/b?c" }),
+    "/altinha-paris/rdv/a%2Fb%3Fc?paiement=annule&p=p1",
+    "the type id is URL-encoded",
+  );
 });
 
 // The route handler imports next/server, which node:test cannot load: its wiring is pinned on the source.

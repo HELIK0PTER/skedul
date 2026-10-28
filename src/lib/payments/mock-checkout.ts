@@ -8,6 +8,7 @@
  * No `server-only`, no env, no process db: the route passes `db`.
  */
 import { and, eq } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 import { fulfillPurchase } from "@/lib/booking/fulfillment";
 import type { Effect } from "@/lib/booking/types";
@@ -27,13 +28,19 @@ export type MockCheckoutView = {
   cancelPath: string;
 };
 
-/** The cancel link of the simulated page: the séance of a buy + book, else the offer of a shop purchase, else the pro's page. */
+/**
+ * The cancel link of the simulated page: the RDV type page of an RDV purchase (P5 O5: never the séance page, which
+ * sends an RDV to the espace), else the séance of a buy + book, else the offer of a shop purchase, else the pro's page.
+ * `occurrenceId` is a séance's only: the caller passes null for an RDV occurrence.
+ */
 export function mockCancelPath(p: {
   slug: string;
   purchaseId: string;
   occurrenceId: string | null;
   offerId: string | null;
+  rdvTypeId: string | null;
 }): string {
+  if (p.rdvTypeId) return cancelPathOf({ kind: "rdv", slug: p.slug, purchaseId: p.purchaseId, ticketTypeId: p.rdvTypeId });
   if (p.occurrenceId) {
     return cancelPathOf({ kind: "buybook", slug: p.slug, purchaseId: p.purchaseId, occurrenceId: p.occurrenceId });
   }
@@ -46,6 +53,8 @@ const merciPathOf = (slug: string, purchaseId: string): string => `/${slug}/merc
 /** The purchase when its id has the right shape, its ticket type is its pro's own and its session is simulated (null or a mock id); null otherwise, whatever its status. A séance or event of another pro is left out of the row, not a reason to refuse it. */
 async function simulatedPurchase(db: Db, purchaseId: string) {
   if (!isReferenceId(purchaseId)) return null;
+  // The RDV type of the booked occurrence, a second join of ticket_type (the first is the purchase's own type).
+  const rdvType = alias(ticketType, "rdv_type");
   const [row] = await db
     .select({
       purchaseId: ticketPurchase.id,
@@ -60,6 +69,10 @@ async function simulatedPurchase(db: Db, purchaseId: string) {
       businessName: professional.businessName,
       // From the filtered join, not from the booking: a booking that points to another pro's séance has no séance here.
       occurrenceId: occurrence.id,
+      // Set for an RDV occurrence (occurrence_kind_chk: an event or a ticket type, never both), null for a séance.
+      occurrenceTypeId: occurrence.ticketTypeId,
+      // The RDV's type through this pro's own join: a type of another pro is left out, its id never reaches the page.
+      rdvTypeId: rdvType.id,
       eventTitle: event.title,
     })
     .from(ticketPurchase)
@@ -82,6 +95,10 @@ async function simulatedPurchase(db: Db, purchaseId: string) {
       and(eq(occurrence.id, booking.occurrenceId), eq(occurrence.professionalId, ticketPurchase.professionalId)),
     )
     .leftJoin(event, and(eq(event.id, occurrence.eventId), eq(event.professionalId, ticketPurchase.professionalId)))
+    .leftJoin(
+      rdvType,
+      and(eq(rdvType.id, occurrence.ticketTypeId), eq(rdvType.professionalId, ticketPurchase.professionalId)),
+    )
     .where(eq(ticketPurchase.id, purchaseId));
   if (!row) return null;
   if (row.checkoutSessionId !== null && !isMockSession(row.checkoutSessionId)) return null;
@@ -107,8 +124,10 @@ export async function mockCheckoutState(
       cancelPath: mockCancelPath({
         slug: p.slug,
         purchaseId: p.purchaseId,
-        occurrenceId: p.occurrenceId,
+        // An RDV occurrence is never sent to the séance page; a crossed RDV type falls back to the offer or the page.
+        occurrenceId: p.occurrenceTypeId === null ? p.occurrenceId : null,
         offerId: p.offerId,
+        rdvTypeId: p.rdvTypeId,
       }),
     },
   };

@@ -71,14 +71,21 @@ export function mockCheckoutUrl(appUrl: string, purchaseId: string): string {
 export type CheckoutTarget = { slug: string; purchaseId: string } & (
   | { kind: "buybook"; occurrenceId: string }
   | { kind: "shop"; offerId: string }
+  | { kind: "rdv"; ticketTypeId: string }
 );
 
-/** Path of the cancel page: /{slug}/seance/{o}?paiement=annule&p={id} (L812) or /{slug}/offre/{offerId}?paiement=annule&p={id}. */
+/**
+ * Path of the cancel page: /{slug}/seance/{o}?paiement=annule&p={id} (L812), /{slug}/offre/{offerId}?paiement=annule&p={id},
+ * or for an RDV purchase /{slug}/rdv/{ticketTypeId}?paiement=annule&p={id} (P5 dossier O5: the séance page sends an RDV
+ * to the espace and would lose `p`). Every segment is URL-encoded.
+ */
 export function cancelPathOf(t: CheckoutTarget): string {
   const page =
     t.kind === "buybook"
       ? `seance/${encodeURIComponent(t.occurrenceId)}`
-      : `offre/${encodeURIComponent(t.offerId)}`;
+      : t.kind === "shop"
+        ? `offre/${encodeURIComponent(t.offerId)}`
+        : `rdv/${encodeURIComponent(t.ticketTypeId)}`;
   return `/${encodeURIComponent(t.slug)}/${page}?paiement=annule&p=${encodeURIComponent(t.purchaseId)}`;
 }
 

@@ -52,6 +52,7 @@ const SHOP: CheckoutRequest = {
 
 const BUYBOOK_TARGET: CheckoutTarget = { kind: "buybook", slug: "altinha-paris", purchaseId: "pur_abc-123", occurrenceId: "occ_1" };
 const SHOP_TARGET: CheckoutTarget = { kind: "shop", slug: "altinha-paris", purchaseId: "pur_abc-123", offerId: "off_1" };
+const RDV_TARGET: CheckoutTarget = { kind: "rdv", slug: "altinha-paris", purchaseId: "pur_abc-123", ticketTypeId: "tt_1" };
 
 test("stripeSessionParams: the exact Checkout session of a buy + book (card only, app marker, whole-second expiry)", () => {
   assert.deepEqual(stripeSessionParams(BUYBOOK), {
@@ -116,6 +117,18 @@ test("cancelPathOf: the séance page for a buy + book, the offer page for a shop
   assert.equal(cancelPathOf(SHOP_TARGET), "/altinha-paris/offre/off_1?paiement=annule&p=pur_abc-123");
 });
 
+test("cancelPathOf: an RDV purchase comes back to its RDV type page /{slug}/rdv/{ticketTypeId}, never the séance page (P5 O5)", () => {
+  assert.equal(cancelPathOf(RDV_TARGET), "/altinha-paris/rdv/tt_1?paiement=annule&p=pur_abc-123");
+  // Every segment is URL-encoded: a slash, a query or a fragment in an id stays inside its segment.
+  assert.equal(
+    cancelPathOf({ kind: "rdv", slug: "a b", purchaseId: "p/1?x#y", ticketTypeId: "../tt?y=1#z" }),
+    "/a%20b/rdv/..%2Ftt%3Fy%3D1%23z?paiement=annule&p=p%2F1%3Fx%23y",
+  );
+  const { successUrl, cancelUrl } = checkoutUrls("https://app.test/", RDV_TARGET);
+  assert.equal(successUrl, "https://app.test/altinha-paris/merci?p=pur_abc-123", "the success page is the shared /merci");
+  assert.equal(cancelUrl, "https://app.test/altinha-paris/rdv/tt_1?paiement=annule&p=pur_abc-123");
+});
+
 test("checkoutUrls: built from the trusted app URL, trailing slashes stripped, success on /merci?p=", () => {
   const buybook = {
     successUrl: "https://app.test/altinha-paris/merci?p=pur_abc-123",
@@ -137,10 +150,14 @@ test("S16: no URL carries a redirect or next parameter or an address, and a host
   const targets: CheckoutTarget[] = [
     BUYBOOK_TARGET,
     SHOP_TARGET,
+    RDV_TARGET,
     { ...BUYBOOK_TARGET, purchaseId: hostile },
     { ...SHOP_TARGET, purchaseId: hostile },
+    { ...RDV_TARGET, purchaseId: hostile },
     { kind: "buybook", slug: "altinha-paris", purchaseId: "p1", occurrenceId: hostile },
     { kind: "shop", slug: "altinha-paris", purchaseId: "p1", offerId: hostile },
+    { kind: "rdv", slug: "altinha-paris", purchaseId: "p1", ticketTypeId: hostile },
+    { kind: "rdv", slug: hostile, purchaseId: "p1", ticketTypeId: "tt_1" },
   ];
   for (const target of targets) {
     const { successUrl, cancelUrl } = checkoutUrls("https://app.test", target);
@@ -152,7 +169,7 @@ test("S16: no URL carries a redirect or next parameter or an address, and a host
     }
     assert.equal(new URL(successUrl).searchParams.get("p"), target.purchaseId, "the id round-trips as one value");
   }
-  for (const target of [BUYBOOK_TARGET, SHOP_TARGET]) {
+  for (const target of [BUYBOOK_TARGET, SHOP_TARGET, RDV_TARGET]) {
     const { successUrl, cancelUrl } = checkoutUrls("https://app.test", target);
     for (const url of [successUrl, cancelUrl]) assert.equal(/redirect|next/i.test(url), false, url);
   }
