@@ -8,6 +8,7 @@ import { useRefusalFocus } from "@/components/dashboard/use-refusal-focus";
 import { IdentityFields } from "@/components/public/identity-fields";
 import { TestPaymentsBanner } from "@/components/public/test-payments-banner";
 import { Button } from "@/components/ui/button";
+import { safeCheckoutUrl } from "@/lib/public/buy-and-book-form";
 import type { IdentityInput } from "@/lib/public/identity-schema";
 import type { VisitorState } from "@/lib/public/identity";
 import { COPY } from "@/lib/public/messages";
@@ -18,7 +19,7 @@ import { startShopPurchaseAction } from "@/server/public";
 /**
  * The identity form of a shop purchase (E9, spec L1099-1104, contract § 3.23): « Prénom et nom », « Email », « Téléphone »,
  * then « Payer {prix} ». It posts the slug, the offer id, the typed identity and the honeypot, and leaves for the Checkout
- * URL the server answers with. The e-mail is read-only for a VERIFIED session only (the session address, never a cookie's);
+ * URL the server answers with when safeCheckoutUrl accepts it (P4 final review PAY-2). The e-mail is read-only for a VERIFIED session only (the session address, never a cookie's);
  * everybody else types an address, which identifies a client row and authorises nothing (Decision 38).
  */
 export function OfferCheckoutForm({
@@ -87,8 +88,16 @@ export function OfferCheckoutForm({
           refused();
           return;
         }
-        setRedirecting(true);
-        window.location.assign(res.checkoutUrl);
+        // The page leaves only for an https URL without credentials, or the same-origin mock checkout (the check of the
+        // séance page): any other answer stays here with the séance page's refusal.
+        const target = safeCheckoutUrl(res.checkoutUrl, window.location.origin);
+        if (target !== null) {
+          setRedirecting(true);
+          window.location.assign(target);
+          return;
+        }
+        setFormError(COPY.CHECKOUT_FAILED);
+        refused();
       } catch {
         setFormError(PUBLIC_UNEXPECTED);
         refused();

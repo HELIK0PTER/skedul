@@ -27,10 +27,22 @@ test("an identity the server would refuse is said under its field before any cal
 });
 
 test("a success leaves for the Checkout URL with a full navigation and keeps the button disabled", () => {
-  assert.match(SOURCE, /setRedirecting\(true\);\s*window\.location\.assign\(res\.checkoutUrl\);/);
+  assert.match(SOURCE, /setRedirecting\(true\);\s*window\.location\.assign\(target\);\s*return;/);
   assert.doesNotMatch(SOURCE, /useRouter|router\.(refresh|push|replace)/, "navigation after a Server Action is window.location.assign alone");
   assert.match(SOURCE, /const busy = pending \|\| redirecting;/);
   assert.match(SOURCE, /disabled=\{busy\}/);
+});
+
+test("the browser leaves only for a Checkout URL safeCheckoutUrl accepts; any other URL gets the refusal of the séance page (P4 final review PAY-2)", () => {
+  assert.match(SOURCE, /^import \{ safeCheckoutUrl \} from "@\/lib\/public\/buy-and-book-form";$/m, "the séance page's own check");
+  assert.match(
+    SOURCE,
+    /const target = safeCheckoutUrl\(res\.checkoutUrl, window\.location\.origin\);\s*if \(target !== null\) \{\s*setRedirecting\(true\);\s*window\.location\.assign\(target\);\s*return;\s*\}\s*setFormError\(COPY\.CHECKOUT_FAILED\);\s*refused\(\);/,
+    "an unsafe URL never leaves the page: the same COPY.CHECKOUT_FAILED as occurrence-booking.tsx, on the alert line",
+  );
+  assert.equal(SOURCE.split("window.location.assign(").length - 1, 1, "one navigation, to the checked URL");
+  assert.equal(SOURCE.split("res.checkoutUrl").length - 1, 1, "the raw URL reaches the check only");
+  assert.doesNotMatch(SOURCE, /location\.href\s*=|location\s*=|location\.replace\(|window\.open\(/, "no other way out");
 });
 
 test("a page restored from the back/forward cache leaves the redirecting state", () => {
@@ -77,7 +89,7 @@ test("a failure goes to an always-mounted alert line, unless an identity field o
   assert.doesNotMatch(SOURCE, /ERROR_CLASS|role="alert"/, "the line is the shared primitive's: no class string and no alert of its own (G4c)");
   assert.match(SOURCE, /Object\.keys\(fields\)\.some\(\(key\) => key\.startsWith\("identity\."\)\)/);
   assert.match(SOURCE, /setFormError\(PUBLIC_UNEXPECTED\);\s*refused\(\);/);
-  assert.equal(SOURCE.split("refused();").length - 1, 3, "the local check, a server refusal and a failed call");
+  assert.equal(SOURCE.split("refused();").length - 1, 4, "the local check, a server refusal, an unsafe Checkout URL and a failed call");
 });
 
 test("no dash, no brand-coloured text and no address in the logs", () => {
