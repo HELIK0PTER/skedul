@@ -66,6 +66,26 @@ test("the confirmation banner says it is busy: pending labels on both send butto
   for (const spinner of spinners) assert.match(spinner, /aria-hidden/, spinner);
 });
 
+test("the sign-in and sign-up form says it is busy and announces its failure: pending labels, an always-mounted alert, silent spinners, still method=post (AUTH-4)", () => {
+  const form = source("src/components/auth/auth-form.tsx");
+  assert.match(form, /import \{ FormError \} from "@\/components\/dashboard\/form-error";/);
+  assert.match(form, /import \{ COPY \} from "@\/lib\/public\/messages";/, "the one source of the pending labels");
+  // A live region inserted together with its text is not reliably announced: the line exists from the first render.
+  assert.match(form, /<FormError alwaysMounted message=\{error\} \/>/);
+  assert.doesNotMatch(form, /\{error && \(/, "no conditionally mounted error line");
+  assert.doesNotMatch(form, /role="alert"/, "the alert is FormError's, one style");
+  assert.match(
+    form,
+    /\{loading \? \(isSignUp \? COPY\.PENDING_SIGN_UP : COPY\.PENDING_SIGN_IN\) : isSignUp \? "Créer mon compte" : "Se connecter"\}/,
+    "the submit button",
+  );
+  const spinners = form.match(/<Loader2\b[^>]*>/g) ?? [];
+  assert.equal(spinners.length, 2, "the Google button and the submit button");
+  for (const spinner of spinners) assert.match(spinner, /aria-hidden/, spinner);
+  // G4b: a form that holds an e-mail or a password never falls back to GET (the values would land in the URL).
+  assert.match(form, /<form method="post" onSubmit=\{onSubmit\}/);
+});
+
 test("the reset link is logged only by a dev build without Resend, never by a production build (no token in logs)", () => {
   const auth = source("src/lib/auth.ts");
   assert.match(auth, /logResetLink: !env\.RESEND_ENABLED && process\.env\.NODE_ENV !== "production",/);

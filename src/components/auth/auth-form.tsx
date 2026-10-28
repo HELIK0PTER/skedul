@@ -7,11 +7,13 @@ import { Loader2 } from "lucide-react";
 
 import { signIn, signUp } from "@/lib/auth-client";
 import { authFormErrorMessage } from "@/lib/auth-messages";
+import { COPY } from "@/lib/public/messages";
 import { authFormGoogleCallbacks } from "@/lib/public/sign-in-flow";
 import { resolvePostSignIn, type PostSignIn } from "@/server/entry";
 import { EntryChooser } from "@/components/auth/entry-chooser";
 import { GoogleLogo } from "@/components/auth/google-logo";
 import { useGoogleRedirect } from "@/components/auth/use-google-redirect";
+import { FormError } from "@/components/dashboard/form-error";
 import { Button } from "@/components/ui/button";
 import { INLINE_LINK_CLASS } from "@/components/ui/link-class";
 import { Input } from "@/components/ui/input";
@@ -123,7 +125,7 @@ export function AuthForm({
             disabled={busy}
           >
             {googleLoading ? (
-              <Loader2 className="size-4 animate-spin" />
+              <Loader2 className="size-4 animate-spin" aria-hidden />
             ) : (
               <GoogleLogo className="size-4" />
             )}
@@ -177,15 +179,12 @@ export function AuthForm({
           />
         </div>
 
-        {error && (
-          <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-rose-700">
-            {error}
-          </p>
-        )}
+        {/* Mounted from the first render (empty, it is screen-reader only): a failure is announced when its text arrives. */}
+        <FormError alwaysMounted message={error} />
 
         <Button type="submit" className="w-full" disabled={busy}>
-          {loading && <Loader2 className="size-4 animate-spin" />}
-          {isSignUp ? "Créer mon compte" : "Se connecter"}
+          {loading && <Loader2 className="size-4 animate-spin" aria-hidden />}
+          {loading ? (isSignUp ? COPY.PENDING_SIGN_UP : COPY.PENDING_SIGN_IN) : isSignUp ? "Créer mon compte" : "Se connecter"}
         </Button>
 
         <p className="text-center text-sm text-muted-foreground">

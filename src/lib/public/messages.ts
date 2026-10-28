@@ -138,6 +138,9 @@ export const COPY = {
   PENDING_PAY: "Redirection vers le paiement…",
   /** Said by the page's status line once an inline code sign-in is accepted (AUTH-1): the form that held the focus is gone. */
   SIGNED_IN: "Connexion réussie.",
+  /** The password form's submit while its call runs (`AuthForm`, P4 final review AUTH-4): the form serves clients too. */
+  PENDING_SIGN_IN: "Connexion…",
+  PENDING_SIGN_UP: "Création…",
 } as const;
 
 /** « 1 place restante » / « 5 places restantes » (fr-FR thousands). */
