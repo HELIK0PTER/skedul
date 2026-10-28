@@ -105,6 +105,14 @@ test("a release speaks through the page-level region, even when the revalidation
 test("the release status region is one always-mounted status line that clears itself, and only the blocks speak through it (G4c)", () => {
   assert.match(STATUS, /^"use client";/);
   assert.match(STATUS, /<p role="status" className="sr-only">\{text\}<\/p>/, "always rendered, read by screen readers only (the notice above the form is the visible line)");
+  // Always in the DOM, even for an empty text: a live region that is inserted together with its text is announced by few
+  // screen readers (WCAG 4.1.3). The markup above is also found inside a `text === "" ? null : <p ...>`, so the component's
+  // return is pinned on its own line and no early return or null branch may precede it.
+  const regionAt = STATUS.indexOf("export function ReleaseStatus() {");
+  assert.notEqual(regionAt, -1, "ReleaseStatus is found");
+  const region = STATUS.slice(regionAt);
+  assert.match(region, /^ {2}return <p role="status" className="sr-only">\{text\}<\/p>;\r?$/m, "the component's one return, with no condition around the region");
+  assert.doesNotMatch(region, /\breturn (?:null|undefined)\b|\breturn;|\? null\b|&& <p\b/, "no early return, no null branch");
   assert.match(STATUS, /useSyncExternalStore\(store\.subscribe, store\.get, \(\) => ""\)/);
   assert.match(STATUS, /export function announceRelease\(text: string\): void \{\s*store\.set\(text\);\s*\}/);
   // A stale line from an earlier page never shows on the next: it is cleared when the region mounts and when it goes.
