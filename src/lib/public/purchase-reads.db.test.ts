@@ -3,15 +3,17 @@ import assert from "node:assert/strict";
 import { eq, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
-import { attachCheckoutSession, startBuyAndBook } from "@/lib/booking/claims";
+import { setAvailabilityRules } from "@/lib/booking/catalog";
+import { attachCheckoutSession, bookRdv, startBuyAndBook } from "@/lib/booking/claims";
 import { fulfillPurchase, startPurchase } from "@/lib/booking/fulfillment";
 import { releasePurchase } from "@/lib/booking/release";
+import { instantAt } from "@/lib/civil-date";
 import type { Db } from "@/lib/db/atomic";
 import * as schema from "@/lib/db/schema";
 import { purchaseByReference } from "@/lib/public/purchase-reads";
 import { HOLD_MINUTES } from "@/lib/tickets";
 import { addMinutes, createTestPro, dbTest, deleteTestUser, testEmail, type TestPro } from "@/test/db";
-import { makeCustomer, makeEvent, makeOffer, makeType } from "@/test/fixtures";
+import { dayIn, makeCustomer, makeEvent, makeOffer, makeType } from "@/test/fixtures";
 import { rowBooking, rowCustomer, rowOffer, rowPurchase, rowRdv, rowSeance, rowType } from "@/test/rows";
 
 /** A 4-ticket offer linked to a fresh event: « Altinha débutants » at « Gymnase Jean Bouin », capacity 12. */
@@ -84,6 +86,8 @@ dbTest("purchaseByReference: a pending buy + book purchase with its own booking 
     booking: {
       bookingId: h.bookingId,
       occurrenceId: cat.occ.id,
+      isRdv: false,
+      ticketTypeId: null,
       status: "pending",
       holdExpiresAt: addMinutes(now, HOLD_MINUTES),
       title: "Altinha débutants",
@@ -252,6 +256,8 @@ dbTest("purchaseByReference: a séance row that points to another pro's event or
       assert.equal(ref.booking.occurrenceId, occurrenceId);
       assert.equal(ref.booking.title, "", "no title of another pro");
       assert.equal(ref.booking.location, null, "no location of another pro");
+      assert.equal(ref.booking.isRdv, occurrenceId === viaType, "an occurrence with no event is an RDV");
+      assert.equal(ref.booking.ticketTypeId, null, "never another pro's type id (an RDV page of this pro never accepts it)");
       assert.equal(JSON.stringify(ref).includes("l'autre pro"), false, "nothing of the other pro's event or type anywhere in the reference");
     }
   } finally {
@@ -260,4 +266,36 @@ dbTest("purchaseByReference: a séance row that points to another pro's event or
     for (const id of handBuilt.occurrences) await db.delete(schema.occurrence).where(eq(schema.occurrence.id, id));
     await deleteTestUser(db, other.userId);
   }
+});
+
+dbTest("purchaseByReference: an RDV buy reference names its type (isRdv, ticketTypeId), its title is the type's name and it has no location", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await makeType(db, pro, { name: "Massage sportif", rdvEnabled: true, rdvDurationMin: 60 });
+  const offerId = await makeOffer(db, pro, typeId, { quantity: 1, priceCents: 6000 });
+  const hours = await setAvailabilityRules(db, {
+    professionalId: pro.proId,
+    ticketTypeId: null,
+    rules: [0, 1, 2, 3, 4, 5, 6].map((dayOfWeek) => ({ dayOfWeek, startMinute: 480, endMinute: 1200 })),
+  });
+  assert.ok(hours.ok, JSON.stringify(hours));
+  const startsAt = instantAt(dayIn(pro, 3, now), 600, pro.tz);
+  const customerId = await makeCustomer(db, pro);
+  const res = await bookRdv(db, { professionalId: pro.proId, ticketTypeId: typeId, startsAt, customerId, actorUserId: null, mode: "buy", offerId }, now);
+  assert.ok(res.ok && res.purchaseId, JSON.stringify(res));
+
+  const ref = await purchaseByReference(db, pro.proId, res.purchaseId, now);
+  assert.deepEqual(ref?.booking, {
+    bookingId: res.bookingId,
+    occurrenceId: res.occurrenceId,
+    isRdv: true,
+    ticketTypeId: typeId,
+    status: "pending",
+    holdExpiresAt: addMinutes(now, HOLD_MINUTES),
+    title: "Massage sportif",
+    startsAt,
+    endsAt: addMinutes(startsAt, 60),
+    location: null,
+  });
+  assert.equal(ref?.offerId, offerId);
+  assert.equal(ref?.ticketTypeName, "Massage sportif");
 });

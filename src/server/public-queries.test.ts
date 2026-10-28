@@ -30,10 +30,12 @@ const WITH_CLOCK: readonly { name: string; passes: RegExp }[] = [
   { name: "getSeanceVisitorFacts", passes: /return safeRead\(\(\) => seanceVisitorFacts\(db, professionalId, occurrenceId, viewer, now\)\);/ },
   { name: "getLivePendingHolds", passes: /return safeRead\(\(\) => livePendingHoldsOf\(db, professionalId, customerId, now\)\);/ },
   { name: "getPurchaseReference", passes: /return safeRead\(\(\) => purchaseByReference\(db, professionalId, purchaseId, now\)\);/ },
+  { name: "getRdvTypePage", passes: /return safeRead\(\(\) => getPublicRdvType\(db, pro, ticketTypeId, now\)\);/ },
+  { name: "getRdvWeek", passes: /return safeRead\(\(\) => loadRdvWeek\(db, pro\.professionalId, ticketTypeId, weekKey, now\)\);/ },
 ];
 
 /** The wrappers that read nothing time-dependent and take no instant. */
-const WITHOUT_CLOCK = ["getBoutiquePage", "getOfferPage"] as const;
+const WITHOUT_CLOCK = ["getBoutiquePage", "getOfferPage", "getRdvCards", "getRdvOwnerTickets"] as const;
 
 test("no wrapper takes its own clock: the file never reads new Date() or Date.now()", () => {
   assert.doesNotMatch(codeView(SOURCE), /new Date\(|Date\.now\(/);
@@ -47,7 +49,7 @@ test("every wrapper that reads with the clock takes `now: Date` as its last para
   }
 });
 
-test("the wrappers without a clock stay without one: the Boutique and the offer read nothing time-dependent", () => {
+test("the wrappers without a clock stay without one: the Boutique, the offer, the RDV cards and the Owner's RDV tickets read nothing time-dependent", () => {
   for (const name of WITHOUT_CLOCK) {
     const body = bodyOf(SOURCE, name);
     assert.doesNotMatch(body, /\bnow\b/, `${name} takes no instant`);

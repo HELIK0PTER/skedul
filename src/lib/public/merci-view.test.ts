@@ -30,6 +30,8 @@ function booking(startsAt: string, endsAt: string, status: BookingStatus = "conf
   return {
     bookingId: "b1",
     occurrenceId: "occ1",
+    isRdv: false,
+    ticketTypeId: null,
     status,
     holdExpiresAt: null,
     title: "Altinha débutants",

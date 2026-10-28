@@ -39,6 +39,8 @@ function ref(over: Partial<PurchaseReference> = {}): PurchaseReference {
     booking: {
       bookingId: "b1",
       occurrenceId: "o1",
+      isRdv: false,
+      ticketTypeId: null,
       status: "pending",
       holdExpiresAt: new Date("2026-10-12T17:45:00Z"),
       title: "Altinha débutants",
@@ -144,6 +146,52 @@ test("referenceForPage: an Owner ignores the reference of another customer (OUT:
   const hers = ref({ customerId: OWNER.customerId });
   assert.equal(referenceForPage(hers, SEANCE, OWNER)?.purchaseId, "p1");
   assert.equal(referenceForPage(hers, SEANCE, null)?.purchaseId, "p1");
+});
+
+/** A pending RDV buy of type t1, its booking on the RDV occurrence r1. */
+const rdvRef = (over: Partial<PurchaseReference> = {}): PurchaseReference =>
+  ref({ booking: { ...ref().booking!, occurrenceId: "r1", isRdv: true, ticketTypeId: "t1", title: "Massage" }, ...over });
+const RDV_PAGE = { kind: "rdv", ticketTypeId: "t1" } as const;
+
+test("referenceForPage: an RDV page shows an RDV purchase of this type, as a buy + book view", () => {
+  assert.deepEqual(referenceForPage(rdvRef(), RDV_PAGE, null), {
+    purchaseId: "p1",
+    kind: "buybook",
+    status: "pending",
+    processing: false,
+    livemode: false,
+    resumeUrl: "https://checkout.test/p1",
+    holdExpiresAt: "2026-10-12T17:45:00.000Z",
+    booking: { occurrenceId: "r1", status: "pending" },
+  });
+  const released = rdvRef({ status: "expired", resumeUrl: null, booking: { ...rdvRef().booking!, status: "expired", holdExpiresAt: null } });
+  assert.equal(referenceForPage(released, RDV_PAGE, null)?.booking?.status, "expired", "an ended RDV purchase still reads");
+});
+
+test("referenceForPage: an RDV page refuses another type, a séance reference, a shop reference and a foreign row", () => {
+  assert.equal(referenceForPage(rdvRef(), { kind: "rdv", ticketTypeId: "t2" }, null), null, "an RDV of another type");
+  assert.equal(referenceForPage(ref(), RDV_PAGE, null), null, "a séance reference");
+  assert.equal(
+    referenceForPage(ref({ booking: { ...ref().booking!, ticketTypeId: "t1" } }), RDV_PAGE, null),
+    null,
+    "a booking that is not an RDV never matches, whatever its type id",
+  );
+  assert.equal(referenceForPage(shopRef(), RDV_PAGE, null), null, "a shop purchase has no booking");
+  assert.equal(referenceForPage(shopRef({ ticketTypeName: "Massage" }), RDV_PAGE, null), null);
+  // a row pointing at another pro's type reads with ticketTypeId null (purchaseByReference's own join): never this page
+  const foreign = rdvRef({ booking: { ...rdvRef().booking!, ticketTypeId: null } });
+  assert.equal(referenceForPage(foreign, RDV_PAGE, null), null, "an RDV of a type this pro does not have");
+  // and an RDV reference is never shown on a séance page of the same occurrence id, nor on an offer page
+  assert.equal(referenceForPage(rdvRef(), { kind: "offer", offerId: "offer1" }, null), null);
+});
+
+test("referenceForPage: on an RDV page an Owner ignores another customer's RDV reference, and keeps her own", () => {
+  assert.equal(referenceForPage(rdvRef(), RDV_PAGE, OWNER), null, "an Owner's foreign reference");
+  const hers = rdvRef({ customerId: OWNER.customerId });
+  assert.equal(referenceForPage(hers, RDV_PAGE, OWNER)?.purchaseId, "p1");
+  const got = referenceForPage(hers, RDV_PAGE, OWNER);
+  assert.ok(got);
+  assert.equal(JSON.stringify(got).includes(OWNER.customerId), false, "the customer id is compared and dropped");
 });
 
 test("seanceViewerOf: the Owner wins, whatever the cookie or the reference", () => {

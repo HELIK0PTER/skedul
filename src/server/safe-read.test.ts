@@ -99,6 +99,10 @@ test("the scan reads every export of the four modules, React cache() ones includ
     "getLivePendingHolds",
     "getOfferPage",
     "getPurchaseReference",
+    "getRdvTypePage",
+    "getRdvWeek",
+    "getRdvCards",
+    "getRdvOwnerTickets",
   ]);
   assert.deepEqual(names("src/server/client-queries.ts"), [
     "getClientsPage",

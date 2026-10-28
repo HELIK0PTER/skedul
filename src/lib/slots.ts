@@ -19,7 +19,7 @@ import { computeSlots, isGridStart, type BusyInterval, type RdvSlot } from "@/li
 import { noticeExceedsHorizon } from "@/lib/back-office/notice";
 import { loadRdvType, rdvRules, type RdvTypeFacts } from "@/lib/booking/claims";
 import { lapsedHold } from "@/lib/booking/holds";
-import { lastBookableDate } from "@/lib/booking-window";
+import { lastBookableDate, type BookingWindow } from "@/lib/booking-window";
 import { addDays, instantAt, maxKey, minKey, mondayOf, parseKey, todayKey, type DateKey } from "@/lib/civil-date";
 import { ts, type Db } from "@/lib/db/atomic";
 import { occurrence, timeOff } from "@/lib/db/schema";
@@ -35,11 +35,11 @@ export function isBookableRdvType(type: RdvTypeFacts | null): type is BookableRd
 }
 
 /**
- * True when online booking of this type never opens (O14): no hours at all (its own rules and the pro's are both
- * empty), or a notice longer than the horizon.
+ * True when online booking of a type never opens (O14): no hours at all (its own rules and the pro's are both
+ * empty), or a notice longer than the horizon of its effective window.
  */
-export function rdvNeverBookable(type: RdvTypeFacts, ruleCount: number): boolean {
-  return ruleCount === 0 || noticeExceedsHorizon(type.window.minNoticeMinutes, type.window.bookingHorizonDays);
+export function rdvNeverBookable(window: BookingWindow, hasHours: boolean): boolean {
+  return !hasHours || noticeExceedsHorizon(window.minNoticeMinutes, window.bookingHorizonDays);
 }
 
 /**
@@ -130,7 +130,7 @@ export async function loadRdvWeek(
     rdvRules(db, professionalId, ticketTypeId),
   ]);
   if (!isBookableRdvType(type)) return null;
-  const neverBookable = rdvNeverBookable(type, rules.length);
+  const neverBookable = rdvNeverBookable(type.window, rules.length > 0);
   if (!isDateKey(weekKey)) return { type, days: [], neverBookable };
 
   const monday = mondayOf(weekKey);

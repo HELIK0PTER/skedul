@@ -32,6 +32,10 @@ export type PurchaseReference = {
   booking: {
     bookingId: string;
     occurrenceId: string;
+    /** true for an RDV libre (an occurrence with no event), false for a séance */
+    isRdv: boolean;
+    /** an RDV's type, read through this pro's own join (null for a séance, and for a row pointing at another pro's type) */
+    ticketTypeId: string | null;
     status: BookingStatus;
     /** the live hold of a pending booking; null once it is confirmed, cancelled or expired */
     holdExpiresAt: Date | null;
@@ -91,6 +95,8 @@ export async function purchaseByReference(
       .select({
         bookingId: booking.id,
         occurrenceId: booking.occurrenceId,
+        eventId: occurrence.eventId,
+        ticketTypeId: ticketType.id,
         status: booking.status,
         holdExpiresAt: booking.holdExpiresAt,
         title: sql<string>`coalesce(${event.title}, ${ticketType.name}, '')`,
@@ -132,6 +138,8 @@ export async function purchaseByReference(
       ? {
           bookingId: b.bookingId,
           occurrenceId: b.occurrenceId,
+          isRdv: b.eventId === null,
+          ticketTypeId: b.eventId === null ? b.ticketTypeId : null,
           status: b.status,
           holdExpiresAt: b.status === "pending" ? b.holdExpiresAt : null,
           title: b.title,

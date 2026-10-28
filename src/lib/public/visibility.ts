@@ -1,5 +1,5 @@
 /**
- * Who sees what on a séance or an offer page (spec L1445-1455, Decisions 9, 21, 63, 71). Pure: the page reads the
+ * Who sees what on a séance, an offer or an RDV page (spec L1445-1455, Decisions 9, 21, 63, 71). Pure: the page reads the
  * `?p=` purchase, the visitor and the customer facts, and these functions decide what each of them may use. The one
  * rule that runs through all of them: a `?p=` reference shows THAT purchase and its own booking, never its customer,
  * because the customer of a purchase came from an e-mail somebody typed (SEC-C1). Nothing here imports the database.
@@ -23,20 +23,30 @@ export type ReferenceView = {
   booking: { occurrenceId: string; status: BookingStatus } | null;
 };
 
+/** The page a reference is shown on: a séance, an offer, or an RDV type (P5 dossier § 3.8). */
+export type ReferencePage =
+  | { kind: "seance"; occurrenceId: string }
+  | { kind: "offer"; offerId: string }
+  | { kind: "rdv"; ticketTypeId: string };
+
 /**
  * The reference as this page may use it, or null: null for no reference; on a séance page when its booking is not on
- * this occurrence; on an offer page when its offer is not this offer or it has a booking; and whenever an Owner is
- * signed in and the reference is not her customer's (OUT:74). The customerId is compared here and dropped.
+ * this occurrence; on an offer page when its offer is not this offer or it has a booking; on an RDV page when it has
+ * no booking, or its booking is not an RDV, or not an RDV of THIS type (a type read through the pro's own join, so a
+ * row pointing at another pro's type never matches); and whenever an Owner is signed in and the reference is not her
+ * customer's (OUT:74). The customerId is compared here and dropped.
  */
 export function referenceForPage(
   ref: PurchaseReference | null,
-  page: { kind: "seance"; occurrenceId: string } | { kind: "offer"; offerId: string },
+  page: ReferencePage,
   owner: WalletOwner | null,
 ): ReferenceView | null {
   if (ref === null) return null;
   if (owner !== null && ref.customerId !== owner.customerId) return null;
   if (page.kind === "seance") {
     if (ref.booking === null || ref.booking.occurrenceId !== page.occurrenceId) return null;
+  } else if (page.kind === "rdv") {
+    if (ref.booking === null || !ref.booking.isRdv || ref.booking.ticketTypeId !== page.ticketTypeId) return null;
   } else if (ref.offerId !== page.offerId || ref.booking !== null) {
     return null;
   }
