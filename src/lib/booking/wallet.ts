@@ -625,7 +625,7 @@ export async function moveAttendee(
       .where(and(eq(booking.id, input.bookingId), eq(booking.professionalId, input.professionalId)));
     if (!b) throw new PlanError("not_found");
     if (b.status !== "confirmed") throw new PlanError("stale");
-    if (b.srcEventId === null) throw new PlanError("invalid", "Un rendez-vous ne se déplace pas : annulez-le puis réservez à nouveau.");
+    if (b.srcEventId === null) throw new PlanError("invalid", "Un rendez-vous ne se déplace pas : annulez-le, votre client pourra en réserver un autre depuis votre page.");
     if (b.occurrenceId === input.targetOccurrenceId) throw new PlanError("invalid");
     const [tgt] = await db
       .select({ id: occurrence.id, eventId: occurrence.eventId, status: occurrence.status, startsAt: occurrence.startsAt, bookingMode: event.bookingMode })

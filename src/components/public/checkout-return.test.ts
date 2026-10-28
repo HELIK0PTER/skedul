@@ -32,6 +32,9 @@ test("every sentence of the contract is in the source of the block or of its pur
     "Libérer votre place ?",
     "La place est rendue aux autres clients et le paiement en cours est annulé.",
     "Libérer ma place",
+    "Libérer votre créneau ?",
+    "Le créneau est rendu aux autres clients et le paiement en cours est annulé.",
+    "Libérer mon créneau",
     "Reprendre le paiement",
     "Voir la confirmation",
   ]) {
@@ -47,12 +50,24 @@ test("every sentence of the contract is in the source of the block or of its pur
     "Votre achat n'est pas payé.",
     "La page de paiement a expiré. Vous pouvez libérer votre place maintenant.",
     "Votre place est gardée jusqu'à",
+    "Votre créneau est libéré.",
+    "Votre créneau a été libéré. Vous pouvez réserver à nouveau.",
+    "La page de paiement a expiré. Vous pouvez libérer votre créneau maintenant.",
+    "Votre créneau est gardé jusqu'à",
     "COPY.PAYMENT_RECEIVED",
     "COPY.PROCESSING",
   ]) {
     assert.ok(VIEW.includes(text), `checkout-return-view.ts lacks: ${text}`);
   }
-  for (const text of ["COPY.PENDING_HOLDS_TITLE", "Place gardée jusqu'à", "Libérer ma place", "RELEASE_CONFIRM", "releaseOutcomeText("]) {
+  for (const text of [
+    "COPY.PENDING_HOLDS_TITLE",
+    "Place gardée jusqu'à",
+    "Créneau gardé jusqu'à",
+    "RELEASE_CONFIRM.confirm",
+    "RDV_RELEASE_CONFIRM.confirm",
+    "copy={target?.isRdv ? RDV_RELEASE_CONFIRM : RELEASE_CONFIRM}",
+    "releaseOutcomeText(",
+  ]) {
     assert.ok(HOLDS.includes(text), `pending-holds.tsx lacks: ${text}`);
   }
 });
@@ -70,9 +85,10 @@ test("the release is confirmed first and a success ends on a heading that stays 
   assert.match(RETURN, /opener\.current = afterReleaseTarget\(heading\.current\);/);
   assert.match(
     RETURN,
-    /function afterReleaseTarget\(own: HTMLElement \| null\): HTMLElement \| null \{\s*return document\.getElementById\(SEANCE_HEADING_ID\) \?\? own;\s*\}/,
+    /function afterReleaseTarget\(own: HTMLElement \| null\): HTMLElement \| null \{\s*return document\.getElementById\(SEANCE_HEADING_ID\) \?\? document\.getElementById\(RDV_HEADING_ID\) \?\? own;\s*\}/,
   );
   assert.match(RETURN, /import \{[^}]*\bSEANCE_HEADING_ID\b[^}]*\} from "@\/lib\/public\/seance-copy";/);
+  assert.match(RETURN, /import \{ RDV_HEADING_ID \} from "@\/lib\/public-anchors";/, "the RDV page heading, P5");
   // The button that opened the dialog, written by the click handler itself (G4b: a bare « opener.current = » matched any write).
   assert.match(RETURN, /function ask\(e: React\.MouseEvent<HTMLButtonElement>\) \{\s*opener\.current = e\.currentTarget;/);
   assert.match(RETURN, /onClick=\{ask\}/);
@@ -93,7 +109,7 @@ test("a release speaks through the page-level region, even when the revalidation
   // The line is emptied at the start of each release (the `announce(null)` rule of CancelBookingButton): two releases in a
   // row say the same sentence, and a region whose text did not change announces nothing.
   assert.match(RETURN, /setError\(null\);\s*announceRelease\(""\);\s*startTransition\(async \(\) => \{/);
-  assert.match(RETURN, /announceRelease\(releaseOutcomeText\(res\.outcome\)\);/);
+  assert.match(RETURN, /announceRelease\(releaseOutcomeText\(res\.outcome, kind\)\);/);
   assert.match(RETURN, /import \{ announceRelease \} from "@\/components\/public\/release-status";/);
   // The answer can arrive after the block went (the Server Action applies the new page first): then nothing restores the
   // focus the dialog held, so the component does, once, and only then.
@@ -137,9 +153,12 @@ test("« Reprendre le paiement » is a plain link to the Checkout URL, never a p
   assert.match(RETURN, /resumeUrl !== null && \(/, "only while the session is open (Decision 31)");
 });
 
-test("a shop purchase can only be resumed, never released (Decision 13)", () => {
-  assert.match(RETURN, /const canRelease = kind === "buybook";/);
+test("a shop purchase can only be resumed, never released (Decision 13); a séance or an RDV hold can, each in its own words (P5 T10)", () => {
+  assert.match(RETURN, /const canRelease = kind !== "shop";/);
   assert.match(RETURN, /\{canRelease && \(/);
+  assert.match(RETURN, /const confirmCopy = kind === "rdv" \? RDV_RELEASE_CONFIRM : RELEASE_CONFIRM;/);
+  assert.match(RETURN, /onClick=\{ask\} disabled=\{pending\}>\s*\{confirmCopy\.confirm\}\s*<\/Button>/);
+  assert.match(RETURN, /copy=\{confirmCopy\}/);
 });
 
 test("read-only (an impersonating admin, G4b): no « Reprendre le paiement », no « Libérer ma place », one sentence that says why", () => {
@@ -156,7 +175,7 @@ test("read-only (an impersonating admin, G4b): no « Reprendre le paiement », n
   );
   assert.match(RETURN, /READ_ONLY_TEXT/);
   // The page passes no resumeUrl when read-only: the sentence that invites a release must not show instead (a unit case in checkout-return-view.test.ts).
-  assert.match(VIEW, /if \(a\.resumeUrl === null && !a\.readOnly\) return "La page de paiement a expiré\. Vous pouvez libérer votre place maintenant\.";/);
+  assert.match(VIEW, /if \(a\.resumeUrl === null && !a\.readOnly\) \{\s*return rdv\s*\? "La page de paiement a expiré\. Vous pouvez libérer votre créneau maintenant\."\s*: "La page de paiement a expiré\. Vous pouvez libérer votre place maintenant\.";/);
   assert.match(RETURN, /returnTextOf\(\{ view, kind, resumeUrl, holdUntilLabel, readOnly \}\)/);
 });
 
@@ -172,7 +191,7 @@ test("PendingHolds empties its line before each release, so two releases in a ro
 test("PendingHolds renders nothing without a hold and without a line, and keeps its heading while a line shows", () => {
   assert.match(HOLDS, /if \(rows\.length === 0 && notice === ""\) return null;/);
   assert.match(HOLDS, /const rows = holds\.filter\(\(h\) => !gone\.includes\(h\.purchaseId\)\);/);
-  assert.match(HOLDS, /setNotice\(releaseOutcomeText\(res\.outcome\)\);/);
+  assert.match(HOLDS, /setNotice\(releaseOutcomeText\(res\.outcome, hold\.isRdv \? "rdv" : "buybook"\)\);/);
 });
 
 test("the live regions are always mounted", () => {

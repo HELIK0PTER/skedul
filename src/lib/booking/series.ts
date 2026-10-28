@@ -138,7 +138,7 @@ export async function updateOccurrence(
       .where(and(eq(occurrence.id, input.occurrenceId), eq(occurrence.professionalId, input.professionalId)));
     if (!o) throw new PlanError("not_found");
     if (o.eventId === null) {
-      throw new PlanError("invalid", "Un rendez-vous se déplace en l'annulant puis en le réservant à nouveau.");
+      throw new PlanError("invalid", "Un rendez-vous ne se déplace pas : annulez-le, votre client pourra en réserver un autre depuis votre page.");
     }
     if (o.status !== "scheduled" || o.startsAt.getTime() !== input.seenStartsAt.getTime()) throw new PlanError("changed");
     if (unenroll.length > 0) {

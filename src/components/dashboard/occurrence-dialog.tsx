@@ -29,6 +29,7 @@ type Confirm = { kind: "cancel" } | { kind: "restore" } | { kind: "unenroll"; id
 
 function AttendeeRow({
   attendee,
+  isRdv,
   selectable,
   selected,
   disabled,
@@ -37,6 +38,8 @@ function AttendeeRow({
   onMove,
 }: {
   attendee: PlanningAttendeeVM;
+  /** an RDV slot: a lapsed hold freed a « créneau », never a « place » (P5 § 3.14) */
+  isRdv: boolean;
   selectable: boolean;
   selected: boolean;
   disabled: boolean;
@@ -79,7 +82,9 @@ function AttendeeRow({
               <p className="mt-2 text-xs text-muted-foreground wrap-anywhere">{attendee.ticketLabel}</p>
             )}
             {attendee.holdLapsed ? (
-              <p className="mt-1 text-xs text-zinc-600">Paiement non finalisé, place libérée</p>
+              <p className="mt-1 text-xs text-zinc-600">
+                {isRdv ? "Paiement non finalisé, créneau libéré" : "Paiement non finalisé, place libérée"}
+              </p>
             ) : (
               attendee.holdUntil && (
                 <p className="mt-1 text-xs text-warning">{`Paiement en cours jusqu'à ${attendee.holdUntil}`}</p>
@@ -236,9 +241,12 @@ function OccurrenceDialogBody({
   const cancelled = item.status === "cancelled";
   const scheduled = item.status === "scheduled";
   const isSeance = item.kind === "seance";
-  const place = item.location
-    ? `Lieu : ${item.location}${item.locationOverride !== null ? " (pour cette séance)" : ""}`
-    : "Lieu non précisé";
+  // An RDV has no location (P5 O12): its dialog shows no place row at all, rather than « Lieu non précisé ».
+  const place = !isSeance
+    ? null
+    : item.location
+      ? `Lieu : ${item.location}${item.locationOverride !== null ? " (pour cette séance)" : ""}`
+      : "Lieu non précisé";
 
   // Selection by booking id, limited to the rows still there after a refresh.
   const selected = item.attendees.filter((a) => picked.includes(a.bookingId));
@@ -393,12 +401,14 @@ function OccurrenceDialogBody({
 
         <div id={summaryId} className="grid gap-3">
           <p className="text-sm text-foreground">{formatWhen(new Date(item.startsAt), new Date(item.endsAt), tz)}</p>
-          <p className="flex items-start gap-1.5 text-sm text-muted-foreground">
-            <MapPin className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-            <span className="min-w-0 wrap-anywhere">{place}</span>
-          </p>
+          {place !== null && (
+            <p className="flex items-start gap-1.5 text-sm text-muted-foreground">
+              <MapPin className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              <span className="min-w-0 wrap-anywhere">{place}</span>
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-1.5">
-            {cancelled && <Badge variant="destructive">Annulée</Badge>}
+            {cancelled && <Badge variant="destructive">{isSeance ? "Annulée" : "Annulé"}</Badge>}
             {isSeance && item.bookingMode && <Badge variant="outline">{MODE_SHORT_LABELS[item.bookingMode]}</Badge>}
             {item.isPrivate && <Badge variant="neutral">Privé</Badge>}
             {item.acceptedTypes.map((t) => (
@@ -471,11 +481,12 @@ function OccurrenceDialogBody({
             Personne n&apos;est inscrit pour le moment.
           </p>
         ) : (
-          <ul className="mt-4 grid gap-2" aria-label="Inscrits">
+          <ul className="mt-4 grid gap-2" aria-label={isSeance ? "Inscrits" : "Client"}>
             {item.attendees.map((a) => (
               <AttendeeRow
                 key={a.bookingId}
                 attendee={a}
+                isRdv={!isSeance}
                 selectable={isSeance}
                 selected={picked.includes(a.bookingId)}
                 disabled={pending}

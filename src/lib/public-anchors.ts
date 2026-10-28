@@ -29,6 +29,13 @@ export const MY_SPACE_HEADING_ID = "my-space-title";
 export const ESPACE_HEADING_ID = "espace-title";
 
 /**
+ * The heading of an RDV page `/{slug}/rdv/{ticketTypeId}` (`tabIndex={-1}`, P5): rendered by every state of the page,
+ * it takes the focus after an inline code sign-in, after a booking that changes the page, and after a release that
+ * removed the payment block (the role SEANCE_HEADING_ID plays on a séance page).
+ */
+export const RDV_HEADING_ID = "rdv-title";
+
+/**
  * Scrolls to `anchor` when the URL hash names exactly it, and says whether it did. The public page streams behind
  * loading.tsx: on a client navigation to `/{slug}#boutique` the router scrolls when the loading skeleton commits, before
  * the Boutique exists, and never again; on a fresh load the browser's own fragment scroll can run before the streamed

@@ -1036,6 +1036,106 @@ dbTest("pro_booking_cancelled: the client cancelled; « Son ticket lui a été r
   );
 });
 
+/** The words of a séance an RDV mail never says (P5 § 3.10), outside the spec headline of the late payment. */
+const SEANCE_WORDS = /[Ss][ée]ance|[Ii]nscri|(^|[^a-zà-ÿ])place([^a-zà-ÿ]|$)/;
+/** The text of a mail without its link targets: the planning deep link names its parameter `seance`, which is no copy. */
+const withoutLinks = (html: string): string => html.replace(/href="[^"]*"/g, "");
+
+dbTest("an RDV booking is a rendez-vous in every mail: confirmed, the pro's notice, both cancellations, the receipt and the late payment (P5 T10)", async ({ db, pro }) => {
+  const now = new Date();
+  const business = await businessNameOf(db, pro.proId);
+  const proEmail = await userEmailOf(db, pro.userId);
+  const allWeek = [0, 1, 2, 3, 4, 5, 6].map((dayOfWeek) => ({ dayOfWeek, startMinute: 0, endMinute: 1440 }));
+  must(await setAvailabilityRules(db, { professionalId: pro.proId, ticketTypeId: null, rules: allWeek }));
+
+  // A free RDV: confirmed, notified, then cancelled by the client.
+  const freeType = await makeType(db, pro, { name: "Appel découverte", rdvEnabled: true, rdvFree: true, rdvDurationMin: 60 });
+  const email = testEmail("rdv-free");
+  const customerId = await makeCustomer(db, pro, { name: "Beatriz Almeida", email });
+  const free = must(
+    await bookRdv(
+      db,
+      { professionalId: pro.proId, ticketTypeId: freeType, startsAt: instantAt(dayIn(pro, 3), 600, pro.tz), customerId, actorUserId: null, mode: "free" },
+      now,
+    ),
+  );
+  const freeOcc = await getOccurrence(db, free.occurrenceId);
+  const when = formatWhen(freeOcc.startsAt, freeOcc.endsAt, pro.tz);
+  const [confirmed] = emailsOf(await planEffect(db, { type: "email.booking_confirmed", bookingId: free.bookingId }, depsAt(now)), pro.proId);
+  assert.equal(confirmed.to, email);
+  assert.equal(confirmed.subject, "Rendez-vous confirmé : Appel découverte");
+  assert.ok(confirmed.html.includes(">Rendez-vous confirmé</h1>"));
+  assert.ok(confirmed.html.includes(esc(`Bonjour Beatriz Almeida, votre rendez-vous chez ${business} est confirmé.`)));
+  assert.ok(confirmed.html.includes(">Rendez-vous</td><td style=\"text-align:right\">Appel découverte</td>"));
+  assert.ok(confirmed.html.includes(">Couverture</td><td style=\"text-align:right\">Gratuit</td>"), "a free RDV is « Gratuit »");
+  assert.equal(confirmed.html.includes(">Lieu<"), false, "an RDV has no location");
+  const [notice] = emailsOf(await planEffect(db, { type: "email.pro_new_booking", bookingId: free.bookingId }, depsAt(now)), pro.proId);
+  assert.equal(notice.to, proEmail);
+  assert.equal(notice.subject, "Nouveau rendez-vous : Appel découverte");
+  assert.ok(notice.html.includes(esc(`Beatriz Almeida (${email}) a réservé le rendez-vous « Appel découverte » (${when}).`)));
+  assert.ok(notice.html.includes(">Couverture</td><td style=\"text-align:right\">Gratuit</td>"));
+  const cancel = must(await cancelByClient(db, { professionalId: pro.proId, customerId, bookingId: free.bookingId, actorUserId: null }, now));
+  const [ack] = emailsOf(await planEffect(db, effectOf(cancel.effects, "email.booking_cancelled"), depsAt(now)), pro.proId);
+  assert.equal(ack.subject, "Rendez-vous annulé : Appel découverte");
+  assert.ok(ack.html.includes(esc(`Bonjour Beatriz Almeida, votre annulation pour « Appel découverte » (${when}) est bien enregistrée.`)));
+  const [proAck] = emailsOf(await planEffect(db, effectOf(cancel.effects, "email.pro_booking_cancelled"), depsAt(now)), pro.proId);
+  assert.equal(proAck.to, proEmail);
+  assert.ok(proAck.html.includes(esc(`Beatriz Almeida (${email}) a annulé son rendez-vous « Appel découverte » (${when}).`)));
+  for (const mail of [confirmed, notice, ack, proAck]) {
+    assert.doesNotMatch(mail.subject, SEANCE_WORDS, mail.subject);
+    assert.doesNotMatch(withoutLinks(mail.html), SEANCE_WORDS, mail.subject);
+  }
+
+  // A paid RDV bought and paid in time: the receipt names the rendez-vous its first ticket booked.
+  const paidType = await makeType(db, pro, { name: "Cours particulier", rdvEnabled: true, rdvDurationMin: 60 });
+  const offerId = await makeOffer(db, pro, paidType, { quantity: 4, priceCents: 8500 });
+  const buyer = await makeCustomer(db, pro, { name: "Thomas Leroy", email: testEmail("rdv-buy") });
+  const buy = must(
+    await bookRdv(
+      db,
+      { professionalId: pro.proId, ticketTypeId: paidType, startsAt: instantAt(dayIn(pro, 4), 600, pro.tz), customerId: buyer, actorUserId: null, mode: "buy", offerId },
+      now,
+    ),
+  );
+  assert.ok(buy.purchaseId);
+  must(await attachCheckoutSession(db, { purchaseId: buy.purchaseId, checkoutSessionId: `cs_test_${buy.purchaseId}`, checkoutUrl: "https://checkout.example.test/s" }, now));
+  const paid = await pay(db, buy.purchaseId, now);
+  assert.equal(paid.outcome, "fulfilled");
+  const buyOcc = await getOccurrence(db, buy.occurrenceId);
+  const buyWhen = formatWhen(buyOcc.startsAt, buyOcc.endsAt, pro.tz);
+  const [receipt] = emailsOf(await planEffect(db, effectOf(paid.effects, "email.purchase_receipt"), depsAt(now)), pro.proId);
+  assert.ok(receipt.html.includes(esc(`Un des tickets a servi pour votre rendez-vous « Cours particulier » (${buyWhen}).`)), "the RDV booking line");
+  assert.equal(receipt.html.includes("inscription"), false);
+  const [booked] = emailsOf(await planEffect(db, effectOf(paid.effects, "email.booking_confirmed"), depsAt(now)), pro.proId);
+  assert.equal(booked.subject, "Rendez-vous confirmé : Cours particulier");
+  assert.ok(booked.html.includes(">Couverture</td><td style=\"text-align:right\">Ticket (Cours particulier)</td>"));
+
+  // A paid RDV whose hold lapsed and was released before the money landed: the late payment names a rendez-vous.
+  const late = await makeCustomer(db, pro, { name: "Rafael Souza", email: testEmail("rdv-late") });
+  const holdAt = addMinutes(now, -60);
+  const hold = must(
+    await bookRdv(
+      db,
+      { professionalId: pro.proId, ticketTypeId: paidType, startsAt: instantAt(dayIn(pro, 5), 600, pro.tz), customerId: late, actorUserId: null, mode: "buy", offerId },
+      holdAt,
+    ),
+  );
+  assert.ok(hold.purchaseId);
+  must(await attachCheckoutSession(db, { purchaseId: hold.purchaseId, checkoutSessionId: `cs_test_${hold.purchaseId}`, checkoutUrl: "https://checkout.example.test/s" }, holdAt));
+  const holdOcc = await getOccurrence(db, hold.occurrenceId);
+  assert.equal(must(await releasePurchase(db, hold.purchaseId, now)).released, true);
+  const latePaid = await pay(db, hold.purchaseId, now);
+  assert.deepEqual(latePaid.effects.map((e) => e.type), ["email.purchase_receipt", "email.late_payment"]);
+  const [lateMail] = emailsOf(await planEffect(db, effectOf(latePaid.effects, "email.late_payment"), depsAt(now)), pro.proId);
+  assert.equal(lateMail.subject, "Paiement reçu : votre place n'était plus réservée", "the spec headline (L1136-1137)");
+  assert.ok(
+    lateMail.html.includes(
+      esc(`Le rendez-vous « Cours particulier » (${formatWhen(holdOcc.startsAt, holdOcc.endsAt, pro.tz)}) n'est pas réservé pour vous. Vous pouvez utiliser vos tickets sur un autre créneau.`),
+    ),
+  );
+  assert.equal(lateMail.html.includes("autre séance"), false);
+});
+
 dbTest("the receipt, the late payment and the pro notices plan nothing for a purchase or a booking that is not in their state", async ({ db, pro }) => {
   const now = new Date();
   const deps = depsAt(now);

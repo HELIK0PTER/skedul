@@ -23,6 +23,7 @@ type Mail = { subject: string; html: string };
 const h = escapeHtml;
 
 const confirmed: BookingConfirmedArgs = {
+  kind: "seance",
   customerName: "Beatriz Almeida",
   businessName: "Altinha Paris",
   title: "Altinha débutants",
@@ -52,6 +53,7 @@ const confirmed: BookingConfirmedArgs = {
 };
 
 const cancelled: BookingCancelledArgs = {
+  kind: "seance",
   customerName: "Beatriz Almeida",
   businessName: "Altinha Paris",
   title: "Altinha débutants",
@@ -119,6 +121,7 @@ const TEMPLATES: { name: string; normal: Mail; evil: Mail; title: string }[] = [
     title: confirmed.title,
     normal: bookingConfirmedEmail(confirmed),
     evil: bookingConfirmedEmail({
+      kind: "seance",
       customerName: EVIL,
       businessName: EVIL,
       title: EVIL,
@@ -146,6 +149,7 @@ const TEMPLATES: { name: string; normal: Mail; evil: Mail; title: string }[] = [
     title: cancelled.title,
     normal: bookingCancelledEmail(cancelled),
     evil: bookingCancelledEmail({
+      kind: "seance",
       customerName: EVIL,
       businessName: EVIL,
       title: EVIL,
@@ -341,6 +345,67 @@ test("booking-cancelled: the pro and client sentences, reason and ticket line", 
   assert.equal(byClient.html.includes("a annulé votre inscription"), false);
   assert.equal(byClient.html.includes("Motif"), false);
   assert.equal(byClient.html.includes("Votre ticket a été rendu"), false);
+});
+
+/** The words of a séance that an RDV mail must never say (P5 § 3.10): « séance », « inscription » / « inscrit », « place ». */
+const SEANCE_WORDS = /[Ss][ée]ance|[Ii]nscri|(^|[^a-zà-ÿ])place([^a-zà-ÿ]|$)/;
+
+test("booking-confirmed: a rendez-vous is confirmed as a rendez-vous, never as a séance or an inscription (P5 T10)", () => {
+  const rdv = bookingConfirmedEmail({
+    ...confirmed,
+    kind: "rdv",
+    title: "Appel découverte",
+    location: null,
+    coverageLabel: "Gratuit",
+    ticketTypeName: null,
+    ticketsLeft: [],
+  });
+  assert.equal(rdv.subject, "Rendez-vous confirmé : Appel découverte");
+  assert.ok(rdv.html.includes(">Rendez-vous confirmé</h1>"));
+  assert.ok(rdv.html.includes("Bonjour Beatriz Almeida, votre rendez-vous chez Altinha Paris est confirmé."));
+  assert.ok(rdv.html.includes(">Rendez-vous</td><td style=\"text-align:right\">Appel découverte</td>"));
+  assert.ok(rdv.html.includes(">Date</td><td style=\"text-align:right\">lun. 12 octobre 2026 · 19:00 à 20:00</td>"));
+  assert.ok(rdv.html.includes(">Couverture</td><td style=\"text-align:right\">Gratuit</td>"));
+  assert.equal(rdv.html.includes(">Lieu<"), false, "an RDV has no location (O12)");
+  assert.ok(rdv.html.includes(">Ajouter à Google Agenda</a>"), "the calendar buttons stay");
+  assert.doesNotMatch(rdv.subject, SEANCE_WORDS);
+  assert.doesNotMatch(rdv.html, SEANCE_WORDS);
+  assert.equal(DASH.test(rdv.subject + rdv.html), false);
+  // A hostile type name is escaped in the RDV wording too.
+  const evil = bookingConfirmedEmail({ ...confirmed, kind: "rdv", title: EVIL, businessName: EVIL });
+  assert.equal(evil.html.includes("<script>"), false);
+  assert.ok(evil.html.includes(`>Rendez-vous</td><td style="text-align:right">${EVIL_ESCAPED}</td>`));
+  assert.ok(evil.html.includes(`votre rendez-vous chez ${EVIL_ESCAPED} est confirmé.`));
+  // The séance wording is unchanged.
+  assert.equal(bookingConfirmedEmail(confirmed).subject, "Inscription confirmée : Altinha débutants");
+});
+
+test("booking-cancelled: a rendez-vous is cancelled as a rendez-vous, by the pro and by the client (P5 T10)", () => {
+  const byPro = bookingCancelledEmail({ ...cancelled, kind: "rdv", title: "Appel découverte" });
+  assert.equal(byPro.subject, "Rendez-vous annulé : Appel découverte");
+  assert.ok(byPro.html.includes(">Rendez-vous annulé</h1>"));
+  assert.ok(
+    byPro.html.includes(
+      h("Bonjour Beatriz Almeida, Altinha Paris a annulé votre rendez-vous « Appel découverte » (lun. 12 octobre 2026 · 19:00 à 20:00)."),
+    ),
+  );
+  assert.ok(byPro.html.includes("Motif : Terrain fermé"));
+  assert.ok(byPro.html.includes("Votre ticket a été rendu à votre portefeuille."));
+  const byClient = bookingCancelledEmail({ ...cancelled, kind: "rdv", title: "Appel découverte", by: "client", reason: null, ticketReturned: false });
+  assert.equal(byClient.subject, "Rendez-vous annulé : Appel découverte");
+  assert.ok(
+    byClient.html.includes(
+      h("Bonjour Beatriz Almeida, votre annulation pour « Appel découverte » (lun. 12 octobre 2026 · 19:00 à 20:00) est bien enregistrée."),
+    ),
+  );
+  for (const mail of [byPro, byClient]) {
+    assert.doesNotMatch(mail.subject, SEANCE_WORDS);
+    assert.doesNotMatch(mail.html, SEANCE_WORDS);
+    assert.equal(DASH.test(mail.subject + mail.html), false);
+  }
+  const evil = bookingCancelledEmail({ ...cancelled, kind: "rdv", title: EVIL });
+  assert.equal(evil.html.includes("<script>"), false);
+  assert.ok(evil.html.includes(`a annulé votre rendez-vous « ${EVIL_ESCAPED} »`));
 });
 
 test("occurrence-changed: details, and the cancel sentence only when the client can still cancel", () => {

@@ -3,7 +3,7 @@
 import { useCallback, useId, useRef, useState, useTransition } from "react";
 
 import { ConfirmDialog } from "@/components/dashboard/confirm-dialog";
-import { RELEASE_CONFIRM } from "@/components/public/checkout-return";
+import { RDV_RELEASE_CONFIRM, RELEASE_CONFIRM } from "@/components/public/checkout-return";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { releaseOutcomeText } from "@/lib/public/checkout-return-view";
@@ -11,11 +11,13 @@ import { COPY } from "@/lib/public/messages";
 import { PUBLIC_UNEXPECTED } from "@/lib/public/result";
 import { abandonCheckoutAction } from "@/server/public";
 
-type PendingHold = { purchaseId: string; title: string; whenLabel: string; holdUntilLabel: string };
+/** `isRdv`: an RDV slot, whose row says « créneau » and never « place » (P5 § 3.13). */
+type PendingHold = { purchaseId: string; isRdv: boolean; title: string; whenLabel: string; holdUntilLabel: string };
 
 /**
  * « Paiements en attente » (SEC-I6, Decision 67): the live holds of the signed-in Owner at this pro. A stranger can start
  * a buy + book with her address, which parks a seat on her customer row for 45 minutes; here she sees it and releases it.
+ * A séance seat and an RDV slot are listed together, each in its own words.
  * The page renders this for every Owner, even with no hold, so that the line left by a release survives the revalidation
  * that follows the action; the component renders nothing while it has no hold and no line to show.
  */
@@ -63,7 +65,7 @@ export function PendingHolds({ slug, holds }: { slug: string; holds: PendingHold
         }
         // The row goes with its button: the focus is handed to the section heading (WCAG 2.4.3).
         opener.current = heading.current;
-        setNotice(releaseOutcomeText(res.outcome));
+        setNotice(releaseOutcomeText(res.outcome, hold.isRdv ? "rdv" : "buybook"));
         if (res.outcome !== "processing") setGone((ids) => [...ids, hold.purchaseId]);
         setTarget(null);
       } catch {
@@ -93,7 +95,9 @@ export function PendingHolds({ slug, holds }: { slug: string; holds: PendingHold
               <li key={h.purchaseId} className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
                   <p className="font-medium wrap-anywhere">{`${h.title} · ${h.whenLabel}`}</p>
-                  <p className="text-sm text-zinc-600">{`Place gardée jusqu'à ${h.holdUntilLabel}.`}</p>
+                  <p className="text-sm text-zinc-600">
+                    {h.isRdv ? `Créneau gardé jusqu'à ${h.holdUntilLabel}.` : `Place gardée jusqu'à ${h.holdUntilLabel}.`}
+                  </p>
                 </div>
                 <Button
                   type="button"
@@ -101,10 +105,10 @@ export function PendingHolds({ slug, holds }: { slug: string; holds: PendingHold
                   size="sm"
                   className="w-full sm:w-auto"
                   disabled={pending}
-                  aria-label={`Libérer ma place pour ${h.title}, ${h.whenLabel}`}
+                  aria-label={`${h.isRdv ? RDV_RELEASE_CONFIRM.confirm : RELEASE_CONFIRM.confirm} pour ${h.title}, ${h.whenLabel}`}
                   onClick={(e) => ask(h, e.currentTarget)}
                 >
-                  Libérer ma place
+                  {h.isRdv ? RDV_RELEASE_CONFIRM.confirm : RELEASE_CONFIRM.confirm}
                 </Button>
               </li>
             ))}
@@ -112,7 +116,7 @@ export function PendingHolds({ slug, holds }: { slug: string; holds: PendingHold
         )}
         <ConfirmDialog
           open={target !== null}
-          copy={RELEASE_CONFIRM}
+          copy={target?.isRdv ? RDV_RELEASE_CONFIRM : RELEASE_CONFIRM}
           pending={pending}
           error={error}
           onConfirm={release}

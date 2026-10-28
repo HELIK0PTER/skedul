@@ -269,17 +269,61 @@ test("the pending sentence: read-only never invites a release, a closed session 
 });
 
 test("the release outcome lines are the ones the block and PendingHolds share", () => {
-  assert.equal(releaseOutcomeText("released"), "Votre place est libérée.");
-  assert.equal(releaseOutcomeText("paid"), "Paiement reçu");
-  assert.equal(releaseOutcomeText("processing"), "Paiement en cours de traitement");
-  assert.equal(releaseOutcomeText("already_ended"), "Cette réservation n'est plus en attente de paiement.");
+  assert.equal(releaseOutcomeText("released", "buybook"), "Votre place est libérée.");
+  assert.equal(releaseOutcomeText("paid", "buybook"), "Paiement reçu");
+  assert.equal(releaseOutcomeText("processing", "buybook"), "Paiement en cours de traitement");
+  assert.equal(releaseOutcomeText("already_ended", "buybook"), "Cette réservation n'est plus en attente de paiement.");
+});
+
+/** The words of a séance an RDV block never says (P5 § 3.10): « séance », « inscription », « place ». */
+const SEANCE_WORDS = /[Ss][ée]ance|[Ii]nscri|(^|[^a-zà-ÿ])place([^a-zà-ÿ]|$)/;
+
+test("an RDV reference keeps its kind in the block, which can be released like a séance hold (P5 T10)", () => {
+  for (const { tz, live } of ZONES) {
+    const got = checkoutBlockOf(view({ kind: "rdv", booking: { occurrenceId: "r1", status: "pending" } }), { slug: "s", tz, now: NOW, readOnly: false });
+    assert.equal(got?.kind, "rdv", tz);
+    assert.equal(got?.holdUntilLabel, live, `${tz}: the hold end in the pro's zone`);
+    assert.equal(got?.resumeUrl, "https://checkout.test/p1");
+    const lapsed = checkoutBlockOf(view({ kind: "rdv", holdExpiresAt: HOLD_ENDED }), { slug: "s", tz, now: NOW, readOnly: false });
+    assert.equal(lapsed?.status, "expired", `${tz}: a lapsed RDV hold reads expired`);
+  }
+});
+
+test("the RDV block says « créneau » where a séance block says « place » (P5 T10, D § 3.13)", () => {
+  const args = { kind: "rdv", resumeUrl: "https://checkout.test/p1", holdUntilLabel: "19:45", readOnly: false } as const;
+  assert.equal(returnTextOf({ ...args, view: "pending" }), "Votre créneau est gardé jusqu'à 19:45.");
+  assert.equal(returnTextOf({ ...args, view: "pending", resumeUrl: null }), "La page de paiement a expiré. Vous pouvez libérer votre créneau maintenant.");
+  assert.equal(returnTextOf({ ...args, view: "pending", resumeUrl: null, readOnly: true }), "Votre créneau est gardé jusqu'à 19:45.");
+  assert.equal(returnTextOf({ ...args, view: "pending", holdUntilLabel: null }), null);
+  assert.equal(returnTextOf({ ...args, view: "expired" }), "Votre créneau a été libéré. Vous pouvez réserver à nouveau.");
+  assert.equal(returnTextOf({ ...args, view: "released" }), "Votre créneau est libéré.");
+  assert.equal(returnTextOf({ ...args, view: "ended" }), "Cette réservation n'est plus en attente de paiement.");
+  assert.equal(returnTextOf({ ...args, view: "paid" }), "Paiement reçu");
+  assert.equal(returnTextOf({ ...args, view: "processing" }), "Paiement en cours de traitement");
+  assert.equal(releaseOutcomeText("released", "rdv"), "Votre créneau est libéré.");
+  assert.equal(releaseOutcomeText("released", "buybook"), "Votre place est libérée.");
+  for (const outcome of ["paid", "processing", "already_ended"] as const) {
+    assert.equal(releaseOutcomeText(outcome, "rdv"), releaseOutcomeText(outcome, "buybook"), outcome);
+  }
+  for (const v of ["pending", "paid", "processing", "expired", "released", "ended"] as const) {
+    for (const readOnly of [true, false]) {
+      for (const resumeUrl of [null, "https://checkout.test/p1"]) {
+        const text = returnTextOf({ ...args, view: v, resumeUrl, readOnly });
+        if (text !== null) assert.doesNotMatch(text, SEANCE_WORDS, `${v}: ${text}`);
+      }
+    }
+    assert.doesNotMatch(returnHeadingOf(v), SEANCE_WORDS);
+  }
+  for (const outcome of ["released", "paid", "processing", "already_ended"] as const) {
+    assert.doesNotMatch(releaseOutcomeText(outcome, "rdv"), SEANCE_WORDS, outcome);
+  }
 });
 
 test("nothing the module says carries a dash", () => {
   const strings: string[] = [];
   for (const v of ["pending", "paid", "processing", "expired", "released", "ended"] as const) {
     strings.push(returnHeadingOf(v));
-    for (const kind of ["buybook", "shop"] as const) {
+    for (const kind of ["buybook", "rdv", "shop"] as const) {
       for (const readOnly of [true, false]) {
         const t = returnTextOf({ view: v, kind, resumeUrl: null, holdUntilLabel: "19:45", readOnly });
         if (t !== null) strings.push(t);

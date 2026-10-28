@@ -8,14 +8,15 @@ import { formatCount, formatWhen } from "@/lib/back-office/format";
 import { COPY } from "@/lib/public/messages";
 import type { PurchaseReference } from "@/lib/public/purchase-reads";
 
+/** `isRdv`: the booking is a rendez-vous (an occurrence with no event), whose copy never says « séance », « inscrit » or « place » (P5 § 3.13). */
 export type MerciState =
-  | { kind: "booked"; title: string; whenLabel: string }
+  | { kind: "booked"; title: string; whenLabel: string; isRdv: boolean }
   | { kind: "paid_shop"; count: number; typeName: string }
-  | { kind: "paid_late"; count: number }
-  | { kind: "paid_cancelled" }
+  | { kind: "paid_late"; count: number; isRdv: boolean }
+  | { kind: "paid_cancelled"; isRdv: boolean }
   | { kind: "processing" }
   | { kind: "pending" }
-  | { kind: "expired"; withBooking: boolean };
+  | { kind: "expired"; withBooking: boolean; isRdv: boolean };
 
 /**
  * paid + confirmed booking → booked; paid + expired booking → paid_late (only a hold expires: the place was released
@@ -29,21 +30,28 @@ export function merciStateOf(ref: PurchaseReference, tz: string): MerciState {
     const count = ref.ticketCount > 0 ? ref.ticketCount : ref.quantity;
     const booking = ref.booking;
     if (booking === null) return { kind: "paid_shop", count, typeName: ref.ticketTypeName };
+    const isRdv = booking.isRdv;
     if (booking.status === "confirmed") {
-      return { kind: "booked", title: booking.title, whenLabel: formatWhen(booking.startsAt, booking.endsAt, tz) };
+      return { kind: "booked", title: booking.title, whenLabel: formatWhen(booking.startsAt, booking.endsAt, tz), isRdv };
     }
     if (booking.status === "pending") return { kind: "pending" };
-    if (booking.status === "cancelled") return { kind: "paid_cancelled" };
-    return { kind: "paid_late", count };
+    if (booking.status === "cancelled") return { kind: "paid_cancelled", isRdv };
+    return { kind: "paid_late", count, isRdv };
   }
   if (ref.status === "pending") return ref.processing ? { kind: "processing" } : { kind: "pending" };
-  return { kind: "expired", withBooking: ref.booking !== null };
+  return { kind: "expired", withBooking: ref.booking !== null, isRdv: ref.booking?.isRdv ?? false };
 }
 
 /** Title and body of a state (exact copy, contract § 3.23). */
 export function merciCopy(state: MerciState): { title: string; body: string } {
   switch (state.kind) {
     case "booked":
+      if (state.isRdv) {
+        return {
+          title: "Rendez-vous confirmé",
+          body: `Paiement reçu. Votre rendez-vous « ${state.title} » (${state.whenLabel}) est réservé. Vous recevez par email la confirmation et le reçu.`,
+        };
+      }
       return {
         title: "Inscription confirmée",
         body: `Paiement reçu. Vous êtes inscrit(e) à « ${state.title} » (${state.whenLabel}). Vous recevez par email la confirmation et le reçu.`,
@@ -56,16 +64,18 @@ export function merciCopy(state: MerciState): { title: string; body: string } {
             ? `Votre ticket « ${state.typeName} » est dans votre portefeuille.`
             : `Vos ${formatCount(state.count)} tickets « ${state.typeName} » sont dans votre portefeuille.`,
       };
-    case "paid_late":
+    case "paid_late": {
+      const lead = state.isRdv ? "Paiement reçu, votre créneau n'était plus réservé" : "Paiement reçu, votre place n'était plus réservée";
       return {
         title: COPY.PAYMENT_RECEIVED,
         body:
           state.count === 1
-            ? "Paiement reçu, votre place n'était plus réservée : votre ticket est dans votre portefeuille."
-            : `Paiement reçu, votre place n'était plus réservée : vos ${formatCount(state.count)} tickets sont dans votre portefeuille.`,
+            ? `${lead} : votre ticket est dans votre portefeuille.`
+            : `${lead} : vos ${formatCount(state.count)} tickets sont dans votre portefeuille.`,
       };
+    }
     case "paid_cancelled":
-      return { title: COPY.PAYMENT_RECEIVED, body: "Paiement reçu. Cette réservation a été annulée." };
+      return { title: COPY.PAYMENT_RECEIVED, body: state.isRdv ? "Paiement reçu. Ce rendez-vous a été annulé." : "Paiement reçu. Cette réservation a été annulée." };
     case "processing":
       return {
         title: COPY.PROCESSING,
@@ -77,8 +87,9 @@ export function merciCopy(state: MerciState): { title: string; body: string } {
         body: "La confirmation arrive dans quelques secondes. Cette page se met à jour toute seule.",
       };
     case "expired":
-      return state.withBooking
-        ? { title: "Place expirée", body: "Le paiement n'a pas abouti et votre réservation a expiré." }
-        : { title: "Paiement non abouti", body: "Le paiement n'a pas abouti." };
+      if (!state.withBooking) return { title: "Paiement non abouti", body: "Le paiement n'a pas abouti." };
+      return state.isRdv
+        ? { title: "Créneau expiré", body: "Le paiement n'a pas abouti et votre créneau n'est plus réservé." }
+        : { title: "Place expirée", body: "Le paiement n'a pas abouti et votre réservation a expiré." };
   }
 }

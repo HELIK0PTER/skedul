@@ -121,6 +121,7 @@ export default async function SeancePage({ params, searchParams }: Props) {
     .filter((h) => h.purchaseId !== paymentReturn.shownPurchaseId)
     .map((h) => ({
       purchaseId: h.purchaseId,
+      isRdv: h.isRdv,
       title: h.title,
       whenLabel: formatWhenShort(h.startsAt, pro.timezone, now),
       holdUntilLabel: formatTime(h.holdExpiresAt, pro.timezone),

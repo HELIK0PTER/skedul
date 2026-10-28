@@ -283,6 +283,8 @@ async function usableFor(
 export type LivePendingHold = {
   purchaseId: string;
   occurrenceId: string;
+  /** an RDV slot (an occurrence with no event): its row says « créneau », never « place » (P5 § 3.13) */
+  isRdv: boolean;
   title: string;
   startsAt: Date;
   holdExpiresAt: Date;
@@ -303,6 +305,7 @@ export async function livePendingHoldsOf(
     .select({
       purchaseId: ticketPurchase.id,
       occurrenceId: booking.occurrenceId,
+      eventId: occurrence.eventId,
       title: sql<string | null>`coalesce(${event.title}, ${ticketType.name})`,
       startsAt: occurrence.startsAt,
       holdExpiresAt: booking.holdExpiresAt,
@@ -329,6 +332,15 @@ export async function livePendingHoldsOf(
   return rows.flatMap((r) =>
     r.holdExpiresAt === null || r.title === null
       ? []
-      : [{ purchaseId: r.purchaseId, occurrenceId: r.occurrenceId, title: r.title, startsAt: r.startsAt, holdExpiresAt: r.holdExpiresAt }],
+      : [
+          {
+            purchaseId: r.purchaseId,
+            occurrenceId: r.occurrenceId,
+            isRdv: r.eventId === null,
+            title: r.title,
+            startsAt: r.startsAt,
+            holdExpiresAt: r.holdExpiresAt,
+          },
+        ],
   );
 }

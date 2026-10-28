@@ -84,6 +84,11 @@ export const COVERAGE_LABELS: Record<BookingCoverage, string> = {
   guest: "Invité",
 };
 
+/** The coverage of one booking in words: a free rendez-vous is « Gratuit », never an « inscription » (P5 § 3.10). */
+export function coverageLabelOf(coverage: BookingCoverage, isRdv: boolean): string {
+  return isRdv && coverage === "free" ? "Gratuit" : COVERAGE_LABELS[coverage];
+}
+
 export const PURCHASE_STATUS_LABELS: Record<PurchaseStatus, string> = {
   pending: "En attente",
   paid: "Payé",

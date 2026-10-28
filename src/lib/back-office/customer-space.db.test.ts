@@ -17,6 +17,21 @@ import { rowBooking, rowCustomer, rowEvent, rowOffer, rowPurchase, rowRdv, rowRd
 
 const BUSINESS = "Altinha Test";
 
+dbTest("getCustomerSpace: a free rendez-vous reads « Gratuit », a free séance keeps « Inscription libre » (P5 T10)", async ({ db, pro }) => {
+  const now = new Date();
+  const customerId = await rowCustomer(db, pro, { name: "Beatriz Almeida", email: testEmail("gratuit") });
+  const rdvType = await rowRdvType(db, pro, { name: "Appel découverte", rdvFree: true });
+  const rdv = await rowRdv(db, pro, rdvType, { startsAt: addDaysMs(now, 3) });
+  const bRdv = await rowBooking(db, pro, { occurrenceId: rdv, customerId, status: "confirmed", coverage: "free" });
+  const seance = await rowSeance(db, pro, await rowEvent(db, pro), { startsAt: addDaysMs(now, 4), seatsTaken: 1 });
+  const bSeance = await rowBooking(db, pro, { occurrenceId: seance, customerId, status: "confirmed", coverage: "free" });
+  const space = await getCustomerSpace(db, pro.proId, customerId, now);
+  assert.ok(space);
+  const byId = new Map(space.upcoming.map((u) => [u.bookingId, u]));
+  assert.equal(byId.get(bRdv)?.coverageLabel, "Gratuit");
+  assert.equal(byId.get(bSeance)?.coverageLabel, COVERAGE_LABELS.free);
+});
+
 dbTest("getCustomerSpace: confirmed future bookings only, soonest first, with place, coverage and cancellation hint", async ({ db, pro }) => {
   const now = new Date();
   await db

@@ -1,7 +1,7 @@
 /**
- * « Inscription confirmée »: sent to a client once a registration is confirmed
- * (a ticket, a free place, a guest place or a paid one). The personal link opens
- * their space; the three buttons add the séance to their calendar.
+ * « Inscription confirmée » / « Rendez-vous confirmé »: sent to a client once a registration or a rendez-vous is
+ * confirmed (a ticket, a free place, a guest place or a paid one). The personal link opens their space; the three
+ * buttons add the séance or the rendez-vous to their calendar. A rendez-vous is never called a séance (P5 § 3.12).
  */
 import { formatCount } from "@/lib/back-office/format";
 import { escapeHtml, layout } from "@/lib/email-layout";
@@ -27,6 +27,8 @@ export type TicketsLeft = {
 };
 
 export type BookingConfirmedArgs = {
+  /** a séance of an event, or a rendez-vous (an occurrence with no event) */
+  kind: "seance" | "rdv";
   customerName: string;
   businessName: string;
   title: string;
@@ -51,8 +53,10 @@ function ticketsLeftBlock(left: TicketsLeft): string {
 }
 
 export function bookingConfirmedEmail(a: BookingConfirmedArgs): { subject: string; html: string } {
+  const rdv = a.kind === "rdv";
+  const heading = rdv ? "Rendez-vous confirmé" : "Inscription confirmée";
   const rows = [
-    { label: "Séance", value: a.title },
+    { label: rdv ? "Rendez-vous" : "Séance", value: a.title },
     { label: "Date", value: a.whenLabel },
     ...(a.location ? [{ label: "Lieu", value: a.location }] : []),
     { label: "Couverture", value: a.ticketTypeName ? `${a.coverageLabel} (${a.ticketTypeName})` : a.coverageLabel },
@@ -66,10 +70,13 @@ export function bookingConfirmedEmail(a: BookingConfirmedArgs): { subject: strin
       : "";
   const cancel = a.cancelText.trim() ? mailParagraph(a.cancelText) : "";
   const calendar = mailCalendarButtons(a.calendar);
+  const greeting = rdv
+    ? `Bonjour ${a.customerName}, votre rendez-vous chez ${a.businessName} est confirmé.`
+    : `Bonjour ${a.customerName}, votre inscription chez ${a.businessName} est confirmée.`;
   const html = layout(
-    escapeHtml("Inscription confirmée"),
+    escapeHtml(heading),
     `
-    ${mailParagraph(`Bonjour ${a.customerName}, votre inscription chez ${a.businessName} est confirmée.`)}
+    ${mailParagraph(greeting)}
     ${mailDetails(rows)}
     ${ticketsLeft}
     ${cancel}
@@ -77,5 +84,5 @@ export function bookingConfirmedEmail(a: BookingConfirmedArgs): { subject: strin
     ${mailPersonalLink(a.personalLinkUrl)}
   `,
   );
-  return { subject: oneLine(`Inscription confirmée : ${a.title}`), html };
+  return { subject: oneLine(`${heading} : ${a.title}`), html };
 }

@@ -16,7 +16,7 @@ import { clientCanCancel, clientCancelDeadline } from "@/lib/cancellation";
 import type { Db } from "@/lib/db/atomic";
 import { booking, customer, event, occurrence, professional, ticket, ticketType } from "@/lib/db/schema";
 import { cancelLockedText } from "@/lib/public/messages";
-import { COVERAGE_LABELS, type BookingCoverage } from "@/lib/tickets";
+import { coverageLabelOf, type BookingCoverage } from "@/lib/tickets";
 import { classifyTypes, type TypeClass } from "@/lib/wallet-rules";
 
 export type CustomerSpace = {
@@ -189,7 +189,7 @@ export async function getCustomerSpace(
         whenLabel: formatWhen(b.startsAt, b.endsAt, owner.tz),
         location: b.location && b.location.trim() !== "" ? b.location : null,
         coverage: b.coverage,
-        coverageLabel: COVERAGE_LABELS[b.coverage],
+        coverageLabel: coverageLabelOf(b.coverage, kind === "rdv"),
         cancellable: hint !== null,
         cancelText: hint ?? cancelLockedText(owner.businessName),
       };

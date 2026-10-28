@@ -843,7 +843,7 @@ dbTest("moveAttendeeCore: an expiring ticket asks to force; booked, full, cancel
   check(
     "RDV booking",
     await moveAttendeeCore(db, ctx, move(rdvBooking, t6.id), now),
-    "Un rendez-vous ne se déplace pas : annulez-le puis réservez à nouveau.",
+    "Un rendez-vous ne se déplace pas : annulez-le, votre client pourra en réserver un autre depuis votre page.",
   );
 });
 
@@ -1449,7 +1449,7 @@ dbTest("every séance core refuses another pro's ids with the not-found wording 
     check(
       "own RDV, edit",
       await updateOccurrenceCore(db, ctx, { occurrenceId: rdv, seenStartsAt: new Date().toISOString(), durationMin: 30 }, now),
-      "Un rendez-vous se déplace en l'annulant puis en le réservant à nouveau.",
+      "Un rendez-vous ne se déplace pas : annulez-le, votre client pourra en réserver un autre depuis votre page.",
     );
     check("own RDV, following", await previewFollowingCore(db, ctx, { occurrenceId: rdv, startMinute: 600, durationMin: 60 }, now), "Événement introuvable ou terminé.");
   } finally {
@@ -1575,7 +1575,7 @@ dbTest("expiringBeforeCore refuses the moves updateOccurrenceCore refuses, with 
     new Date().toISOString(),
     new Date(),
     move,
-    "Un rendez-vous se déplace en l'annulant puis en le réservant à nouveau.",
+    "Un rendez-vous ne se déplace pas : annulez-le, votre client pourra en réserver un autre depuis votre page.",
     "invalid",
   );
 

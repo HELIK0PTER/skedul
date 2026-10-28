@@ -477,6 +477,27 @@ dbTest("livePendingHoldsOf: the holds anonymous requests started with her addres
   assert.equal((await livePendingHoldsOf(db, pro.proId, stranger, addMinutes(now, 11))).length, 1);
 });
 
+dbTest("livePendingHoldsOf: an RDV hold is listed with isRdv and the type's name, a séance hold without (P5 T10)", async ({ db, pro }) => {
+  const h = { db, pro };
+  const w = await world(h);
+  const now = new Date();
+  const seanceHold = await buyAndBook(h, w, now);
+  const rdvType = await rowRdvType(db, pro, { name: "Cours particulier" });
+  const rdvOffer = await rowOffer(db, pro, rdvType);
+  const rdvOcc = await rowRdv(db, pro, rdvType, { startsAt: instantAt(dayIn(pro, 5), 600, pro.tz) }, now);
+  const purchaseId = await rowPurchase(db, pro, { customerId: w.customerId, offerId: rdvOffer, ticketTypeId: rdvType });
+  await rowBooking(db, pro, { occurrenceId: rdvOcc, customerId: w.customerId, status: "pending", coverage: "ticket", purchaseId, holdExpiresAt: addMinutes(now, 50) });
+
+  const listed = await livePendingHoldsOf(db, pro.proId, w.customerId, now);
+  assert.deepEqual(
+    listed.map((x) => [x.purchaseId, x.isRdv, x.title]),
+    [
+      [seanceHold.purchaseId, false, "Altinha débutants"],
+      [purchaseId, true, "Cours particulier"],
+    ],
+  );
+});
+
 dbTest("livePendingHoldsOf: a confirmed booking is not a hold, another pro's id lists nothing", async ({ db, pro }) => {
   const w = await world({ db, pro });
   const now = new Date();
@@ -823,7 +844,8 @@ dbTest("the séance page reads carry the public fields only: the séance, its qu
   const started = await buyAndBook(h, w, now);
   const holds = await livePendingHoldsOf(db, pro.proId, w.customerId, now);
   assert.equal(holds[0]?.purchaseId, started.purchaseId);
-  assert.deepEqual(keyPaths(holds[0]), ["holdExpiresAt", "occurrenceId", "purchaseId", "startsAt", "title"]);
+  assert.deepEqual(keyPaths(holds[0]), ["holdExpiresAt", "isRdv", "occurrenceId", "purchaseId", "startsAt", "title"]);
+  assert.equal(holds[0]?.isRdv, false, "a séance hold");
   assert.deepEqual(privateKeyPaths(holds), []);
 });
 

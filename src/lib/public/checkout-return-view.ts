@@ -16,13 +16,14 @@ import { formatTime } from "@/lib/datetime";
 import { COPY } from "@/lib/public/messages";
 import type { AbandonOutcome } from "@/lib/public/release-actions";
 
-import { liveHoldEnd, seatGoneOf, type PageBooking, type ReferenceView } from "./visibility";
+import { liveHoldEnd, seatGoneOf, type PageBooking, type ReferenceKind, type ReferenceView } from "./visibility";
 
 /** The props of `CheckoutReturn`. */
 export type CheckoutReturnProps = {
   slug: string;
   purchaseId: string;
-  kind: "buybook" | "shop";
+  /** a séance seat, an RDV slot (« créneau ») or a shop purchase (no seat, never released) */
+  kind: ReferenceKind;
   status: "pending" | "paid" | "expired";
   processing: boolean;
   resumeUrl: string | null;
@@ -130,15 +131,20 @@ export function paymentReturnOf(a: {
 /* ───────────────────────── what the block says ───────────────────────── */
 
 const RELEASED_TEXT = "Votre place est libérée.";
+/** The same line for an RDV slot: a « créneau », never a « place » (P5 § 3.13). */
+const RDV_RELEASED_TEXT = "Votre créneau est libéré.";
 const ENDED_TEXT = "Cette réservation n'est plus en attente de paiement.";
 /** Under a pending purchase an impersonating admin may look at but not act on (no client identity, SEC-M6, G4b). */
 export const READ_ONLY_TEXT = "Ce paiement ne peut être ni repris ni libéré quand vous êtes connecté en tant que ce compte.";
 
-/** The line a release outcome leaves on the page (the action never fulfils: « Paiement reçu » only points to merci, Decision 33). */
-export function releaseOutcomeText(outcome: AbandonOutcome): string {
+/**
+ * The line a release outcome leaves on the page (the action never fulfils: « Paiement reçu » only points to merci,
+ * Decision 33). `kind` words what was held: an RDV slot is « Votre créneau est libéré. ».
+ */
+export function releaseOutcomeText(outcome: AbandonOutcome, kind: ReferenceKind): string {
   switch (outcome) {
     case "released":
-      return RELEASED_TEXT;
+      return kind === "rdv" ? RDV_RELEASED_TEXT : RELEASED_TEXT;
     case "paid":
       return COPY.PAYMENT_RECEIVED;
     case "processing":
@@ -169,29 +175,39 @@ export function returnHeadingOf(view: ReturnView): string {
   return view === "paid" || view === "processing" ? "Votre paiement" : "Paiement interrompu";
 }
 
-/** The sentence under the heading (null: nothing to say, e.g. a pending hold whose end the page could not read). */
+/**
+ * The sentence under the heading (null: nothing to say, e.g. a pending hold whose end the page could not read). A séance
+ * seat is « votre place »; an RDV slot is « votre créneau » (P5 § 3.13).
+ */
 export function returnTextOf(a: {
   view: ReturnView;
-  kind: "buybook" | "shop";
+  kind: ReferenceKind;
   resumeUrl: string | null;
   holdUntilLabel: string | null;
   readOnly: boolean;
 }): string | null {
+  const rdv = a.kind === "rdv";
   switch (a.view) {
     case "paid":
       return COPY.PAYMENT_RECEIVED;
     case "processing":
       return COPY.PROCESSING;
     case "released":
-      return RELEASED_TEXT;
+      return releaseOutcomeText("released", a.kind);
     case "ended":
       return ENDED_TEXT;
     case "expired":
-      return a.kind === "buybook" ? "Votre place a été libérée. Vous pouvez réserver à nouveau." : "Ce paiement n'a pas abouti.";
+      if (a.kind === "shop") return "Ce paiement n'a pas abouti.";
+      return rdv ? "Votre créneau a été libéré. Vous pouvez réserver à nouveau." : "Votre place a été libérée. Vous pouvez réserver à nouveau.";
     case "pending":
       if (a.kind === "shop") return "Votre achat n'est pas payé.";
       // Read-only, the page passes no Checkout URL: the block says how long the seat is held, never that it can be released.
-      if (a.resumeUrl === null && !a.readOnly) return "La page de paiement a expiré. Vous pouvez libérer votre place maintenant.";
-      return a.holdUntilLabel === null ? null : `Votre place est gardée jusqu'à ${a.holdUntilLabel}.`;
+      if (a.resumeUrl === null && !a.readOnly) {
+        return rdv
+          ? "La page de paiement a expiré. Vous pouvez libérer votre créneau maintenant."
+          : "La page de paiement a expiré. Vous pouvez libérer votre place maintenant.";
+      }
+      if (a.holdUntilLabel === null) return null;
+      return rdv ? `Votre créneau est gardé jusqu'à ${a.holdUntilLabel}.` : `Votre place est gardée jusqu'à ${a.holdUntilLabel}.`;
   }
 }

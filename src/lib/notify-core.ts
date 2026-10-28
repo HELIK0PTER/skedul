@@ -41,7 +41,7 @@ import { proNewBookingEmail } from "@/lib/emails/pro-new-booking";
 import { purchaseReceiptEmail } from "@/lib/emails/purchase-receipt";
 import { ticketsOfferedEmail } from "@/lib/emails/tickets-offered";
 import { personalLinkUrl } from "@/lib/guest-link";
-import { COVERAGE_LABELS } from "@/lib/tickets-vocab";
+import { coverageLabelOf } from "@/lib/tickets-vocab";
 import { formatMoney } from "@/lib/utils";
 
 export type OutgoingEmail = { to: string; subject: string; html: string };
@@ -142,6 +142,11 @@ async function readBookings(db: Db, where: SQL | undefined) {
 }
 
 type BookingFacts = Awaited<ReturnType<typeof readBookings>>[number];
+
+/** A séance of an event, or a rendez-vous (an occurrence with no event): the templates word them apart (P5 § 3.12). */
+function kindOf(b: Pick<BookingFacts, "eventId">): "seance" | "rdv" {
+  return b.eventId === null ? "rdv" : "seance";
+}
 
 /** The title and times of one occurrence of this pro, or null. */
 async function readOccurrence(db: Db, professionalId: string, occurrenceId: string) {
@@ -263,12 +268,13 @@ async function planBookingConfirmed(db: Db, bookingId: string, deps: NotifyDeps)
       ? `Vous pouvez annuler en ligne jusqu'au ${formatWhenShort(deadline, b.tz)}.`
       : `L'annulation en ligne n'est plus possible : contactez ${b.businessName}.`;
   const mail = bookingConfirmedEmail({
+    kind: kindOf(b),
     customerName: b.customerName,
     businessName: b.businessName,
     title: b.title,
     whenLabel: whenOf(b),
     location: b.location,
-    coverageLabel: COVERAGE_LABELS[b.coverage],
+    coverageLabel: coverageLabelOf(b.coverage, b.eventId === null),
     ticketTypeName,
     ticketsLeft,
     cancelText,
@@ -280,6 +286,7 @@ async function planBookingConfirmed(db: Db, bookingId: string, deps: NotifyDeps)
 
 function cancelledMail(b: BookingFacts, by: "pro" | "client", ticketReturned: boolean, deps: NotifyDeps): OutgoingEmail {
   const mail = bookingCancelledEmail({
+    kind: kindOf(b),
     customerName: b.customerName,
     businessName: b.businessName,
     title: b.title,
@@ -318,7 +325,7 @@ async function planOccurrenceCancelled(
     heard[0].professionalId,
     heard.map((b) => {
       const mail = occurrenceCancelledEmail({
-        kind: b.eventId === null ? "rdv" : "seance",
+        kind: kindOf(b),
         customerName: b.customerName,
         businessName: b.businessName,
         title: b.title,
@@ -491,7 +498,9 @@ async function planPurchaseReceipt(db: Db, purchaseId: string, deps: NotifyDeps)
   // reference never stands for its customer, so another customer's booking attached to it is never read out.
   const bookingLine =
     held && held.professionalId === p.professionalId && held.customerId === p.customerId
-      ? `Un des tickets a servi pour votre inscription à « ${held.title} » (${whenOf(held)}).`
+      ? held.eventId === null
+        ? `Un des tickets a servi pour votre rendez-vous « ${held.title} » (${whenOf(held)}).`
+        : `Un des tickets a servi pour votre inscription à « ${held.title} » (${whenOf(held)}).`
       : null;
 
   const mail = purchaseReceiptEmail({
@@ -536,6 +545,7 @@ async function planLatePayment(db: Db, purchaseId: string, deps: NotifyDeps): Pr
   if (!tickets || tickets.n === 0) return noEmail();
 
   const mail = latePaymentEmail({
+    kind: kindOf(b),
     customerName: b.customerName,
     businessName: b.businessName,
     title: b.title,
@@ -554,11 +564,12 @@ async function planProNewBooking(db: Db, bookingId: string, deps: NotifyDeps): P
   const to = await proEmailOf(db, b.professionalId);
   if (to === null) return noEmail();
   const mail = proNewBookingEmail({
+    kind: kindOf(b),
     customerName: b.customerName,
     customerEmail: b.customerEmail,
     title: b.title,
     whenLabel: whenOf(b),
-    coverageLabel: COVERAGE_LABELS[b.coverage],
+    coverageLabel: coverageLabelOf(b.coverage, b.eventId === null),
     planningUrl: planningUrlOf(b, deps),
   });
   return emails(b.professionalId, [{ to, ...mail }]);
@@ -572,6 +583,7 @@ async function planProBookingCancelled(db: Db, bookingId: string, deps: NotifyDe
   if (to === null) return noEmail();
   const returned = await returnedBookingIds(db, b.professionalId, [b.bookingId]);
   const mail = proBookingCancelledEmail({
+    kind: kindOf(b),
     customerName: b.customerName,
     customerEmail: b.customerEmail,
     title: b.title,

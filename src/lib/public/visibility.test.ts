@@ -153,10 +153,10 @@ const rdvRef = (over: Partial<PurchaseReference> = {}): PurchaseReference =>
   ref({ booking: { ...ref().booking!, occurrenceId: "r1", isRdv: true, ticketTypeId: "t1", title: "Massage" }, ...over });
 const RDV_PAGE = { kind: "rdv", ticketTypeId: "t1" } as const;
 
-test("referenceForPage: an RDV page shows an RDV purchase of this type, as a buy + book view", () => {
+test("referenceForPage: an RDV page shows an RDV purchase of this type, as an RDV view (its block says « créneau », P5 T10)", () => {
   assert.deepEqual(referenceForPage(rdvRef(), RDV_PAGE, null), {
     purchaseId: "p1",
-    kind: "buybook",
+    kind: "rdv",
     status: "pending",
     processing: false,
     livemode: false,

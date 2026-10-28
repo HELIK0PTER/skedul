@@ -277,13 +277,22 @@ export function timeOffConflictCopy(a: { seances: number; rdvs: number; tickets:
   };
 }
 
-/** One line of the conflict list: « {when} · {title} · 2 inscrits » for a séance, « ... · 1 client » for a rendez-vous. */
+/**
+ * One line of the conflict list: « {when} · {title} · 2 inscrits » for a séance, « ... · 1 client » for a rendez-vous.
+ * A rendez-vous whose bookings hold no ticket (a free one, or a payment not made yet) adds « aucun ticket à rendre », so
+ * the pro reads at a glance that cancelling it gives nothing back (LED:309, P5 § 3.14).
+ */
 export function timeOffConflictLine(c: {
   kind: "seance" | "rdv";
   whenLabel: string;
   title: string;
   activeBookings: number;
+  /** how many of those bookings hold a ticket */
+  ticketBookings: number;
 }): string {
-  const who = c.kind === "rdv" ? plural(c.activeBookings, "client", "clients") : plural(c.activeBookings, "inscrit", "inscrits");
-  return `${c.whenLabel} · ${c.title} · ${who}`;
+  if (c.kind === "rdv") {
+    const line = `${c.whenLabel} · ${c.title} · ${plural(c.activeBookings, "client", "clients")}`;
+    return c.ticketBookings > 0 ? line : `${line} · aucun ticket à rendre`;
+  }
+  return `${c.whenLabel} · ${c.title} · ${plural(c.activeBookings, "inscrit", "inscrits")}`;
 }

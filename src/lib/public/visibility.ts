@@ -10,10 +10,16 @@ import type { PublicVisitor, WalletOwner } from "./identity";
 import type { PublicSeanceState } from "./planning-view";
 import type { PurchaseReference } from "./purchase-reads";
 
+/**
+ * What a purchase holds, as the payment return words it: a séance seat (`buybook`), an RDV slot (`rdv`, an occurrence
+ * with no event: « créneau », never « place », P5 § 3.13) or nothing (`shop`).
+ */
+export type ReferenceKind = "buybook" | "rdv" | "shop";
+
 /** What a ?p= reference lets a page show: THAT purchase and its own booking, never its customer (Decision 71). */
 export type ReferenceView = {
   purchaseId: string;
-  kind: "buybook" | "shop";
+  kind: ReferenceKind;
   status: PurchaseStatus;
   processing: boolean;
   livemode: boolean;
@@ -52,7 +58,7 @@ export function referenceForPage(
   }
   return {
     purchaseId: ref.purchaseId,
-    kind: ref.booking === null ? "shop" : "buybook",
+    kind: ref.booking === null ? "shop" : ref.booking.isRdv ? "rdv" : "buybook",
     status: ref.status,
     processing: ref.processing,
     livemode: ref.livemode,

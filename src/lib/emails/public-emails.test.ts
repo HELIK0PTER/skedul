@@ -40,6 +40,7 @@ const receipt: PurchaseReceiptArgs = {
 };
 
 const late: LatePaymentArgs = {
+  kind: "seance",
   customerName: "Beatriz Almeida",
   businessName: "Altinha Paris",
   title: "Altinha débutants",
@@ -50,6 +51,7 @@ const late: LatePaymentArgs = {
 };
 
 const newBooking: ProNewBookingArgs = {
+  kind: "seance",
   customerName: "Thomas Leroy",
   customerEmail: "thomas@example.com",
   title: "Altinha débutants",
@@ -59,6 +61,7 @@ const newBooking: ProNewBookingArgs = {
 };
 
 const cancelled: ProBookingCancelledArgs = {
+  kind: "seance",
   customerName: "Thomas Leroy",
   customerEmail: "thomas@example.com",
   title: "Altinha débutants",
@@ -93,6 +96,7 @@ const TEMPLATES: { name: string; client: boolean; normal: Mail; evil: Mail }[] =
     client: true,
     normal: latePaymentEmail(late),
     evil: latePaymentEmail({
+      kind: "seance",
       customerName: EVIL,
       businessName: EVIL,
       title: EVIL,
@@ -106,13 +110,13 @@ const TEMPLATES: { name: string; client: boolean; normal: Mail; evil: Mail }[] =
     name: "pro-new-booking",
     client: false,
     normal: proNewBookingEmail(newBooking),
-    evil: proNewBookingEmail({ customerName: EVIL, customerEmail: EVIL, title: EVIL, whenLabel: EVIL, coverageLabel: EVIL, planningUrl: EVIL }),
+    evil: proNewBookingEmail({ kind: "seance", customerName: EVIL, customerEmail: EVIL, title: EVIL, whenLabel: EVIL, coverageLabel: EVIL, planningUrl: EVIL }),
   },
   {
     name: "pro-booking-cancelled",
     client: false,
     normal: proBookingCancelledEmail(cancelled),
-    evil: proBookingCancelledEmail({ customerName: EVIL, customerEmail: EVIL, title: EVIL, whenLabel: EVIL, ticketReturned: true, planningUrl: EVIL }),
+    evil: proBookingCancelledEmail({ kind: "seance", customerName: EVIL, customerEmail: EVIL, title: EVIL, whenLabel: EVIL, ticketReturned: true, planningUrl: EVIL }),
   },
 ];
 
@@ -204,6 +208,64 @@ test("pro-booking-cancelled: the client's name and address in the body, the tick
   assert.ok(mail.html.includes(`href="${h(PLANNING)}"`));
   assert.ok(mail.html.includes(">Voir dans le planning</a>"));
   assert.equal(proBookingCancelledEmail({ ...cancelled, ticketReturned: false }).html.includes("Son ticket lui a été rendu."), false);
+});
+
+/** The words of a séance that an RDV mail must never say (P5 § 3.10), outside the spec headline of the late payment. */
+const SEANCE_WORDS = /[Ss][ée]ance|[Ii]nscri|(^|[^a-zà-ÿ])place([^a-zà-ÿ]|$)/;
+/** The text of a mail without its link targets: the planning deep link names its parameter `seance`, which is no copy. */
+const withoutLinks = (html: string): string => html.replace(/href="[^"]*"/g, "");
+
+test("late-payment: an RDV keeps the spec headline, and its second sentence names a rendez-vous and another créneau (P5 T10, D § 3.12)", () => {
+  const four = latePaymentEmail({ ...late, kind: "rdv", title: "Cours particulier" });
+  assert.equal(four.subject, "Paiement reçu : votre place n'était plus réservée", "the spec subject (L1136-1137)");
+  assert.ok(four.html.includes(h("Paiement reçu, votre place n'était plus réservée : vos 4 tickets sont dans votre portefeuille.")));
+  assert.ok(
+    four.html.includes(
+      h("Le rendez-vous « Cours particulier » (lun. 26 octobre 2026 · 19:00 à 20:00) n'est pas réservé pour vous. Vous pouvez utiliser vos tickets sur un autre créneau."),
+    ),
+  );
+  const one = latePaymentEmail({ ...late, kind: "rdv", title: "Cours particulier", count: 1 });
+  assert.ok(
+    one.html.includes(
+      h("Le rendez-vous « Cours particulier » (lun. 26 octobre 2026 · 19:00 à 20:00) n'est pas réservé pour vous. Vous pouvez utiliser votre ticket sur un autre créneau."),
+    ),
+  );
+  for (const mail of [four, one]) {
+    const body = mail.html.replace(h("Paiement reçu, votre place n'était plus réservée"), "");
+    assert.doesNotMatch(body, SEANCE_WORDS, "only the spec headline says « place »");
+    assert.equal(DASH.test(mail.subject + mail.html), false);
+  }
+  const evil = latePaymentEmail({ ...late, kind: "rdv", title: EVIL });
+  assert.equal(evil.html.includes("<script>"), false);
+  assert.ok(evil.html.includes(`Le rendez-vous « ${EVIL_ESCAPED} »`));
+});
+
+test("pro-new-booking: an RDV is a « Nouveau rendez-vous » in the heading, the subject and the sentence (P5 T10)", () => {
+  const mail = proNewBookingEmail({ ...newBooking, kind: "rdv", title: "Appel découverte", coverageLabel: "Gratuit" });
+  assert.equal(mail.subject, "Nouveau rendez-vous : Appel découverte");
+  assert.ok(mail.html.includes(">Nouveau rendez-vous</h1>"));
+  assert.ok(mail.html.includes(h("Thomas Leroy (thomas@example.com) a réservé le rendez-vous « Appel découverte » (lun. 26 octobre 2026 · 19:00 à 20:00).")));
+  assert.ok(mail.html.includes(row("Couverture", "Gratuit")));
+  assert.ok(mail.html.includes(">Voir dans le planning</a>"));
+  assert.doesNotMatch(mail.subject, SEANCE_WORDS);
+  assert.doesNotMatch(withoutLinks(mail.html), SEANCE_WORDS);
+  assert.equal(mail.subject.includes("Thomas"), false, "S29: the subject names no client");
+  assert.equal(DASH.test(mail.subject + mail.html), false);
+  const evil = proNewBookingEmail({ ...newBooking, kind: "rdv", title: EVIL, customerName: EVIL });
+  assert.equal(evil.html.includes("<script>"), false);
+  assert.ok(evil.html.includes(`a réservé le rendez-vous « ${EVIL_ESCAPED} »`));
+  assert.equal(proNewBookingEmail({ ...newBooking, kind: "rdv", title: "Cours\r\nBcc: x@example.com" }).subject, "Nouveau rendez-vous : Cours Bcc: x@example.com");
+});
+
+test("pro-booking-cancelled: a client who cancels an RDV « a annulé son rendez-vous » (P5 T10)", () => {
+  const mail = proBookingCancelledEmail({ ...cancelled, kind: "rdv", title: "Cours particulier" });
+  assert.equal(mail.subject, "Annulation : Cours particulier");
+  assert.ok(mail.html.includes(h("Thomas Leroy (thomas@example.com) a annulé son rendez-vous « Cours particulier » (lun. 26 octobre 2026 · 19:00 à 20:00).")));
+  assert.ok(mail.html.includes("Son ticket lui a été rendu."));
+  assert.doesNotMatch(withoutLinks(mail.html), SEANCE_WORDS);
+  const evil = proBookingCancelledEmail({ ...cancelled, kind: "rdv", title: EVIL });
+  assert.equal(evil.html.includes("<script>"), false);
+  assert.ok(evil.html.includes(`a annulé son rendez-vous « ${EVIL_ESCAPED} »`));
 });
 
 test("every template escapes every string argument and never emits it raw", () => {

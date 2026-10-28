@@ -373,18 +373,33 @@ test("timeOffConflictCopy: tickets are promised back only when the bookings hold
 test("timeOffConflictLine: a séance has inscrits, a rendez-vous has a client", () => {
   const when = "lun. 19 octobre 2026 · 12:00 à 12:15";
   assert.equal(
-    timeOffConflictLine({ kind: "seance", whenLabel: when, title: "Altinha débutants", activeBookings: 3 }),
+    timeOffConflictLine({ kind: "seance", whenLabel: when, title: "Altinha débutants", activeBookings: 3, ticketBookings: 3 }),
     "lun. 19 octobre 2026 · 12:00 à 12:15 · Altinha débutants · 3 inscrits",
   );
   assert.equal(
-    timeOffConflictLine({ kind: "seance", whenLabel: when, title: "Altinha débutants", activeBookings: 1 }),
+    timeOffConflictLine({ kind: "seance", whenLabel: when, title: "Altinha débutants", activeBookings: 1, ticketBookings: 1 }),
     "lun. 19 octobre 2026 · 12:00 à 12:15 · Altinha débutants · 1 inscrit",
   );
   assert.equal(
-    timeOffConflictLine({ kind: "rdv", whenLabel: when, title: "Appel découverte", activeBookings: 1 }),
-    "lun. 19 octobre 2026 · 12:00 à 12:15 · Appel découverte · 1 client",
+    timeOffConflictLine({ kind: "rdv", whenLabel: when, title: "Cours particulier", activeBookings: 1, ticketBookings: 1 }),
+    "lun. 19 octobre 2026 · 12:00 à 12:15 · Cours particulier · 1 client",
   );
-  assert.equal(DASH.test(timeOffConflictLine({ kind: "rdv", whenLabel: when, title: "Appel", activeBookings: 2 })), false);
+  assert.equal(DASH.test(timeOffConflictLine({ kind: "rdv", whenLabel: when, title: "Appel", activeBookings: 2, ticketBookings: 0 })), false);
+});
+
+test("timeOffConflictLine: a rendez-vous that holds no ticket (a free one) says « aucun ticket à rendre » (LED:309, P5 T10)", () => {
+  const when = "lun. 19 octobre 2026 · 12:00 à 12:15";
+  assert.equal(
+    timeOffConflictLine({ kind: "rdv", whenLabel: when, title: "Appel découverte", activeBookings: 1, ticketBookings: 0 }),
+    "lun. 19 octobre 2026 · 12:00 à 12:15 · Appel découverte · 1 client · aucun ticket à rendre",
+  );
+  // a séance keeps its line: the dialog's buttons already promise tickets only when some are held (UI-7)
+  assert.equal(
+    timeOffConflictLine({ kind: "seance", whenLabel: when, title: "Altinha débutants", activeBookings: 2, ticketBookings: 0 }),
+    "lun. 19 octobre 2026 · 12:00 à 12:15 · Altinha débutants · 2 inscrits",
+  );
+  // and the buttons over one free RDV promise no ticket back
+  assert.equal(timeOffConflictCopy({ seances: 0, rdvs: 1, tickets: 0 }).cancelLabel, "Annuler ce rendez-vous (client prévenu)");
 });
 
 test("every text is non-empty for 0, 1 and 2 and carries no dash", () => {

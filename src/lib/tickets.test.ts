@@ -41,6 +41,7 @@ import {
   TICKET_STATUS_LABELS,
   VALIDITY_UNITS,
   availabilityRuleInputSchema,
+  coverageLabelOf,
   customerInputSchema,
   dateKeySchema,
   eventInputSchema,
@@ -100,6 +101,15 @@ test("every enum value has a French label", () => {
   for (const [values, labels] of pairs) {
     assert.deepEqual(Object.keys(labels).sort(), [...values].sort());
     for (const v of values) assert.ok(labels[v].trim().length > 0, v);
+  }
+});
+
+test("coverageLabelOf: a free rendez-vous is « Gratuit », every other booking keeps its coverage label (P5 T10)", () => {
+  assert.equal(coverageLabelOf("free", true), "Gratuit");
+  assert.equal(coverageLabelOf("free", false), "Inscription libre");
+  for (const coverage of BOOKING_COVERAGES) {
+    if (coverage !== "free") assert.equal(coverageLabelOf(coverage, true), COVERAGE_LABELS[coverage], coverage);
+    assert.equal(coverageLabelOf(coverage, false), COVERAGE_LABELS[coverage], coverage);
   }
 });
 

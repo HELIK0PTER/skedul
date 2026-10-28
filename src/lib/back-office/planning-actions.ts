@@ -53,7 +53,7 @@ export const FOLLOWING_TIME_DETACHED =
   "Cette séance a été modifiée seule : elle ne suit plus l'horaire de la série. Enregistrez le changement pour cette séance seulement, ou ouvrez la séance suivante et choisissez « Appliquer aussi aux séances suivantes ».";
 
 /** The engine's own texts for the refusals updateOccurrence makes while it plans (src/lib/booking/series.ts). */
-const RDV_NOT_MOVABLE = "Un rendez-vous se déplace en l'annulant puis en le réservant à nouveau.";
+const RDV_NOT_MOVABLE = "Un rendez-vous ne se déplace pas : annulez-le, votre client pourra en réserver un autre depuis votre page.";
 const SEANCE_STARTED = "Une séance concernée a déjà commencé.";
 const NEW_START_PAST = "La nouvelle date serait déjà passée.";
 
