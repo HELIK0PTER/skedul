@@ -108,7 +108,7 @@ export type ActionThrottleArgs =
  * Pure: every key and limit the action consumes, in this order: the IP key, the /48 key (when there is
  * one), then for a typed address the global e-mail key and the per-pro e-mail key, or for a verified
  * identity its user key, then the per-séance IP key (seat-taking actions) and the per-pro IP key (free
- * registrations). Throws when a seat-taking action has no occurrence id.
+ * registrations and RDV bookings). Throws when a seat-taking action has no occurrence id.
  */
 export function actionThrottleKeys(args: ActionThrottleArgs): { key: string; limit: number }[] {
   const { action, professionalId } = args;

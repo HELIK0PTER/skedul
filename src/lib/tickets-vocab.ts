@@ -176,6 +176,11 @@ export const SHOP_CHECKOUT_HOURS = 24;
 export const STALE_PURCHASE_GRACE_MINUTES = 60;
 /** Live holds (pending bookings) one customer may have at once. */
 export const MAX_PENDING_HOLDS = 2;
+/**
+ * Live RDV holds (pending RDV bookings) a pro may carry before a typed address is refused a new one
+ * (P5 O23, a read before the engine like `holdCeiling` for a séance); verified identities bypass it.
+ */
+export const RDV_HOLD_CEILING = 3;
 
 export const THROTTLE_WINDOW_SEC = 3600;
 /** Public actions that consume throttle keys (src/lib/throttle.ts `actionThrottleKeys`). « mail », « horizon », « otp » and « reset » name other key families of the same table and are never actions. */
@@ -185,7 +190,9 @@ export type ThrottleAction = (typeof THROTTLE_ACTIONS)[number];
  * Limits per THROTTLE_WINDOW_SEC. `ip`: per IPv4 address or IPv6 /64; `ip48`: per IPv6 /48; `email`: per
  * (pro, typed address) AND per verified user; `emailGlobal`: per typed address across pros (the mailbox
  * bound); `perOccurrenceIp`: per séance and IP on the seat-taking actions; `perProIp`: per pro and IP on
- * free registrations. A null limit means the key does not exist for that action.
+ * free registrations and on RDV bookings of every mode (P5 O22: it bounds the filling of a pro's calendar;
+ * an RDV has no occurrence before it is booked, so it has no per-séance key). A null limit means the key
+ * does not exist for that action.
  */
 export type ThrottleLimits = {
   ip: number;
@@ -198,7 +205,7 @@ export type ThrottleLimits = {
 export const THROTTLE_LIMITS: Record<ThrottleAction, ThrottleLimits> = {
   free: { ip: 20, ip48: 60, email: 6, emailGlobal: 20, perOccurrenceIp: 2, perProIp: 6 },
   buybook: { ip: 20, ip48: 60, email: 6, emailGlobal: 20, perOccurrenceIp: 2, perProIp: null },
-  rdv: { ip: 20, ip48: 60, email: 6, emailGlobal: 20, perOccurrenceIp: null, perProIp: null },
+  rdv: { ip: 20, ip48: 60, email: 6, emailGlobal: 20, perOccurrenceIp: null, perProIp: 6 },
   shop: { ip: 20, ip48: 60, email: 6, emailGlobal: 20, perOccurrenceIp: null, perProIp: null },
   held: { ip: 20, ip48: 60, email: 10, emailGlobal: 20, perOccurrenceIp: null, perProIp: null },
   cancel: { ip: 20, ip48: 60, email: 10, emailGlobal: 20, perOccurrenceIp: null, perProIp: null },

@@ -160,11 +160,33 @@ test("checkActionThrottle: a forgotten occurrence id rejects before the database
   }
 });
 
-test("actionThrottleKeys: only free registrations add the per-pro IP key", () => {
+test("actionThrottleKeys: only free registrations and RDV bookings add the per-pro IP key (P5 O22)", () => {
   assert.ok(actionThrottleKeys(argsOf({ action: "free", occurrenceId: "occ_1" })).some((k) => k.key === `t:free:p:${PRO}:ip:${IP}` && k.limit === 6));
-  for (const action of ["buybook", "rdv", "shop", "held", "cancel", "release"] as const) {
+  assert.ok(actionThrottleKeys(argsOf({ action: "rdv" })).some((k) => k.key === `t:rdv:p:${PRO}:ip:${IP}` && k.limit === 6));
+  for (const action of ["buybook", "shop", "held", "cancel", "release"] as const) {
     assert.equal(actionThrottleKeys(argsOf({ action, occurrenceId: "occ_1" })).some((k) => k.key.includes(":p:")), false, action);
   }
+  assert.deepEqual(THROTTLE_ACTIONS.filter((a) => THROTTLE_LIMITS[a].perProIp !== null), ["free", "rdv"]);
+});
+
+test("actionThrottleKeys: an RDV booking takes no séance and lists its keys in order, typed or verified (P5 O22)", () => {
+  // A typed address: IP, /48, global and per-pro e-mail keys, then the per-pro IP key; never a per-séance key.
+  assert.deepEqual(actionThrottleKeys(argsOf({ action: "rdv", wideIpHash: WIDE })), [
+    { key: `t:rdv:ip:${IP}`, limit: 20 },
+    { key: `t:rdv:ip48:${WIDE}`, limit: 60 },
+    { key: `t:rdv:e:${LEA}`, limit: 20 },
+    { key: `t:rdv:e:${PRO}:${LEA}`, limit: 6 },
+    { key: `t:rdv:p:${PRO}:ip:${IP}`, limit: 6 },
+  ]);
+  // An Owner spending a held ticket: her user key (6, stricter than held's 10), then the per-pro IP key.
+  assert.deepEqual(actionThrottleKeys(argsOf({ action: "rdv", subject: { kind: "user", userId: "user-1" } })), [
+    { key: `t:rdv:ip:${IP}`, limit: 20 },
+    { key: "t:rdv:u:user-1", limit: 6 },
+    { key: `t:rdv:p:${PRO}:ip:${IP}`, limit: 6 },
+  ]);
+  // The type lets an RDV call go without an occurrence id (there is no occurrence before the booking).
+  const rdv: ActionThrottleArgs = { action: "rdv", professionalId: PRO, ipHash: IP, wideIpHash: null, subject: { kind: "email", email: "a@b.fr" } };
+  assert.equal(actionThrottleKeys(rdv).length, 4);
 });
 
 test("actionThrottleKeys: a free registration with everything set lists its six keys in order", () => {

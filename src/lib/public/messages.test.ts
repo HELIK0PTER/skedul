@@ -15,6 +15,7 @@ import {
   heldTicketButtonLabel,
   maskEmail,
   noRecordText,
+  rdvTimeZoneLine,
   seatsLeftLabel,
   walletLine,
 } from "./messages";
@@ -63,8 +64,16 @@ test("CLIENT_CONTEXT_MESSAGES is the contract table and only names real codes an
       not_found: "Inscription introuvable : rafraîchissez la page.",
       stale: "Cette inscription a changé : rafraîchissez la page.",
     },
+    rdv: {
+      unavailable: "Ce créneau n'est plus disponible : choisissez-en un autre.",
+      stale: "Les horaires ou l'offre ont changé : rafraîchissez la page.",
+      not_found: "Ce rendez-vous ou cette offre n'existe plus : rafraîchissez la page.",
+      no_ticket: "Aucun ticket utilisable pour ce rendez-vous.",
+      offer_too_short: "La validité de cette offre ne couvre pas la date du rendez-vous.",
+      too_many_holds: "Vous avez déjà deux paiements en cours. Terminez-les avant de réserver un autre rendez-vous.",
+    },
   });
-  const contexts = ["buybook", "free", "held", "shop", "release", "cancel"];
+  const contexts = ["buybook", "free", "held", "shop", "release", "cancel", "rdv"];
   for (const [context, table] of Object.entries(CLIENT_CONTEXT_MESSAGES)) {
     assert.ok(contexts.includes(context), `unknown context ${context}`);
     for (const code of Object.keys(table ?? {})) assert.ok(isEngineErrorCode(code), `${context}.${code} is not an engine code`);
@@ -235,7 +244,61 @@ test("COPY holds every fixed client sentence, word for word", () => {
     SIGNED_IN: "Connexion réussie.",
     PENDING_SIGN_IN: "Connexion…",
     PENDING_SIGN_UP: "Création…",
+    RDV_SLOT_GONE: "Ce créneau n'est plus disponible : choisissez-en un autre.",
+    RDV_NO_OFFER: "Aucune offre ne couvre cette date. Choisissez un créneau plus proche.",
+    RDV_EMPTY_WEEK: "Aucun créneau cette semaine",
+    RDV_NEXT_WEEK: "Semaine suivante",
+    RDV_CLOSED: "Aucun créneau disponible pour le moment.",
+    RDV_BOOK: "Réserver",
+    RDV_CARD_CTA: "Réserver un rendez-vous",
+    RDV_FREE_BADGE: "Gratuit",
+    RDV_TOO_MANY_PAYMENTS: "Plusieurs paiements de rendez-vous sont en cours. Réessayez dans quelques minutes.",
   });
+});
+
+test("rdvTimeZoneLine: « Heures de {zone} », the zone label inserted literally (O30)", () => {
+  assert.equal(rdvTimeZoneLine("Paris (France)"), "Heures de Paris (France)");
+  assert.equal(rdvTimeZoneLine("Los Angeles (États-Unis)"), "Heures de Los Angeles (États-Unis)");
+  assert.equal(rdvTimeZoneLine("$& {zone}"), "Heures de $& {zone}");
+});
+
+test("RDV wording: the off-grid refusal is the unavailable sentence, and the rdv context reads per code", () => {
+  assert.equal(COPY.RDV_SLOT_GONE, CLIENT_CONTEXT_MESSAGES.rdv?.unavailable);
+  assert.equal(clientErrorMessage({ code: "slot_taken" }, "rdv", V), "Ce créneau vient d'être pris.");
+  assert.equal(clientErrorMessage({ code: "slot_taken" }, "rdv", V), ENGINE_ERROR_MESSAGES.slot_taken, "the engine default, L711");
+  assert.equal(clientErrorMessage({ code: "stale" }, "rdv", V), "Les horaires ou l'offre ont changé : rafraîchissez la page.");
+  assert.equal(clientErrorMessage({ code: "throttled" }, "rdv", V), ENGINE_ERROR_MESSAGES.throttled);
+  // buildAnswers' French message still goes through on an RDV
+  assert.equal(clientErrorMessage({ code: "invalid", message: "Merci de répondre à : Niveau" }, "rdv", V), "Merci de répondre à : Niveau");
+});
+
+/** « séance », « inscription », « inscrit(e) », « place »: never said of an RDV (P5 plan, copy rule). */
+const SEANCE_WORDS = new RegExp(`(^|[^${"a-zàâäçéèêëîïôöùûüÿœæ"}])(séances?|inscriptions?|inscrite?s?|places?)(?![${"a-zàâäçéèêëîïôöùûüÿœæ"}])`, "i");
+
+test("the séance-word guard flags séance, inscription, inscrit(e) and place, not « remplacer » or « placement »", () => {
+  for (const flagged of ["Cette séance", "Inscription confirmée", "Vous êtes inscrit(e).", "libérez une place", "3 places"]) {
+    assert.equal(SEANCE_WORDS.test(flagged), true, flagged);
+  }
+  for (const fine of ["Ce créneau", "remplacer", "placement", "Réserver un rendez-vous"]) {
+    assert.equal(SEANCE_WORDS.test(fine), false, fine);
+  }
+});
+
+test("every sentence the RDV path shows is worded for a rendez-vous, never a séance (P5 copy rule)", () => {
+  const texts: { where: string; text: string }[] = [];
+  for (const [code, text] of Object.entries(CLIENT_CONTEXT_MESSAGES.rdv ?? {})) texts.push({ where: `rdv.${code}`, text });
+  for (const [key, text] of Object.entries(COPY)) if (key.startsWith("RDV_")) texts.push({ where: `COPY.${key}`, text });
+  // Every code bookRdv can return (claims.ts), read in the rdv context.
+  for (const code of ["not_found", "unavailable", "offer_too_short", "invalid", "stale", "slot_taken", "no_ticket", "too_many_holds", "throttled"] as const) {
+    texts.push({ where: `engine.${code}`, text: clientErrorMessage({ code }, "rdv", V) });
+  }
+  // The shared sentences bookRdvCore returns (dossier § 3.5).
+  for (const key of ["HONEYPOT_REFUSED", "CONFIRM_EMAIL_TO_SPEND", "PAYMENT_UNAVAILABLE", "CHECKOUT_FAILED", "BUYBOOK_NOT_POSSIBLE"] as const) {
+    texts.push({ where: `COPY.${key}`, text: COPY[key] });
+  }
+  texts.push({ where: "rdvTimeZoneLine", text: rdvTimeZoneLine("Paris (France)") });
+  assert.ok(texts.length >= 25, "the list of RDV sentences is not empty");
+  for (const { where, text } of texts) assert.equal(SEANCE_WORDS.test(text), false, `${where} speaks of a séance: ${text}`);
 });
 
 const DASH = new RegExp("[" + String.fromCharCode(0x2013, 0x2014) + "]");
@@ -263,6 +326,7 @@ function everyClientString(): { where: string; text: string }[] {
     acceptedByLine(["Altinha débutants", "Roda libre"]),
     walletLine(1) ?? "",
     walletLine(4) ?? "",
+    rdvTimeZoneLine("Paris (France)"),
   ];
   samples.forEach((text, index) => out.push({ where: `sample.${index}`, text }));
   return out;

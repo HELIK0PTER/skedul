@@ -6,7 +6,7 @@
  */
 import { ENGINE_ERROR_MESSAGES, type EngineErrorCode } from "@/lib/tickets-vocab";
 
-export type PublicErrorContext = "buybook" | "free" | "held" | "shop" | "release" | "cancel";
+export type PublicErrorContext = "buybook" | "free" | "held" | "shop" | "release" | "cancel" | "rdv";
 export type PublicStateKind = "cancelled" | "past" | "ongoing" | "onsite" | "notYet" | "closed" | "full" | "free" | "open";
 
 /** Page and planning states (L1441, L1448-1451). */
@@ -25,6 +25,8 @@ const FULL_SEANCE = "Complet : il ne reste plus de place sur cette séance.";
 const OFFER_CHANGED = "L'offre a changé : rafraîchissez la page.";
 const SEANCE_GONE = "Cette séance n'existe plus : rafraîchissez la page.";
 const CANCEL_LOCKED = "Seul(e) {businessName} peut annuler maintenant.";
+/** An RDV start that is no longer offered (off the grid, past the notice, a narrowed week): P5 dossier § 3.10. */
+const RDV_SLOT_GONE = "Ce créneau n'est plus disponible : choisissez-en un autre.";
 
 /** Client wording per action context (overrides of ENGINE_ERROR_MESSAGES); « {businessName} » is substituted. */
 export const CLIENT_CONTEXT_MESSAGES: Readonly<Partial<Record<PublicErrorContext, Partial<Record<EngineErrorCode, string>>>>> = {
@@ -52,6 +54,17 @@ export const CLIENT_CONTEXT_MESSAGES: Readonly<Partial<Record<PublicErrorContext
     too_late_or_done: CANCEL_LOCKED,
     not_found: "Inscription introuvable : rafraîchissez la page.",
     stale: "Cette inscription a changé : rafraîchissez la page.",
+  },
+  // RDV libre (bookRdv, every mode): a rendez-vous is never a séance, an inscription or a place (P5 copy rule).
+  // `slot_taken` keeps the engine's own sentence « Ce créneau vient d'être pris. » (L711): no override needed.
+  rdv: {
+    unavailable: RDV_SLOT_GONE,
+    stale: "Les horaires ou l'offre ont changé : rafraîchissez la page.",
+    not_found: "Ce rendez-vous ou cette offre n'existe plus : rafraîchissez la page.",
+    no_ticket: "Aucun ticket utilisable pour ce rendez-vous.",
+    offer_too_short: "La validité de cette offre ne couvre pas la date du rendez-vous.",
+    // A verified identity only: a typed address gets COPY.BUYBOOK_NOT_POSSIBLE instead (Decision 64).
+    too_many_holds: "Vous avez déjà deux paiements en cours. Terminez-les avant de réserver un autre rendez-vous.",
   },
 };
 
@@ -141,7 +154,24 @@ export const COPY = {
   /** The password form's submit while its call runs (`AuthForm`, P4 final review AUTH-4): the form serves clients too. */
   PENDING_SIGN_IN: "Connexion…",
   PENDING_SIGN_UP: "Création…",
+  /* RDV libre (P5 dossier § 3.10): the off-grid refusal, the page states and the card. */
+  RDV_SLOT_GONE,
+  RDV_NO_OFFER: "Aucune offre ne couvre cette date. Choisissez un créneau plus proche.",
+  RDV_EMPTY_WEEK: "Aucun créneau cette semaine",
+  RDV_NEXT_WEEK: "Semaine suivante",
+  /** A type that can never be booked online (no hours, notice above the horizon): O14. */
+  RDV_CLOSED: "Aucun créneau disponible pour le moment.",
+  RDV_BOOK: "Réserver",
+  RDV_CARD_CTA: "Réserver un rendez-vous",
+  RDV_FREE_BADGE: "Gratuit",
+  /** The hold ceiling of a typed buyer (O23, RDV_HOLD_CEILING): the RDV twin of TOO_MANY_PAYMENTS, which names a séance. */
+  RDV_TOO_MANY_PAYMENTS: "Plusieurs paiements de rendez-vous sont en cours. Réessayez dans quelques minutes.",
 } as const;
+
+/** « Heures de {zone} », the static time-zone line of the RDV page (O30); `zone` is `timeZoneLabel(tz)`, inserted as given. */
+export function rdvTimeZoneLine(zone: string): string {
+  return `Heures de ${zone}`;
+}
 
 /** « 1 place restante » / « 5 places restantes » (fr-FR thousands). */
 export function seatsLeftLabel(n: number): string {
