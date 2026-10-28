@@ -9,7 +9,7 @@ const NOW = new Date("2026-07-01T06:00:00.000Z");
 const EVT = "evt_1";
 
 const rules = [
-  { dayOfWeek: 5, startMinute: 540, endMinute: 660 }, // Friday 09:00–11:00
+  { dayOfWeek: 5, startMinute: 540, endMinute: 660 }, // Friday 09:00-11:00
 ];
 
 // Friday 2026-07-03 09:00 Paris = 07:00 UTC
@@ -112,7 +112,7 @@ test("a session of another event type blocks this event's overlapping slot", () 
 test("computeSlots: at 23:30 the night before spring-forward, Sunday is not skipped", () => {
   const slots = computeSlots(
     base({
-      rules: [{ dayOfWeek: 0, startMinute: 540, endMinute: 600 }], // Sunday 09:00–10:00
+      rules: [{ dayOfWeek: 0, startMinute: 540, endMinute: 600 }], // Sunday 09:00-10:00
       now: new Date("2026-03-28T22:30:00.000Z"), // Sat 28 Mar, 23:30 Paris (UTC+1)
       daysAhead: 2,
       minNoticeMinutes: 0,

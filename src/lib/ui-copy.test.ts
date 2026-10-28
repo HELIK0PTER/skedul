@@ -1,7 +1,16 @@
 /**
- * Copy guard (decision 38, extended by P4 Task 1): no em dash (U+2014) and no en
- * dash (U+2013) in the files that carry UI text, e-mails or Google bodies, and in
- * the P4 public, payment and identity code, comments included.
+ * Copy guard: no em dash (U+2014) and no en dash (U+2013) in any .ts or .tsx file
+ * under src/, tests, fixtures and comments included, except the short ALLOWLIST
+ * below, where every entry says why it is left out.
+ *
+ * History: decision 38 started it on the back-office copy, P4 Task 1 widened it to
+ * the public, payment and identity code, P5 Task 1 to the whole of src/ (P3OUT:115,
+ * LED:457: components/{ui,auth,support}, lib/* and layout.tsx were not covered).
+ *
+ * Out of the scan on purpose:
+ * - `.css` files hold no copy (comments and `content: ""` only);
+ * - `.sql` migrations are applied history, never edited, and hold no copy either.
+ *
  * Run from the repository root: the paths are relative to process.cwd().
  */
 import assert from "node:assert/strict";
@@ -11,91 +20,59 @@ import test from "node:test";
 
 const DASH = new RegExp("[" + String.fromCharCode(0x2013, 0x2014) + "]");
 
+/** The root the scan walks whole. */
+const ROOT = "src";
+
+/** Outside src/ but scanned since P4 Task 1 (their strings reach headers and the deploy config). */
+const ROOT_FILES = ["vercel.ts", "next.config.ts"];
+
 /**
- * Always scanned: these directories exist from P3 on. The admin space and the
- * public pages are walked whole, so a new file there is covered at once.
+ * Left out of the scan (a file, or a directory with everything under it). Keep it
+ * short: an entry needs a reason, must exist and must still hold a dash, so the
+ * entry goes away with the last dash it excuses.
  */
-const DIRECTORIES = [
-  "src/components/dashboard",
-  "src/app/dashboard",
-  "src/lib/back-office",
-  "src/lib/emails",
-  "src/app/admin",
-  "src/components/admin",
-  "src/app/[slug]",
-  "src/components/public",
+const ALLOWLIST: readonly { path: string; why: string }[] = [
+  {
+    path: "src/app/demo",
+    why: "the /demo tour (main's landing work, not the tickets redesign): its copy goes to the P6 copy pass",
+  },
+  {
+    path: "src/components/demo",
+    why: "the /demo tour screens, script and fixture data shared with the landing (main's work): P6 copy pass",
+  },
+  {
+    path: "src/components/hero-cards.tsx",
+    why: "the old landing hero, no importer left, its deletion awaits the owner (landing redesign)",
+  },
+  {
+    path: "src/components/ticket-cta.tsx",
+    why: "the old landing ticket CTA, no importer left, its deletion awaits the owner (landing redesign)",
+  },
 ];
 
 /**
- * Scanned when they exist (a file, or a directory walked whole). P4 creates most of
- * the paths below task by task, and the ones it only modifies are scanned from Task 1
- * on, because their strings and comments become client copy.
+ * The P5 « RDV libre » paths: always scanned the moment they exist, never allowlisted.
+ * A directory stands for everything under it.
  */
-const OPTIONAL = [
-  "src/lib/pro-messages.ts",
-  "src/lib/zod-fr.ts",
-  "src/lib/google-event.ts",
-  "src/lib/email-layout.ts",
-  "src/lib/admin-metrics.ts",
-  "src/lib/auth-admin.ts",
-  // P4: public pages' logic, payments, identity and the client-facing server code
-  "src/lib/public",
-  "src/lib/payments",
-  "src/lib/client-ip.ts",
-  "src/lib/cron-auth.ts",
-  "src/lib/auth-messages.ts",
-  "src/components/auth/email-code-form.tsx",
-  "src/components/auth/otp-dialog.tsx",
-  "src/components/auth/client-sign-in-choices.tsx",
-  "src/components/auth/link-google-form.tsx",
-  "src/components/auth/sign-in-status.tsx",
-  "src/app/mon-espace",
-  "src/app/api/mock-checkout",
-  "src/app/api/stripe",
-  "src/app/api/cron",
-  "src/server/public.ts",
-  "src/server/client.ts",
-  "src/server/public-context.ts",
-  "src/server/public-queries.ts",
-  "src/server/visitor.ts",
-  // existing files whose strings or comments P4 adds or turns into client copy (COV-I13)
-  "src/lib/notify-core.ts",
-  "src/lib/notify-run.ts",
-  "src/lib/tickets-vocab.ts",
-  "src/lib/oauth-errors.ts",
-  "src/lib/entry.ts",
-  "src/server/entry.ts",
-  "src/app/(auth)/sign-in",
-  "src/components/auth/auth-form.tsx",
-  "src/components/ui/dialog.tsx",
-  "src/lib/stripe.ts",
-  "src/lib/email.ts",
-  "src/lib/throttle.ts",
-  "src/lib/env.ts",
-  "src/lib/same-origin.ts",
-  "src/app/api/c",
-  "vercel.ts",
-  "next.config.ts",
-  "src/lib/booking/wallet.ts",
+const P5_PATHS = [
+  "src/lib/availability.ts",
+  "src/lib/availability.test.ts",
+  "src/lib/slots.ts",
+  "src/lib/slots.db.test.ts",
+  "src/lib/public/rdv-view.ts",
+  "src/lib/public/rdv-form.ts",
+  "src/lib/public/rdv-reads.ts",
+  "src/lib/public/rdv-actions.ts",
+  "src/lib/public/rdv-actions.db.test.ts",
+  "src/app/[slug]/rdv",
+  "src/components/public/rdv-booking.tsx",
+  "src/components/public/rdv-cards.tsx",
   "src/lib/booking/claims.ts",
-  "src/lib/booking/fulfillment.ts",
-  "src/lib/booking/release.ts",
-  "src/lib/booking/nightly.ts",
-  // revision 2: the boot checks
-  "src/lib/env-checks.ts",
-  // revision 3: files P4 modifies outside the walked directories
-  "src/lib/auth-options.ts",
-  "src/server/pro.ts",
-  "src/server/pro-context.ts",
-  "src/server/pro-clients.ts",
-  "src/server/client-queries.ts",
-  "src/server/notify.ts",
-  "src/lib/auth.ts",
-  "src/components/auth/forgot-password-form.tsx",
-  // the shared P4 test helper (Task 5 creates it, Task 7 extends it)
-  "src/test/public.ts",
-  // Task 31: the root metadata, whose default title is the tab title of every page that sets none (the root 404)
-  "src/app/layout.tsx",
+  "src/lib/booking/catalog.ts",
+  "src/lib/booking/wallet.ts",
+  "src/lib/back-office/catalog-actions.ts",
+  "src/lib/tickets-vocab.ts",
+  "src/lib/public/messages.ts",
 ];
 
 /** 1-based numbers of the lines holding a dash (LF or CRLF). */
@@ -107,7 +84,17 @@ function dashLines(text: string): number[] {
   return lines;
 }
 
-/** Every .ts / .tsx file under `path` (a file or a directory), tests excluded. */
+/** True when `file` is `path` itself or sits under the directory `path`. */
+function within(file: string, path: string): boolean {
+  return file === path || file.startsWith(`${path}/`);
+}
+
+/** The allowlist entry that leaves `file` out, if any. */
+function allowedBy(file: string): string | undefined {
+  return ALLOWLIST.find((entry) => within(file, entry.path))?.path;
+}
+
+/** Every .ts / .tsx file under `path` (a file or a directory), tests included. */
 function collect(path: string, out: string[]): void {
   const full = join(process.cwd(), path);
   if (!existsSync(full)) return;
@@ -115,14 +102,14 @@ function collect(path: string, out: string[]): void {
     for (const name of readdirSync(full).sort()) collect(`${path}/${name}`, out);
     return;
   }
-  if (/\.tsx?$/.test(path) && !/\.test\.ts$/.test(path)) out.push(path);
+  if (/\.tsx?$/.test(path)) out.push(path);
 }
 
-/** Every file the scan walks: the always-walked directories, then the optional paths that exist. */
+/** Every .ts / .tsx file under src/ (the allowlist left out), then the root files. */
 function scannedFiles(): string[] {
   const files: string[] = [];
-  for (const path of [...DIRECTORIES, ...OPTIONAL]) collect(path, files);
-  return files;
+  collect(ROOT, files);
+  return [...files.filter((file) => allowedBy(file) === undefined), ...ROOT_FILES];
 }
 
 test("dashLines reports the lines holding an em dash or an en dash, LF or CRLF", () => {
@@ -133,66 +120,76 @@ test("dashLines reports the lines holding an em dash or an en dash, LF or CRLF",
   assert.deepEqual(dashLines("a - b : c"), []);
 });
 
-test("the directories that must be scanned exist and hold source files", () => {
-  for (const dir of DIRECTORIES) {
-    const files: string[] = [];
-    collect(dir, files);
-    assert.ok(files.length > 0, `${dir} holds no .ts or .tsx file`);
-  }
+test("within and allowedBy match a file or a whole directory, never a name prefix", () => {
+  assert.equal(within("src/app/demo/page.tsx", "src/app/demo"), true);
+  assert.equal(within("src/app/demo", "src/app/demo"), true);
+  assert.equal(within("src/app/demonstration/page.tsx", "src/app/demo"), false);
+  assert.equal(allowedBy("src/components/demo/demo-data.ts"), "src/components/demo");
+  assert.equal(allowedBy("src/components/public/rdv-booking.tsx"), undefined);
 });
 
-test("the scan covers the existing files P4 turns into client copy (COV-I13)", () => {
+test("the scan walks the whole of src/, tests and the folders earlier phases left out included", () => {
   const scanned = new Set(scannedFiles());
   for (const file of [
-    "src/lib/auth-messages.ts",
-    "src/lib/auth-options.ts",
-    "src/lib/auth.ts",
-    "src/lib/entry.ts",
-    "src/lib/env.ts",
-    "src/lib/email.ts",
-    "src/lib/notify-core.ts",
-    "src/lib/oauth-errors.ts",
-    "src/lib/stripe.ts",
-    "src/lib/throttle.ts",
-    "src/lib/tickets-vocab.ts",
-    "src/lib/booking/claims.ts",
-    "src/lib/booking/fulfillment.ts",
-    "src/lib/booking/nightly.ts",
-    "src/lib/booking/release.ts",
-    "src/lib/booking/wallet.ts",
-    "src/server/client-queries.ts",
-    "src/server/entry.ts",
-    "src/server/notify.ts",
-    "src/server/pro.ts",
-    "src/server/pro-clients.ts",
-    "src/server/pro-context.ts",
-    "src/components/auth/auth-form.tsx",
-    "src/components/auth/forgot-password-form.tsx",
-    "src/components/auth/link-google-form.tsx",
+    // P3OUT:115 and LED:457: components/{ui,auth,support}, lib/* and layout.tsx
+    "src/components/ui/button.tsx",
     "src/components/ui/dialog.tsx",
-    "src/app/(auth)/sign-in/page.tsx",
-    "src/app/api/c/[token]/route.ts",
+    "src/components/auth/auth-form.tsx",
+    "src/lib/availability.ts",
+    "src/lib/booking/claims.ts",
+    "src/lib/booking/catalog.ts",
+    "src/lib/db/schema.ts",
+    "src/lib/calendar-grid.ts",
+    "src/app/layout.tsx",
+    // the paths P4 listed by hand (COV-I13)
+    "src/lib/tickets-vocab.ts",
+    "src/lib/public/messages.ts",
+    "src/server/public.ts",
+    "src/server/analytics-salt.ts",
     "src/app/api/mock-checkout/route.ts",
-    "src/app/api/stripe/webhook/route.ts",
+    "src/lib/notify-core.ts",
     "vercel.ts",
     "next.config.ts",
-    "src/app/layout.tsx",
+    // tests and helpers are scanned too
+    "src/lib/ui-copy.test.ts",
+    "src/lib/booking/rdv.db.test.ts",
+    "src/test/db.ts",
   ]) {
     assert.ok(scanned.has(file), `${file} is not scanned`);
   }
-  // Not created yet (Task 5 creates it): listed ahead of time, so it is scanned the moment it exists.
-  assert.ok(OPTIONAL.includes("src/test/public.ts"), "src/test/public.ts is not listed in OPTIONAL");
+  const support = [...scanned].filter((file) => within(file, "src/components/support"));
+  assert.ok(support.length > 0, "src/components/support is not scanned");
 });
 
-test("OPTIONAL lists no path twice and no path the always-walked directories already hold", () => {
-  assert.equal(new Set(OPTIONAL).size, OPTIONAL.length, "a path is listed twice");
-  for (const path of OPTIONAL) {
-    const inside = DIRECTORIES.find((dir) => path === dir || path.startsWith(`${dir}/`));
-    assert.equal(inside, undefined, `${path} is already walked through ${inside}`);
+test("the allowlist is short, every entry exists, has a reason and still excuses a dash", () => {
+  assert.ok(ALLOWLIST.length <= 6, "the allowlist grew past six entries: fix the dashes instead");
+  const paths = ALLOWLIST.map((entry) => entry.path);
+  assert.equal(new Set(paths).size, paths.length, "a path is listed twice");
+  for (const { path, why } of ALLOWLIST) {
+    assert.ok(why.trim().length > 20, `${path} has no reason`);
+    assert.ok(path.startsWith(`${ROOT}/`), `${path} is not under ${ROOT}/`);
+    assert.ok(existsSync(join(process.cwd(), path)), `${path} does not exist: remove its entry`);
+    // A broad entry would hide whole layers: never a top-level folder of src/.
+    assert.ok(!["src/app", "src/components", "src/lib", "src/server", "src/test"].includes(path), `${path} is too broad`);
+    const files: string[] = [];
+    collect(path, files);
+    const dashed = files.filter((file) => dashLines(readFileSync(join(process.cwd(), file), "utf8")).length > 0);
+    assert.ok(dashed.length > 0, `${path} holds no dash any more: remove its entry`);
   }
 });
 
-test("no em dash or en dash in the UI, e-mail, copy and P4 public code files (comments included)", () => {
+test("no P5 path is allowlisted, and the P5 paths that exist are scanned", () => {
+  const scanned = new Set(scannedFiles());
+  for (const path of P5_PATHS) {
+    const covering = ALLOWLIST.find((entry) => within(path, entry.path) || within(entry.path, path));
+    assert.equal(covering, undefined, `${path} is allowlisted through ${covering?.path}`);
+    const files: string[] = [];
+    collect(path, files);
+    for (const file of files) assert.ok(scanned.has(file), `${file} is not scanned`);
+  }
+});
+
+test("no em dash or en dash in any scanned .ts or .tsx file under src/ (comments included)", () => {
   const hits: string[] = [];
   for (const file of scannedFiles()) {
     for (const line of dashLines(readFileSync(join(process.cwd(), file), "utf8"))) hits.push(`${file}:${line}`);

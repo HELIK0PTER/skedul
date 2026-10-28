@@ -12,8 +12,8 @@ const cache = new Map<string, string>();
 
 /**
  * Housekeeping, run on a cache miss (~once a day per instance): salts are
- * deleted after 2 days — from then on that day's visitor hashes can no longer
- * be linked to an IP — and page views are kept 25 months. It never throws: a
+ * deleted after 2 days (from then on that day's visitor hashes can no longer
+ * be linked to an IP), and page views are kept 25 months. It never throws: a
  * failed purge must not break tracking, it simply runs again on the next miss.
  */
 async function purgeExpired() {

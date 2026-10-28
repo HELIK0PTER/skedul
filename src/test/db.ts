@@ -7,7 +7,7 @@
  * Skips when DATABASE_URL_TEST is unset; refuses to run when DATABASE_URL and
  * DATABASE_URL_TEST point at different hosts; builds the client only after
  * those guards. Each dbTest creates its own pro and deletes its user at the end
- * (the deleteUser cascade, rule R2), after checking I1–I6 for that pro.
+ * (the deleteUser cascade, rule R2), after checking I1 to I6 for that pro.
  */
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
@@ -98,7 +98,7 @@ export function dbTest(
       await fn({ db, pro }, t);
       if (opts.invariants !== false) {
         const { checkInvariants } = await import("../lib/booking/invariants");
-        assert.deepEqual(await checkInvariants(db, { proId: pro.proId }), [], "invariants I1–I6");
+        assert.deepEqual(await checkInvariants(db, { proId: pro.proId }), [], "invariants I1 to I6");
       }
     } finally {
       await deleteTestUser(db, pro.userId);

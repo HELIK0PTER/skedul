@@ -24,7 +24,7 @@ import {
 type Outcome = { ok: true } | { ok: false; code: string };
 const codeOf = (r: Outcome): string => (r.ok ? "ok" : r.code);
 
-/** Global hours 08:00–20:00 every day; an RDV type; `at(minute)` = that minute on the day in 3 days (Paris). */
+/** Global hours 08:00-20:00 every day; an RDV type; `at(minute)` = that minute on the day in 3 days (Paris). */
 async function rdvSetup(h: DbHarness, typeOver: Partial<TicketTypeInput> = {}) {
   const hours = await setAvailabilityRules(h.db, {
     professionalId: h.pro.proId,
@@ -103,7 +103,7 @@ dbTest("T6a: two clients on the same slot, one wins", async (h) => {
 
 dbTest("T6b: an RDV over an event séance is slot_taken; back-to-back is fine", async (h) => {
   const s = await rdvSetup(h, { rdvFree: true, rdvDurationMin: 30 });
-  // makeEvent default: once, in 3 days, 10:00–11:00 (Paris), private séances block too.
+  // makeEvent default: once, in 3 days, 10:00-11:00 (Paris), private séances block too.
   await makeEvent(h.db, h.pro, { isPrivate: true, bookingMode: "none" });
   const customerId = await makeCustomer(h.db, h.pro);
   assert.equal(codeOf(await bookRdv(h.db, rdv(h, s.typeId, s.at(630), customerId, "free"))), "slot_taken");
@@ -118,9 +118,9 @@ dbTest("E4 buffers widen the block: neighbours inside the buffer are slot_taken"
   const o = await getOccurrence(h.db, first.occurrenceId);
   assert.equal(o.blockStart.getTime(), s.at(585).getTime());
   assert.equal(o.blockEnd.getTime(), s.at(675).getTime());
-  // 11:00 → block 10:45–12:15 overlaps 09:45–11:15 (EXCLUDE).
+  // 11:00 → block 10:45-12:15 overlaps 09:45-11:15 (EXCLUDE).
   assert.equal(codeOf(await bookRdv(h.db, rdv(h, s.typeId, s.at(660), b, "free"))), "slot_taken");
-  // 11:30 → block 11:15–12:45 only touches it.
+  // 11:30 → block 11:15-12:45 only touches it.
   assert.equal(codeOf(await bookRdv(h.db, rdv(h, s.typeId, s.at(690), c, "free"))), "ok");
 });
 
@@ -135,7 +135,7 @@ dbTest("E4 free type, mode checks, hours, archived type and time off", async (h)
 
   assert.equal(codeOf(await bookRdv(h.db, rdv(h, free.typeId, free.at(600), customerId, "held_ticket"))), "unavailable");
   assert.equal(codeOf(await bookRdv(h.db, rdv(h, paid, free.at(600), customerId, "free"))), "unavailable");
-  // 20:00 is outside the 08:00–20:00 hours (the 15 min would end at 20:15).
+  // 20:00 is outside the 08:00-20:00 hours (the 15 min would end at 20:15).
   assert.equal(codeOf(await bookRdv(h.db, rdv(h, free.typeId, free.at(1200), customerId, "free"))), "unavailable");
 
   await h.db.insert(timeOff).values({

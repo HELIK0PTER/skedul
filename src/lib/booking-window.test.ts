@@ -52,20 +52,20 @@ test("onlineBookability honours an event override", () => {
 
 test("fitsAvailability: inside one rule window of the local weekday", () => {
   const rules = [
-    { dayOfWeek: 1, startMinute: 600, endMinute: 780 }, // Monday 10:00–13:00
-    { dayOfWeek: 0, startMinute: 600, endMinute: 720 }, // Sunday 10:00–12:00
-    { dayOfWeek: 5, startMinute: 1320, endMinute: 1440 }, // Friday 22:00–24:00
+    { dayOfWeek: 1, startMinute: 600, endMinute: 780 }, // Monday 10:00-13:00
+    { dayOfWeek: 0, startMinute: 600, endMinute: 720 }, // Sunday 10:00-12:00
+    { dayOfWeek: 5, startMinute: 1320, endMinute: 1440 }, // Friday 22:00-24:00
   ];
   const fits = (s: string, e: string) => fitsAvailability(rules, new Date(s), new Date(e), TZ);
   // Monday 12 Oct 2026, Paris = UTC+2
   assert.equal(fits("2026-10-12T08:00:00Z", "2026-10-12T09:00:00Z"), true);
   assert.equal(fits("2026-10-12T10:00:00Z", "2026-10-12T11:00:00Z"), true); // ends exactly 13:00
-  assert.equal(fits("2026-10-12T10:30:00Z", "2026-10-12T11:30:00Z"), false); // 12:30–13:30
+  assert.equal(fits("2026-10-12T10:30:00Z", "2026-10-12T11:30:00Z"), false); // 12:30-13:30
   assert.equal(fits("2026-10-12T07:30:00Z", "2026-10-12T08:30:00Z"), false); // starts 09:30
   assert.equal(fits("2026-10-13T08:00:00Z", "2026-10-13T09:00:00Z"), false); // Tuesday
   // Sunday 29 March 2026 (spring forward): 10:00 Paris = 08:00Z
   assert.equal(fits("2026-03-29T08:00:00Z", "2026-03-29T09:00:00Z"), true);
-  // Friday 16 Oct 23:00–24:00 Paris: ends at the next local midnight
+  // Friday 16 Oct 23:00-24:00 Paris: ends at the next local midnight
   assert.equal(fits("2026-10-16T21:00:00Z", "2026-10-16T22:00:00Z"), true);
   // Friday 23:30 → Saturday 00:30 crosses midnight
   assert.equal(fits("2026-10-16T21:30:00Z", "2026-10-16T22:30:00Z"), false);

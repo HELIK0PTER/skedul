@@ -758,7 +758,7 @@ export const pageView = pgTable(
     entry: boolean("entry").default(false).notNull(),
     device: text("device").notNull(),
     country: text("country"),
-    // HMAC of IP + user agent keyed with the day's random salt (analytics_salt) —
+    // HMAC of IP + user agent keyed with the day's random salt (analytics_salt):
     // the IP is never stored
     visitorHash: text("visitor_hash").notNull(),
   },

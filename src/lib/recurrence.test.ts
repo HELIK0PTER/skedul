@@ -308,6 +308,6 @@ test("describeRecurrence produces the French labels of spec § 8", () => {
   ];
   for (const [over, label] of cases) {
     assert.equal(describeRecurrence(rule(over)), label);
-    assert.ok(!describeRecurrence(rule(over)).includes("—"));
+    assert.ok(!describeRecurrence(rule(over)).includes(String.fromCharCode(0x2014)));
   }
 });

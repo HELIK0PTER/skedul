@@ -122,7 +122,7 @@ dbTest("occurrence_rdv_excl refuses overlapping scheduled RDVs of one pro", asyn
     .where(eq(schema.occurrence.id, first.id));
   await db.insert(schema.occurrence).values(rdv(MON_0900, 30));
 
-  // These hand-made RDVs have no booking: remove them so I1–I6 hold for the pro.
+  // These hand-made RDVs have no booking: remove them so I1 to I6 hold for the pro.
   await db.delete(schema.occurrence).where(eq(schema.occurrence.professionalId, pro.proId));
 });
 

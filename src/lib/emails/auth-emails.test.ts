@@ -79,7 +79,7 @@ test("no auth e-mail contains an em dash", () => {
     { subject: "", html: passwordResetEmail({ name: "Ana", url: "https://x.test" }) },
   ];
   for (const mail of mails) {
-    assert.ok(!mail.subject.includes("—"), mail.subject);
-    assert.ok(!mail.html.includes("—"), mail.subject);
+    assert.ok(!mail.subject.includes(String.fromCharCode(0x2014)), mail.subject);
+    assert.ok(!mail.html.includes(String.fromCharCode(0x2014)), mail.subject);
   }
 });
