@@ -138,8 +138,11 @@ test("a private séance is also shown to the reference whose booking is on it, t
     page,
     /canSeePrivateSeance\(\{ isPageOwner: visitor\.isPageOwner, viewer, customerHasActiveBooking: facts\?\.booking != null \}\)/,
   );
-  assert.match(page, /referrer: "no-referrer"/, "the URL may carry p");
-  assert.match(page, /robots: \{ index: false \}/, "a private, archived or foreign séance is never indexed");
+  assert.match(
+    page,
+    /return seanceMetadata\(await loadSeance\(slug, occurrenceId\), await searchParams\);/,
+    "the URL may carry p, and a private, archived or foreign séance is never indexed: seanceMetadata's rules (page-metadata.test.ts)",
+  );
 });
 
 test("the séance page mounts the payment block for the reference or the Owner's pending purchase, and the holds for an Owner only", () => {
@@ -355,15 +358,17 @@ test("a guest cookie never makes a booking « booked » and never hides the form
   assert.match(derivation, /else if \(a\.reference\?\.booking\)/, "a reference only: no other source");
 });
 
-test("the séance metadata never reads the viewer: a private, archived or RDV séance carries the business name only (SEC-M10)", () => {
+test("the séance metadata never reads the viewer and is seanceMetadata of the séance and the URL's query: a payment return is never indexed (SEC-M10, SEC-6)", () => {
   const text = seance();
   const metadata = bodyOf(text, "generateMetadata");
   assert.doesNotMatch(metadata, /currentPublicVisitor|cookies\(|headers\(/);
-  assert.match(metadata, /detail\.isPrivate/);
-  assert.match(metadata, /detail\.archived/);
-  assert.match(metadata, /referrer: "no-referrer"/);
-  assert.match(metadata, /robots: \{ index: false \}/);
-  assert.match(metadata, /title: `\$\{detail\.title\} · \$\{pro\.businessName\}`/);
+  // The rules (private, archived, RDV, the title, no referrer, the payment return) are page-metadata.test.ts's: the
+  // page hands them its one memoized load and its own searchParams, and returns what they give, nothing else.
+  assert.match(
+    metadata,
+    /^export async function generateMetadata\(\{ params, searchParams \}: Props\): Promise<Metadata> \{\s*const \{ slug, occurrenceId \} = await params;\s*return seanceMetadata\(await loadSeance\(slug, occurrenceId\), await searchParams\);\s*\}\s*$/,
+  );
+  assert.match(text, /^import \{ seanceMetadata \} from "@\/lib\/public\/page-metadata";\r?$/m);
 });
 
 test("no row, user or customer identifier reaches a client prop, and the séance start travels as an ISO string", () => {
@@ -556,7 +561,9 @@ test("every not-found metadata of a public page is notFoundMetadata(): noindex a
   ]) {
     const text = source(path);
     assert.doesNotMatch(text, /title: "Page introuvable"/, `${path}: the 404's title comes from notFoundMetadata`);
-    if (!path.includes("offre")) {
+    // The offer and séance pages return offerMetadata / seanceMetadata, whose unknown branch is notFoundMetadata()
+    // (page-metadata.test.ts); the other two call it themselves.
+    if (!path.includes("offre") && !path.includes("seance")) {
       assert.match(text, /return notFoundMetadata\(\);/, `${path}: its unknown-pro branch`);
       assert.match(text, /^import \{ notFoundMetadata \} from "@\/lib\/public\/page-metadata";\r?$/m, path);
     }
