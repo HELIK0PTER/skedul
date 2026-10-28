@@ -950,7 +950,7 @@ Each pro runs in its own `try`; a throw → `failures.push(\`pro ${id}: ${messag
 - **`src/lib/auth-messages.ts`**: `export const CODE_SENT = "Si l'adresse est valide, un code a été envoyé.";` (L1247); `verifyCodeFailure`: code `"BANNED_USER"` → `oauthErrorMessage("BANNED_USER")` (checked before the `WRONG_CODE` fallback; H2 of the identity map).
 - **`src/components/dashboard/verify-email-banner.tsx`**: its private `SENT` becomes the imported `CODE_SENT`.
 - **`src/lib/emails/mock-log.ts`** exists since P3 `e73b7bf` (FR:SEC-3) and P4 does not change it: `mockMailLog(mail, production)` prints the whole mail in development and, in a production build (preview deployments), the single line `[email:mock] <redactSubject(subject)>` (no recipient, no code, no link); `mockMailRefusal(appEnv, resendEnabled)` makes `src/lib/email.ts` throw at load when `APP_ENV` is `production` without a Resend key. Decision 59 follows it; Task 8 pins that no subject of the four new templates carries a client's name or address, so the redacted production line never holds client data.
-- **`src/components/auth/link-google-form.tsx`**: its failure text already comes from `authFormErrorMessage(result.error)` (P3 `444f102`, LED:405); P4 makes both error `<p>` (the password step and the Google step) always-mounted alert regions, `<p role="alert" className={error ? ERROR_CLASS : "sr-only"}>{error}</p>` (G3a: empty and out of the layout until a failure, never conditionally mounted); their `text-destructive` class stays (rose-700, AA since `d39c8d1`).
+- **`src/components/auth/link-google-form.tsx`**: its failure text already comes from `authFormErrorMessage(result.error)` (P3 `444f102`, LED:405); P4 makes both error `<p>` (the password step and the Google step) always-mounted alert regions, `<p role="alert" className={error ? ERROR_CLASS : "sr-only"}>{error}</p>` (G3a: empty and out of the layout until a failure, never conditionally mounted); their `text-destructive` class stays (rose-700, AA since `d39c8d1`). (P4 final review AUTH-2) The Google link round trip keeps the page to come back to: `/sign-in` and `/sign-up` answer `?error=account_not_linked` with `redirect(linkGoogleHref(rawNext))` (`/link-google?next=<path>`, or bare `/link-google` without a valid next), `/link-google` reads `next` and hands `linkReturnPath(next)` to `LinkGoogleForm` (`next?: string | null`), whose `linkSocial` uses `linkGoogleCallbacks(next)` (callbackURL `/sign-in[?next=]`, errorCallbackURL `/link-google[?next=]`, so a failed link is shown on the link page and can be retried without losing next), and whose « Annuler » / « Continuer sans Google » links go to that callbackURL; `next` is checked by `safeNextPath` and reduced to its path (query and hash dropped, SEC-M7: a `p` never travels into the OAuth state).
 
 ### 3.16 Code sign-in (Task 17)
 
@@ -966,6 +966,12 @@ export function returnPathOf(path: string): string;
 export function googleCallbacks(returnTo: string): { callbackURL: string; newUserCallbackURL: string; errorCallbackURL: string };
 /** AuthForm's Google callbacks (COV-I3): callbackURL /sign-in[?next=]; newUserCallbackURL: sign-up → next ?? "/onboarding" (L1397), sign-in → /sign-in[?next=] (the page re-resolves the entry: /mon-espace for a non-pro), never "/onboarding"; errorCallbackURL /sign-up[?next=] or /sign-in[?next=] by mode. */
 export function authFormGoogleCallbacks(mode: "sign-in" | "sign-up", next: string | null): { callbackURL: string; newUserCallbackURL: string; errorCallbackURL: string };
+/** (P4 final review AUTH-2) The page a Google link round trip comes back to: the path of safeNextPath(next), query and hash dropped (SEC-M7), else null. */
+export function linkReturnPath(next: unknown): string | null;
+/** account_not_linked on /sign-in or /sign-up: /link-google, with ?next=<linkReturnPath(next)> when there is one. */
+export function linkGoogleHref(next: unknown): string;
+/** LinkGoogleForm: callbackURL /sign-in[?next=], errorCallbackURL /link-google[?next=]. */
+export function linkGoogleCallbacks(next: unknown): { callbackURL: string; errorCallbackURL: string };
 /** « J'ai un mot de passe »: /sign-in?next=<returnTo>. */
 export function passwordSignInHref(returnTo: string): string;
 /** The name sent with a first code sign-in (L1249): trimmed, at most BOUNDS.name characters, undefined when empty or not isPlainName. */

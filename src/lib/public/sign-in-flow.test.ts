@@ -10,6 +10,9 @@ import {
   focusTargetOnClose,
   googleCallbacks,
   isCompleteCode,
+  linkGoogleCallbacks,
+  linkGoogleHref,
+  linkReturnPath,
   nameToSend,
   passwordSignInHref,
   returnPathOf,
@@ -117,6 +120,36 @@ test("passwordSignInHref points at /sign-in with the page to come back to, query
   assert.equal(passwordSignInHref("/altinha-paris"), "/sign-in?next=%2Faltinha-paris");
   assert.equal(passwordSignInHref("/altinha-paris/espace?lien=invalide"), "/sign-in?next=%2Faltinha-paris%2Fespace");
   assert.equal(passwordSignInHref("//evil.example"), "/sign-in?next=%2Fmon-espace");
+});
+
+test("linkReturnPath keeps the path of a plain site path, query and hash dropped, and nothing else (AUTH-2, SEC-M7)", () => {
+  assert.equal(linkReturnPath("/altinha-paris/seance/occ_1"), "/altinha-paris/seance/occ_1");
+  assert.equal(linkReturnPath("/altinha-paris/seance/occ_1?p=ref_1&paiement=annule"), "/altinha-paris/seance/occ_1", "a `p` never travels");
+  assert.equal(linkReturnPath("/altinha-paris#boutique"), "/altinha-paris");
+  assert.equal(linkReturnPath("/"), "/");
+  for (const bad of [null, undefined, "", "altinha-paris", "//evil.example", "https://evil.example", "/\\evil", "/.//evil.example", "/x\ny", ["/a"], 42]) {
+    assert.equal(linkReturnPath(bad), null, String(bad));
+  }
+});
+
+test("linkGoogleHref sends an account_not_linked answer to /link-google, with the page to come back to when there is one (AUTH-2)", () => {
+  assert.equal(linkGoogleHref("/altinha-paris/seance/occ_1"), "/link-google?next=%2Faltinha-paris%2Fseance%2Focc_1");
+  assert.equal(linkGoogleHref("/altinha-paris/espace?p=ref_1"), "/link-google?next=%2Faltinha-paris%2Fespace");
+  assert.equal(linkGoogleHref(undefined), "/link-google", "no next: /sign-in routes as usual afterwards");
+  assert.equal(linkGoogleHref("//evil.example"), "/link-google");
+  assert.equal(linkGoogleHref(["/a", "/b"]), "/link-google", "a repeated parameter is no path");
+});
+
+test("linkGoogleCallbacks comes back through /sign-in with the same next, and shows a failure on the link page, which keeps it (AUTH-2)", () => {
+  assert.deepEqual(linkGoogleCallbacks("/altinha-paris/seance/occ_1"), {
+    callbackURL: "/sign-in?next=%2Faltinha-paris%2Fseance%2Focc_1",
+    errorCallbackURL: "/link-google?next=%2Faltinha-paris%2Fseance%2Focc_1",
+  });
+  assert.deepEqual(linkGoogleCallbacks(null), { callbackURL: "/sign-in", errorCallbackURL: "/link-google" });
+  for (const bad of ["//evil.example", "https://evil.example", "/\\evil", ""]) {
+    assert.deepEqual(linkGoogleCallbacks(bad), linkGoogleCallbacks(null), bad);
+  }
+  assert.deepEqual(linkGoogleCallbacks("/mon-espace?p=ref_1#x"), linkGoogleCallbacks("/mon-espace"), "query and hash dropped");
 });
 
 test("nameToSend sends a trimmed plain name of at most 80 characters, else nothing (L1249)", () => {

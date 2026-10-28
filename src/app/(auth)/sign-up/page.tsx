@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { signedInSignUpTarget } from "@/lib/entry";
 import { env } from "@/lib/env";
 import { oauthErrorMessage } from "@/lib/oauth-errors";
+import { linkGoogleHref } from "@/lib/public/sign-in-flow";
 import { safeNextPath } from "@/lib/safe-next";
 import { getCurrentProfessional, getCurrentUser } from "@/lib/session";
 
@@ -22,8 +23,8 @@ export default async function SignUpPage({
   if (await getCurrentUser()) {
     redirect(signedInSignUpTarget({ next, hasProfessional: (await getCurrentProfessional()) !== null }));
   }
-  // Google found an existing email/password account: offer to link it.
-  if (error === "account_not_linked") redirect("/link-google");
+  // Google found an existing email/password account: offer to link it, keeping the page to come back to (AUTH-2).
+  if (error === "account_not_linked") redirect(linkGoogleHref(rawNext));
 
   return (
     <Card>

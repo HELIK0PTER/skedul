@@ -51,6 +51,33 @@ export function authFormGoogleCallbacks(mode: "sign-in" | "sign-up", next: strin
   };
 }
 
+/**
+ * The page a Google link round trip comes back to (P4 final review AUTH-2): the path of safeNextPath(next), its query and
+ * hash dropped like returnPathOf does (SEC-M7: a `p` never travels into the OAuth state), else null, and /sign-in then
+ * routes the entry as usual (a pro to /dashboard, a client to /mon-espace).
+ */
+export function linkReturnPath(next: unknown): string | null {
+  const safe = safeNextPath(next);
+  return safe === null ? null : safe.split(/[?#]/, 1)[0];
+}
+
+/** Where /sign-in and /sign-up send an account_not_linked answer: /link-google, with ?next= when there is a page to come back to. */
+export function linkGoogleHref(next: unknown): string {
+  const to = linkReturnPath(next);
+  return to === null ? "/link-google" : `/link-google?next=${encodeURIComponent(to)}`;
+}
+
+/**
+ * LinkGoogleForm's `linkSocial` callbacks: callbackURL /sign-in[?next=] (signed in by then, /sign-in goes to next or
+ * routes the entry), errorCallbackURL /link-google[?next=] (a failure is shown on the link page, which keeps next and
+ * offers the link again). « Annuler » and « Continuer sans Google » use the callbackURL as well.
+ */
+export function linkGoogleCallbacks(next: unknown): { callbackURL: string; errorCallbackURL: string } {
+  const to = linkReturnPath(next);
+  const query = to === null ? "" : `?next=${encodeURIComponent(to)}`;
+  return { callbackURL: `/sign-in${query}`, errorCallbackURL: `/link-google${query}` };
+}
+
 /** « J'ai un mot de passe »: /sign-in?next=<returnTo>. */
 export function passwordSignInHref(returnTo: string): string {
   return `/sign-in?next=${encodeURIComponent(returnPathOf(returnTo))}`;

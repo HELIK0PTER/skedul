@@ -9,6 +9,7 @@ import { INLINE_LINK_CLASS } from "@/components/ui/link-class";
 import { env } from "@/lib/env";
 import { oauthErrorMessage } from "@/lib/oauth-errors";
 import { COPY } from "@/lib/public/messages";
+import { linkGoogleHref } from "@/lib/public/sign-in-flow";
 import { safeNextPath } from "@/lib/safe-next";
 import { getCurrentUser } from "@/lib/session";
 import { resolvePostSignIn } from "@/server/entry";
@@ -21,8 +22,8 @@ export default async function SignInPage({
   searchParams: Promise<{ error?: string | string[]; next?: string | string[] }>;
 }) {
   const { error, next: rawNext } = await searchParams;
-  // Google found an existing email/password account: offer to link it.
-  if (error === "account_not_linked") redirect("/link-google");
+  // Google found an existing email/password account: offer to link it, keeping the page to come back to (AUTH-2).
+  if (error === "account_not_linked") redirect(linkGoogleHref(rawNext));
   const next = safeNextPath(rawNext);
 
   // Already signed in: go back where the user was headed, else the usual

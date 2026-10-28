@@ -26,6 +26,25 @@ test("both error lines of the Google link form are always-mounted alert regions 
   assert.match(form, /authFormErrorMessage\(result\.error\)/);
 });
 
+test("the Google link round trip keeps the page to come back to: /sign-in and /sign-up forward next, the link page and its form hand it back (AUTH-2)", () => {
+  for (const page of ["src/app/(auth)/sign-in/page.tsx", "src/app/(auth)/sign-up/page.tsx"]) {
+    const text = source(page);
+    assert.match(text, /import \{ linkGoogleHref \} from "@\/lib\/public\/sign-in-flow";/, page);
+    assert.match(text, /if \(error === "account_not_linked"\) redirect\(linkGoogleHref\(rawNext\)\);/, `${page}: the raw parameter goes through safeNextPath inside the helper`);
+    assert.doesNotMatch(text, /redirect\("\/link-google"\)/, `${page}: no bare /link-google left`);
+  }
+  const linkPage = source("src/app/(auth)/link-google/page.tsx");
+  assert.match(linkPage, /searchParams: Promise<\{ error\?: string \| string\[\]; next\?: string \| string\[\] \}>;/);
+  assert.match(linkPage, /next=\{linkReturnPath\(next\)\}/, "the form gets a checked path, never the raw parameter");
+  const form = source("src/components/auth/link-google-form.tsx");
+  assert.match(form, /next\?: string \| null;/);
+  assert.match(form, /const \{ callbackURL, errorCallbackURL \} = linkGoogleCallbacks\(next\);/);
+  assert.match(form, /authClient\.linkSocial\(\{\s*provider: "google",\s*callbackURL,\s*errorCallbackURL,\s*\}\)/);
+  assert.doesNotMatch(form, /callbackURL: "/, "no literal callback left");
+  assert.doesNotMatch(form, /href="\/sign-in"/, "« Annuler » and « Continuer sans Google » keep next as well");
+  assert.equal((form.match(/href=\{callbackURL\}/g) ?? []).length, 2);
+});
+
 test("the confirmation banner takes the neutral sentence from auth-messages, one source (CODE_SENT)", () => {
   const banner = source("src/components/dashboard/verify-email-banner.tsx");
   assert.match(banner, /import \{[^}]*\bCODE_SENT\b[^}]*\} from "@\/lib\/auth-messages";/);

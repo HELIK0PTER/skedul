@@ -7,6 +7,7 @@ import { Loader2 } from "lucide-react";
 import { authClient, signIn } from "@/lib/auth-client";
 import { authFormErrorMessage, GENERIC_ERROR } from "@/lib/auth-messages";
 import { oauthErrorMessage } from "@/lib/oauth-errors";
+import { linkGoogleCallbacks } from "@/lib/public/sign-in-flow";
 import { GoogleLogo } from "@/components/auth/google-logo";
 import { useGoogleRedirect } from "@/components/auth/use-google-redirect";
 import { Button } from "@/components/ui/button";
@@ -21,25 +22,30 @@ const ERROR_CLASS = "rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destruc
  * Links Google to an existing email/password account. Better Auth refuses to
  * link it implicitly (the local email was never verified), so the user proves
  * they own the Skedul account with its password, then confirms on Google.
+ * Every way out keeps `next`, the page the sign-in started from (AUTH-2).
  */
 export function LinkGoogleForm({
   signedInEmail,
+  next = null,
   initialError = null,
 }: {
   /** Set when a session already exists (e.g. back here after a failed link). */
   signedInEmail: string | null;
+  /** The page to come back to, already checked by the page (linkReturnPath), else null. */
+  next?: string | null;
   initialError?: string | null;
 }) {
   const [error, setError] = useState<string | null>(initialError);
   const { loading, setLoading, redirect } = useGoogleRedirect(setError, LINK_FAILED);
+  const { callbackURL, errorCallbackURL } = linkGoogleCallbacks(next);
 
-  /** Sends the signed-in user to Google; on return /sign-in routes them. */
+  /** Sends the signed-in user to Google; on return /sign-in goes to `next` or routes them. */
   function linkGoogle() {
     return redirect(() =>
       authClient.linkSocial({
         provider: "google",
-        callbackURL: "/sign-in",
-        errorCallbackURL: "/link-google",
+        callbackURL,
+        errorCallbackURL,
       }),
     );
   }
@@ -91,7 +97,7 @@ export function LinkGoogleForm({
           Relier mon compte Google
         </Button>
         <p className="text-center text-sm">
-          <Link href="/sign-in" className="font-medium text-accent-foreground hover:underline">
+          <Link href={callbackURL} className="font-medium text-accent-foreground hover:underline">
             Continuer sans Google
           </Link>
         </p>
@@ -144,7 +150,7 @@ export function LinkGoogleForm({
         Google vous demandera de confirmer une dernière fois.
       </p>
       <p className="text-center text-sm">
-        <Link href="/sign-in" className="font-medium text-accent-foreground hover:underline">
+        <Link href={callbackURL} className="font-medium text-accent-foreground hover:underline">
           Annuler
         </Link>
       </p>
