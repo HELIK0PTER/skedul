@@ -53,6 +53,19 @@ test("the confirmation banner takes the neutral sentence from auth-messages, one
   assert.equal((banner.match(/\{CODE_SENT\}/g) ?? []).length, 2, "the banner line and the dialog line");
 });
 
+test("the confirmation banner says it is busy: pending labels on both send buttons and on « Confirmer », the dialog's failure line always mounted (AUTH-3)", () => {
+  const banner = source("src/components/dashboard/verify-email-banner.tsx");
+  assert.match(banner, /import \{ COPY \} from "@\/lib\/public\/messages";/, "the one source of the pending labels");
+  assert.match(banner, /\{sending \? COPY\.PENDING_SEND : sent \? "Saisir le code" : "Recevoir un code"\}/, "the banner button");
+  assert.match(banner, /\{sending \? COPY\.PENDING_SEND : "Renvoyer le code"\}/, "the dialog's resend");
+  assert.match(banner, /\{verifying \? COPY\.PENDING_VERIFY : "Confirmer"\}/, "the dialog's submit");
+  // A live region inserted together with its text is not reliably announced: the dialog's region exists from its first render.
+  assert.match(banner, /<FormError alwaysMounted message=\{dialogError\} ref=\{dialogErrorBox\} tabIndex=\{-1\} \/>/);
+  const spinners = banner.match(/<Loader2\b[^>]*>/g) ?? [];
+  assert.equal(spinners.length, 3);
+  for (const spinner of spinners) assert.match(spinner, /aria-hidden/, spinner);
+});
+
 test("the reset link is logged only by a dev build without Resend, never by a production build (no token in logs)", () => {
   const auth = source("src/lib/auth.ts");
   assert.match(auth, /logResetLink: !env\.RESEND_ENABLED && process\.env\.NODE_ENV !== "production",/);

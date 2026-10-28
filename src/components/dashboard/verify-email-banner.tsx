@@ -11,6 +11,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { authClient } from "@/lib/auth-client";
 import { CODE_SENT, SEND_FAILED, sendCodeFailure, VERIFY_FAILED, verifyCodeFailure } from "@/lib/auth-messages";
+import { COPY } from "@/lib/public/messages";
 
 const CODE_FORMAT = "Saisissez les 6 chiffres du code.";
 const CONFIRMED = "Adresse confirmée.";
@@ -25,7 +26,8 @@ const CONFIRMED = "Adresse confirmée.";
  *
  * After a send, whatever the outcome except 429 and a server failure, the answer is the same sentence: the endpoint
  * never says whether the address exists. The success lines live in regions that stay mounted, so a screen reader
- * announces the text when it appears.
+ * announces the text when it appears; so does the dialog's failure line (`FormError alwaysMounted`). While a call runs
+ * its button says so (« Envoi… », « Vérification… », the client pages' COPY labels: the banner is shown to clients too).
  */
 export function VerifyEmailBanner({ email, verified }: { email: string; verified: boolean }) {
   const router = useRouter();
@@ -197,7 +199,7 @@ export function VerifyEmailBanner({ email, verified }: { email: string; verified
               disabled={sending}
             >
               {sending && <Loader2 className="animate-spin" aria-hidden />}
-              {sent ? "Saisir le code" : "Recevoir un code"}
+              {sending ? COPY.PENDING_SEND : sent ? "Saisir le code" : "Recevoir un code"}
             </Button>
           </div>
 
@@ -239,15 +241,15 @@ export function VerifyEmailBanner({ email, verified }: { email: string; verified
                   className="text-center text-lg tracking-[0.4em]"
                 />
               </FormField>
-              <FormError message={dialogError} ref={dialogErrorBox} tabIndex={-1} />
+              <FormError alwaysMounted message={dialogError} ref={dialogErrorBox} tabIndex={-1} />
               <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                 <Button type="button" variant="ghost" onClick={sendCode} disabled={sending || verifying}>
                   {sending && <Loader2 className="animate-spin" aria-hidden />}
-                  Renvoyer le code
+                  {sending ? COPY.PENDING_SEND : "Renvoyer le code"}
                 </Button>
                 <Button type="submit" disabled={verifying || sending}>
                   {verifying && <Loader2 className="animate-spin" aria-hidden />}
-                  Confirmer
+                  {verifying ? COPY.PENDING_VERIFY : "Confirmer"}
                 </Button>
               </div>
             </form>
