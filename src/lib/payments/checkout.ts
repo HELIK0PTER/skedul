@@ -42,7 +42,7 @@ export interface CheckoutGateway {
   create(req: CheckoutRequest): Promise<CheckoutCreated>;
   /** « Libérer ma place » (L1166-1167): retrieve, expire when open. Never throws ("failed"). */
   closeForRelease(sessionId: string): Promise<CheckoutCloseOutcome>;
-  /** Best effort expiry of a session the engine refused to attach. Never throws. */
+  /** Best effort expiry of a session whose URL never left the server (a refused attach, a throw after the create), run after the purchase is released; bounded (10 s, one retry). Never throws. */
   expire(sessionId: string): Promise<void>;
 }
 

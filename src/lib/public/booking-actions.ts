@@ -140,11 +140,14 @@ async function seanceTitleOf(db: Db, professionalId: string, occurrenceId: strin
 
 /**
  * Best effort once a purchase exists (a pending purchase, and its held seat for a buy + book) and a later step THREW:
- * close the Checkout session when Stripe has one, then release the purchase, each in its own try so one failure never
+ * release the purchase, then close the Checkout session when Stripe has one, each in its own try so one failure never
  * hides the other. It never throws: the caller rethrows the ORIGINAL error, which runPublicActionWith answers as
  * PUBLIC_UNEXPECTED. Without this the seat stays held until the hold lapses, and the same typed address then gets
- * COPY.BUYBOOK_NOT_POSSIBLE. The sync effect a release returns is dropped (nothing can run it after a throw): the
- * next calendar sync heals it. Logs carry no address and no session id (logSafeMessage).
+ * COPY.BUYBOOK_NOT_POSSIBLE. The release comes FIRST (P4 final review PAY-1): the session's URL never reached the
+ * browser (a throw answers no URL), so nobody can pay it, and a hung Stripe or a function killed at its duration limit
+ * must not keep the seat; a payment that still lands on the session is fulfilled from `expired` as a late payment
+ * (fulfillPurchase, E10). The sync effect a release returns is dropped (nothing can run it after a throw): the next
+ * calendar sync heals it. Logs carry no address and no session id (logSafeMessage).
  */
 async function abandonPurchase(
   db: Db,
@@ -153,6 +156,11 @@ async function abandonPurchase(
   sessionId: string | null,
   now: Date,
 ): Promise<void> {
+  try {
+    await releasePurchase(db, purchaseId, now);
+  } catch (err) {
+    console.error("[public] purchase release failed: " + logSafeMessage(err));
+  }
   if (sessionId !== null) {
     try {
       await deps.checkout.expire(sessionId);
@@ -160,20 +168,16 @@ async function abandonPurchase(
       console.error("[public] checkout expire failed: " + logSafeMessage(err));
     }
   }
-  try {
-    await releasePurchase(db, purchaseId, now);
-  } catch (err) {
-    console.error("[public] purchase release failed: " + logSafeMessage(err));
-  }
 }
 
 /**
  * Steps 10 and 11 of E1 and E9: the Checkout session, then its attachment to the purchase. A throw from the
  * gateway releases the purchase at once (COPY.CHECKOUT_FAILED, L814); a refused attachment (the purchase is no
- * longer pending) expires the session, releases the purchase and answers « stale ». The seat of a buy + book
+ * longer pending) releases the purchase, then expires the session, and answers « stale ». The seat of a buy + book
  * comes back in both cases and its sync effect is returned with the failure. Logs carry no address or session id.
- * Anything else that THROWS here (the attach UPDATE, a release) closes the session that exists and releases the
- * purchase best effort (abandonPurchase), then rethrows.
+ * Anything else that THROWS here (the attach UPDATE, a release) releases the purchase and closes the session that
+ * exists, best effort (abandonPurchase), then rethrows. The URL leaves this function only in its success answer, so
+ * every path that expires a session here released the purchase first (P4 final review PAY-1, see abandonPurchase).
  */
 export async function createCheckoutAndAttach(
   db: Db,
@@ -201,13 +205,15 @@ export async function createCheckoutAndAttach(
       now,
     );
     if (!attached.ok) {
+      // The URL was never handed out: free the seat first, then close the session (a throwing release leaves the
+      // session open for abandonPurchase to close).
+      const rel = await releasePurchase(db, request.purchaseId, now);
       openSessionId = null;
       try {
         await deps.checkout.expire(created.sessionId);
       } catch (err) {
         console.error("[public] checkout expire failed: " + logSafeMessage(err));
       }
-      const rel = await releasePurchase(db, request.purchaseId, now);
       return fromEngineClient(fail("stale"), context, { businessName }, rel.ok ? rel.effects : []);
     }
     return publicOk({ purchaseId: request.purchaseId, checkoutUrl: created.url });

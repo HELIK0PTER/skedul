@@ -542,6 +542,81 @@ dbTest("the clean-up after a throw is best effort: a failing expire never keeps 
   assert.deepEqual(lines, ["[public] checkout expire failed: stripe down for [email]"]);
 });
 
+/**
+ * Runs `start` with the fake's expire stalled until the seat has been read: the platform can kill a function at its
+ * duration limit while Stripe hangs, so what counts is the seat WHILE the expire is pending (P4 final review PAY-1).
+ * Fails fast when the core ends without asking for the expire. Returns that seat and how the core ended once let go.
+ */
+async function seatWhileExpireStalls<T>(
+  h: DbHarness,
+  s: Setup,
+  fake: FakeCheckout,
+  start: () => Promise<T>,
+): Promise<{ seat: { status: string; seatsTaken: number }; outcome: { ok: true; value: T } | { ok: false; error: unknown } }> {
+  let markCalled: () => void = () => {};
+  const called = new Promise<"expire">((resolve) => {
+    markCalled = () => resolve("expire");
+  });
+  let unstall: () => void = () => {};
+  const stalled = new Promise<void>((resolve) => {
+    unstall = resolve;
+  });
+  fake.expire = async (sessionId) => {
+    fake.expired.push(sessionId);
+    markCalled();
+    await stalled;
+  };
+  const outcome = start().then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+  let seat: { status: string; seatsTaken: number };
+  try {
+    const first = await Promise.race([called, outcome.then(() => "done" as const)]);
+    assert.equal(first, "expire", "the core asks Stripe to expire the session it holds");
+    const [held] = await bookingsOf(h, s.occ.id);
+    seat = { status: held.status, seatsTaken: (await getOccurrence(h.db, s.occ.id)).seatsTaken };
+  } finally {
+    unstall();
+  }
+  return { seat, outcome: await outcome };
+}
+
+dbTest("a refused attachment frees the seat BEFORE it asks Stripe to expire the session: a stalled expire never keeps it (PAY-1)", async (h) => {
+  const s = await setup(h);
+  const fake = fakeCheckout("test");
+  fake.onCreate = async (req) => {
+    await h.db.update(ticketPurchase).set({ status: "expired" }).where(eq(ticketPurchase.id, req.purchaseId));
+  };
+
+  const { seat, outcome } = await seatWhileExpireStalls(h, s, fake, () => run(h, buyInput(s), { fake }));
+  assert.deepEqual(seat, { status: "expired", seatsTaken: 0 }, "the seat is back while Stripe still hangs");
+
+  assert.ok(outcome.ok);
+  assert.ok(!outcome.value.res.ok);
+  assert.equal(outcome.value.res.code, "stale");
+  assert.deepEqual(fake.expired, [`cs_test_fake_${fake.created[0].purchaseId}`], "the session is still closed, once");
+});
+
+dbTest("a throw after the session was created frees the seat BEFORE it asks Stripe to expire the session: a stalled expire never keeps it (PAY-1)", async (h) => {
+  const s = await setup(h);
+  const fake = fakeCheckout("test");
+  attachWillThrow(h, s, fake);
+  const email = testEmail("stall");
+
+  const { seat, outcome } = await seatWhileExpireStalls(h, s, fake, () =>
+    run(h, buyInput(s, { identity: { name: "Beatriz Almeida", email } }), { fake }),
+  );
+  assert.deepEqual(seat, { status: "expired", seatsTaken: 0 }, "the seat is back while Stripe still hangs");
+
+  assert.ok(!outcome.ok, "the original failure is rethrown");
+  assert.match(String(outcome.error), ATTACH_FAILURE);
+  const purchaseId = fake.created[0].purchaseId;
+  assert.deepEqual(fake.expired, [`cs_test_fake_${purchaseId}`], "the open session is still closed, once");
+  const mine = (await purchasesOf(h)).find((p) => p.id === purchaseId);
+  assert.equal(mine?.status, "expired");
+});
+
 dbTest("a filled honeypot is refused before any customer or throttle row is written (S20)", async (h) => {
   const s = await setup(h);
   const email = testEmail("bot");

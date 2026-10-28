@@ -6,6 +6,7 @@ import Stripe from "stripe";
 
 import { stripeMode } from "@/lib/admin-metrics";
 import { CHECKOUT_MINUTES } from "@/lib/tickets-vocab";
+import { bodyOf, codeView } from "@/test/source-guards";
 
 import {
   CREATE_OPTIONS,
@@ -269,4 +270,53 @@ test("the real gateway creates the session with createRequestOptions(req.purchas
   const source = readFileSync("src/lib/stripe.ts", "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   assert.match(source, /sessions\.create\(stripeSessionParams\(req\), createRequestOptions\(req\.purchaseId\)\)/);
   assert.equal(source.match(/sessions\.create\(/g)?.length, 1, "one create call, with options");
+});
+
+/** The top-level arguments, trimmed, of every call `callee` (a global regex ending in its open paren) finds in `code`, a codeView (comments and string text blanked). */
+function callArgsOf(code: string, callee: RegExp): string[][] {
+  return [...code.matchAll(callee)].map((m) => {
+    const args: string[] = [];
+    let depth = 0;
+    let arg = "";
+    for (let i = (m.index ?? 0) + m[0].length; i < code.length; i++) {
+      const c = code[i];
+      if (c === ")" && depth === 0) break;
+      if (c === "(" || c === "{" || c === "[") depth++;
+      if (c === ")" || c === "}" || c === "]") depth--;
+      if (c === "," && depth === 0) {
+        args.push(arg.trim());
+        arg = "";
+      } else {
+        arg += c;
+      }
+    }
+    args.push(arg.trim());
+    return args;
+  });
+}
+
+test("every Stripe call of the real gateway passes bounded per-request options, never the client defaults (80 s, 2 retries): each method runs inside a visitor's Server Action (P4 final review PAY-1)", () => {
+  const code = codeView(readFileSync("src/lib/stripe.ts", "utf8"));
+  // The release bound: one 10 s try and one retry, a visitor is waiting.
+  assert.match(code, /const RELEASE_OPTIONS = \{ timeout: 10_000, maxNetworkRetries: 1 \} as const;/);
+
+  const start = code.indexOf("function stripeGateway(");
+  const end = code.indexOf("const mockGateway");
+  assert.ok(start !== -1 && end > start, "the gateway factory precedes the mock gateway");
+  const gateway = code.slice(start, end);
+  const sdkCalls = callArgsOf(gateway, /\bclient\.[\w.]+\(/g);
+  const helperCalls = callArgsOf(gateway, /\bexpireCheckoutSession\(/g);
+  assert.equal(sdkCalls.length, 3, "create, then the retrieve and the expire of closeForRelease");
+  assert.equal(helperCalls.length, 1, "the gateway's expire");
+  assert.equal(callArgsOf(gateway, /\bstripe\.[\w.]+\(/g).length, 0, "the gateway calls Stripe through its own client only");
+  const bounded = ["RELEASE_OPTIONS", "createRequestOptions(req.purchaseId)"];
+  for (const args of [...sdkCalls, ...helperCalls]) {
+    const options = args[args.length - 1];
+    assert.ok(bounded.includes(options), `a gateway call ends with ${JSON.stringify(options)}, not bounded options`);
+  }
+
+  // expireCheckoutSession hands the options it is given to both of its Stripe calls.
+  const helperSdk = callArgsOf(bodyOf(code, "expireCheckoutSession"), /\bstripe\.[\w.]+\(/g);
+  assert.equal(helperSdk.length, 2, "retrieve, then expire");
+  for (const args of helperSdk) assert.equal(args[args.length - 1], "options");
 });

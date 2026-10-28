@@ -41,7 +41,12 @@ export function mockCheckoutEnabled(): boolean {
   });
 }
 
-/** Stripe request options of « Libérer ma place »: a visitor is waiting, so one short try and one retry. */
+/**
+ * Stripe request options of every gateway call but the create (which has its own, createRequestOptions): « Libérer ma
+ * place » and the best-effort expire of a session that was never handed out. A visitor is waiting inside the Server
+ * Action, so one short try and one retry, never the client defaults (80 s, 2 retries; P4 final review PAY-1).
+ * checkout.test.ts pins that every Stripe call of the gateway passes bounded options.
+ */
 const RELEASE_OPTIONS = { timeout: 10_000, maxNetworkRetries: 1 } as const;
 
 function stripeGateway(client: Stripe, mode: PaymentMode): CheckoutGateway {
@@ -66,7 +71,7 @@ function stripeGateway(client: Stripe, mode: PaymentMode): CheckoutGateway {
       }
     },
     async expire(sessionId) {
-      await expireCheckoutSession(sessionId);
+      await expireCheckoutSession(sessionId, RELEASE_OPTIONS);
     },
   };
 }
@@ -103,8 +108,10 @@ export const checkoutGateway: CheckoutGateway = stripe ? stripeGateway(stripe, p
  *
  * `options` are Stripe per-request options applied to both calls. Without them
  * the client defaults apply (80 s timeout, 2 retries), which suits a background
- * effect; the account deletion passes a short timeout and no retry so that a
- * hung Stripe cannot hold it (DELETION_STRIPE_OPTIONS, src/lib/admin-deletion.ts).
+ * effect only; the account deletion passes a short timeout and no retry so that a
+ * hung Stripe cannot hold it (DELETION_STRIPE_OPTIONS, src/lib/admin-deletion.ts),
+ * and the gateway's `expire`, which runs inside a visitor's Server Action, passes
+ * RELEASE_OPTIONS (P4 final review PAY-1).
  */
 export async function expireCheckoutSession(
   checkoutSessionId: string,
