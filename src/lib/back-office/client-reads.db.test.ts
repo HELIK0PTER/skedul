@@ -148,7 +148,8 @@ dbTest("listClients: filters, counts, holdings and the red / orange alerts", asy
   );
   await giveTickets(db, pro, carla, typeArchived, 1);
   await giveTickets(db, pro, denis, typeOrphan, 1);
-  await giveTickets(db, pro, emma, typeFree, 1);
+  // offerTickets refuses a free type (FR:F9, P5 T5): a ticket handed back as available on it (E6a) is written raw
+  await rowTicket(db, pro, { customerId: emma, ticketTypeId: typeFree });
   await giveTickets(db, pro, felix, typeOk, 1, { now: addDaysMs(now, -30), expiresAt: addDaysMs(now, -1) });
   must(await setTicketTypeArchived(db, { professionalId: pro.proId, ticketTypeId: typeArchived, archived: true }));
 

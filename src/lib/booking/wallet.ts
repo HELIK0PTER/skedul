@@ -12,6 +12,7 @@ import { booking, customer, event, eventTicketType, occurrence, ticket, ticketTy
 import { BOUNDS, TICKET_CLOSE_REASONS, customerInputSchema, normalizeEmail, type MovementKind, type TicketCloseReason, type TicketStatus } from "@/lib/tickets";
 import { consumptionOrder, type TypeFacts } from "@/lib/wallet-rules";
 
+import { typeNotFree } from "./catalog";
 import { assertNotBooked } from "./claims";
 import { fail, failOf, syncEffects, type Effect, type EngineResult } from "./types";
 
@@ -128,7 +129,8 @@ export async function revokeLinks(
  * « Offrir N » (E8): N tickets (JS ids, purchase_id NULL, available, optional
  * expiry) for a customer of the pro, of an active type of the pro, and their
  * `offer` movements, in ONE statement; then G(N movements for this action,
- * 'stale'). Effects: email.tickets_offered when `notify`.
+ * 'stale') and G(the type is not « Gratuit », 'stale': typeNotFree, FR:F9).
+ * Effects: email.tickets_offered when `notify`.
  * `expiresAt` is the first instant the tickets stop being valid: for a last
  * valid day chosen by the pro, build it with expiryFromLastDay(lastDay, tz)
  * (src/lib/ticket-expiry.ts), never from a browser date.
@@ -147,6 +149,7 @@ export async function offerTickets(
     notify: boolean;
   },
   now: Date = new Date(),
+  opts: { afterPlan?: () => Promise<void> } = {},
 ): Promise<EngineResult<{ ticketIds: string[] }>> {
   const n = input.quantity;
   if (!Number.isInteger(n) || n < 1 || n > BOUNDS.walletQuantity) return fail("invalid");
@@ -185,8 +188,9 @@ export async function offerTickets(
           ticket_type_id, 'pro'::actor, ${input.actorUserId}, ${reason}, ${ts(now)}
         from t`),
       G(db, sql`(select count(*)::int from ticket_movement where action_id = ${aid}) = ${n}::int`, "stale"),
+      G(db, typeNotFree(p, input.ticketTypeId), "stale"),
     ];
-  });
+  }, { afterPlan: opts.afterPlan });
   if (!res.ok) return failOf(res);
   const effects: Effect[] = input.notify
     ? [{ type: "email.tickets_offered", customerId: input.customerId, actionId: res.aid, quantity: n }]
@@ -365,7 +369,9 @@ function e8Movement(
 
 /**
  * Convertir A → B (keeps purchase_id and expires_at): available tickets valid
- * at now, `convert` movements with from_ticket_type_id; G(N); G(B active).
+ * at now, `convert` movements with from_ticket_type_id; G(N); G(B active);
+ * G(B not « Gratuit », 'stale': typeNotFree, FR:F9; the re-plan on stale then
+ * fails the same way).
  */
 export async function convertTickets(
   db: Db,
@@ -422,6 +428,7 @@ export async function convertTickets(
         sql`exists (select 1 from ticket_type where id = ${input.toTicketTypeId} and professional_id = ${input.professionalId} and archived_at is null)`,
         "stale",
       ),
+      G(db, typeNotFree(input.professionalId, input.toTicketTypeId), "stale"),
     ],
   });
 }
@@ -582,7 +589,8 @@ export type MoveConversion = { ticketId: string; fromTicketTypeId: string; toTic
  * ticket is first converted to that active type of the pro, in the same batch
  * after the booking moved and before the eligibility guard: booked → booked
  * `convert` movement with from_ticket_type_id, purchase_id and expires_at kept;
- * G(type still active, 'stale'), G(one movement for this action, 'stale').
+ * G(type still active, 'stale'), G(type not « Gratuit », 'stale': typeNotFree,
+ * FR:F9), G(one movement for this action, 'stale').
  * Plan errors: not_found (unknown or archived type), invalid (its current type).
  * `opts.afterPlan` is test-only: it runs between the plan and its batch.
  */
@@ -677,6 +685,7 @@ export async function moveAttendee(
               and professional_id = ${input.professionalId} and archived_at is null)`,
             "stale",
           ),
+          G(db, typeNotFree(input.professionalId, conversion.toTicketTypeId), "stale"),
           db.execute(sql`
             with u as (
               update ticket set ticket_type_id = ${conversion.toTicketTypeId}, updated_at = ${ts(now)}

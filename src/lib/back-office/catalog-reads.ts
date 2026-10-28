@@ -11,9 +11,10 @@
 import { and, asc, eq, gt, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 
 import { loadQuestions, type QuestionRow } from "@/lib/booking/answers";
+import { freeBlockerCounts } from "@/lib/booking/catalog";
 import { loadTypeFacts } from "@/lib/booking/wallet";
 import type { BookingWindow } from "@/lib/booking-window";
-import { ts, type Db } from "@/lib/db/atomic";
+import type { Db } from "@/lib/db/atomic";
 import { availabilityRule, professional, ticket, ticketOffer, ticketPurchase, ticketType } from "@/lib/db/schema";
 import type { AvailabilityRuleInput, WindowOverrides } from "@/lib/tickets";
 import { offerLabel, validityLabel, type ValidityUnit } from "@/lib/tickets-vocab";
@@ -243,19 +244,10 @@ export type FreeBlockers = {
  * Raw SQL, outer columns written literally (no single-table select, no unqualified interpolated column).
  */
 export async function readFreeBlockers(db: Db, professionalId: string, ticketTypeId: string, now: Date): Promise<FreeBlockers> {
+  // the engine's definition (freeBlockerCounts): the switch's own guard in updateTicketType counts the same facts
+  const c = freeBlockerCounts(professionalId, ticketTypeId, now);
   const res = await db.execute<{ offers: number; purchases: number; usable: number; booked: number }>(sql`select
-    (select count(*)::int from ticket_offer where ticket_type_id = ${ticketTypeId} and professional_id = ${professionalId}
-      and is_active and archived_at is null) as offers,
-    (select count(*)::int from ticket_purchase where ticket_type_id = ${ticketTypeId} and professional_id = ${professionalId}
-      and status = 'pending' and (checkout_expires_at > ${ts(now)} or processing_at is not null)) as purchases,
-    (select count(*)::int from ticket where ticket_type_id = ${ticketTypeId} and professional_id = ${professionalId}
-      and status = 'available' and (expires_at is null or expires_at > ${ts(now)})) as usable,
-    (select count(*)::int from ticket t
-      join booking b on b.id = t.booking_id and b.professional_id = ${professionalId}
-      join occurrence o on o.id = b.occurrence_id and o.professional_id = ${professionalId}
-      where t.ticket_type_id = ${ticketTypeId} and t.professional_id = ${professionalId} and t.status = 'booked'
-        and (b.status = 'confirmed' or (b.status = 'pending' and b.hold_expires_at > ${ts(now)}))
-        and o.status = 'scheduled' and o.starts_at > ${ts(now)}) as booked`);
+    ${c.offers} as offers, ${c.purchases} as purchases, ${c.usable} as usable, ${c.booked} as booked`);
   const row = res.rows[0];
   return {
     offersOnSale: Number(row?.offers ?? 0),

@@ -21,6 +21,7 @@ import {
   updateOffer,
   updateTicketType,
 } from "@/lib/booking/catalog";
+import type { EngineFail } from "@/lib/booking/types";
 import { effectiveWindow } from "@/lib/booking-window";
 import type { Db } from "@/lib/db/atomic";
 import { ticketOffer, ticketType } from "@/lib/db/schema";
@@ -51,6 +52,18 @@ export const RDV_FREE_NO_OFFER = "Un rendez-vous gratuit ne se vend pas : retire
 export const RDV_FREE_OFFER_STAYS_OFF = "Un rendez-vous gratuit ne se vend pas : cette offre doit rester hors vente.";
 export const RDV_FREE_HAS_SALES =
   "Ce type a des offres en vente, un paiement en cours, des tickets valides ou des réservations à venir : il ne peut pas devenir gratuit.";
+
+/** Test-only: passed to the engine, it runs between the engine's plan and its batch (after this core's own checks). */
+type RaceOpts = { afterPlan?: () => Promise<void> };
+
+/**
+ * An engine failure in French. On these paths the engine's `stale` is only its FR:F9 guard: the type turned
+ * « Gratuit » (or the switch met a sale) after this core's own check, in another tab of the pro. It reads as the
+ * free-type sentence of the action (`onStale`), the code kept.
+ */
+function catalogFail(res: EngineFail, onStale: string): ActionFail {
+  return res.code === "stale" ? actionFail(onStale, "stale") : fromEngine(res, "catalog");
+}
 
 /** Hours of one type: at most 24 ranges a day. */
 const MAX_HOURS_RULES = 7 * 24;
@@ -179,13 +192,14 @@ export async function createTicketTypeCore(
  * booked on an occurrence to come exists (RDV_FREE_HAS_SALES; tickets booked on over séances do not count, see
  * readFreeBlockers), refuses an effective notice longer than
  * the horizon (NOTICE_TOO_LONG) when the patch carries rdvEnabled or rdvOverrides,
- * then updateTicketType.
+ * then updateTicketType (whose batch re-checks the switch: its stale is RDV_FREE_HAS_SALES).
  */
 export async function updateTicketTypeCore(
   db: Db,
   ctx: ProCtx,
   input: { ticketTypeId: string; patch: TicketTypePatch },
   now: Date,
+  opts: RaceOpts = {},
 ): Promise<CoreResult> {
   const head = parseFr(updateTypeSchema, input);
   if (!head.ok) return actionFail(head.error);
@@ -209,8 +223,8 @@ export async function updateTicketTypeCore(
   const refusal = touchesWindow ? await noticeRefusal(db, ctx, parsed.data) : null;
   if (refusal) return refusal;
 
-  const res = await updateTicketType(db, { professionalId: ctx.professionalId, ticketTypeId: row.id, type: parsed.data }, now);
-  return res.ok ? res : fromEngine(res, "catalog");
+  const res = await updateTicketType(db, { professionalId: ctx.professionalId, ticketTypeId: row.id, type: parsed.data }, now, opts);
+  return res.ok ? res : catalogFail(res, RDV_FREE_HAS_SALES);
 }
 
 export async function setTicketTypeArchivedCore(
@@ -256,12 +270,13 @@ function parseOffer(input: unknown, currency: string) {
   return underMinimum === null ? parsed : { ok: false as const, error: underMinimum };
 }
 
-/** parseOffer (the schema, then the Stripe minimum of ctx.currency); the type must be the pro's, not archived, not rdv_free (RDV_FREE_NO_OFFER); createOffer. */
+/** parseOffer (the schema, then the Stripe minimum of ctx.currency); the type must be the pro's, not archived, not rdv_free (RDV_FREE_NO_OFFER, also the engine's stale); createOffer. */
 export async function createOfferCore(
   db: Db,
   ctx: ProCtx,
   input: OfferInput,
   now: Date,
+  opts: RaceOpts = {},
 ): Promise<CoreResult<{ offerId: string }>> {
   const parsed = parseOffer(input, ctx.currency);
   if (!parsed.ok) return actionFail(parsed.error);
@@ -277,16 +292,17 @@ export async function createOfferCore(
     );
   if (!type) return notFound();
   if (type.rdvFree) return actionFail(RDV_FREE_NO_OFFER);
-  const res = await createOffer(db, { professionalId: ctx.professionalId, offer: parsed.data }, now);
-  return res.ok ? res : fromEngine(res, "catalog");
+  const res = await createOffer(db, { professionalId: ctx.professionalId, offer: parsed.data }, now, opts);
+  return res.ok ? res : catalogFail(res, RDV_FREE_NO_OFFER);
 }
 
-/** parseOffer (the schema, then the Stripe minimum of ctx.currency) with ticketTypeId forced to the offer's own type; no en vente offer on an rdv_free type (RDV_FREE_OFFER_STAYS_OFF); updateOffer. */
+/** parseOffer (the schema, then the Stripe minimum of ctx.currency) with ticketTypeId forced to the offer's own type; no en vente offer on an rdv_free type (RDV_FREE_OFFER_STAYS_OFF, also the engine's stale); updateOffer. */
 export async function updateOfferCore(
   db: Db,
   ctx: ProCtx,
   input: { offerId: string; offer: OfferInput },
   now: Date,
+  opts: RaceOpts = {},
 ): Promise<CoreResult> {
   const head = parseFr(updateOfferSchema, input);
   if (!head.ok) return actionFail(head.error);
@@ -296,20 +312,22 @@ export async function updateOfferCore(
   if (!parsed.ok) return actionFail(parsed.error);
   const refusal = await freeTypeRefusal(db, ctx.professionalId, row.ticketTypeId, parsed.data.isActive);
   if (refusal) return refusal;
-  const res = await updateOffer(db, { professionalId: ctx.professionalId, offerId: row.id, offer: parsed.data }, now);
-  return res.ok ? res : fromEngine(res, "catalog");
+  const res = await updateOffer(db, { professionalId: ctx.professionalId, offerId: row.id, offer: parsed.data }, now, opts);
+  return res.ok ? res : catalogFail(res, RDV_FREE_OFFER_STAYS_OFF);
 }
 
 /**
  * « En vente » toggle: reads the offer (pro, not archived), refuses to put it en vente on an rdv_free type
  * (RDV_FREE_OFFER_STAYS_OFF) or under the Stripe minimum of ctx.currency (an offer written before PAY-3: it can be
- * taken off sale, never put back on it until its price is raised) and calls updateOffer with its fields and the new isActive.
+ * taken off sale, never put back on it until its price is raised) and calls updateOffer with its fields and the new isActive
+ * (the engine's stale is RDV_FREE_OFFER_STAYS_OFF too).
  */
 export async function setOfferActiveCore(
   db: Db,
   ctx: ProCtx,
   input: { offerId: string; isActive: boolean },
   now: Date,
+  opts: RaceOpts = {},
 ): Promise<CoreResult> {
   const parsed = parseFr(offerActiveSchema, input);
   if (!parsed.ok) return actionFail(parsed.error);
@@ -336,8 +354,9 @@ export async function setOfferActiveCore(
       },
     },
     now,
+    opts,
   );
-  return res.ok ? res : fromEngine(res, "catalog");
+  return res.ok ? res : catalogFail(res, RDV_FREE_OFFER_STAYS_OFF);
 }
 
 export async function deleteOfferCore(

@@ -11,8 +11,9 @@ import {
   ticketOffer,
   ticketType,
 } from "@/lib/db/schema";
+import type { Db } from "@/lib/db/atomic";
 
-import { createTestPro, dbTest, deleteTestUser } from "../../test/db";
+import { createTestPro, dbTest, deleteTestUser, type TestPro } from "../../test/db";
 import { rowBooking, rowCustomer, rowEvent, rowLink, rowPurchase, rowRdv, rowTicket } from "../../test/rows";
 import {
   createOffer,
@@ -431,4 +432,127 @@ dbTest("updateBookingSettings validates the bounds; hasDomainData sees the catal
 
   must(await createTicketType(db, { professionalId: pro.proId, type: { name: "Premier" } }));
   assert.equal(await hasDomainData(db, pro.proId), true);
+});
+
+/* ───────────── P5 Task 5: FR:F9, the pro half (P3OUT:90, P4OUT:96, dossier § 3.15 point 5) ───────────── */
+
+/** A paid RDV type of this pro and a raw setter of its rdv_free (another tab of the pro committing « Gratuit »). */
+async function paidRdvType(db: Db, pro: TestPro) {
+  const { ticketTypeId } = must(
+    await createTicketType(db, { professionalId: pro.proId, type: { name: "Particulier", rdvEnabled: true, rdvDurationMin: 60 } }),
+  );
+  const setFree = (free: boolean) => async () => {
+    await db.update(ticketType).set({ rdvFree: free }).where(eq(ticketType.id, ticketTypeId));
+  };
+  return { ticketTypeId, setFree };
+}
+
+dbTest("FR:F9 createOffer and updateOffer (en vente) on a type switched to « Gratuit » are stale and write nothing", async ({ db, pro }) => {
+  const { ticketTypeId, setFree } = await paidRdvType(db, pro);
+  const offersOf = () => db.select().from(ticketOffer).where(eq(ticketOffer.ticketTypeId, ticketTypeId));
+  const body = { ticketTypeId, quantity: 1, priceCents: 2500 };
+
+  // The switch commits between the plan and the batch.
+  assert.deepEqual(
+    await createOffer(db, { professionalId: pro.proId, offer: body }, new Date(), { afterPlan: setFree(true) }),
+    { ok: false, code: "stale" },
+  );
+  assert.equal((await offersOf()).length, 0, "no offer row");
+  // The engine refuses a free type on its own, even with no race (and even an offer created « Pas en vente »).
+  assert.deepEqual(await createOffer(db, { professionalId: pro.proId, offer: body }), { ok: false, code: "stale" });
+  assert.deepEqual(await createOffer(db, { professionalId: pro.proId, offer: { ...body, isActive: false } }), { ok: false, code: "stale" });
+  assert.equal((await offersOf()).length, 0);
+
+  await setFree(false)();
+  const { offerId } = must(await createOffer(db, { professionalId: pro.proId, offer: { ...body, isActive: false } }));
+  const update = (isActive: boolean, priceCents: number, afterPlan?: () => Promise<void>) =>
+    updateOffer(db, { professionalId: pro.proId, offerId, offer: { ...body, priceCents, isActive } }, new Date(), { afterPlan });
+
+  // Putting it en vente while the type turns free: stale, the offer keeps its old price and stays off sale.
+  assert.deepEqual(await update(true, 3000, setFree(true)), { ok: false, code: "stale" });
+  let [row] = await offersOf();
+  assert.deepEqual([row.isActive, row.priceCents], [false, 2500]);
+  assert.deepEqual(await update(true, 3000), { ok: false, code: "stale" }, "no race needed: a free type sells nothing");
+  // An offer left « Pas en vente » on a free type stays editable.
+  must(await update(false, 3500));
+  [row] = await offersOf();
+  assert.deepEqual([row.isActive, row.priceCents], [false, 3500]);
+
+  // Back to paid: both go through.
+  await setFree(false)();
+  must(await update(true, 4000));
+  must(await createOffer(db, { professionalId: pro.proId, offer: body }));
+  assert.equal((await offersOf()).length, 2);
+});
+
+dbTest("FR:F9 the switch to « Gratuit » re-checks its blockers in the batch: an offer, a live checkout, a sale or a booked ticket staged after its plan is stale", async ({ db, pro }) => {
+  const free = { name: "Particulier", rdvEnabled: true, rdvFree: true, rdvDurationMin: 60 };
+  const toFree = (ticketTypeId: string, afterPlan?: () => Promise<void>) =>
+    updateTicketType(db, { professionalId: pro.proId, ticketTypeId, type: free }, new Date(), { afterPlan });
+  const isFree = async (ticketTypeId: string) =>
+    (await db.select({ f: ticketType.rdvFree }).from(ticketType).where(eq(ticketType.id, ticketTypeId)))[0].f;
+  const customerId = await rowCustomer(db, pro);
+  const stagedIsStale = async (what: string, stage: (ticketTypeId: string) => Promise<void>) => {
+    const { ticketTypeId } = await paidRdvType(db, pro);
+    assert.deepEqual(await toFree(ticketTypeId, () => stage(ticketTypeId)), { ok: false, code: "stale" }, what);
+    assert.equal(await isFree(ticketTypeId), false, `${what}: nothing written`);
+  };
+
+  await stagedIsStale("an offer en vente", async (ticketTypeId) => {
+    must(await createOffer(db, { professionalId: pro.proId, offer: { ticketTypeId, quantity: 2, priceCents: 5000 } }));
+  });
+  await stagedIsStale("a checkout that can still be paid (the offer taken off sale since)", async (ticketTypeId) => {
+    const { offerId } = must(
+      await createOffer(db, { professionalId: pro.proId, offer: { ticketTypeId, quantity: 1, priceCents: 2500, isActive: false } }),
+    );
+    await rowPurchase(db, pro, { customerId, offerId, ticketTypeId, status: "pending" });
+  });
+  await stagedIsStale("a sale (a usable ticket)", async (ticketTypeId) => {
+    await rowTicket(db, pro, { customerId, ticketTypeId });
+  });
+  await stagedIsStale("a ticket booked on an RDV to come", async (ticketTypeId) => {
+    const rdv = await rowRdv(db, pro, ticketTypeId, { startsAt: new Date(Date.now() + 3 * 86_400_000) });
+    const bookingId = await rowBooking(db, pro, { occurrenceId: rdv, customerId, coverage: "ticket" });
+    await rowTicket(db, pro, { customerId, ticketTypeId, status: "booked", bookingId });
+  });
+
+  // Nothing that blocks (a used ticket does not count): the switch goes through.
+  const { ticketTypeId } = await paidRdvType(db, pro);
+  await rowTicket(db, pro, { customerId, ticketTypeId, status: "used" });
+  must(await toFree(ticketTypeId));
+  assert.equal(await isFree(ticketTypeId), true);
+  // Already free: an edit re-checks nothing, even with a ticket handed back as available on the type (E6a, F2).
+  await rowTicket(db, pro, { customerId, ticketTypeId });
+  must(await updateTicketType(db, { professionalId: pro.proId, ticketTypeId, type: { ...free, name: "Appel" } }));
+  // Leaving « Gratuit » is never checked either.
+  must(await updateTicketType(db, { professionalId: pro.proId, ticketTypeId, type: { ...free, rdvFree: false } }));
+  assert.equal(await isFree(ticketTypeId), false);
+});
+
+dbTest("FR:F9 a second pro's type id is not_found on the guarded paths, never stale", async ({ db, pro }) => {
+  const other = await createTestPro(db);
+  try {
+    const theirs = await paidRdvType(db, other);
+    const theirOffer = must(
+      await createOffer(db, { professionalId: other.proId, offer: { ticketTypeId: theirs.ticketTypeId, quantity: 1, priceCents: 2500, isActive: false } }),
+    );
+    const body = { ticketTypeId: theirs.ticketTypeId, quantity: 1, priceCents: 2500 };
+    assert.deepEqual(await createOffer(db, { professionalId: pro.proId, offer: body }), { ok: false, code: "not_found" });
+    assert.deepEqual(
+      await updateOffer(db, { professionalId: pro.proId, offerId: theirOffer.offerId, offer: body }),
+      { ok: false, code: "not_found" },
+    );
+    assert.deepEqual(
+      await updateTicketType(db, {
+        professionalId: pro.proId,
+        ticketTypeId: theirs.ticketTypeId,
+        type: { name: "Volé", rdvEnabled: true, rdvFree: true, rdvDurationMin: 60 },
+      }),
+      { ok: false, code: "not_found" },
+    );
+    const [row] = await db.select().from(ticketType).where(eq(ticketType.id, theirs.ticketTypeId));
+    assert.deepEqual([row.name, row.rdvFree], ["Particulier", false]);
+  } finally {
+    await deleteTestUser(db, other.userId);
+  }
 });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
-import { addMinutes, dbTest, inParallel } from "../../test/db";
+import { addMinutes, createTestPro, dbTest, deleteTestUser, inParallel } from "../../test/db";
 import {
   dayIn,
   getBooking,
@@ -15,6 +15,8 @@ import {
   ticketsOf,
 } from "../../test/fixtures";
 import { instantAt } from "../civil-date";
+import type { Db } from "../db/atomic";
+import { ticketType } from "../db/schema";
 import type { TicketCloseReason } from "../tickets";
 import { classifyTypes } from "../wallet-rules";
 import { cancelByClient } from "./cancel";
@@ -26,6 +28,7 @@ import {
   convertTickets,
   loadTypeFacts,
   moveAttendee,
+  offerTickets,
   pointTickets,
   unpointTickets,
   walletBalance,
@@ -554,4 +557,117 @@ dbTest("E5 after « Déplacer »: a moved client may cancel until the start of t
   must(res, "late cancel after a move");
   assert.equal(res.occurrenceId, dst.id);
   assert.equal((await getOccurrence(db, dst.id)).seatsTaken, 0);
+});
+
+/* ───────────── P5 Task 5: FR:F9, the pro half (P3OUT:90, P4OUT:96, dossier § 3.15 point 5) ───────────── */
+
+/** A raw setter of a type's rdv_free: another tab of the pro committing « Gratuit » (or back). */
+const setFree = (db: Db, ticketTypeId: string, free: boolean) => async (): Promise<void> => {
+  await db.update(ticketType).set({ rdvFree: free }).where(eq(ticketType.id, ticketTypeId));
+};
+
+const codeOf = (r: { ok: true } | { ok: false; code: string }): string => (r.ok ? "ok" : r.code);
+
+dbTest("FR:F9 offerTickets and convertTickets onto a type switched to « Gratuit »: stale, nothing written; a second pro's type is not_found", async ({ db, pro }) => {
+  const source = await makeType(db, pro);
+  const target = await makeType(db, pro, { rdvEnabled: true, rdvDurationMin: 60 });
+  const customerId = await makeCustomer(db, pro);
+  const [held] = await giveTickets(db, pro, customerId, source, 1);
+  const offer = (ticketTypeId: string, afterPlan?: () => Promise<void>) =>
+    offerTickets(
+      db,
+      { professionalId: pro.proId, actorUserId: pro.userId, customerId, ticketTypeId, quantity: 2, expiresAt: null, notify: false },
+      new Date(),
+      { afterPlan },
+    );
+  const convert = (toTicketTypeId: string, afterPlan?: () => Promise<void>) =>
+    convertTickets(
+      db,
+      { professionalId: pro.proId, actorUserId: pro.userId, customerId, selection: { ticketIds: [held] }, toTicketTypeId },
+      new Date(),
+      { afterPlan },
+    );
+  const wallet = async () => (await ticketsOf(db, customerId)).map((t) => [t.id, t.ticketTypeId, t.status]);
+  const before = await wallet();
+
+  // The switch commits between the plan and the batch (convert re-plans once on stale: it stays stale).
+  assert.equal(codeOf(await offer(target, setFree(db, target, true))), "stale");
+  await setFree(db, target, false)();
+  assert.equal(codeOf(await convert(target, setFree(db, target, true))), "stale");
+  assert.deepEqual(await wallet(), before, "no ticket offered or converted");
+  assert.equal((await movementsOf(db, held)).length, 1, "only the offer movement of the held ticket");
+  // No race needed: the engine refuses a free type on its own.
+  assert.equal(codeOf(await offer(target)), "stale");
+  assert.equal(codeOf(await convert(target)), "stale");
+  assert.deepEqual(await wallet(), before);
+
+  // Back to paid: both go through.
+  await setFree(db, target, false)();
+  must(await offer(target), "offer");
+  must(await convert(target), "convert");
+  assert.equal((await ticketsOf(db, customerId)).filter((t) => t.ticketTypeId === target).length, 3);
+
+  const other = await createTestPro(db);
+  try {
+    const theirs = await makeType(db, other, { rdvEnabled: true, rdvDurationMin: 60 });
+    const [spare] = await giveTickets(db, pro, customerId, source, 1);
+    assert.equal(codeOf(await offer(theirs)), "not_found");
+    const foreign = await convertTickets(db, {
+      professionalId: pro.proId,
+      actorUserId: pro.userId,
+      customerId,
+      selection: { ticketIds: [spare] },
+      toTicketTypeId: theirs,
+    });
+    assert.equal(codeOf(foreign), "not_found");
+  } finally {
+    await deleteTestUser(db, other.userId);
+  }
+});
+
+dbTest("FR:F9 Déplacer + convertir onto a type switched to « Gratuit »: stale, nothing moves; a second pro's type is not_found", async ({ db, pro }) => {
+  const typeA = await makeType(db, pro);
+  const typeB = await makeType(db, pro, { rdvEnabled: true, rdvDurationMin: 60 });
+  const {
+    occurrences: [src],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeA], rule: { startDate: dayIn(pro, 3) } });
+  const {
+    occurrences: [tgt],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeB], rule: { startDate: dayIn(pro, 5) } });
+  const customerId = await makeCustomer(db, pro);
+  const [bookedTicket] = await giveTickets(db, pro, customerId, typeA, 1);
+  const b = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: src.id, customerId, seenStartsAt: src.startsAt, actorUserId: pro.userId });
+  must(b, "book");
+  const move = (convertToTicketTypeId: string, afterPlan?: () => Promise<void>) =>
+    moveAttendee(
+      db,
+      { professionalId: pro.proId, actorUserId: pro.userId, bookingId: b.bookingId, targetOccurrenceId: tgt.id, force: false, convertToTicketTypeId },
+      new Date(),
+      { afterPlan },
+    );
+  const unmoved = async () => {
+    assert.equal((await getBooking(db, b.bookingId)).occurrenceId, src.id);
+    const [t] = await ticketsOf(db, customerId);
+    assert.deepEqual([t.id, t.status, t.ticketTypeId], [bookedTicket, "booked", typeA]);
+    assert.equal((await getOccurrence(db, src.id)).seatsTaken, 1);
+    assert.equal((await getOccurrence(db, tgt.id)).seatsTaken, 0);
+  };
+
+  assert.equal(codeOf(await move(typeB, setFree(db, typeB, true))), "stale");
+  await unmoved();
+  assert.equal(codeOf(await move(typeB)), "stale", "no race needed: a free type takes no booked ticket");
+  await unmoved();
+
+  const other = await createTestPro(db);
+  try {
+    const theirs = await makeType(db, other, { rdvEnabled: true, rdvDurationMin: 60 });
+    assert.equal(codeOf(await move(theirs)), "not_found");
+    await unmoved();
+  } finally {
+    await deleteTestUser(db, other.userId);
+  }
+
+  await setFree(db, typeB, false)();
+  must(await move(typeB), "move + convert once the type is paid again");
+  assert.equal((await getBooking(db, b.bookingId)).occurrenceId, tgt.id);
 });

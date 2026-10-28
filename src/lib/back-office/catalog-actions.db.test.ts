@@ -614,3 +614,57 @@ dbTest("catalog cores never act on another pro's type or offer", async ({ db, pr
     await deleteTestUser(db, other.userId);
   }
 });
+
+dbTest("FR:F9 a « Gratuit » race the cores' own checks missed: the engine's stale reads as the free-type message, nothing written", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const typeId = await makeType(db, pro, { rdvEnabled: true, rdvDurationMin: 60 });
+  const setFree = (free: boolean) => async () => {
+    await db.execute(sql`update ticket_type set rdv_free = ${free} where id = ${typeId}`);
+  };
+  const offerCount = async () =>
+    (await db.execute<{ n: number }>(sql`select count(*)::int as n from ticket_offer where ticket_type_id = ${typeId}`)).rows[0].n;
+
+  // createOfferCore checked « not free », then another tab switched the type before the engine's batch.
+  refused(
+    await createOfferCore(db, ctx, { ticketTypeId: typeId, quantity: 1, priceCents: 2500 }, now, { afterPlan: setFree(true) }),
+    RDV_FREE_NO_OFFER,
+    "create",
+  );
+  assert.equal(await offerCount(), 0);
+  await setFree(false)();
+
+  const offerId = await makeOffer(db, pro, typeId);
+  must(await setOfferActiveCore(db, ctx, { offerId, isActive: false }, now), "off sale");
+  refused(
+    await setOfferActiveCore(db, ctx, { offerId, isActive: true }, now, { afterPlan: setFree(true) }),
+    RDV_FREE_OFFER_STAYS_OFF,
+    "« En vente »",
+  );
+  await setFree(false)();
+  refused(
+    await updateOfferCore(db, ctx, { offerId, offer: { ticketTypeId: typeId, quantity: 1, priceCents: 2600, isActive: true } }, now, {
+      afterPlan: setFree(true),
+    }),
+    RDV_FREE_OFFER_STAYS_OFF,
+    "update en vente",
+  );
+  await setFree(false)();
+  const [offer] = (await db.execute<{ is_active: boolean; price_cents: number }>(
+    sql`select is_active, price_cents from ticket_offer where id = ${offerId}`,
+  )).rows;
+  assert.deepEqual([offer.is_active, offer.price_cents], [false, 2500], "the offer is still off sale at its old price");
+
+  // updateTicketTypeCore checked the blockers, then another tab put the offer back en vente before the batch.
+  refused(
+    await updateTicketTypeCore(db, ctx, { ticketTypeId: typeId, patch: { rdvFree: true } }, now, {
+      afterPlan: async () => {
+        await db.execute(sql`update ticket_offer set is_active = true where id = ${offerId}`);
+      },
+    }),
+    RDV_FREE_HAS_SALES,
+    "switch to free",
+  );
+  const [type] = (await db.execute<{ rdv_free: boolean }>(sql`select rdv_free from ticket_type where id = ${typeId}`)).rows;
+  assert.equal(type.rdv_free, false);
+});

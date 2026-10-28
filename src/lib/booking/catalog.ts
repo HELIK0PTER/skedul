@@ -5,7 +5,7 @@
  * statement filters professional_id; every write is one tryAtomic, so CHECK
  * and FK errors come back as engine codes.
  */
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 
@@ -37,6 +37,50 @@ const typeExists = (professionalId: string, ticketTypeId: string, opts: { active
   sql`exists (select 1 from ticket_type where id = ${ticketTypeId} and professional_id = ${professionalId}${
     opts.active ? sql` and archived_at is null` : sql``
   })`;
+
+/** Test-only: runs between an engine plan and its batch, to stage a race (tryAtomic). */
+type RaceOpts = { afterPlan?: () => Promise<void> };
+
+/**
+ * FR:F9, the pro half (P3OUT:90, P4OUT:96, P5 dossier § 3.15 point 5): the type of this pro is still not « Gratuit ».
+ * FOR SHARE takes the type row: a switch to « Gratuit » (updateTicketType locks that row before its blocker guard)
+ * and a statement carrying this predicate exclude each other, so whichever commits second sees the other (this
+ * sub-select waits for the switch, then reads the row it committed; the switch waits for this batch, then counts what
+ * it wrote). Another pro's or an unknown type reads false. Asserted 'stale' by createOffer, updateOffer (en vente),
+ * offerTickets, convertTickets and moveAttendee (convert on move).
+ */
+export function typeNotFree(professionalId: string, ticketTypeId: string): SQL {
+  return sql`coalesce((select not rdv_free from ticket_type
+    where id = ${ticketTypeId} and professional_id = ${professionalId} for share), false)`;
+}
+
+/**
+ * The facts that keep a type of this pro from becoming « Gratuit » (FR:F9, as narrowed in F2), one count each: an
+ * offer en vente, a checkout that can still be paid (not lapsed, or already processing), a ticket usable at `now`,
+ * and a ticket booked on an occurrence to come (confirmed, or a hold still running). Booked tickets of OVER séances
+ * do not count: nothing hands them back by itself. The single definition behind the type page (readFreeBlockers)
+ * and the switch's guard (updateTicketType).
+ */
+export function freeBlockerCounts(
+  professionalId: string,
+  ticketTypeId: string,
+  now: Date,
+): { offers: SQL; purchases: SQL; usable: SQL; booked: SQL } {
+  return {
+    offers: sql`(select count(*)::int from ticket_offer where ticket_type_id = ${ticketTypeId} and professional_id = ${professionalId}
+      and is_active and archived_at is null)`,
+    purchases: sql`(select count(*)::int from ticket_purchase where ticket_type_id = ${ticketTypeId} and professional_id = ${professionalId}
+      and status = 'pending' and (checkout_expires_at > ${ts(now)} or processing_at is not null))`,
+    usable: sql`(select count(*)::int from ticket where ticket_type_id = ${ticketTypeId} and professional_id = ${professionalId}
+      and status = 'available' and (expires_at is null or expires_at > ${ts(now)}))`,
+    booked: sql`(select count(*)::int from ticket t
+      join booking b on b.id = t.booking_id and b.professional_id = ${professionalId}
+      join occurrence o on o.id = b.occurrence_id and o.professional_id = ${professionalId}
+      where t.ticket_type_id = ${ticketTypeId} and t.professional_id = ${professionalId} and t.status = 'booked'
+        and (b.status = 'confirmed' or (b.status = 'pending' and b.hold_expires_at > ${ts(now)}))
+        and o.status = 'scheduled' and o.starts_at > ${ts(now)})`,
+  };
+}
 
 function typeColumns(t: z.output<typeof ticketTypeInputSchema>) {
   return {
@@ -90,21 +134,50 @@ export async function createTicketType(
   return { ok: true, effects: [], ticketTypeId };
 }
 
-/** Replaces the editable fields (archived or not). Errors: invalid, not_found. */
+/**
+ * Replaces the editable fields (archived or not). A type saved « Gratuit » first locks its row, then asserts that it
+ * already was free or that no blocker exists (freeBlockerCounts at `now`, 'stale'): the switch false → true is
+ * re-checked inside the batch (FR:F9), an edit of a type already free is not (a ticket handed back as available on
+ * it, E6a or a move, must not freeze the type). Errors: invalid, not_found, stale.
+ */
 export async function updateTicketType(
   db: Db,
   input: { professionalId: string; ticketTypeId: string; type: TicketTypeInput },
   now: Date = new Date(),
+  opts: RaceOpts = {},
 ): Promise<EngineResult> {
   const parsed = parse(ticketTypeInputSchema, input.type);
   if (!parsed.ok) return parsed;
-  const res = await tryAtomic(db, async () => () => [
-    db
-      .update(ticketType)
-      .set({ ...typeColumns(parsed.data), updatedAt: now })
-      .where(and(eq(ticketType.id, input.ticketTypeId), eq(ticketType.professionalId, input.professionalId))),
-    G(db, typeExists(input.professionalId, input.ticketTypeId), "not_found"),
-  ]);
+  const p = input.professionalId;
+  const t = input.ticketTypeId;
+  const res = await tryAtomic(
+    db,
+    async () => () => {
+      const switchGuard: Query[] = [];
+      if (parsed.data.rdvFree) {
+        const c = freeBlockerCounts(p, t, now);
+        switchGuard.push(
+          // the row lock first, in its own statement: the guard below then reads what a writer holding the row committed
+          db.execute(sql`select id from ticket_type where id = ${t} and professional_id = ${p} for no key update`),
+          G(
+            db,
+            sql`coalesce((select rdv_free from ticket_type where id = ${t} and professional_id = ${p}), true)
+              or (${c.offers} + ${c.purchases} + ${c.usable} + ${c.booked}) = 0`,
+            "stale",
+          ),
+        );
+      }
+      return [
+        ...switchGuard,
+        db
+          .update(ticketType)
+          .set({ ...typeColumns(parsed.data), updatedAt: now })
+          .where(and(eq(ticketType.id, t), eq(ticketType.professionalId, p))),
+        G(db, typeExists(p, t), "not_found"),
+      ];
+    },
+    { afterPlan: opts.afterPlan },
+  );
   return res.ok ? { ok: true, effects: [] } : failOf(res);
 }
 
@@ -152,11 +225,15 @@ export async function deleteTicketType(
 
 /* ───────────────────────────── Offers ───────────────────────────── */
 
-/** Adds an offer at the end of its type's list. Errors: invalid, not_found (type unknown or archived). */
+/**
+ * Adds an offer at the end of its type's list; never on a « Gratuit » type, en vente or not (typeNotFree, FR:F9).
+ * Errors: invalid, not_found (type unknown or archived), stale (the type is « Gratuit »).
+ */
 export async function createOffer(
   db: Db,
   input: { professionalId: string; offer: OfferInput },
   now: Date = new Date(),
+  opts: RaceOpts = {},
 ): Promise<EngineResult<{ offerId: string }>> {
   const parsed = parse(offerInputSchema, input.offer);
   if (!parsed.ok) return parsed;
@@ -185,23 +262,38 @@ export async function createOffer(
         updatedAt: now,
       }),
       G(db, typeExists(input.professionalId, o.ticketTypeId, { active: true }), "not_found"),
+      G(db, typeNotFree(input.professionalId, o.ticketTypeId), "stale"),
     ];
-  });
+  }, { afterPlan: opts.afterPlan });
   if (!res.ok) return failOf(res);
   return { ok: true, effects: [], offerId };
 }
 
 /**
  * Edits an offer (ticketTypeId is immutable and ignored). Pending purchases
- * keep their snapshot. Errors: invalid, not_found (unknown or archived offer).
+ * keep their snapshot. An offer saved en vente asserts that its type is not
+ * « Gratuit » (the typeNotFree lock and rule, FR:F9); one kept « Pas en vente »
+ * stays editable on a free type. Errors: invalid, not_found (unknown or
+ * archived offer), stale (en vente on a « Gratuit » type).
  */
 export async function updateOffer(
   db: Db,
   input: { professionalId: string; offerId: string; offer: OfferInput },
   now: Date = new Date(),
+  opts: RaceOpts = {},
 ): Promise<EngineResult> {
   const parsed = parse(offerInputSchema, input.offer);
   if (!parsed.ok) return parsed;
+  const onSale: Query[] = parsed.data.isActive
+    ? [
+        G(
+          db,
+          sql`coalesce((select not tt.rdv_free from ticket_offer o join ticket_type tt on tt.id = o.ticket_type_id
+            where o.id = ${input.offerId} and o.professional_id = ${input.professionalId} for share of tt), false)`,
+          "stale",
+        ),
+      ]
+    : [];
   const res = await tryAtomic(db, async () => () => [
     db
       .update(ticketOffer)
@@ -218,7 +310,8 @@ export async function updateOffer(
       sql`exists (select 1 from ticket_offer where id = ${input.offerId} and professional_id = ${input.professionalId} and archived_at is null)`,
       "not_found",
     ),
-  ]);
+    ...onSale,
+  ], { afterPlan: opts.afterPlan });
   return res.ok ? { ok: true, effects: [] } : failOf(res);
 }
 
