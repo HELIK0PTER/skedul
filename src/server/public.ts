@@ -10,6 +10,7 @@ import {
   type HeldTicketInput,
 } from "@/lib/public/booking-actions";
 import { splitActionInput } from "@/lib/public/context";
+import { bookRdvCore, type BookRdvActionInput, type BookRdvOutcome } from "@/lib/public/rdv-actions";
 import { abandonCheckoutCore, type AbandonOutcome } from "@/lib/public/release-actions";
 import type { PublicResult } from "@/lib/public/result";
 import { startShopPurchaseCore, type ShopPurchaseInput } from "@/lib/public/shop-actions";
@@ -54,6 +55,14 @@ export async function startShopPurchaseAction(
   const { slug, rest } = splitActionInput(input);
   return runPublicAction("startShopPurchase", slug, (pro, visitor, now) =>
     startShopPurchaseCore(db, pro, visitor, rest, publicDeps(), now),
+  );
+}
+
+/** E4 from the RDV page: book a slot with a held ticket or for free, or hold it and answer the Checkout URL (bookRdvCore). */
+export async function bookRdvAction(input: { slug: string } & BookRdvActionInput): Promise<PublicResult<BookRdvOutcome>> {
+  const { slug, rest } = splitActionInput(input);
+  return runPublicAction("bookRdv", slug, (pro, visitor, now) =>
+    bookRdvCore(db, pro, visitor, rest, publicDeps(), now),
   );
 }
 

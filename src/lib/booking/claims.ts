@@ -169,7 +169,12 @@ export type OfferScope =
  * The offer is still on sale with the snapshot the plan read (price,
  * quantity, validity) and still usable in `scope`. A type switched to
  * « Gratuit » (rdv_free) sells nothing in ANY scope (LED:139): this is the
- * client half of the rdv_free race, inside the batch. Asserted with 'stale'.
+ * client half of the rdv_free race, inside the batch. The type row is read
+ * FOR SHARE, like typeNotFree (catalog.ts): a switch to « Gratuit » holds it
+ * FOR NO KEY UPDATE, so whichever of the two commits second sees the other
+ * (this batch re-reads rdv_free once the switch committed, the switch counts
+ * the pending purchase once this batch committed); never both (FR:F9, P5 T9).
+ * Asserted with 'stale'.
  */
 export function offerUnchanged(o: OfferRow, professionalId: string, scope: OfferScope): SQL {
   const link =
@@ -191,6 +196,7 @@ export function offerUnchanged(o: OfferRow, professionalId: string, scope: Offer
       and f.validity_count is not distinct from ${o.validityCount}::int
       and f.validity_unit is not distinct from ${o.validityUnit}::validity_unit
       ${rdv}
+    for share of tt
   )`;
 }
 

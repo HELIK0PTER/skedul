@@ -8,21 +8,32 @@ import type { Effect, EngineFail } from "@/lib/booking/types";
 import { clientErrorMessage, type PublicErrorContext } from "@/lib/public/messages";
 import type { EngineErrorCode } from "@/lib/tickets-vocab";
 
-export type PublicFail = { ok: false; error: string; code?: EngineErrorCode; fieldErrors?: Record<string, string> };
+export type PublicFail = {
+  ok: false;
+  error: string;
+  code?: EngineErrorCode;
+  fieldErrors?: Record<string, string>;
+  /**
+   * The page that takes a verified Owner back to HER OWN live hold on the slot she was refused (bookRdvCore, P5 O6):
+   * /{slug}/rdv/{ticketTypeId}?paiement=annule&p={her purchase}. Never set for anyone else (P4 Decisions 64 and 71).
+   */
+  resumeHref?: string;
+};
 export type PublicResult<T extends object = object> = ({ ok: true } & T) | PublicFail;
 /** What a core returns: the browser result plus the effects to run after the response (also on a failure that committed a release). */
 export type PublicCoreResult<T extends object = object> = (({ ok: true } & T) | PublicFail) & { effects: Effect[] };
 
 export const PUBLIC_UNEXPECTED = "Une erreur inattendue est survenue. Réessayez dans un instant.";
 
-/** A failure with its optional code, field errors and effects (default []). */
+/** A failure with its optional code, field errors, resume link and effects (default []). */
 export function publicFail(
   error: string,
-  opts: { code?: EngineErrorCode; fieldErrors?: Record<string, string>; effects?: Effect[] } = {},
+  opts: { code?: EngineErrorCode; fieldErrors?: Record<string, string>; resumeHref?: string; effects?: Effect[] } = {},
 ): PublicFail & { effects: Effect[] } {
   const out: PublicFail & { effects: Effect[] } = { ok: false, error, effects: opts.effects ?? [] };
   if (opts.code !== undefined) out.code = opts.code;
   if (opts.fieldErrors !== undefined) out.fieldErrors = opts.fieldErrors;
+  if (opts.resumeHref !== undefined) out.resumeHref = opts.resumeHref;
   return out;
 }
 

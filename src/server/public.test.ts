@@ -6,8 +6,8 @@
  * still passed (those tests hand the core a pro and a visitor they build). The file imports the action plumbing
  * (next/cache, next/server) and the process db, which the node:test runner cannot load, so the wiring is pinned on
  * the source; the rules themselves have their own tests (run-action.test.ts, booking-actions.db.test.ts,
- * shop-actions.db.test.ts, release-actions.db.test.ts). P5 adds `bookRdv` here: it goes in ACTIONS below, with its
- * core. Pure: no database, no env. Run from the repository root.
+ * shop-actions.db.test.ts, release-actions.db.test.ts, rdv-actions.db.test.ts). P5 added `bookRdv` (ACTIONS below, with
+ * its core). Pure: no database, no env. Run from the repository root.
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -23,6 +23,7 @@ const ACTIONS: readonly { exportName: string; name: string; core: string; deps: 
   { exportName: "registerFreeAction", name: "registerFree", core: "registerFreeCore", deps: false },
   { exportName: "bookWithHeldTicketAction", name: "bookWithHeldTicket", core: "bookWithHeldTicketCore", deps: false },
   { exportName: "startShopPurchaseAction", name: "startShopPurchase", core: "startShopPurchaseCore", deps: true },
+  { exportName: "bookRdvAction", name: "bookRdv", core: "bookRdvCore", deps: true },
   { exportName: "abandonCheckoutAction", name: "abandonCheckout", core: "abandonCheckoutCore", deps: true },
 ];
 
@@ -31,6 +32,7 @@ const RUNTIME_IMPORTS: Record<string, readonly string[]> = {
   "@/lib/db": ["db"],
   "@/lib/public/booking-actions": ["bookWithHeldTicketCore", "registerFreeCore", "startBuyAndBookCore"],
   "@/lib/public/context": ["splitActionInput"],
+  "@/lib/public/rdv-actions": ["bookRdvCore"],
   "@/lib/public/release-actions": ["abandonCheckoutCore"],
   "@/lib/public/shop-actions": ["startShopPurchaseCore"],
   "@/server/public-context": ["publicDeps", "runPublicAction"],
@@ -98,7 +100,7 @@ function runtimeImportsOf(source: string): Record<string, string[]> {
   return found;
 }
 
-test("public.ts is a Server Actions file: the directive first, and only the five public writes are exported", () => {
+test("public.ts is a Server Actions file: the directive first, and only the six public writes are exported", () => {
   assert.ok(SOURCE.trimStart().startsWith('"use server";'), "the directive comes first");
   const exports = SOURCE.split(/\r?\n/).filter((line) => line.startsWith("export "));
   for (const line of exports) assert.match(line, /^export async function \w+\(/, `only async functions are exported: ${line}`);
@@ -126,7 +128,7 @@ test("no action takes an identity from the browser: its input names ids of rows 
   }
 });
 
-test("the only runtime imports are the db, the five cores, splitActionInput and the two wrappers: no writer, no notify, no session read", () => {
+test("the only runtime imports are the db, the six cores, splitActionInput and the two wrappers: no writer, no notify, no session read", () => {
   assert.deepEqual(runtimeImportsOf(SOURCE), Object.fromEntries(Object.entries(RUNTIME_IMPORTS).map(([k, v]) => [k, [...v].sort()])));
   const code = codeView(SOURCE);
   assert.doesNotMatch(code, /\bgetSession\(|\bgetFreshSession\(|\bgetCurrentUser\(|\bauth\.api\b|\bcookies\(|\bheaders\(|\brunEffects\(|\brevalidatePath\(/);

@@ -147,9 +147,10 @@ async function seanceTitleOf(db: Db, professionalId: string, occurrenceId: strin
  * browser (a throw answers no URL), so nobody can pay it, and a hung Stripe or a function killed at its duration limit
  * must not keep the seat; a payment that still lands on the session is fulfilled from `expired` as a late payment
  * (fulfillPurchase, E10). The sync effect a release returns is dropped (nothing can run it after a throw): the next
- * calendar sync heals it. Logs carry no address and no session id (logSafeMessage).
+ * calendar sync heals it. Logs carry no address and no session id (logSafeMessage). Exported for the RDV buy
+ * (rdv-actions.ts), which holds its slot the same way.
  */
-async function abandonPurchase(
+export async function abandonPurchase(
   db: Db,
   deps: PublicDeps,
   purchaseId: string,
