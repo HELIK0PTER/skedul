@@ -11,6 +11,9 @@ import { bodyOf, codeView, openingTags, rawErrorLogs } from "@/test/source-guard
 
 const source = (path: string): string => readFileSync(path, "utf8");
 
+/** The RDV libre page (P5 T11). */
+const RDV_PAGE = "src/app/[slug]/rdv/[ticketTypeId]/page.tsx";
+
 /** The matches of `re` (global) in `text` that start in code: one in a comment or inside a string literal is not counted (G4b). */
 function inCode(text: string, re: RegExp): string[] {
   const code = codeView(text);
@@ -83,7 +86,11 @@ test("the offer page passes the form what a visitor may know of themselves, form
   );
   assert.match(page, /formatMoney\(offer\.priceCents, pro\.currency\)/);
   assert.match(page, /const testMode = payment === "live" \? null : payment;/);
-  assert.match(page, /return offerMetadata\(loaded\);/, "the URL may carry p: offerMetadata never sends the referrer (page-metadata.test.ts)");
+  assert.match(
+    page,
+    /return offerMetadata\(loaded, await searchParams\);/,
+    "the URL may carry p: offerMetadata never sends the referrer and never indexes a payment return (page-metadata.test.ts)",
+  );
   assert.doesNotMatch(page, /\b(customerId|ownerUserId|userId)=\{/, "no identity in a prop");
 });
 
@@ -187,6 +194,7 @@ test("an impersonating admin sees the payment block read-only and no Checkout UR
   for (const [page, call] of [
     [seancePage(), /paymentReturnOf\(\{ slug: pro\.slug, tz: pro\.timezone, now, readOnly, reference: refView, ownerFacts, ownerPending \}\)/],
     [bodyOf(source("src/app/[slug]/offre/[offerId]/page.tsx"), "OfferPage"), /checkoutBlockOf\(refView, \{ slug, tz: pro\.timezone, now, readOnly \}\)/],
+    [bodyOf(source(RDV_PAGE), "RdvPage"), /checkoutBlockOf\(refView, \{ slug: pro\.slug, tz, now, readOnly \}\)/],
   ] as const) {
     assert.equal(inCode(page, /const readOnly = visitor\.state === "impersonating";/g).length, 1);
     assert.match(page, call, "the block is told");
@@ -448,10 +456,16 @@ test("the [slug] layout refuses a segment that is no slug before any read, then 
   assert.doesNotMatch(body, /\.suspended|publicPageExists|getPublicProfile|resolvePublicPro/, "a suspended pro still exists here (merci keeps working)");
 });
 
-test("the offer metadata comes from offerMetadata: a page that 404s or whose offer is no longer sold is titled as the 404 (G4b)", () => {
-  const metadata = bodyOf(source("src/app/[slug]/offre/[offerId]/page.tsx"), "generateMetadata");
-  assert.match(metadata, /const loaded = await loadOffer\(slug, offerId\);\s*return offerMetadata\(loaded\);/);
+test("the offer metadata is offerMetadata of the offer and the URL's query, never the viewer: a 404, an offer no longer sold and a payment return are never indexed (G4b, SEC-6)", () => {
+  const text = source("src/app/[slug]/offre/[offerId]/page.tsx");
+  const metadata = bodyOf(text, "generateMetadata");
+  assert.doesNotMatch(metadata, /currentPublicVisitor|cookies\(|headers\(/);
+  assert.match(
+    metadata,
+    /^export async function generateMetadata\(\{ params, searchParams \}: Props\): Promise<Metadata> \{\s*const \{ slug, offerId \} = await params;\s*const loaded = await loadOffer\(slug, offerId\);\s*return offerMetadata\(loaded, await searchParams\);\s*\}\s*$/,
+  );
   assert.doesNotMatch(codeView(metadata), /businessName|title:/, "no title is built here");
+  assert.match(text, /^import \{ offerMetadata \} from "@\/lib\/public\/page-metadata";\r?$/m);
 });
 
 test("/[slug] takes one clock per request and hands it to every read and every view function (G4a)", () => {
@@ -494,6 +508,7 @@ test("no element of the public pages receives the pro whole: pro=, profile= and 
     "src/app/[slug]/seance/[occurrenceId]/page.tsx",
     "src/app/[slug]/offre/[offerId]/page.tsx",
     "src/app/[slug]/merci/page.tsx",
+    RDV_PAGE,
   ]) {
     const tags = allTags(source(path));
     assert.ok(tags.length > 0, `${path}: the scan reads its markup`);
@@ -546,7 +561,7 @@ test("the séance, offer, thank-you and espace pages read the pro through the la
   assert.match(queries, /currentPublicVisitor\(pro\.professionalId, pro\.ownerUserId\)/);
   // The suspension rule of each page is as it was: the merci page asks for a suspended pro, no other page does.
   assert.equal(inCode(source("src/app/[slug]/merci/page.tsx"), /resolvePublicPro\(slug, \{ includeSuspended: true \}\)/g).length, 2, "the title and the page");
-  for (const path of ["src/app/[slug]/seance/[occurrenceId]/page.tsx", "src/app/[slug]/offre/[offerId]/page.tsx"]) {
+  for (const path of ["src/app/[slug]/seance/[occurrenceId]/page.tsx", "src/app/[slug]/offre/[offerId]/page.tsx", RDV_PAGE]) {
     assert.deepEqual(inCode(source(path), /includeSuspended/g), [], `${path}: a suspended pro is offline`);
     assert.equal(inCode(source(path), /\bresolvePublicPro\(slug\)/g).length, 1, `${path}: one read, memoized for the metadata and the page`);
   }
@@ -558,15 +573,130 @@ test("every not-found metadata of a public page is notFoundMetadata(): noindex a
     "src/app/[slug]/merci/page.tsx",
     "src/app/[slug]/seance/[occurrenceId]/page.tsx",
     "src/app/[slug]/offre/[offerId]/page.tsx",
+    RDV_PAGE,
   ]) {
     const text = source(path);
     assert.doesNotMatch(text, /title: "Page introuvable"/, `${path}: the 404's title comes from notFoundMetadata`);
-    // The offer and séance pages return offerMetadata / seanceMetadata, whose unknown branch is notFoundMetadata()
-    // (page-metadata.test.ts); the other two call it themselves.
-    if (!path.includes("offre") && !path.includes("seance")) {
+    // The offer, séance and RDV pages return offerMetadata / seanceMetadata / rdvMetadata, whose unknown branch is
+    // notFoundMetadata() (page-metadata.test.ts); the other two call it themselves.
+    if (!/\/(?:offre|seance|rdv)\//.test(path)) {
       assert.match(text, /return notFoundMetadata\(\);/, `${path}: its unknown-pro branch`);
       assert.match(text, /^import \{ notFoundMetadata \} from "@\/lib\/public\/page-metadata";\r?$/m, path);
     }
   }
   assert.match(bodyOf(HOME, "generateMetadata"), /if \(!page \|\| page\.suspended\) return notFoundMetadata\(\);/);
+});
+
+/* ───────────────────────── the RDV libre page (P5 T11, § 3.3, § 3.11) ───────────────────────── */
+
+const rdvPage = (): string => bodyOf(source(RDV_PAGE), "RdvPage");
+
+test("the RDV metadata is rdvMetadata of the type and the URL's query, never the viewer: every 404 case and a payment return are never indexed (§ 3.11, SEC-6)", () => {
+  const text = source(RDV_PAGE);
+  const metadata = bodyOf(text, "generateMetadata");
+  assert.doesNotMatch(metadata, /currentPublicVisitor|cookies\(|headers\(/);
+  assert.match(
+    metadata,
+    /^export async function generateMetadata\(\{ params, searchParams \}: Props\): Promise<Metadata> \{\s*const \{ slug, ticketTypeId \} = await params;\s*const loaded = await loadRdv\(slug, ticketTypeId\);\s*return rdvMetadata\(loaded, await searchParams\);\s*\}\s*$/,
+  );
+  assert.doesNotMatch(codeView(metadata), /businessName|title:|referrer:/, "no title and no referrer rule is built here: rdvMetadata gives no-referrer");
+  assert.match(text, /^import \{ rdvMetadata \} from "@\/lib\/public\/page-metadata";\r?$/m);
+});
+
+test("the RDV page takes one clock per request and refuses a malformed id before any read: one loader, one path to notFound() (G4a, § 3.3)", () => {
+  const text = source(RDV_PAGE);
+  const start = text.indexOf("const loadRdv = cache(");
+  const end = text.indexOf("export async function generateMetadata");
+  assert.ok(start !== -1 && end > start, "the loader sits above generateMetadata");
+  const loader = codeView(text.slice(start, end));
+  assert.equal((loader.match(/new Date\(\)/g) ?? []).length, 1, "the loader reads the clock once");
+  const shape = loader.indexOf("if (!idSchema.safeParse(ticketTypeId).success) return null;");
+  assert.ok(shape !== -1 && shape < loader.indexOf("resolvePublicPro(slug)"), "the id's shape before the pro is read");
+  assert.match(loader, /getRdvTypePage\(resolved\.pro, ticketTypeId, now\)/);
+  assert.match(loader, /return \{ \.\.\.resolved, type, now \};/);
+  const page = rdvPage();
+  assert.doesNotMatch(codeView(page), /new Date\(/, "the page never reads the clock itself");
+  assert.match(page, /const \{ pro, branding, type, now \} = loaded;/);
+  // Every 404 (unknown slug, malformed, unknown, foreign, archived, not RDV-enabled, duration-less) is decided before the
+  // visitor is read, by the one loader: no response tells them apart (no oracle).
+  const visitorAt = page.indexOf("currentPublicVisitor(");
+  assert.ok(page.indexOf("if (!loaded) notFound();") < visitorAt && page.indexOf("if (!type) notFound();") < visitorAt);
+  assert.match(page, /getRdvWeek\(pro, type\.ticketTypeId, weekKey, now\)/);
+  assert.match(page, /if \(!week\) notFound\(\);/);
+  assert.match(page, /const weekKey = rdvWeekKey\(one\(query\.semaine\), now, tz, type\.window\);/, "the week of the URL, or the default one (O28)");
+  assert.doesNotMatch(codeView(source(RDV_PAGE)), /export const (?:dynamic|revalidate|fetchCache)\b|unstable_cache|"use cache"/, "no cache directive: a dynamic page");
+});
+
+test("the RDV page shows a ?p= reference only on paiement=annule, through the slug's pro and referenceForPage of this very type (Decision 71, § 3.8)", () => {
+  const page = rdvPage();
+  assert.match(page, /const referenceId = one\(query\.paiement\) === "annule" \? one\(query\.p\) : undefined;/);
+  assert.match(page, /referenceId \? getPurchaseReference\(pro\.professionalId, referenceId, now\) : Promise\.resolve\(null\)/);
+  assert.match(page, /referenceForPage\(reference, \{ kind: "rdv", ticketTypeId: type\.ticketTypeId \}, owner\)/);
+  assert.match(page, /<CheckoutReturn key=\{checkout\.purchaseId\} \{\.\.\.checkout\} \/>/);
+  assert.match(page, /\.filter\(\(h\) => h\.purchaseId !== checkout\?\.purchaseId\)/, "the purchase shown by the block is not listed twice");
+});
+
+test("the RDV page reads the wallet, the holds and the tickets of THIS type for the Owner only (Decisions 63, 71; P4 Review Focus 6)", () => {
+  const page = rdvPage();
+  assert.match(page, /owner \? getCustomerSpacePage\(pro\.professionalId, owner\.customerId, now\) : Promise\.resolve\(null\)/);
+  assert.match(page, /owner \? getLivePendingHolds\(pro\.professionalId, owner\.customerId, now\) : Promise\.resolve\(\[\]\)/);
+  assert.match(
+    page,
+    /owner && !type\.isFree \? getRdvOwnerTickets\(pro\.professionalId, owner\.customerId, type\.ticketTypeId\) : Promise\.resolve\(null\)/,
+  );
+  assert.equal(inCode(page, /\bgetRdvOwnerTickets\(/g).length, 1);
+  assert.match(page, /\{visitor\.owner && \(\s*<div[^>]*>\s*<PendingHolds slug=\{pro\.slug\} holds=\{holdRows\} \/>/);
+  assert.match(page, /<WalletPanel slug=\{pro\.slug\} businessName=\{pro\.businessName\} wallet=\{space\.wallet\} variant="compact" \/>/);
+});
+
+test("the RDV page mounts the release status, the confirmation banner and the sign-in line once, outside every condition (G4c, UI-1)", () => {
+  const page = rdvPage();
+  assert.equal(inCode(page, /<ReleaseStatus \/>/g).length, 1);
+  assert.match(page, /^\s*<ReleaseStatus \/>\r?$/m, "on its own line, with no && or ternary around it");
+  assert.ok(page.indexOf("<ReleaseStatus />") < page.indexOf("<CheckoutReturn"), "mounted before the block it speaks for");
+  assert.equal(inCode(page, /<SignInStatus \/>/g).length, 1, "one sign-in line");
+  assert.match(page, /^\s*<SignInStatus \/>\r?$/m, "outside every condition: the booking block it speaks for is remounted on sign-in");
+  assert.match(source(RDV_PAGE), /^import \{ SignInStatus \} from "@\/components\/auth\/sign-in-status";\r?$/m);
+  assert.equal((page.match(/<VerifyEmailBanner/g) ?? []).length, 1, "one instance");
+  assert.match(page, /\{visitor\.email !== null && <VerifyEmailBanner email=\{visitor\.email\} verified=\{visitor\.state === "verified"\} \/>\}/);
+  assert.ok(page.indexOf("<VerifyEmailBanner") < page.indexOf("<RdvBooking"), "above the booking block the refresh may swap");
+  assert.match(page, /\{visitor\.isPageOwner && <OwnerPreviewBanner \/>\}/);
+});
+
+test("the RDV heading takes the focus after a sign-in (RDV_HEADING_ID, tabIndex -1), in every state of the page (UI-1)", () => {
+  const page = rdvPage();
+  assert.match(page, /<h2\s+id=\{RDV_HEADING_ID\}\s+tabIndex=\{-1\}/);
+  assert.ok(page.indexOf("<h2") < page.indexOf("{closed ? ("), "above the closed / empty / booking switch");
+  assert.match(source(RDV_PAGE), /^import \{ RDV_HEADING_ID \} from "@\/lib\/public-anchors";\r?$/m);
+});
+
+test("the RDV booking block gets picked strings only: no row, no Date, no identifier of a customer, the visitor's own e-mail when verified (§ 3.1)", () => {
+  const page = rdvPage();
+  const tag = openingTags(page, "RdvBooking");
+  assert.equal(tag.length, 1, "one booking block");
+  const props = tag[0].text;
+  assert.doesNotMatch(props, /\b(ownerUserId|userId|customerId|bookingId|professionalId|owner)=\{/, "no identity and no row in a prop");
+  assert.doesNotMatch(props, /type=\{type\}|week=\{week\}|\.toISOString\(\)|startsAt=|new Date/, "the type and the week travel as view models");
+  assert.match(props, /days=\{days\}/);
+  assert.match(page, /const days = rdvDaysVM\(week\.days, tz\);/, "the chips' labels and ISO starts are the server's, in the pro's zone");
+  assert.match(props, /email: visitor\.state === "verified" \? visitor\.email : null,/);
+  assert.match(props, /name: visitor\.state === "verified" \? visitor\.name : null,/);
+  assert.match(props, /returnTo=\{`\/\$\{pro\.slug\}\/rdv\/\$\{type\.ticketTypeId\}`\}/, "a sign-in comes back to the page, never with a p");
+  assert.match(props, /coversUntil: o\.coversUntil,/, "the per-slot offer list is decided by ISO strings (R26)");
+  assert.match(
+    props,
+    /key=\{`\$\{nav\.weekKey\}:\$\{visitor\.state\}:\$\{refView\?\.purchaseId \?\? ""\}`\}/,
+    "a new week, a sign-in or a new reference starts the block over",
+  );
+});
+
+test("the RDV page says when nothing can be booked: never bookable, an empty week with its next-week link, and the time-zone line (O14, R51, O30)", () => {
+  const page = rdvPage();
+  assert.match(page, /const closed = type\.neverBookable \|\| week\.neverBookable;/);
+  assert.match(page, /\{COPY\.RDV_CLOSED\}/);
+  assert.match(page, /\{COPY\.RDV_EMPTY_WEEK\}/);
+  assert.match(page, /\{nav\.nextHref && \(/, "the next week only while it is within the horizon");
+  assert.match(page, /rdvWeekNav\(\{ slug: pro\.slug, ticketTypeId: type\.ticketTypeId, weekKey, now, tz, window: type\.window \}\)/);
+  assert.match(page, /\{rdvTimeZoneLine\(timeZoneLabel\(tz\)\)\}/);
+  assert.match(page, /testMode=\{testMode\}/);
 });

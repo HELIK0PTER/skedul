@@ -46,13 +46,14 @@ const loadOffer = cache(async (slug: string, offerId: string) => {
 /**
  * « {label} · {business} » for an offer on sale; the 404's metadata (« Page introuvable », not indexed) for every other
  * case: an unknown slug, an unknown or another pro's offer (the page answers notFound()) and an offer no longer sold (the
- * page says so, G4b). The URL may carry `p` (the cancel URL of a Checkout), so the referrer is not sent (offerMetadata,
- * page-metadata.test.ts).
+ * page says so, G4b). The URL may carry `p` (the cancel URL of a Checkout), so the referrer is not sent, and a payment
+ * return is neither indexed nor followed (SEC-6): offerMetadata of the offer and the page's own query, never the viewer
+ * (page-metadata.test.ts).
  */
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
+export async function generateMetadata({ params, searchParams }: Props): Promise<Metadata> {
   const { slug, offerId } = await params;
   const loaded = await loadOffer(slug, offerId);
-  return offerMetadata(loaded);
+  return offerMetadata(loaded, await searchParams);
 }
 
 /**

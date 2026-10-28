@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { PublicOfferDetail } from "./offer-reads";
-import { isPaymentReturn, notFoundMetadata, offerMetadata, seanceMetadata } from "./page-metadata";
+import { isPaymentReturn, notFoundMetadata, offerMetadata, rdvMetadata, seanceMetadata } from "./page-metadata";
 
 const pro = { businessName: "Altinha Paris" };
 const onSale = { kind: "on_sale", label: "Carnet de 4" } as PublicOfferDetail;
@@ -15,23 +15,76 @@ test("notFoundMetadata: the 404's own title, not indexed, no referrer, a fresh o
 });
 
 test("offerMetadata: no page (an unknown slug, an unknown offer, another pro's offer) is titled as the 404, never with the business name (G4b)", () => {
-  assert.deepEqual(offerMetadata(null), NOT_FOUND, "unknown slug");
-  assert.deepEqual(offerMetadata({ pro, offer: null }), NOT_FOUND, "unknown or foreign offer: getOfferPage is null, the page answers notFound()");
+  assert.deepEqual(offerMetadata(null, {}), NOT_FOUND, "unknown slug");
+  assert.deepEqual(offerMetadata({ pro, offer: null }, {}), NOT_FOUND, "unknown or foreign offer: getOfferPage is null, the page answers notFound()");
 });
 
 test("offerMetadata: an offer on sale is « label · business », indexable, without referrer (the URL may carry p)", () => {
-  assert.deepEqual(offerMetadata({ pro, offer: onSale }), { title: "Carnet de 4 · Altinha Paris", referrer: "no-referrer" });
+  assert.deepEqual(offerMetadata({ pro, offer: onSale }, {}), { title: "Carnet de 4 · Altinha Paris", referrer: "no-referrer" });
 });
 
 test("offerMetadata: an offer no longer sold (archived, paused, its type archived) gets the unknown-slug metadata, never the business name (G4b brief, Item 6)", () => {
   // The page body says « Cette offre n'est plus proposée » and leads back to the Boutique; its metadata is the 404's, so
   // an archived offer id and an unknown one carry the same title.
-  assert.deepEqual(offerMetadata({ pro, offer: unavailable }), NOT_FOUND);
-  assert.doesNotMatch(String(offerMetadata({ pro, offer: unavailable }).title), /Altinha Paris/, "no business name");
+  assert.deepEqual(offerMetadata({ pro, offer: unavailable }, {}), NOT_FOUND);
+  assert.doesNotMatch(String(offerMetadata({ pro, offer: unavailable }, {}).title), /Altinha Paris/, "no business name");
 });
 
 const seance = { kind: "seance", title: "Altinha débutants", isPrivate: false, archived: false } as const;
 const NOT_FOLLOWED = { index: false, follow: false };
+/** The payment-return queries of SEC-6: `p` or `paiement`, whatever the value (an empty one, a repeated one). */
+const PAYMENT_RETURNS = [{ p: "pur_1" }, { paiement: "annule" }, { paiement: "ok", p: "pur_1" }, { p: "" }, { p: ["a", "b"] }, { paiement: [] }];
+
+test("offerMetadata: a payment-return URL (the cancel URL of a shop Checkout carries p and paiement) is neither indexed nor followed, every other field kept (SEC-6, P5 carry)", () => {
+  for (const query of PAYMENT_RETURNS) {
+    const label = JSON.stringify(query);
+    assert.deepEqual(
+      offerMetadata({ pro, offer: onSale }, query),
+      { title: "Carnet de 4 · Altinha Paris", referrer: "no-referrer", robots: NOT_FOLLOWED },
+      label,
+    );
+    assert.deepEqual(offerMetadata({ pro, offer: unavailable }, query), { ...NOT_FOUND, robots: NOT_FOLLOWED }, label);
+    assert.deepEqual(offerMetadata(null, query), { ...NOT_FOUND, robots: NOT_FOLLOWED }, label);
+  }
+  assert.deepEqual(offerMetadata({ pro, offer: onSale }, { semaine: "2030-01-07" } as never), {
+    title: "Carnet de 4 · Altinha Paris",
+    referrer: "no-referrer",
+  });
+  assert.notEqual(offerMetadata(null, { p: "x" }).robots, offerMetadata(null, { p: "x" }).robots, "a fresh object each time");
+});
+
+const rdvType = { name: "Cours particulier" };
+
+test("rdvMetadata: an RDV type of this pro is « name · business », indexable, without referrer (the URL may carry p) (P5 § 3.11)", () => {
+  assert.deepEqual(rdvMetadata({ pro, type: rdvType }, {}), { title: "Cours particulier · Altinha Paris", referrer: "no-referrer" });
+  assert.deepEqual(
+    rdvMetadata({ pro, type: rdvType }, { semaine: "2026-11-02" } as never),
+    { title: "Cours particulier · Altinha Paris", referrer: "no-referrer" },
+    "the week is no payment return",
+  );
+});
+
+test("rdvMetadata: every case the page answers notFound() for gets the 404's metadata, never the business name (one path, no oracle)", () => {
+  // An unknown slug, then a malformed, unknown, foreign, archived, not RDV-enabled or duration-less type: getRdvTypePage
+  // answers null for all of them, so they cannot be told apart from the title.
+  assert.deepEqual(rdvMetadata(null, {}), NOT_FOUND, "unknown slug");
+  assert.deepEqual(rdvMetadata({ pro, type: null }, {}), NOT_FOUND, "no bookable RDV type of this pro");
+  assert.doesNotMatch(String(rdvMetadata({ pro, type: null }, {}).title), /Altinha Paris/);
+  assert.notEqual(rdvMetadata(null, {}), rdvMetadata(null, {}), "a fresh object each time");
+});
+
+test("rdvMetadata: a payment-return URL is neither indexed nor followed, whatever the type, every other field kept (SEC-6)", () => {
+  for (const query of PAYMENT_RETURNS) {
+    const label = JSON.stringify(query);
+    assert.deepEqual(
+      rdvMetadata({ pro, type: rdvType }, query),
+      { title: "Cours particulier · Altinha Paris", referrer: "no-referrer", robots: NOT_FOLLOWED },
+      label,
+    );
+    assert.deepEqual(rdvMetadata({ pro, type: null }, query), { ...NOT_FOUND, robots: NOT_FOLLOWED }, label);
+    assert.deepEqual(rdvMetadata(null, query), { ...NOT_FOUND, robots: NOT_FOLLOWED }, label);
+  }
+});
 
 test("seanceMetadata: a public séance is « title · business », indexable; every other case carries the business name only, not indexed (SEC-M10)", () => {
   assert.deepEqual(seanceMetadata({ pro, detail: seance }, {}), { title: "Altinha débutants · Altinha Paris", referrer: "no-referrer" });
