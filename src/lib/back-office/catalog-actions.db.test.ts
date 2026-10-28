@@ -28,6 +28,7 @@ import {
 } from "./catalog-actions";
 import { getTicketTypeDetail, listActiveTypeOptions, listTicketTypes } from "./catalog-reads";
 import { NOTICE_TOO_LONG } from "./notice";
+import { offerPriceMinimumError } from "./offer-price";
 import type { CoreResult } from "./result";
 
 const NOT_FOUND = "Type ou offre introuvable.";
@@ -331,7 +332,7 @@ dbTest("createOfferCore: validation, rdv_free types and archived types are refus
   const archived = await makeType(db, pro);
   must(await setTicketTypeArchived(db, { professionalId: pro.proId, ticketTypeId: archived, archived: true }), "archive");
 
-  refused(await createOfferCore(db, ctx, { ticketTypeId: typeId, quantity: 1, priceCents: 0 }, now), "Prix : minimum 1.", "free offer");
+  refused(await createOfferCore(db, ctx, { ticketTypeId: typeId, quantity: 1, priceCents: 0 }, now), offerPriceMinimumError("eur"), "free offer");
   refused(
     await createOfferCore(db, ctx, { ticketTypeId: typeId, quantity: 1, priceCents: 2500, validityCount: 3 }, now),
     "Indiquez une durée et une unité de validité, ou aucune.",
@@ -348,6 +349,46 @@ dbTest("createOfferCore: validation, rdv_free types and archived types are refus
   assert.deepEqual(
     [offer.id, offer.label, offer.quantity, offer.priceCents, offer.validityText, offer.isActive],
     [created.offerId, "Carnet de 4", 4, 8500, "3 mois", true],
+  );
+});
+
+dbTest("a paid offer is payable on Stripe: create and update refuse a price under 0,50 €, 50 cents is accepted, and an older offer under it is not put back en vente (P4 final review PAY-3)", async ({ db, pro }) => {
+  const ctx = proCtx(pro);
+  const now = new Date();
+  const typeId = await makeType(db, pro);
+  const minimum = offerPriceMinimumError(ctx.currency);
+  assert.equal(minimum.replace(/[  ]/g, " "), "Prix : minimum 0,50 €.");
+
+  refused(await createOfferCore(db, ctx, { ticketTypeId: typeId, quantity: 1, priceCents: 49 }, now), minimum, "create at 49 cents");
+  assert.deepEqual((await detailOf(db, pro, typeId, now)).offers, [], "the refusal created nothing");
+  const created = await createOfferCore(db, ctx, { ticketTypeId: typeId, quantity: 1, priceCents: 50 }, now);
+  must(created, "create at 50 cents");
+
+  refused(
+    await updateOfferCore(db, ctx, { offerId: created.offerId, offer: { ticketTypeId: typeId, quantity: 1, priceCents: 49 } }, now),
+    minimum,
+    "update to 49 cents",
+  );
+  assert.deepEqual((await detailOf(db, pro, typeId, now)).offers.map((o) => o.priceCents), [50], "the refusal changed nothing");
+  must(
+    await updateOfferCore(db, ctx, { offerId: created.offerId, offer: { ticketTypeId: typeId, quantity: 2, priceCents: 50 } }, now),
+    "update at 50 cents",
+  );
+
+  // An offer written under the minimum before the rule (the engine and the DB CHECK still take 1 cent): it can be taken
+  // off sale, and it is not put back en vente until its price is raised.
+  const older = await makeOffer(db, pro, typeId, { quantity: 1, priceCents: 30 });
+  must(await setOfferActiveCore(db, ctx, { offerId: older, isActive: false }, now), "take the older offer off sale");
+  refused(
+    await setOfferActiveCore(db, ctx, { offerId: older, isActive: true }, now),
+    `${minimum} Modifiez son prix pour la mettre en vente.`,
+    "put the older offer back en vente",
+  );
+  const olderRow = (await detailOf(db, pro, typeId, now)).offers.find((o) => o.id === older);
+  assert.equal(olderRow?.isActive, false, "the refused switch left it off sale");
+  must(
+    await updateOfferCore(db, ctx, { offerId: older, offer: { ticketTypeId: typeId, quantity: 1, priceCents: 500, isActive: true } }, now),
+    "raise its price and put it en vente",
   );
 });
 

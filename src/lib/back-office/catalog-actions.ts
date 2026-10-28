@@ -40,6 +40,7 @@ import { parseFr } from "@/lib/zod-fr";
 
 import { readFreeBlockers, readProWindow } from "./catalog-reads";
 import { NOTICE_TOO_LONG, noticeExceedsHorizon } from "./notice";
+import { offerPriceMinimumError, offerPriceRefusal, stripeMinimumCents } from "./offer-price";
 import { actionFail, fromEngine, type ActionFail, type CoreResult, type ProCtx } from "./result";
 import { mergeAvailabilityRules } from "./week-hours";
 
@@ -243,14 +244,26 @@ export async function deleteTicketTypeCore(
 
 /* ───────────────────────────── Offers ───────────────────────────── */
 
-/** parseFr(offerInputSchema); the type must be the pro's, not archived, not rdv_free (RDV_FREE_NO_OFFER); createOffer. */
+/**
+ * parseFr(offerInputSchema, input), then the Stripe minimum of the pro's currency (P4 final review PAY-3): a price under
+ * it, 0 included, is refused with « Prix : minimum 0,50 € » (offerPriceRefusal), never the schema's « minimum 1 », a
+ * count of cents the pro never typed. The schema's other refusals stand when the price is not under it.
+ */
+function parseOffer(input: unknown, currency: string) {
+  const parsed = parseFr(offerInputSchema, input);
+  const price = typeof input === "object" && input !== null ? (input as { priceCents?: unknown }).priceCents : undefined;
+  const underMinimum = offerPriceRefusal(price, currency);
+  return underMinimum === null ? parsed : { ok: false as const, error: underMinimum };
+}
+
+/** parseOffer (the schema, then the Stripe minimum of ctx.currency); the type must be the pro's, not archived, not rdv_free (RDV_FREE_NO_OFFER); createOffer. */
 export async function createOfferCore(
   db: Db,
   ctx: ProCtx,
   input: OfferInput,
   now: Date,
 ): Promise<CoreResult<{ offerId: string }>> {
-  const parsed = parseFr(offerInputSchema, input);
+  const parsed = parseOffer(input, ctx.currency);
   if (!parsed.ok) return actionFail(parsed.error);
   const [type] = await db
     .select({ rdvFree: ticketType.rdvFree })
@@ -268,7 +281,7 @@ export async function createOfferCore(
   return res.ok ? res : fromEngine(res, "catalog");
 }
 
-/** parseFr(offerInputSchema) with ticketTypeId forced to the offer's own type; no en vente offer on an rdv_free type (RDV_FREE_OFFER_STAYS_OFF); updateOffer. */
+/** parseOffer (the schema, then the Stripe minimum of ctx.currency) with ticketTypeId forced to the offer's own type; no en vente offer on an rdv_free type (RDV_FREE_OFFER_STAYS_OFF); updateOffer. */
 export async function updateOfferCore(
   db: Db,
   ctx: ProCtx,
@@ -279,7 +292,7 @@ export async function updateOfferCore(
   if (!head.ok) return actionFail(head.error);
   const row = await readOffer(db, ctx.professionalId, head.data.offerId);
   if (!row) return notFound();
-  const parsed = parseFr(offerInputSchema, { ...head.data.offer, ticketTypeId: row.ticketTypeId });
+  const parsed = parseOffer({ ...head.data.offer, ticketTypeId: row.ticketTypeId }, ctx.currency);
   if (!parsed.ok) return actionFail(parsed.error);
   const refusal = await freeTypeRefusal(db, ctx.professionalId, row.ticketTypeId, parsed.data.isActive);
   if (refusal) return refusal;
@@ -287,7 +300,11 @@ export async function updateOfferCore(
   return res.ok ? res : fromEngine(res, "catalog");
 }
 
-/** « En vente » toggle: reads the offer (pro, not archived), refuses to put it en vente on an rdv_free type (RDV_FREE_OFFER_STAYS_OFF) and calls updateOffer with its fields and the new isActive. */
+/**
+ * « En vente » toggle: reads the offer (pro, not archived), refuses to put it en vente on an rdv_free type
+ * (RDV_FREE_OFFER_STAYS_OFF) or under the Stripe minimum of ctx.currency (an offer written before PAY-3: it can be
+ * taken off sale, never put back on it until its price is raised) and calls updateOffer with its fields and the new isActive.
+ */
 export async function setOfferActiveCore(
   db: Db,
   ctx: ProCtx,
@@ -298,6 +315,9 @@ export async function setOfferActiveCore(
   if (!parsed.ok) return actionFail(parsed.error);
   const row = await readOffer(db, ctx.professionalId, parsed.data.offerId);
   if (!row) return notFound();
+  if (parsed.data.isActive && row.priceCents < stripeMinimumCents(ctx.currency)) {
+    return actionFail(`${offerPriceMinimumError(ctx.currency)} Modifiez son prix pour la mettre en vente.`);
+  }
   const refusal = await freeTypeRefusal(db, ctx.professionalId, row.ticketTypeId, parsed.data.isActive);
   if (refusal) return refusal;
   const res = await updateOffer(

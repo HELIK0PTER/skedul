@@ -1,14 +1,16 @@
 /**
  * The offer dialog's form model (spec § 13.1 « Offres »): strings as typed,
  * converted to an OfferInput before the Server Action. Whole-number and price
- * syntax are checked here (no round trip for a typo); the numeric bounds and
- * every other rule stay with the server, whose French messages the dialog
- * shows under the field they belong to.
+ * syntax are checked here (no round trip for a typo), and so are the price's
+ * maximum and its Stripe minimum (offer-price.ts, with the server's own
+ * message); the other numeric bounds and every other rule stay with the
+ * server, whose French messages the dialog shows under the field they belong to.
  */
 import type { OfferInput } from "@/lib/tickets";
 import { BOUNDS, type ValidityUnit } from "@/lib/tickets-vocab";
 
 import { moneyInputValue, parseMoneyInput } from "./format";
+import { offerPriceRefusal } from "./offer-price";
 
 export type ValidityChoice = "none" | "day" | "month";
 export type OfferField = "quantity" | "price" | "label" | "validity";
@@ -54,7 +56,8 @@ export type OfferFormResult = { ok: true; input: OfferInput } | { ok: false; fie
 
 const WHOLE = /^\d+$/;
 
-export function offerInputFromForm(ticketTypeId: string, f: OfferFormValues): OfferFormResult {
+/** The form as an OfferInput; `currency` is the pro's, whose Stripe minimum the price must reach (the server's own refusal, P4 final review PAY-3). */
+export function offerInputFromForm(ticketTypeId: string, f: OfferFormValues, currency: string): OfferFormResult {
   const quantity = f.quantity.trim();
   if (!WHOLE.test(quantity)) return { ok: false, field: "quantity", error: "Quantité : indiquez un nombre entier." };
 
@@ -64,6 +67,8 @@ export function offerInputFromForm(ticketTypeId: string, f: OfferFormValues): Of
     const max = (BOUNDS.offerPriceCents.max / 100).toLocaleString("fr-FR");
     return { ok: false, field: "price", error: `Prix invalide : ${max} au maximum.` };
   }
+  const underMinimum = offerPriceRefusal(priceCents, currency);
+  if (underMinimum !== null) return { ok: false, field: "price", error: underMinimum };
 
   let validityCount: number | null = null;
   let validityUnit: ValidityUnit | null = null;

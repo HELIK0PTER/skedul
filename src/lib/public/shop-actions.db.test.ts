@@ -240,6 +240,36 @@ dbTest("shop purchase: a gateway failure expires the purchase and answers CHECKO
   assert.equal(lines[0].includes("cs_test_"), false);
 });
 
+dbTest("shop purchase: an offer written under the Stripe minimum before PAY-3 gets the neutral CHECKOUT_FAILED when Stripe refuses its amount, never Stripe's text", async (h, t) => {
+  const typeId = await makeType(h.db, h.pro, { name: "Roda libre" });
+  // The engine and the DB CHECK still take 1 cent: only the back-office cores refuse a price under 0,50 € (PAY-3).
+  const offerId = await makeOffer(h.db, h.pro, typeId, { quantity: 1, priceCents: 30 });
+  const lines: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  });
+  const fake = fakeCheckout("test");
+  // What Stripe answers for a Checkout under its minimum (an invalid_request_error with code amount_too_small).
+  fake.create = async (req) => {
+    fake.created.push(req);
+    throw Object.assign(new Error("The Checkout Session's total amount due must add up to at least €0.50 eur"), {
+      type: "StripeInvalidRequestError",
+      code: "amount_too_small",
+    });
+  };
+
+  const { res } = await run(h, shopInput({ offerId }), { fake });
+  assert.equal(fake.created[0].amountCents, 30, "the offer's price reached the gateway");
+  assert.ok(!res.ok);
+  assert.equal(res.error, COPY.CHECKOUT_FAILED);
+  assert.equal(res.code, undefined);
+  assert.equal(JSON.stringify(res).includes("amount"), false, "nothing of Stripe's answer reaches the browser");
+  const [purchase] = await purchasesOf(h);
+  assert.equal(purchase.status, "expired", "the pending purchase is released at once");
+  assert.equal(lines.length, 1);
+  assert.ok(lines[0].startsWith("[public] checkout create failed: "), lines[0]);
+});
+
 dbTest("shop purchase: a refused attachment expires the session and says the offer changed", async (h) => {
   const s = await setup(h);
   const fake = fakeCheckout("test");

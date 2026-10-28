@@ -25,12 +25,15 @@ import {
   type OfferFormValues,
   type ValidityChoice,
 } from "@/lib/back-office/offer-form";
+import { stripeMinimumCents } from "@/lib/back-office/offer-price";
 import { callOrFail } from "@/lib/pro-messages";
 import { formatMoney } from "@/lib/utils";
 import { createOfferAction, deleteOfferAction, setOfferActiveAction, updateOfferAction } from "@/server/pro-catalog";
 
 const QUANTITY_HELP = "Nombre de tickets de l'offre : 1 pour « À l'unité ».";
-const PRICE_HELP = "Pas d'offre gratuite : pour donner des tickets, utilisez « Offrir » dans la fiche client.";
+/** The price help names the Stripe minimum of the pro's currency, which the dialog and the server both enforce (P4 final review PAY-3). */
+const priceHelp = (currency: string): string =>
+  `Minimum ${formatMoney(stripeMinimumCents(currency), currency)}. Pas d'offre gratuite : pour donner des tickets, utilisez « Offrir » dans la fiche client.`;
 const LABEL_HELP = "Laissé vide : « À l'unité » ou « Carnet de N ».";
 const VALIDITY_HELP = "Comptée à partir de l'achat ; le ticket reste valable jusqu'à la fin du dernier jour.";
 
@@ -319,7 +322,7 @@ function OfferDialog({
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (pending) return;
-    const built = offerInputFromForm(ticketTypeId, values);
+    const built = offerInputFromForm(ticketTypeId, values, currency);
     if (!built.ok) {
       setError({ field: built.field, message: built.error });
       refused();
@@ -355,7 +358,7 @@ function OfferDialog({
             onChange={(e) => set("quantity", e.target.value)}
           />
         </FormField>
-        <FormField label={`Prix (${currencySymbol(currency)})`} htmlFor={`${uid}-price`} help={PRICE_HELP} error={under("price")}>
+        <FormField label={`Prix (${currencySymbol(currency)})`} htmlFor={`${uid}-price`} help={priceHelp(currency)} error={under("price")}>
           <Input
             id={`${uid}-price`}
             inputMode="decimal"
