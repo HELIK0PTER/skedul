@@ -271,7 +271,7 @@ dbTest("resolveSpaceIdentity: an UNVERIFIED session is the banner kind, never an
     guestCustomerId: null,
   });
 
-  // The personal link of that customer still opens a read-only space next to the banner.
+  // The personal link of that customer still opens its space next to the banner, to read and cancel, never spend.
   const token = signGuestLink({ customerId, linkVersion: 1 }, KEY);
   assert.deepEqual(await resolveSpaceIdentity(db, pro.proId, { session, guestToken: token, key: KEY }), {
     kind: "unverified",

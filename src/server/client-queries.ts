@@ -53,7 +53,7 @@ export async function resolveSpaceCustomer(pro: { professionalId: string; ownerU
 }
 
 /**
- * The read-only espace of one customer of the pro (null when the customer is not this pro's). `now` is the page's one
+ * The espace read of one customer of the pro (null when the customer is not this pro's). `now` is the page's one
  * instant (contract Revision 3.9): the wallet, the cards and the séances a page draws agree about « now », and the
  * wrapper reads no clock of its own.
  */

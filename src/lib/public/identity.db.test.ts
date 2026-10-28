@@ -164,7 +164,7 @@ dbTest("resolveVisitor: a verified session without a usable record has no owner 
   });
 });
 
-dbTest("resolveVisitor: an unverified session is never an Owner; the cookie's customer is still reported (the banner, read-only)", async ({ db, pro }) => {
+dbTest("resolveVisitor: an unverified session is never an Owner; the cookie's customer is still reported (the banner; read and cancel, never spend)", async ({ db, pro }) => {
   const email = testEmail("unverified");
   const customerId = await makeCustomer(db, pro, { email });
   await withClientUsers(db, [{ email, verified: false }], async ([me]) => {
