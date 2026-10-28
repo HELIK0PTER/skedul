@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { COPY } from "@/lib/public/messages";
 import { plainNameSchema } from "@/lib/public/plain-name";
 import { PUBLIC_UNEXPECTED, type PublicResult } from "@/lib/public/result";
+import { BOUNDS } from "@/lib/tickets-vocab";
 import { parseFr } from "@/lib/zod-fr";
 import { updateMyNameAction } from "@/server/client";
 
@@ -20,7 +21,8 @@ const nameOnly = z.object({ name: plainNameSchema });
 
 /**
  * « Votre nom » (spec L1384): renames the account and every row linked to it. The field is filled from the name the
- * server rendered; a refused name names the field under its input and takes the focus, a failed call lands in the
+ * server rendered and stops at the 80 characters the schema allows (`BOUNDS.name`, like `IdentityFields` and
+ * `EmailCodeForm`); a refused name names the field under its input and takes the focus, a failed call lands in the
  * error box, which sits in an always-mounted alert region (a live region inserted together with its text is not
  * reliably announced) and takes the focus. The « Enregistré » line sits in an always-mounted status region and goes
  * away with the next edit, so a second save is announced again. No router refresh: the action revalidates this page.
@@ -74,6 +76,7 @@ export function MyNameForm({ initialName }: { initialName: string }) {
           id="my-name"
           name="name"
           autoComplete="name"
+          maxLength={BOUNDS.name}
           value={name}
           onChange={(e) => {
             setName(e.target.value);

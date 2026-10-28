@@ -7,6 +7,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { codeView, openingTags } from "@/test/source-guards";
+
 const source = (path: string): string => readFileSync(path, "utf8");
 
 const FILES = [
@@ -123,6 +125,28 @@ test("the leaves send the typed value only and answer a thrown call with the sha
   assert.match(revoke, /Les liens reçus par email cessent de fonctionner\. Les prochains emails contiendront un nouveau lien\./);
   assert.match(revoke, /COPY\.LINKS_REVOKED/);
   assert.match(revoke, /<div role="status"/, "the success line sits in an always-mounted status region");
+});
+
+test("« Votre nom » stops at the bound its schema checks, like every other name field of the client pages (AUTH-5)", () => {
+  // plainNameSchema refuses a name over BOUNDS.name (80): the field stops there instead of letting the visitor type a
+  // name that only the save then refuses.
+  const fields = [
+    { file: "src/components/public/my-name-form.tsx", id: 'id="my-name"' },
+    { file: "src/components/public/identity-fields.tsx", id: "id={`${idPrefix}-name`}" },
+    { file: "src/components/auth/email-code-form.tsx", id: 'name="name"' },
+  ];
+  for (const { file, id } of fields) {
+    const text = source(file);
+    assert.match(text, /import \{ BOUNDS \} from "@\/lib\/tickets-vocab";/, file);
+    const inputs = openingTags(text, "Input").filter((tag) => tag.text.includes(id));
+    assert.equal(inputs.length, 1, `${file}: one name input`);
+    assert.match(inputs[0].text, /\smaxLength=\{BOUNDS\.name\}/, `${file}: ${inputs[0].text}`);
+  }
+  assert.match(
+    codeView(source("src/lib/public/plain-name.ts")),
+    /plainNameSchema: z\.ZodString = z\.string\(\)\.trim\(\)\.min\(1\)\.max\(BOUNDS\.name\)/,
+    "the bound the field mirrors (the code, not its comment)",
+  );
 });
 
 test("MySpaceView takes no Date, no engine, database or payment module, wraps user text and keeps its empty states", () => {
