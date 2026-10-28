@@ -19,6 +19,7 @@ import { ts } from "../db/atomic";
 import { cancelBookingsByPro, cancelByClient, cancelOccurrence, restoreOccurrence } from "./cancel";
 import { setAvailabilityRules } from "./catalog";
 import { attachCheckoutSession, bookRdv, bookWithHeldTicket, registerPro, startBuyAndBook } from "./claims";
+import { fulfillPurchase } from "./fulfillment";
 
 type Outcome = { ok: boolean; code?: string };
 
@@ -366,4 +367,96 @@ dbTest("Rétablir: a cancelled future séance comes back empty; never after its 
   must(await cancelOccurrence(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: s.occ.id }), "cancel again");
   const late = await restoreOccurrence(db, { professionalId: pro.proId, occurrenceId: s.occ.id }, addMinutes(s.occ.startsAt, 1));
   assert.equal(late.ok ? "ok" : late.code, "not_found");
+});
+
+/* ───────────── P5 Task 4: E5 and E6b on an RDV (OUT:121) ───────────── */
+
+/** Hours every day, a free RDV type with its cancel deadline override, one booked RDV at `minute` in 3 days. */
+async function bookedRdv(h: DbHarness, cancelDeadlineHours: number | null, minute: number) {
+  const { db, pro } = h;
+  const typeId = await makeType(db, pro, {
+    rdvEnabled: true,
+    rdvFree: true,
+    rdvDurationMin: 60,
+    rdvOverrides: { bookingHorizonDays: null, minNoticeMinutes: null, cancelDeadlineHours },
+  });
+  const allWeek = [0, 1, 2, 3, 4, 5, 6].map((dayOfWeek) => ({ dayOfWeek, startMinute: 0, endMinute: 1440 }));
+  must(await setAvailabilityRules(db, { professionalId: pro.proId, ticketTypeId: null, rules: allWeek }), "rules");
+  const customerId = await makeCustomer(db, pro);
+  const startsAt = instantAt(dayIn(pro, 3), minute, pro.tz);
+  const rdv = await bookRdv(db, { professionalId: pro.proId, ticketTypeId: typeId, startsAt, customerId, actorUserId: null, mode: "free" });
+  must(rdv, "bookRdv");
+  return { typeId, customerId, startsAt, bookingId: rdv.bookingId, occurrenceId: rdv.occurrenceId };
+}
+
+dbTest("E5 on an RDV: the type's rdv_cancel_deadline_hours replaces the pro's 24 h (coalesce order)", async (h) => {
+  const { db, pro } = h;
+  let slot = 0;
+  const cancelAt = async (deadline: number | null, hoursBefore: number): Promise<string> => {
+    // one slot per case (an hour apart), so a booking a case could not cancel never blocks the next one
+    const s = await bookedRdv(h, deadline, 480 + 60 * slot++);
+    const res = await cancelByClient(
+      db,
+      { professionalId: pro.proId, customerId: s.customerId, bookingId: s.bookingId, actorUserId: null },
+      addMinutes(s.startsAt, -hoursBefore * 60),
+    );
+    return res.ok ? "ok" : res.code;
+  };
+  // No override: the pro's 24 h.
+  assert.equal(await cancelAt(null, 23), "too_late_or_done");
+  assert.equal(await cancelAt(null, 25), "ok");
+  // A shorter override lets the client cancel later than the pro's deadline.
+  assert.equal(await cancelAt(2, 3), "ok");
+  assert.equal(await cancelAt(2, 1), "too_late_or_done");
+  // A longer override closes earlier than the pro's deadline.
+  assert.equal(await cancelAt(48, 30), "too_late_or_done");
+  assert.equal(await cancelAt(48, 49), "ok");
+  // 0 is a real override (until the start), not a fall back to the pro's 24 h.
+  assert.equal(await cancelAt(0, 1), "ok");
+});
+
+dbTest("E6b on an RDV with a pending purchase: cancelled, its hold ends, the Checkout is expired, the slot is free, a late payment never resurrects it", async (h) => {
+  const { db, pro } = h;
+  const typeId = await makeType(db, pro, { rdvEnabled: true, rdvDurationMin: 60 });
+  const offerId = await makeOffer(db, pro, typeId, { quantity: 2 });
+  const allWeek = [0, 1, 2, 3, 4, 5, 6].map((dayOfWeek) => ({ dayOfWeek, startMinute: 0, endMinute: 1440 }));
+  must(await setAvailabilityRules(db, { professionalId: pro.proId, ticketTypeId: null, rules: allWeek }), "rules");
+  const [buyer, next] = await Promise.all([makeCustomer(db, pro), makeCustomer(db, pro)]);
+  const startsAt = instantAt(dayIn(pro, 3), 600, pro.tz);
+  const buy = (customerId: string) =>
+    bookRdv(db, { professionalId: pro.proId, ticketTypeId: typeId, startsAt, customerId, actorUserId: null, mode: "buy", offerId });
+  const held = await buy(buyer);
+  must(held, "buy");
+  const purchaseId = held.purchaseId ?? "";
+  const sessionId = `cs_test_${purchaseId}`;
+  must(await attachCheckoutSession(db, { purchaseId, checkoutSessionId: sessionId, checkoutUrl: "https://checkout.example.test/rdv" }), "attach");
+
+  const res = await cancelOccurrence(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: held.occurrenceId });
+  must(res, "cancelOccurrence");
+  assert.equal(res.bookingsCancelled, 1);
+  assert.equal(res.ticketsReturned, 0);
+  assert.deepEqual(res.effects, [
+    { type: "email.occurrence_cancelled", occurrenceId: held.occurrenceId, bookingIds: [held.bookingId] },
+    { type: "stripe.expire_session", purchaseId, checkoutSessionId: sessionId },
+    { type: "google.sync_occurrence", occurrenceId: held.occurrenceId },
+  ]);
+  const o = await getOccurrence(db, held.occurrenceId);
+  assert.equal(o.status, "cancelled");
+  assert.equal(o.seatsTaken, 0);
+  const b = await getBooking(db, held.bookingId);
+  assert.equal(b.status, "cancelled");
+  assert.equal(b.endedBy, "pro");
+
+  // The RDV left the EXCLUDE: the same slot books again.
+  must(await buy(next), "the slot is free again");
+
+  // The first buyer pays anyway: tickets to the wallet, the cancelled RDV stays cancelled.
+  const paid = await fulfillPurchase(db, purchaseId, { sessionId, paymentIntentId: `pi_test_${purchaseId}`, livemode: false });
+  assert.equal(paid.outcome, "fulfilled");
+  assert.equal(paid.bookingConfirmed, false);
+  assert.equal((await getOccurrence(db, held.occurrenceId)).status, "cancelled");
+  assert.equal((await getBooking(db, held.bookingId)).status, "cancelled");
+  const tickets = await ticketsOf(db, buyer);
+  assert.equal(tickets.length, 2);
+  assert.ok(tickets.every((t) => t.status === "available" && t.bookingId === null));
 });

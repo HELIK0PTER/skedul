@@ -3,9 +3,9 @@ import { eq, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
 import { SEAT, atomic, lockRows, releaseEndedSeats, tryAtomic, type BatchCtx, type Db } from "@/lib/db/atomic";
-import { booking, bookingAnswer, occurrence, question, ticket, ticketMovement } from "@/lib/db/schema";
+import { booking, bookingAnswer, occurrence, question, ticket, ticketMovement, ticketType } from "@/lib/db/schema";
 
-import { addMinutes, dbTest, type TestPro } from "../../test/db";
+import { addMinutes, createTestPro, dbTest, deleteTestUser, type TestPro } from "../../test/db";
 import {
   rowBooking,
   rowCustomer,
@@ -254,4 +254,45 @@ dbTest("loadQuestions orders by position; insertAnswers writes one row per answe
   const saved = await db.select().from(bookingAnswer).where(eq(bookingAnswer.bookingId, bookingId));
   assert.equal(saved.length, 2);
   assert.ok(saved.every((a) => a.professionalId === pro.proId && a.createdAt.getTime() === now.getTime()));
+});
+
+dbTest("ELIGIBLE on an RDV, clause by clause: its own type, rdv_enabled, not rdv_free, this pro, valid at the start (OUT:112)", async ({ db, pro }) => {
+  const now = new Date();
+  const rdvType = await rowRdvType(db, pro);
+  const otherRdvType = await rowRdvType(db, pro);
+  const startsAt = new Date(now.getTime() + 3 * DAY);
+  const rdv = await rowRdv(db, pro, rdvType, { startsAt });
+  await rowBooking(db, pro, { occurrenceId: rdv, customerId: await rowCustomer(db, pro) });
+
+  const customerId = await rowCustomer(db, pro);
+  const open = await rowTicket(db, pro, { customerId, ticketTypeId: rdvType });
+  const justValid = await rowTicket(db, pro, { customerId, ticketTypeId: rdvType, expiresAt: addMinutes(startsAt, 1) });
+  await rowTicket(db, pro, { customerId, ticketTypeId: rdvType, expiresAt: startsAt }); // expires at the start: not valid
+  await rowTicket(db, pro, { customerId, ticketTypeId: rdvType, expiresAt: addMinutes(startsAt, -1) });
+  await rowTicket(db, pro, { customerId, ticketTypeId: otherRdvType }); // another paid RDV type of the same pro
+
+  const ids = async () => (await usableTickets(db, { customerId, occurrenceId: rdv })).map((t) => t.id);
+  const expected = [justValid, open]; // consumption order: the soonest expiry first, no expiry last
+  assert.deepEqual(await ids(), expected);
+
+  const setType = (values: Partial<typeof ticketType.$inferInsert>) => db.update(ticketType).set(values).where(eq(ticketType.id, rdvType));
+  await setType({ rdvEnabled: false });
+  assert.deepEqual(await ids(), [], "a type no longer rdv_enabled: none of its tickets is usable on its RDV");
+  await setType({ rdvEnabled: true });
+  assert.deepEqual(await ids(), expected);
+  await setType({ rdvFree: true });
+  assert.deepEqual(await ids(), [], "a type switched to free: a free RDV never consumes a ticket");
+  await setType({ rdvFree: false });
+  assert.deepEqual(await ids(), expected);
+
+  // A ticket row of another pro, on this customer and this type: never usable here (t.professional_id = o.professional_id).
+  const other = await createTestPro(db);
+  let crossed: string | null = null;
+  try {
+    crossed = await rowTicket(db, other, { customerId, ticketTypeId: rdvType, movements: false });
+    assert.deepEqual(await ids(), expected, "another pro's ticket is never usable on this pro's RDV");
+  } finally {
+    if (crossed) await db.delete(ticket).where(eq(ticket.id, crossed));
+    await deleteTestUser(db, other.userId);
+  }
 });

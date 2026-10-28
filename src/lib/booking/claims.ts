@@ -846,10 +846,30 @@ export type BookRdvData = {
   purchaseId: string | null;
   checkoutExpiresAt: Date | null;
   amountCents: number | null;
+  /**
+   * « buy » only (else null): what the Checkout request shows, taken from the planned offer row, the very snapshot
+   * `offerUnchanged` guarded in the batch (a second read could disagree with it). P5 dossier § 3.15 point 2.
+   */
+  checkout: { currency: string; label: string; quantity: number; ticketTypeName: string } | null;
 };
 
-/** An RDV type of this pro with its duration, buffers and effective window (type overrides, else the pro's). */
-async function readRdvType(db: Db, professionalId: string, ticketTypeId: string) {
+/** An RDV type of a pro: its nature, duration, buffers, zone and effective window (type overrides, else the pro's). */
+export type RdvTypeFacts = {
+  rdvEnabled: boolean;
+  rdvFree: boolean;
+  durationMin: number | null;
+  bufferBeforeMin: number;
+  bufferAfterMin: number;
+  archived: boolean;
+  tz: string;
+  window: BookingWindow;
+};
+
+/**
+ * The RDV type `ticketTypeId` of this pro, or null when this pro has no such type (another pro's id included). The
+ * shared reader of E4's plan and of the P5 slot loader (P5 dossier § 3.15 point 3): both see the same facts.
+ */
+export async function loadRdvType(db: Db, professionalId: string, ticketTypeId: string): Promise<RdvTypeFacts | null> {
   const [row] = await db
     .select({
       rdvEnabled: ticketType.rdvEnabled,
@@ -869,7 +889,7 @@ async function readRdvType(db: Db, professionalId: string, ticketTypeId: string)
     .from(ticketType)
     .innerJoin(professional, eq(professional.id, ticketType.professionalId))
     .where(and(eq(ticketType.id, ticketTypeId), eq(ticketType.professionalId, professionalId)));
-  if (!row) throw new PlanError("not_found");
+  if (!row) return null;
   return {
     rdvEnabled: row.rdvEnabled,
     rdvFree: row.rdvFree,
@@ -893,8 +913,22 @@ async function readRdvType(db: Db, professionalId: string, ticketTypeId: string)
   };
 }
 
-/** The type's own weekly hours when it has any, else the global ones (spec § 6.4 availability_rule). */
-async function rdvRules(db: Db, professionalId: string, ticketTypeId: string) {
+/** E4's plan reader: `loadRdvType`, a type this pro does not have being not_found. */
+async function readRdvType(db: Db, professionalId: string, ticketTypeId: string): Promise<RdvTypeFacts> {
+  const type = await loadRdvType(db, professionalId, ticketTypeId);
+  if (!type) throw new PlanError("not_found");
+  return type;
+}
+
+/**
+ * The type's own weekly hours when it has any, else the global ones (spec § 6.4 availability_rule). Shared by E4's
+ * plan and the P5 slot loader (P5 dossier § 3.15 point 3).
+ */
+export async function rdvRules(
+  db: Db,
+  professionalId: string,
+  ticketTypeId: string,
+): Promise<{ dayOfWeek: number; startMinute: number; endMinute: number }[]> {
   const rows = await db
     .select({
       ticketTypeId: availabilityRule.ticketTypeId,
@@ -910,7 +944,8 @@ async function rdvRules(db: Db, professionalId: string, ticketTypeId: string) {
       ),
     );
   const own = rows.filter((r) => r.ticketTypeId === ticketTypeId);
-  return own.length > 0 ? own : rows.filter((r) => r.ticketTypeId === null);
+  const rules = own.length > 0 ? own : rows.filter((r) => r.ticketTypeId === null);
+  return rules.map((r) => ({ dayOfWeek: r.dayOfWeek, startMinute: r.startMinute, endMinute: r.endMinute }));
 }
 
 /** E4 type guard: still RDV-enabled, not archived, same free/paid nature. Asserted 'unavailable'. */
@@ -918,6 +953,25 @@ function rdvTypeOk(a: { professionalId: string; ticketTypeId: string; isFree: bo
   return sql`exists (select 1 from ticket_type tt
     where tt.id = ${a.ticketTypeId} and tt.professional_id = ${a.professionalId}
       and tt.rdv_enabled and tt.archived_at is null and tt.rdv_free = ${a.isFree}::boolean)`;
+}
+
+/**
+ * E4 shape guard, right after the type guard: the duration and both buffers are still the ones the plan built the
+ * occurrence and its block from (P5 dossier § 3.15 point 4, G4 of p5-engine.md). Asserted 'stale' (« Les horaires
+ * ou l'offre ont changé »): the slot the client chose no longer exists as planned. Same row as rdvTypeOk.
+ */
+function rdvShapeOk(a: {
+  professionalId: string;
+  ticketTypeId: string;
+  durationMin: number;
+  bufferBeforeMin: number;
+  bufferAfterMin: number;
+}): SQL {
+  return sql`exists (select 1 from ticket_type tt
+    where tt.id = ${a.ticketTypeId} and tt.professional_id = ${a.professionalId}
+      and tt.rdv_duration_min = ${a.durationMin}::int
+      and tt.rdv_buffer_before_min = ${a.bufferBeforeMin}::int
+      and tt.rdv_buffer_after_min = ${a.bufferAfterMin}::int)`;
 }
 
 /**
@@ -953,10 +1007,13 @@ function rdvSlotFree(
  * asc) [→ customer for « buy »]; expire their elapsed holds and release the
  * seats in aggregate (an RDV at 0 is cancelled and leaves the EXCLUDE);
  * INSERT the RDV occurrence (capacity 1, seats_taken 1, block ± buffers:
- * occurrence_rdv_excl → slot_taken); G(type); G(slot); then held ticket
+ * occurrence_rdv_excl → slot_taken); G(type, 'unavailable'); G(duration and
+ * buffers unchanged, 'stale'); G(slot, 'slot_taken'); then held ticket
  * (booking confirmed + spend), free (booking confirmed, free) or buy (offer
- * unchanged, hold quota, purchase + pending booking). Answers.
+ * unchanged, hold quota, purchase + pending booking); any other case throws
+ * (never an RDV without its booking, I5). Answers.
  * Effects: held/free: confirmation, pro notice, Google; buy: none.
+ * Data: « buy » also returns the Checkout facts of the planned offer row.
  */
 export async function bookRdv(
   db: Db,
@@ -977,8 +1034,9 @@ export async function bookRdv(
       if (!type.rdvEnabled || type.archived || type.rdvFree !== isFree || type.durationMin === null) {
         throw new PlanError("unavailable");
       }
+      const durationMin = type.durationMin;
       const startsAt = input.startsAt;
-      const endsAt = new Date(startsAt.getTime() + type.durationMin * 60_000);
+      const endsAt = new Date(startsAt.getTime() + durationMin * 60_000);
       const blockStart = new Date(startsAt.getTime() - type.bufferBeforeMin * 60_000);
       const blockEnd = new Date(endsAt.getTime() + type.bufferAfterMin * 60_000);
       if (!onlineBookability({ startsAt, now, tz: type.tz, window: type.window }).ok) {
@@ -1011,6 +1069,9 @@ export async function bookRdv(
         purchaseId,
         checkoutExpiresAt,
         amountCents: buy ? buy.priceCents : null,
+        checkout: buy
+          ? { currency: buy.currency, label: buy.label, quantity: buy.quantity, ticketTypeName: buy.ticketTypeName }
+          : null,
       };
 
       return (aid) => {
@@ -1046,6 +1107,17 @@ export async function bookRdv(
             updatedAt: now,
           }),
           G(db, rdvTypeOk({ professionalId, ticketTypeId, isFree }), "unavailable"),
+          G(
+            db,
+            rdvShapeOk({
+              professionalId,
+              ticketTypeId,
+              durationMin,
+              bufferBeforeMin: type.bufferBeforeMin,
+              bufferAfterMin: type.bufferAfterMin,
+            }),
+            "stale",
+          ),
           G(db, rdvSlotFree(c, { professionalId, ticketTypeId, startsAt, blockStart, blockEnd }), "slot_taken"),
         );
         const base = { id: bookingId, professionalId, occurrenceId, customerId, createdBy: "client" as const, customerNotes: notes };
@@ -1075,6 +1147,9 @@ export async function bookRdv(
               holdExpiresAt: holdExpiry(now),
             }),
           );
+        } else {
+          // unreachable (a planned « buy » always has its offer, purchase id and expiry): never commit an RDV without its booking
+          throw new Error("bookRdv: no batch branch for this mode");
         }
         queries.push(...insertAnswers(c, { professionalId, bookingId, rows: answerRows }));
         return queries;

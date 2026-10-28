@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
-import { startBuyAndBook } from "@/lib/booking/claims";
+import { setAvailabilityRules } from "@/lib/booking/catalog";
+import { bookRdv, startBuyAndBook } from "@/lib/booking/claims";
 import { fulfillPurchase, markProcessing, startPurchase } from "@/lib/booking/fulfillment";
 import { expireStalePurchases, releasePurchase, sweepHolds } from "@/lib/booking/release";
 import { instantAt } from "@/lib/civil-date";
@@ -204,4 +205,47 @@ dbTest("expireStalePurchases: grace period, processing purchases kept", async (h
   assert.ok(done.expired >= 1);
   assert.equal(await purchaseStatus(h, plain.purchaseId), "expired");
   assert.equal(await purchaseStatus(h, slow.purchaseId), "pending");
+});
+
+dbTest("releasePurchase on an RDV hold: the RDV is cancelled, leaves the EXCLUDE, the slot books again; idempotent (OUT:118)", async (h) => {
+  const now = new Date();
+  const typeId = await makeType(h.db, h.pro, { rdvEnabled: true, rdvDurationMin: 60 });
+  const offerId = await makeOffer(h.db, h.pro, typeId);
+  const allWeek = [0, 1, 2, 3, 4, 5, 6].map((dayOfWeek) => ({ dayOfWeek, startMinute: 0, endMinute: 1440 }));
+  assert.ok((await setAvailabilityRules(h.db, { professionalId: h.pro.proId, ticketTypeId: null, rules: allWeek })).ok);
+  const [buyer, next] = await Promise.all([makeCustomer(h.db, h.pro), makeCustomer(h.db, h.pro)]);
+  const startsAt = instantAt(dayIn(h.pro, 3), 600, h.pro.tz);
+  const buy = (customerId: string, at: Date) =>
+    bookRdv(h.db, { professionalId: h.pro.proId, ticketTypeId: typeId, startsAt, customerId, actorUserId: null, mode: "buy", offerId }, at);
+  const held = await buy(buyer, now);
+  assert.ok(held.ok, JSON.stringify(held));
+  const purchaseId = held.purchaseId ?? "";
+  // While the hold is live, the slot is taken.
+  assert.equal(codeOf(await buy(next, addMinutes(now, 1))), "slot_taken");
+
+  const first = await releasePurchase(h.db, purchaseId, addMinutes(now, 5));
+  assert.ok(first.ok, JSON.stringify(first));
+  assert.equal(first.released, true);
+  assert.deepEqual(first.effects, [{ type: "google.sync_occurrence", occurrenceId: held.occurrenceId }]);
+  const o = await getOccurrence(h.db, held.occurrenceId);
+  assert.equal(o.status, "cancelled", "an RDV at 0 seats is cancelled");
+  assert.equal(o.seatsTaken, 0);
+  const b = await getBooking(h.db, held.bookingId);
+  assert.equal(b.status, "expired");
+  assert.equal(b.endedBy, "system");
+  assert.equal(await purchaseStatus(h, purchaseId), "expired");
+
+  const second = await releasePurchase(h.db, purchaseId, addMinutes(now, 6));
+  assert.ok(second.ok, JSON.stringify(second));
+  assert.equal(second.released, false);
+  assert.deepEqual(second.effects, []);
+
+  // The slot books again at once, well before the 45-minute hold would have lapsed.
+  const again = await buy(next, addMinutes(now, 7));
+  assert.ok(again.ok, JSON.stringify(again));
+  const live = await h.db
+    .select({ id: occurrence.id })
+    .from(occurrence)
+    .where(and(eq(occurrence.professionalId, h.pro.proId), isNull(occurrence.eventId), eq(occurrence.status, "scheduled")));
+  assert.deepEqual(live.map((r) => r.id), [again.occurrenceId]);
 });
