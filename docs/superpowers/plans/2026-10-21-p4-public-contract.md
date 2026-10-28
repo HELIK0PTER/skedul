@@ -481,7 +481,7 @@ export async function ownedCustomerId(db: Db, professionalId: string, s: { userI
 export type SpaceIdentity =
   | { kind: "customer"; customerId: string; via: "session" | "guest" }
   | { kind: "no_record"; email: string }
-  /** signed in, address not confirmed: the banner, never the code form (a code sign-in would purge the password, risk 7); the cookie customer is shown read-only when set */
+  /** signed in, address not confirmed: the banner, never the code form (a code sign-in would purge the password, risk 7); the cookie customer is shown when set, to read and cancel, never spend (P4 final fix SEC-5) */
   | { kind: "unverified"; email: string; guestCustomerId: string | null }
   | { kind: "impersonating" }
   | { kind: "anonymous" };

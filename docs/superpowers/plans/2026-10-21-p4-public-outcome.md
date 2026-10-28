@@ -233,7 +233,7 @@ Left by the last sweeps and this task:
 
 ## Final review and fix pass
 
-After Task 31 the whole branch (`8ac32eb..08268de`, 105 commits, 310 files) was reviewed by six opus reviewers (workflow `wf_7750946c-a37`), one per dimension. Every Critical or Important finding was then checked by three opus verifiers (reproduction, impact, ruling) and counted as confirmed when two of the three agreed. The reports are `final-review-{ID,PAY,RND,AUTH,TIME,X}.md`; the fix brief and the fix report (`final-fix-brief.md`, `final-fix-report.md`, with every command and its real result, and the mutation checks) sit beside them in `.superpowers/sdd/2026-10-21-p4-public/` (git-ignored, like the ledger).
+After Task 31 the whole branch (`8ac32eb..08268de`, 105 commits, 310 files) was reviewed by six opus reviewers (workflow `wf_7750946c-a37`), one per dimension. Every Critical or Important finding was then checked by three opus verifiers (reproduction, impact, ruling) and counted as confirmed when two of the three agreed. The six reports are archived in `2026-10-21-p4-public-final-review-findings.md`, the fix report (every command and its real result, the mutation checks, the gate) in `2026-10-21-p4-public-final-fix-report.md` and the ledger in `2026-10-21-p4-public-ledger.md`, all three beside this outcome.
 
 **The six dimensions** (the Review Focus rows of the plan). Twelve findings in all: two Important, ten Minor, no Critical.
 
@@ -271,12 +271,12 @@ After Task 31 the whole branch (`8ac32eb..08268de`, 105 commits, 310 files) was 
 | UI-4 | AUTH-4 | `1bc91b7` | The password form says it is busy (« Connexion… », « Création… ») and its failure line is an always-mounted alert with silent spinners. |
 | UI-5 | AUTH-5 | `5d64abc` | « Votre nom » stops at `BOUNDS.name`, like the other name fields. |
 | DOC-1 | Task 31 outcome minors, RND-2 | the commit of this section | The outcome says what the ledger says (items a to d of the brief), the platform-wide reach of the IP keys is a residual with an owner check, and this section. |
-| DOC-2 | G4c deferred minor | `dd634d3` | Mutation pass of the G4c guards (in the fix report): every guard failed on its mutation except the release status region's, which a `null` branch around the always-mounted line passed; that guard now pins the component's one return. |
+| DOC-2 | G4c deferred minor | `dd634d3` | Mutation pass of the G4c guards (fix report, « Group DOC »): every guard failed on its mutation except the release status region's, which a `null` branch around the always-mounted line passed; that guard now pins the component's one return. |
 | DOC-3 | G4c deferred minor | `601a528` | Plan Task 28's design note says G4c closed the Owner-release corner. |
 
 Two items are settled without a code change. RND-2 (the IP and /48 throttle keys are platform-wide) is kept as the spec has it and written down as a residual with an owner check (« Residuals accepted », « For the owner »). PAY-4 found nothing to change (see its row).
 
-The gate of the pass (type check, eslint, the pure suite and the zone matrix, the build, the full DB suite, the seven page titles) runs after the four groups and is recorded in the fix report (« Gate »); this section is written before it and holds no gate numbers.
+The gate of the pass (type check, eslint, the pure suite and the zone matrix, the build, the full DB suite, the seven page titles) runs after the four groups and is recorded in the fix report (« Gate »): green at `0c0d24c` (tsc 0, eslint 69 files 0/0, pure 1475/1475, zone matrix 61/61, build green with every P4 route dynamic, full DB 774/774 over 60 files in 19 chunks, the seven titles). The review of the fix diff found one Important item (the missing « Group DOC » section of the fix report, now written) and three minors (deferred, ledger).
 
 **The rulings of the final review**, copied from the ledger (`progress.md`, the « Final: » lines) as written. The line that announced the cut-off of the first fix run appears once here although the ledger holds it twice.
 
