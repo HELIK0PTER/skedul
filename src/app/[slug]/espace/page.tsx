@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 
 import { ClientSignInChoices } from "@/components/auth/client-sign-in-choices";
 import { EmailCodeForm } from "@/components/auth/email-code-form";
+import { SignInStatus } from "@/components/auth/sign-in-status";
 import { FormError } from "@/components/dashboard/form-error";
 import { VerifyEmailBanner } from "@/components/dashboard/verify-email-banner";
 import { ClientSignOutButton } from "@/components/public/client-sign-out-button";
@@ -17,6 +18,7 @@ import { env } from "@/lib/env";
 import { COPY, guestNote, noRecordText } from "@/lib/public/messages";
 import { canOfferCodeSignIn } from "@/lib/public/sign-in-flow";
 import { bannerOfIdentity, canSignOutIn, canSpendIn, visitorStateOfIdentity } from "@/lib/public/space-view";
+import { ESPACE_HEADING_ID } from "@/lib/public-anchors";
 import { getCustomerSpacePage, getSpendableSeances, resolveSpaceCustomer } from "@/server/client-queries";
 import { getPublicPage } from "@/server/public-queries";
 
@@ -68,12 +70,23 @@ export default async function EspacePage({ params, searchParams }: Props) {
     shownCustomerId ? getSpendableSeances(pro.professionalId, shownCustomerId, now) : Promise.resolve([]),
   ]);
 
-  // The confirmation banner sits in ONE place of the tree, the first child of the shell, whatever the branch below:
+  // The confirmation banner sits in ONE place of the tree, in the shell under its heading, whatever the branch below:
   // it stays mounted when a code is accepted and the identity flips, so « Adresse confirmée. » is announced and takes
-  // the focus (WCAG 2.4.3, the dashboard layout pattern). `verified` comes from the visitor state.
+  // the focus (WCAG 2.4.3, the dashboard layout pattern). `verified` comes from the visitor state. The heading and the
+  // sign-in status line are there for the same reason (AUTH-1): a good code in the anonymous branch's form refreshes the
+  // page into another branch, so the form gives the focus to the heading (ESPACE_HEADING_ID) and says « Connexion
+  // réussie. » in SignInStatus, both outside the switch. PublicShell's own h1 (the business name, a link) is untouched.
   const banner = bannerOfIdentity(identity, space?.customer.email ?? null);
   const shell = (children: React.ReactNode) => (
     <PublicShell branding={branding} backHref={`/${slug}`}>
+      <h2
+        id={ESPACE_HEADING_ID}
+        tabIndex={-1}
+        className="mb-6 w-fit rounded text-2xl font-bold tracking-tight focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        {COPY.MY_SPACE}
+      </h2>
+      <SignInStatus />
       {banner && <VerifyEmailBanner email={banner.email} verified={banner.verified} />}
       {children}
       {canSignOutIn(identity) && (
@@ -151,7 +164,7 @@ export default async function EspacePage({ params, searchParams }: Props) {
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-sm text-zinc-600 wrap-anywhere">{`Recevez un code par email pour voir vos réservations chez ${pro.businessName}.`}</p>
-            <EmailCodeForm idPrefix="espace-code" />
+            <EmailCodeForm idPrefix="espace-code" focusAfterSignIn={ESPACE_HEADING_ID} />
             <ClientSignInChoices returnTo={returnTo} googleEnabled={env.GOOGLE_CALENDAR_ENABLED} />
           </CardContent>
         </Card>

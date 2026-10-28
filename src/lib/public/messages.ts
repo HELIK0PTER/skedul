@@ -136,6 +136,8 @@ export const COPY = {
   PENDING_BOOK: "Réservation…",
   PENDING_SAVE: "Enregistrement…",
   PENDING_PAY: "Redirection vers le paiement…",
+  /** Said by the page's status line once an inline code sign-in is accepted (AUTH-1): the form that held the focus is gone. */
+  SIGNED_IN: "Connexion réussie.",
 } as const;
 
 /** « 1 place restante » / « 5 places restantes » (fr-FR thousands). */

@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 
+import { announceSignIn } from "@/components/auth/sign-in-status";
 import { FormField } from "@/components/dashboard/form-field";
 import { useRefusalFocus } from "@/components/dashboard/use-refusal-focus";
 import { Button } from "@/components/ui/button";
@@ -27,15 +28,23 @@ const CODE_FORMAT = "Saisissez les 6 chiffres du code.";
  * the neutral CODE_SENT unless the send was rate limited or failed (it never says whether the address has an
  * account), and the address is never prefilled (Decision 7). After a good code the session is read once without the
  * cookie cache, then the page re-renders as signed in. `idPrefix` makes the field ids unique when two forms share a page.
+ *
+ * The re-render unmounts the form, and with it the focused « Valider le code ». In a dialog, `onSignedIn` closes it and
+ * the dialog names where the focus goes (OtpDialog). Inline, the page passes `focusAfterSignIn`, the id of a heading
+ * (`tabIndex={-1}`) that every state of the page renders: before the refresh the form gives it the focus and says
+ * « Connexion réussie. » in the page's `SignInStatus` line (AUTH-1, WCAG 2.4.3, 4.1.3). An id, not a function: the
+ * pages are Server Components.
  */
 export function EmailCodeForm({
   idPrefix,
   askName = false,
   onSignedIn,
+  focusAfterSignIn,
 }: {
   idPrefix: string;
   askName?: boolean;
   onSignedIn?: () => void;
+  focusAfterSignIn?: string;
 }) {
   const router = useRouter();
   const { root, errorBox, refused } = useRefusalFocus();
@@ -137,6 +146,11 @@ export function EmailCodeForm({
         await authClient.getSession({ query: { disableCookieCache: true } });
       } catch {
         // A network failure here only delays what the page shows until the cache expires.
+      }
+      // Before the refresh swaps this form for the space: the heading outlives the swap, the status line too.
+      if (focusAfterSignIn) {
+        document.getElementById(focusAfterSignIn)?.focus();
+        announceSignIn(COPY.SIGNED_IN);
       }
       setDone(true);
       onSignedIn?.();

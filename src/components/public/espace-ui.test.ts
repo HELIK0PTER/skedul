@@ -121,14 +121,35 @@ test("the sign-in-by-code form is offered to an anonymous visitor only, after ev
   assert.equal((PAGE.match(/<ClientSignInChoices/g) ?? []).length, 1);
 });
 
-test("the confirmation banner is rendered once, outside the identity switch, as the first child of the shell, so it stays mounted when a code is accepted (WCAG 2.4.3, Revision 3.2)", () => {
+test("the confirmation banner is rendered once, outside the identity switch, in the shell under its heading, so it stays mounted when a code is accepted (WCAG 2.4.3, Revision 3.2)", () => {
   assert.equal((PAGE.match(/<VerifyEmailBanner/g) ?? []).length, 1, "one banner, in the shell");
   assert.match(PAGE, /const banner = bannerOfIdentity\(identity, space\?\.customer\.email \?\? null\);/);
   assert.match(
     PAGE,
-    /<PublicShell branding=\{branding\} backHref=\{`\/\$\{slug\}`\}>\s*\{banner && <VerifyEmailBanner email=\{banner\.email\} verified=\{banner\.verified\} \/>\}\s*\{children\}\s*\{canSignOutIn\(identity\) && \([\s\S]*?\)\}\s*<\/PublicShell>/,
+    /<PublicShell branding=\{branding\} backHref=\{`\/\$\{slug\}`\}>\s*<h2[^>]*>\s*\{COPY\.MY_SPACE\}\s*<\/h2>\s*<SignInStatus \/>\s*\{banner && <VerifyEmailBanner email=\{banner\.email\} verified=\{banner\.verified\} \/>\}\s*\{children\}\s*\{canSignOutIn\(identity\) && \([\s\S]*?\)\}\s*<\/PublicShell>/,
   );
   assert.ok(PAGE.indexOf("<VerifyEmailBanner") < PAGE.indexOf('if (identity.kind === "impersonating") {'), "defined before the branches, which all go through the shell");
+});
+
+test("an inline code sign-in on the espace lands on the shell's own heading and is announced by a status line outside every branch (AUTH-1, WCAG 2.4.3, 4.1.3)", () => {
+  const anchors = read("src/lib/public-anchors.ts");
+  assert.match(anchors, /export const ESPACE_HEADING_ID = "espace-title";/);
+  assert.match(PAGE, /import \{ ESPACE_HEADING_ID \} from "@\/lib\/public-anchors";/);
+  // In the shell every branch goes through (anonymous, customer, no_record, unverified, impersonating), before the
+  // identity switch, so the refresh after the sign-in keeps the element that holds the focus. PublicShell's linked
+  // h1 (the business name) is untouched.
+  assert.match(
+    PAGE,
+    /<PublicShell branding=\{branding\} backHref=\{`\/\$\{slug\}`\}>\s*<h2\s+id=\{ESPACE_HEADING_ID\}\s+tabIndex=\{-1\}\s+className="mb-6 w-fit rounded text-2xl font-bold tracking-tight focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"\s*>\s*\{COPY\.MY_SPACE\}\s*<\/h2>\s*<SignInStatus \/>/,
+  );
+  assert.ok(PAGE.indexOf("<SignInStatus />") < PAGE.indexOf('if (identity.kind === "impersonating") {'), "in the shell, above every branch");
+  assert.equal((PAGE.match(/<SignInStatus \/>/g) ?? []).length, 1);
+  assert.match(PAGE, /<EmailCodeForm idPrefix="espace-code" focusAfterSignIn=\{ESPACE_HEADING_ID\} \/>/);
+  assert.doesNotMatch(read("src/components/public/public-shell.tsx"), /ESPACE_HEADING_ID|tabIndex/, "the shell's h1 stays a plain link");
+  // The space's greeting is no second heading under « Mon espace »: the /mon-espace greeting's style (MySpaceView).
+  const view = read("src/components/public/customer-space.tsx");
+  assert.match(view, /<p className="text-xl font-bold tracking-tight wrap-anywhere">\{`Bonjour \$\{space\.customer\.name\}`\}<\/p>/);
+  assert.doesNotMatch(view, /<h2\b/);
 });
 
 test("the unverified visitor gets the sentence only when no space is shown; the link's customer gets the guest note and « Ce n'est pas moi »; the Owner without a record gets the other-address button", () => {

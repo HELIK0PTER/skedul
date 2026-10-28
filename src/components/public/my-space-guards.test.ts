@@ -66,6 +66,24 @@ test("the confirmation banner stays mounted when a code is accepted (WCAG 2.4.3,
   assert.ok(banner < page.indexOf("<MySpaceView"), "so the flip to the space does not unmount it");
 });
 
+test("an inline code sign-in on /mon-espace lands on the page heading and is announced by a status line outside every branch (AUTH-1, WCAG 2.4.3, 4.1.3)", () => {
+  const page = source("src/app/mon-espace/page.tsx");
+  const anchors = source("src/lib/public-anchors.ts");
+  assert.match(anchors, /export const MY_SPACE_HEADING_ID = "my-space-title";/);
+  assert.match(page, /import \{ MY_SPACE_HEADING_ID \} from "@\/lib\/public-anchors";/);
+  // The h1 is rendered by every state, so it outlives the swap of the code form for the space; tabIndex -1 lets the form
+  // focus it, and the ring is the one the other focus-target headings use.
+  assert.match(
+    page,
+    /<h1\s+id=\{MY_SPACE_HEADING_ID\}\s+tabIndex=\{-1\}\s+className="mb-6 w-fit rounded text-2xl font-bold tracking-tight focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"\s*>\s*Mon espace client\s*<\/h1>/,
+  );
+  assert.match(page, /<EmailCodeForm idPrefix="my-space" askName focusAfterSignIn=\{MY_SPACE_HEADING_ID\} \/>/);
+  // One status line, a sibling of the h1, before the banner and the identity switch: never inside a state branch.
+  assert.match(page, /<\/h1>\s*<SignInStatus \/>\s*\{banner && <VerifyEmailBanner/);
+  assert.equal((page.match(/<SignInStatus \/>/g) ?? []).length, 1);
+  assert.ok(page.indexOf("<SignInStatus />") < page.indexOf("canOfferCodeSignIn("), "above the identity switch");
+});
+
 test("the client leaves of /mon-espace never refresh the router, and sign-out is a full navigation (SEC-M12)", () => {
   for (const file of ["my-name-form", "revoke-my-links-button", "client-sign-out-button"]) {
     assert.doesNotMatch(source(`src/components/public/${file}.tsx`), /router\.refresh|router\.push|useRouter/, file);

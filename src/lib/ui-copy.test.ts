@@ -48,6 +48,7 @@ const OPTIONAL = [
   "src/components/auth/otp-dialog.tsx",
   "src/components/auth/client-sign-in-choices.tsx",
   "src/components/auth/link-google-form.tsx",
+  "src/components/auth/sign-in-status.tsx",
   "src/app/mon-espace",
   "src/app/api/mock-checkout",
   "src/app/api/stripe",

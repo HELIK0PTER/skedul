@@ -7,6 +7,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { openingTags, sourceFilesUnder } from "@/test/source-guards";
+
 const source = (path: string): string => readFileSync(path, "utf8");
 
 const FILES = [
@@ -15,6 +17,7 @@ const FILES = [
   "src/components/auth/client-sign-in-choices.tsx",
   "src/components/auth/otp-dialog.tsx",
   "src/components/auth/use-google-redirect.ts",
+  "src/components/auth/sign-in-status.tsx",
 ];
 
 test("the code form reads a fresh session before it refreshes the page, and refreshes once (L1314-1315)", () => {
@@ -26,6 +29,56 @@ test("the code form reads a fresh session before it refreshes the page, and refr
   assert.ok(fresh < refresh, "the fresh read comes first");
   assert.equal(form.split("router.refresh()").length - 1, 1, "one refresh");
   assert.doesNotMatch(form, /router\.push/, "no navigation: the page re-renders as signed in");
+});
+
+test("after a good code the inline form gives the focus to the page's heading and announces the sign-in, before the refresh unmounts it (AUTH-1, WCAG 2.4.3, 4.1.3)", () => {
+  const form = source("src/components/auth/email-code-form.tsx");
+  // An element id, not a function: the two pages that mount the form inline are Server Components.
+  assert.match(form, /\n {2}focusAfterSignIn\?: string;/, "a serializable prop");
+  assert.match(form, /import \{ announceSignIn \} from "@\/components\/auth\/sign-in-status";/);
+  assert.match(
+    form,
+    /if \(focusAfterSignIn\) \{\s*document\.getElementById\(focusAfterSignIn\)\?\.focus\(\);\s*announceSignIn\(COPY\.SIGNED_IN\);\s*\}/,
+    "the heading takes the focus and the page's status line says so, both only when the page names its heading",
+  );
+  const fresh = form.indexOf("authClient.getSession({ query: { disableCookieCache: true } })");
+  const focus = form.indexOf("document.getElementById(focusAfterSignIn)?.focus();");
+  const announce = form.indexOf("announceSignIn(COPY.SIGNED_IN);");
+  const refresh = form.indexOf("router.refresh()");
+  assert.ok(fresh !== -1 && focus > fresh && announce > fresh, "after the fresh session read");
+  assert.ok(focus < refresh && announce < refresh, "before the refresh that swaps the form for the space");
+  // The dialog path keeps its own focus rule (OtpDialog's onSignedIn and returnFocusTo).
+  assert.ok(form.indexOf("onSignedIn?.();") > announce && form.indexOf("onSignedIn?.();") < refresh, "the dialog's callback stays where it was");
+});
+
+test("the sign-in status line is one always-mounted, screen-reader-only region fed by a module store (the ReleaseStatus pattern)", () => {
+  const status = source("src/components/auth/sign-in-status.tsx");
+  assert.match(status, /^"use client";/);
+  assert.match(status, /import \{ createLineStore \} from "@\/lib\/public\/release-line";/);
+  assert.match(status, /\nconst store = createLineStore\(\);/, "module state: it outlives the form that writes it");
+  assert.match(status, /export function announceSignIn\(text: string\): void \{\s*store\.set\(text\);\s*\}/);
+  assert.match(status, /useSyncExternalStore\(store\.subscribe, store\.get, \(\) => ""\)/);
+  assert.match(status, /useEffect\(\(\) => \{\s*store\.set\(""\);\s*return \(\) => store\.set\(""\);\s*\}, \[\]\);/, "it starts and ends empty");
+  assert.match(status, /return <p role="status" className="sr-only">\{text\}<\/p>;/);
+});
+
+test("every EmailCodeForm says where the focus goes after a sign-in: the dialog's callback, or a page heading with tabIndex -1 and the page's one status line (AUTH-1)", () => {
+  const tsx = sourceFilesUnder("src").filter((file) => file.endsWith(".tsx"));
+  const mounts = tsx.flatMap((file) => openingTags(source(file), "EmailCodeForm").map((tag) => ({ file, tag })));
+  assert.ok(mounts.length >= 3, "the dialog and the two inline pages");
+  const pages = new Set<string>();
+  for (const { file, tag } of mounts) {
+    // The attribute is read at the top level of the tag (topLevel keeps its braces, not what they hold), its value from the text.
+    const target = /\sfocusAfterSignIn=\{\}/.test(tag.topLevel) ? /\sfocusAfterSignIn=\{([A-Z_]+)\}/.exec(tag.text) : null;
+    assert.ok(target || /\sonSignedIn=\{\}/.test(tag.topLevel), `${file}: <EmailCodeForm> names no focus target`);
+    if (!target) continue;
+    pages.add(file);
+    const page = source(file);
+    assert.match(page, new RegExp(`\\sid=\\{${target[1]}\\}\\s+tabIndex=\\{-1\\}`), `${file}: the target is focusable from script only`);
+    assert.equal((page.match(/<SignInStatus \/>/g) ?? []).length, 1, `${file}: one status line`);
+    assert.match(page, /import \{ SignInStatus \} from "@\/components\/auth\/sign-in-status";/, file);
+  }
+  assert.deepEqual([...pages].sort(), ["src/app/[slug]/espace/page.tsx", "src/app/mon-espace/page.tsx"]);
 });
 
 test("the code form answers every send with the neutral sentence unless the send was limited or failed (S22)", () => {

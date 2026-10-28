@@ -20,6 +20,15 @@ export function boutiqueHref(slug: string): string {
 export const PLANNING_HEADING_ID = "planning-title";
 
 /**
+ * The page headings an inline code sign-in gives the focus to (`tabIndex={-1}`, AUTH-1): « Mon espace client » on
+ * /mon-espace and « Mon espace » in the shell of /{slug}/espace. A good code makes the page refresh as signed in, which
+ * unmounts the code form and its focused button; both headings are rendered by every state of their page, outside the
+ * identity switch, so they survive that swap. The pages pass the id to `EmailCodeForm` (`focusAfterSignIn`).
+ */
+export const MY_SPACE_HEADING_ID = "my-space-title";
+export const ESPACE_HEADING_ID = "espace-title";
+
+/**
  * Scrolls to `anchor` when the URL hash names exactly it, and says whether it did. The public page streams behind
  * loading.tsx: on a client navigation to `/{slug}#boutique` the router scrolls when the loading skeleton commits, before
  * the Boutique exists, and never again; on a fresh load the browser's own fragment scroll can run before the streamed

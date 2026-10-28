@@ -45,7 +45,8 @@ export function CustomerSpaceView({
     <SpaceStatusProvider>
       <div className="space-y-6">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight wrap-anywhere">{`Bonjour ${space.customer.name}`}</h2>
+          {/* A greeting, not a second heading: the espace's shell carries the « Mon espace » heading (the /mon-espace style). */}
+          <p className="text-xl font-bold tracking-tight wrap-anywhere">{`Bonjour ${space.customer.name}`}</p>
           <p className="mt-1 text-sm text-zinc-600 wrap-anywhere">{space.customer.email}</p>
         </div>
 

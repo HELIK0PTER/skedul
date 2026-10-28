@@ -232,6 +232,7 @@ test("COPY holds every fixed client sentence, word for word", () => {
     PENDING_BOOK: "Réservation…",
     PENDING_SAVE: "Enregistrement…",
     PENDING_PAY: "Redirection vers le paiement…",
+    SIGNED_IN: "Connexion réussie.",
   });
 });
 
