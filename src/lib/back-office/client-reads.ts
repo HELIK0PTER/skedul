@@ -108,7 +108,7 @@ const byListOrder = (a: Snapshot, b: Snapshot): number =>
  * with its facts and whether it matches `q`. Four queries in parallel:
  * per-customer counts, usable holdings, the types, the type facts. The ticket,
  * booking and holdings reads are restricted to the pro's customers so that the
- * customer_id indexes apply (ticket and booking have no professional_id index).
+ * customer_id indexes apply (written before 0013 gave ticket and booking a professional_id index).
  */
 async function loadSnapshots(db: Db, professionalId: string, now: Date, q: string): Promise<Snapshot[]> {
   const p = professionalId;

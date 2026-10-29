@@ -150,9 +150,8 @@ async function weekCounts(
 
 /**
  * `available` and valid at now, archived types included (the wallet balance predicate). Read through the pro's
- * customers (inProCustomers): ticket has no index that starts with professional_id, so the pro filter alone would scan
- * every pro's tickets on each dashboard load; customer_id leads ticket_customer_status_type_idx, which also narrows
- * on the status.
+ * customers (inProCustomers), written before 0013 added ticket_pro_status_idx: customer_id leads
+ * ticket_customer_status_type_idx, which also narrows on the status.
  */
 async function ticketsInCirculation(db: Db, professionalId: string, now: Date): Promise<number> {
   const [{ n }] = await db

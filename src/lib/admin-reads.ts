@@ -313,8 +313,8 @@ export type ProStats = {
 };
 
 /**
- * One pro's footprint for /admin/users/[id]. booking has no index that starts with professional_id, so its counts go
- * through the pro's customers (booking_customer_idx) and the pro's coming occurrences (booking_occurrence_status_idx).
+ * One pro's footprint for /admin/users/[id]. Its booking counts go through the pro's customers (booking_customer_idx)
+ * and the pro's coming occurrences (booking_occurrence_status_idx), written before 0013 added booking_pro_status_idx.
  * events = live series (distinct
  * series root among the non-archived segments: a split series is ONE event);
  * ticketTypes = non-archived; upcoming = pending + confirmed bookings on

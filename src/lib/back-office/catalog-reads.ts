@@ -123,8 +123,8 @@ async function readOffers(
       ),
     )
     .orderBy(asc(ticketOffer.position), asc(ticketOffer.createdAt), asc(ticketOffer.id));
-  // One grouped read of the pro's purchases of these offers (professional_id leads an index), not two correlated
-  // subqueries per offer on ticket_purchase.offer_id, which no index starts with.
+  // One grouped read of the pro's purchases of these offers, not two correlated subqueries per offer
+  // (ticket_purchase_offer_idx serves the offer ids since 0013).
   const sales = new Map<string, { sold: number; purchases: number }>();
   if (rows.length > 0) {
     const counts = await db
@@ -199,10 +199,9 @@ async function readAcceptedBy(db: Db, professionalId: string, ticketTypeId?: str
 /* ───────────────────────────── Usable tickets, usage ───────────────────────────── */
 
 /**
- * Available and unexpired tickets per type. Without a type, the read goes through the pro's customers (inProCustomers):
- * ticket has no index that starts with professional_id, so `professional_id = p` alone would read every pro's tickets
- * (the list page runs it on every load). `customer_id` leads ticket_customer_status_type_idx, which also narrows on
- * the status.
+ * Available and unexpired tickets per type. Without a type, the read goes through the pro's customers (inProCustomers),
+ * written before 0013 added ticket_pro_status_idx: `customer_id` leads ticket_customer_status_type_idx, which also
+ * narrows on the status (the list page runs it on every load).
  */
 async function readUsableCounts(db: Db, professionalId: string, now: Date, ticketTypeId?: string): Promise<Map<string, number>> {
   const rows = await db
