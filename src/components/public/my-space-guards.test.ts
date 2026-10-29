@@ -160,7 +160,9 @@ test("MySpaceView takes no Date, no engine, database or payment module, wraps us
   assert.match(view, /boutiqueHref\(slug\)/);
   // The espace's own heading constant (« Vos prochaines réservations »: séances and rendez-vous), never a literal.
   assert.match(view, /<h3 className="text-sm font-semibold">\{UPCOMING_TITLE\}<\/h3>/);
-  assert.match(view, /^import \{ UPCOMING_TITLE \} from "@\/lib\/public\/space-view";\r?$/m);
+  assert.match(view, /^import \{ UPCOMING_TITLE, myGreeting \} from "@\/lib\/public\/space-view";\r?$/m);
+  // P6 B6: a code sign-in leaves the account without a name; the greeting falls back on a pro's customer record.
+  assert.match(view, /\{myGreeting\(name, cards\)\}/);
   assert.doesNotMatch(view, /prochaines inscriptions/);
   assert.match(view, /<MyNameForm initialName=\{name\} \/>/);
   assert.match(view, /<RevokeMyLinksButton \/>/);

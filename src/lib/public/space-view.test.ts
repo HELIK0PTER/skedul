@@ -15,6 +15,7 @@ import {
   cancelBookingCopy,
   cancelButtonName,
   cancelDoneText,
+  myGreeting,
   spendButtonName,
   spendControlOf,
   visitorStateOfIdentity,
@@ -163,4 +164,15 @@ test("spendControlOf never offers the one-click booking to a visitor who is not 
   assert.equal(spendControlOf({ needsAnswers: false, canSpend: true, visitorState: "unverified" }), "disabled");
   assert.equal(spendControlOf({ needsAnswers: false, canSpend: true, visitorState: "anonymous" }), "signin");
   assert.equal(spendControlOf({ needsAnswers: false, canSpend: true, visitorState: "impersonating" }), "none");
+});
+
+test("myGreeting: the account's name, else the name a pro has on file, else « Bonjour » alone (P6 B6)", () => {
+  const card = (name: string) => ({ space: { customer: { name } } });
+  assert.equal(myGreeting("Léa Martin", [card("Léa M.")]), "Bonjour Léa Martin", "the account's own name comes first");
+  // a code sign-in creates the account without a name: the name the client typed when booking stands in
+  assert.equal(myGreeting("", [card("Léa Martin")]), "Bonjour Léa Martin");
+  assert.equal(myGreeting("   ", [card("  "), card("Léa Martin"), card("Léa")]), "Bonjour Léa Martin", "the first card with a name");
+  assert.equal(myGreeting("", []), "Bonjour");
+  assert.equal(myGreeting("", [card(""), card("  ")]), "Bonjour");
+  assert.equal(myGreeting("  Léa  ", []), "Bonjour Léa", "trimmed");
 });

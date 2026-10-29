@@ -22,6 +22,15 @@ export const SPEND_DONE = "Réservation confirmée.";
 export const CANCEL_LABEL = "Annuler";
 
 /**
+ * The greeting of « Mon espace » (P6 B6): the account's name, else the name the client gave a pro (the first card that
+ * has one: a code sign-in creates the account without a name), else « Bonjour » alone.
+ */
+export function myGreeting(userName: string, cards: readonly { space: { customer: { name: string } } }[]): string {
+  const name = userName.trim() || cards.map((c) => c.space.customer.name.trim()).find((n) => n !== "") || "";
+  return name === "" ? "Bonjour" : `Bonjour ${name}`;
+}
+
+/**
  * The confirmation of « Annuler » (COV-M12): the ticket comes back for a ticket booking, the pro is told, the client gets a
  * confirmation e-mail. A rendez-vous is called a rendez-vous, never an inscription (P5 copy rule).
  */

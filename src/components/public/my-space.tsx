@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { INLINE_LINK_CLASS } from "@/components/ui/link-class";
 import { COPY } from "@/lib/public/messages";
 import type { MySpaceCard } from "@/lib/public/my-space";
-import { UPCOMING_TITLE } from "@/lib/public/space-view";
+import { UPCOMING_TITLE, myGreeting } from "@/lib/public/space-view";
 import { boutiqueHref } from "@/lib/public-anchors";
 import { cn } from "@/lib/utils";
 
@@ -25,7 +25,7 @@ export function MySpaceView({ name, email, cards }: { name: string; email: strin
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-xl font-bold tracking-tight wrap-anywhere">{name.trim() === "" ? "Bonjour" : `Bonjour ${name}`}</p>
+        <p className="text-xl font-bold tracking-tight wrap-anywhere">{myGreeting(name, cards)}</p>
         <p className="mt-1 text-sm text-zinc-600 wrap-anywhere">{email}</p>
       </div>
 
