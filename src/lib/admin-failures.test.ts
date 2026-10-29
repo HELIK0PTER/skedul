@@ -9,7 +9,7 @@ import test from "node:test";
 
 import { bodyOf, codeView } from "@/test/source-guards";
 
-import { ADMIN_FAILURE_MESSAGES, adminFailure, type AdminFailureKind } from "./admin-failures";
+import { ADMIN_FAILURE_MESSAGES, adminFailure, callAdminAction, type AdminFailureKind } from "./admin-failures";
 import { logSafeMessage } from "./log-safe";
 
 const KINDS = Object.keys(ADMIN_FAILURE_MESSAGES) as AdminFailureKind[];
@@ -60,4 +60,51 @@ test("every admin action that catches answers adminFailure of its kind, and noth
   // the end of the demoted admin's impersonations) are one write each, so a failure leaves the role as it was.
   const role = bodyOf(actions, "setAdminRole");
   assert.match(role, /try \{[\s\S]*db\.update\(user\)\.set\(\{ role \}\)\.where\(eq\(user\.id, target\.id\)\)[\s\S]*db\.batch\(\[setRole, db\.delete\(session\)\.where\(eq\(session\.impersonatedBy, target\.id\)\)\]\)[\s\S]*\} catch \(err\) \{/);
+});
+
+test("callAdminAction: an answer passes through; a call that rejects (network down) is the kind's sentence, never its message; Next's redirect is rethrown first (P6 X4)", async () => {
+  const noRethrow = () => {};
+  assert.deepEqual(await callAdminAction("suspend", async () => ({ ok: true }), noRethrow), { ok: true });
+  assert.deepEqual(
+    await callAdminAction("suspend", async () => ({ ok: false, error: "Refusé par le serveur." }), noRethrow),
+    { ok: false, error: "Refusé par le serveur." },
+  );
+  for (const kind of KINDS) {
+    const seen: unknown[] = [];
+    const failed = new TypeError("Failed to fetch marie@exemple.fr");
+    const answer = await callAdminAction(kind, async () => Promise.reject(failed), (err) => seen.push(err));
+    assert.deepEqual(answer, { ok: false, error: ADMIN_FAILURE_MESSAGES[kind] }, kind);
+    assert.deepEqual(seen, [failed], "the rethrow hook sees the error before the sentence is chosen");
+  }
+  // « Se connecter en tant que » succeeds by redirecting: the hook rethrows, so the navigation goes on.
+  const redirect = Object.assign(new Error("NEXT_REDIRECT"), { digest: "NEXT_REDIRECT;push;/dashboard;307;" });
+  await assert.rejects(
+    callAdminAction("impersonate", async () => Promise.reject(redirect), (err) => {
+      throw err;
+    }),
+    (err) => err === redirect,
+  );
+});
+
+test("UserActions catches every call through callAdminAction with unstable_rethrow and the kind of its action (P6 X4)", () => {
+  const source = readFileSync("src/components/admin/user-actions.tsx", "utf8");
+  const code = codeView(source);
+  assert.match(source, /^import \{ unstable_rethrow \} from "next\/navigation";\r?$/m);
+  assert.match(source, /import \{ callAdminAction, type AdminFailureKind \} from "@\/lib\/admin-failures";/);
+  assert.match(code, /const res = await callAdminAction\(kind, action, unstable_rethrow\);/);
+  assert.doesNotMatch(code, /await action\(\)/, "no bare call left: a rejection never reaches the error boundary");
+  // The kinds are string literals, which codeView blanks: read them on the source, at the calls the code view keeps.
+  const calls = [...source.matchAll(/\brun\("(\w+)", \(\) => (\w+)\(/g)]
+    .filter((m) => code.startsWith("run(", m.index))
+    .map((m) => `${m[2]}:${m[1]}`)
+    .sort();
+  assert.deepEqual(calls, [
+    "reactivateUser:reactivate",
+    "setAdminRole:role",
+    "setAdminRole:role",
+    "signOutEverywhere:signOut",
+    "startImpersonation:impersonate",
+    "suspendUser:suspend",
+  ]);
+  assert.doesNotMatch(code, /console\./, "the browser logs nothing");
 });

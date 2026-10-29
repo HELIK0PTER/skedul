@@ -26,3 +26,22 @@ export function adminFailure(
   log(`[admin] ${kind} failed: ${logSafeMessage(err)}`);
   return { ok: false, error: ADMIN_FAILURE_MESSAGES[kind] };
 }
+
+/**
+ * The browser side of an /admin/users action (P6 X4): the action's own answer, or the kind's sentence when the call
+ * itself rejects (network down, server unreachable), so that the failure is said on the card instead of reaching the
+ * error boundary. `rethrow` sees the error first: UserActions passes Next's unstable_rethrow, which lets the redirect
+ * of « Se connecter en tant que » go on. Nothing is logged: the browser has no detail worth keeping.
+ */
+export async function callAdminAction<T extends { ok: boolean }>(
+  kind: AdminFailureKind,
+  action: () => Promise<T>,
+  rethrow: (err: unknown) => void,
+): Promise<T | { ok: false; error: string }> {
+  try {
+    return await action();
+  } catch (err) {
+    rethrow(err);
+    return { ok: false, error: ADMIN_FAILURE_MESSAGES[kind] };
+  }
+}

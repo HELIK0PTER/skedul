@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { unstable_rethrow } from "next/navigation";
 import { Ban, LogIn, LogOut, ShieldCheck, ShieldOff, Undo2 } from "lucide-react";
 
 import { FormError } from "@/components/dashboard/form-error";
@@ -9,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { callAdminAction, type AdminFailureKind } from "@/lib/admin-failures";
 import {
   BAN_DURATION_LABELS,
   type BanDuration,
@@ -45,11 +47,12 @@ export function UserActions({
   const [reason, setReason] = useState("");
   const [duration, setDuration] = useState<BanDuration>("7d");
 
-  function run(action: () => Promise<AdminActionResult>, success: string) {
+  /** A call that rejects (network down) shows the kind's sentence on the card, not the error boundary (P6 X4). */
+  function run(kind: AdminFailureKind, action: () => Promise<AdminActionResult>, success: string) {
     setError(null);
     setNotice(null);
     startTransition(async () => {
-      const res = await action();
+      const res = await callAdminAction(kind, action, unstable_rethrow);
       setConfirming(null);
       if (!res.ok) {
         setError(res.error);
@@ -130,13 +133,13 @@ export function UserActions({
       <CardContent className="space-y-3">
         {role === "admin" ? (
           confirmable("revoke", "Retirer le rôle admin", <ShieldOff />, "outline", () =>
-            run(() => setAdminRole({ userId, admin: false }), "Rôle admin retiré."),
+            run("role", () => setAdminRole({ userId, admin: false }), "Rôle admin retiré."),
           )
         ) : (
           <>
             {suspended ? (
               confirmable("reactivate", "Réactiver le compte", <Undo2 />, "secondary", () =>
-                run(() => reactivateUser(userId), "Compte réactivé."),
+                run("reactivate", () => reactivateUser(userId), "Compte réactivé."),
               )
             ) : (
               <div className="space-y-2 rounded-xl border border-border p-3">
@@ -166,7 +169,7 @@ export function UserActions({
                   </Select>
                 </div>
                 {confirmable("suspend", "Suspendre", <Ban />, "destructive", () =>
-                  run(() => suspendUser({ userId, reason, duration }), "Compte suspendu."),
+                  run("suspend", () => suspendUser({ userId, reason, duration }), "Compte suspendu."),
                 )}
                 <p className="text-xs text-muted-foreground">
                   Connexion bloquée et sessions coupées
@@ -175,16 +178,16 @@ export function UserActions({
               </div>
             )}
             {confirmable("signout", "Déconnecter partout", <LogOut />, "secondary", () =>
-              run(() => signOutEverywhere(userId), "Toutes ses sessions sont fermées."),
+              run("signOut", () => signOutEverywhere(userId), "Toutes ses sessions sont fermées."),
             )}
             {isPro &&
               !suspended &&
               confirmable("impersonate", "Se connecter en tant que", <LogIn />, "secondary", () =>
-                run(() => startImpersonation(userId), "Ouverture du compte…"),
+                run("impersonate", () => startImpersonation(userId), "Ouverture du compte…"),
               )}
             {!suspended &&
               confirmable("grant", "Nommer admin", <ShieldCheck />, "outline", () =>
-                run(() => setAdminRole({ userId, admin: true }), "Rôle admin attribué."),
+                run("role", () => setAdminRole({ userId, admin: true }), "Rôle admin attribué."),
               )}
           </>
         )}
