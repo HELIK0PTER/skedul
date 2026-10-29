@@ -256,7 +256,7 @@ export default function Home() {
                   crop={660}
                   className={styles.reveal}
                 >
-                  <ClientProfile state={INITIAL_STATE} />
+                  <ClientProfile />
                 </ProductShot>
                 <h3 className={cn(H3, "mt-10")}>
                   Une boutique où réserver est simple

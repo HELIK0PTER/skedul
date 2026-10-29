@@ -18,7 +18,7 @@ export interface ScreenProps {
 export function DemoScreen({ state }: ScreenProps) {
   switch (state.screen) {
     case "client-profile":
-      return <ClientProfile state={state} />;
+      return <ClientProfile />;
     case "client-booking":
       return <ClientBooking state={state} />;
     case "client-pack":

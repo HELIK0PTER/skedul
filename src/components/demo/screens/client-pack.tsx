@@ -37,7 +37,7 @@ export function ClientPack({ state }: ScreenProps) {
 
         <Card>
           <CardContent className="space-y-3 p-5">
-            <h2 className="font-semibold">Finaliser l'achat</h2>
+            <h2 className="font-semibold">{"Finaliser l'achat"}</h2>
             <div className="space-y-1.5">
               <Label>Nom complet</Label>
               <Input data-demo="field-name" readOnly value={state.formName} placeholder="Jean Dupont" />

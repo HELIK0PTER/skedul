@@ -6,9 +6,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { formatMoney } from "@/lib/utils";
 import { DEMO_PACK, DEMO_SERVICES } from "../demo-data";
 import { ClientShell } from "./client-shell";
-import type { ScreenProps } from "./index";
 
-export function ClientProfile(_: ScreenProps) {
+export function ClientProfile() {
   return (
     <ClientShell>
       <h2 className="mb-3 text-base font-semibold">Réserver une prestation</h2>
