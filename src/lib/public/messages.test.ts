@@ -246,7 +246,7 @@ test("COPY holds every fixed client sentence, word for word", () => {
     PENDING_SIGN_UP: "Création…",
     RDV_SLOT_GONE: "Ce créneau n'est plus disponible : choisissez-en un autre.",
     RDV_NO_OFFER: "Aucune offre ne couvre cette date. Choisissez un créneau plus proche.",
-    RDV_TICKETS_ONLY: "Aucune offre n'est en vente en ligne : ce rendez-vous se réserve avec un ticket que vous avez déjà.",
+    RDV_TICKETS_ONLY: "Aucune offre n'est en vente en ligne : ce rendez-vous se réserve avec un ticket valable à cette date.",
     RDV_EMPTY_WEEK: "Aucun créneau cette semaine",
     RDV_NEXT_WEEK: "Semaine suivante",
     RDV_CLOSED: "Aucun créneau disponible pour le moment.",

@@ -239,10 +239,10 @@ test("rdvSlotMode: a paid type with no offer on sale at all is for ticket holder
 });
 
 test("rdvTicketsOnlyLine: the type is booked with a ticket already held; an anonymous visitor is pointed to « J'ai déjà des tickets » (R3)", () => {
-  assert.equal(COPY.RDV_TICKETS_ONLY, "Aucune offre n'est en vente en ligne : ce rendez-vous se réserve avec un ticket que vous avez déjà.");
+  assert.equal(COPY.RDV_TICKETS_ONLY, "Aucune offre n'est en vente en ligne : ce rendez-vous se réserve avec un ticket valable à cette date.");
   assert.equal(
     rdvTicketsOnlyLine("prompt"),
-    "Aucune offre n'est en vente en ligne : ce rendez-vous se réserve avec un ticket que vous avez déjà. Pour l'utiliser, cliquez sur « J'ai déjà des tickets ».",
+    "Aucune offre n'est en vente en ligne : ce rendez-vous se réserve avec un ticket valable à cette date. Pour l'utiliser, cliquez sur « J'ai déjà des tickets ».",
   );
   assert.ok(rdvTicketsOnlyLine("prompt").endsWith(`« ${COPY.HAVE_TICKETS} ».`), "the label of the prompt's own button");
   assert.equal(rdvTicketsOnlyLine("confirm"), COPY.RDV_TICKETS_ONLY, "an unverified visitor already reads « Confirmez votre email pour utiliser vos tickets. »");

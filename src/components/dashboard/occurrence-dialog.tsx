@@ -489,7 +489,7 @@ function OccurrenceDialogBody({
 
         {item.attendees.length === 0 ? (
           <p className="mt-4 rounded-xl bg-muted/60 px-3 py-4 text-sm text-muted-foreground">
-            Personne n&apos;est inscrit pour le moment.
+            {isSeance ? "Personne n'est inscrit pour le moment." : "Aucun client pour ce rendez-vous."}
           </p>
         ) : (
           <ul className="mt-4 grid gap-2" aria-label={isSeance ? "Inscrits" : "Client"}>

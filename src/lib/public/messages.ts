@@ -158,7 +158,7 @@ export const COPY = {
   RDV_SLOT_GONE,
   RDV_NO_OFFER: "Aucune offre ne couvre cette date. Choisissez un créneau plus proche.",
   /** A paid type with no offer on sale at all (R3): only ticket holders can book it (rdvTicketsOnlyLine adds the prompt). */
-  RDV_TICKETS_ONLY: "Aucune offre n'est en vente en ligne : ce rendez-vous se réserve avec un ticket que vous avez déjà.",
+  RDV_TICKETS_ONLY: "Aucune offre n'est en vente en ligne : ce rendez-vous se réserve avec un ticket valable à cette date.",
   RDV_EMPTY_WEEK: "Aucun créneau cette semaine",
   RDV_NEXT_WEEK: "Semaine suivante",
   /** A type that can never be booked online (no hours, notice above the horizon): O14. */

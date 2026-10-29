@@ -33,7 +33,7 @@ export default async function UnavailabilityPage() {
       label =
         startKey === lastKey
           ? formatDateLong(r.startAt, tz)
-          : `${formatDateLong(r.startAt, tz)} → ${formatDateLong(last, tz)}`;
+          : `du ${formatDateLong(r.startAt, tz)} au ${formatDateLong(last, tz)}`;
     } else {
       label = `${formatDateLong(r.startAt, tz)} · ${formatTimeRange(r.startAt, r.endAt, tz)}`;
     }
