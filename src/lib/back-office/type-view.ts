@@ -29,7 +29,13 @@ export function acceptedByText(acceptedBy: readonly { title: string }[]): string
   return acceptedBy.length === 0 ? "Accepté par aucun événement" : `Accepté par : ${acceptedBy.map((e) => e.title).join(", ")}`;
 }
 
-/** Why an RDV type offers no slot online: `no_hours` and `notice_over_horizon` close it, `no_offer` leaves it to ticket holders. */
+/**
+ * Why an RDV type offers no slot online: `no_hours` and `notice_over_horizon` close it, `no_offer` leaves it to ticket
+ * holders. `notice_over_horizon` is defensive (P6 D8): every save of the settings, a type or an event refuses a window
+ * that would close, so only a row written outside those cores (a script, an engine call, data older than the guards)
+ * reaches it. It is kept because the public loader (rdvNeverBookable, src/lib/slots.ts) still closes such a type, and
+ * the pro's page must then say why.
+ */
 export type RdvIssue = "no_hours" | "notice_over_horizon" | "no_offer";
 
 export const RDV_NOT_BOOKABLE = "Non réservable en ligne";
