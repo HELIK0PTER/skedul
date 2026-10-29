@@ -535,7 +535,8 @@ function OccurrenceDialogBody({
                 Modifier cette séance
               </Button>
             )}
-            {scheduled && (
+            {/* An RDV is cancelled from its client's row, one control (P6 A36): the footer offers it only when no row is listed. */}
+            {scheduled && (isSeance || item.attendees.length === 0) && (
               <Button
                 variant="outline"
                 size="sm"

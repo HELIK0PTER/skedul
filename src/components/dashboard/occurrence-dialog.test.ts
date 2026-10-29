@@ -31,6 +31,14 @@ test("an RDV attendee is cancelled with « Annuler le rendez-vous » and the RDV
   assert.match(SOURCE, /selectable=\{isSeance\}/);
 });
 
+test("an RDV has one « Annuler le rendez-vous »: its client's row, the footer only when no row is listed (P6 A36)", () => {
+  // The row's control names the client, asks for the « Motif » sent by email and cancels a payment in progress.
+  assert.match(SOURCE, /\{scheduled && \(isSeance \|\| item\.attendees\.length === 0\) && \(\s*<Button/);
+  const footer = SOURCE.slice(SOURCE.indexOf("{scheduled && (isSeance"), SOURCE.indexOf("{item.canRestore && ("));
+  assert.match(footer, /\{isSeance \? "Annuler la séance" : "Annuler le rendez-vous"\}/);
+  assert.equal(SOURCE.split("{scheduled && (\n").length + SOURCE.split("{scheduled && (\r\n").length - 2, 0, "no unconditional footer cancel left");
+});
+
 test("a seat paid in test mode carries the « Test » badge, the one of the booking dialog and the payments table (P6 A35)", () => {
   assert.match(SOURCE, /\{attendee\.moved && <Badge variant="neutral">Déplacé<\/Badge>\}\s*\{attendee\.testPaid && <Badge variant="outline">Test<\/Badge>\}/);
 });
