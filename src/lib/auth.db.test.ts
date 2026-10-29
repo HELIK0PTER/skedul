@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { and, eq, sql, type Query } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
-import { NAME_NOT_PLAIN_CODE } from "./auth-messages";
+import { IMAGE_NOT_ACCEPTED, IMAGE_NOT_ACCEPTED_CODE, NAME_NOT_PLAIN_CODE } from "./auth-messages";
 import { LINK_REFUSED_WHILE_IMPERSONATING } from "./auth-options";
 import { COPY } from "./public/messages";
 import { BOUNDS } from "./tickets-vocab";
@@ -1170,6 +1170,84 @@ test("A9 a code sign-in with a name that is not plain is refused before the code
     assert.equal((await codeSignIn(t, call, fresh)).status, 200);
   } finally {
     await deleteUsersByEmail(db, [fresh, known]);
+  }
+});
+
+test("X1 a sign-up whose name is not plain or that carries an image, and a code sign-in with an image, are refused before anything is written, alike for a new and a known address", OPTS, async () => {
+  const db = await getTestDb();
+  const t = makeTestAuth(db);
+  const fresh = testEmail("x1new");
+  const known = testEmail("x1known");
+  const image = "https://tracker.example/pixel.png";
+  const badNames: unknown[] = ["Marie 06 12 34 56 78", "Marie bit.ly/promo", "marie@exemple.fr", "x".repeat(BOUNDS.name + 1), "   ", "", 42];
+  const noUser = async (email: string) => (await db.select().from(schema.user).where(eq(schema.user.email, email))).length === 0;
+  try {
+    await signUp(t, known);
+    const knownBefore = await userByEmail(db, known);
+    const answers: Record<string, string[]> = { [fresh]: [], [known]: [] };
+    for (const email of [fresh, known]) {
+      // 3 sign-ups per IP and 10 minutes: one browser (own IP) per attempt.
+      for (const name of badNames) {
+        const res = await browser(t)("/sign-up/email", { email, password: PASSWORD, name });
+        answers[email].push(`${res.status} ${String(res.json?.code)} ${String(res.json?.message)}`);
+        assert.equal(res.status, 400, `${email} ${JSON.stringify(name)}`);
+        assert.equal(res.json?.code, NAME_NOT_PLAIN_CODE, `${email} ${JSON.stringify(name)}`);
+        assert.equal(res.json?.message, COPY.PLAIN_NAME);
+      }
+      const withImage = await browser(t)("/sign-up/email", { email, password: PASSWORD, name: "Marie Dupont", image });
+      answers[email].push(`${withImage.status} ${String(withImage.json?.code)} ${String(withImage.json?.message)}`);
+      assert.equal(withImage.status, 400, `${email}: a sign-up with an image`);
+      assert.equal(withImage.json?.code, IMAGE_NOT_ACCEPTED_CODE);
+      assert.equal(withImage.json?.message, IMAGE_NOT_ACCEPTED);
+      if (email === fresh) assert.ok(await noUser(fresh), "no refused sign-up created the account");
+
+      // A code sign-in with an image is refused before the code is read: the same code then signs in.
+      const call = browser(t);
+      assert.equal((await call("/email-otp/send-verification-otp", { email, type: "sign-in" })).status, 200);
+      const otp = t.lastCode(email);
+      assert.ok(otp, `no sign-in code for ${email}`);
+      for (let i = 0; i < 4; i++) {
+        const refused = await call("/sign-in/email-otp", { email, otp, name: "Marie Dupont", image });
+        answers[email].push(`${refused.status} ${String(refused.json?.code)}`);
+        assert.equal(refused.status, 400, `${email}: a code sign-in with an image`);
+        assert.equal(refused.json?.code, IMAGE_NOT_ACCEPTED_CODE);
+      }
+      assert.equal((await call("/sign-in/email-otp", { email, otp, name: "Marie Dupont" })).status, 200, `the code still signs ${email} in`);
+    }
+    assert.deepEqual(answers[fresh], answers[known], "the answers never tell whether the address has an account");
+    const created = await userByEmail(db, fresh);
+    assert.equal(created.name, "Marie Dupont", "the account of the code sign-in, with its plain name");
+    assert.equal(created.image, null, "and no image");
+    assert.equal(await credentialCount(db, created.id), 0, "no refused sign-up left a password");
+    const knownAfter = await userByEmail(db, known);
+    assert.equal(knownAfter.name, knownBefore.name);
+    assert.equal(knownAfter.image, null);
+    // A plain name and no image still sign up, the name as the form sends it (trimmed).
+    const plain = testEmail("x1plain");
+    try {
+      assert.equal((await browser(t)("/sign-up/email", { email: plain, password: PASSWORD, name: "Léa Martin", image: "" })).status, 200);
+      assert.equal((await userByEmail(db, plain)).name, "Léa Martin");
+    } finally {
+      await deleteUsersByEmail(db, [plain]);
+    }
+  } finally {
+    await deleteUsersByEmail(db, [fresh, known]);
+  }
+});
+
+test("X1 /update-user is closed over HTTP: a session cannot set its account's name or profile image", OPTS, async () => {
+  const db = await getTestDb();
+  const t = makeTestAuth(db);
+  const email = testEmail("x1update");
+  try {
+    const call = await signUp(t, email);
+    const res = await call("/update-user", { name: "Marie 06 12 34 56 78", image: "https://tracker.example/pixel.png" });
+    assert.equal(res.status, 404);
+    const row = await userByEmail(db, email);
+    assert.equal(row.name, "Client");
+    assert.equal(row.image, null);
+  } finally {
+    await deleteUsersByEmail(db, [email]);
   }
 });
 

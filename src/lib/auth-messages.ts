@@ -20,8 +20,12 @@ export const TOO_MANY_ATTEMPTS = "Trop d'essais. Demandez un nouveau code.";
 export const CODE_SENT = "Si l'adresse est valide, un code a été envoyé.";
 /** A suspended account cannot open a session (Better Auth admin plugin, code BANNED_USER). */
 export const ACCOUNT_SUSPENDED = oauthErrorMessage("BANNED_USER") ?? GENERIC_ERROR;
-/** The code of the 400 a code sign-in gets for a name that is not isPlainName (auth hook, P6 A9). */
+/** The code of the 400 a code sign-in or a sign-up gets for a name that is not isPlainName (auth hook, P6 A9, X1). */
 export const NAME_NOT_PLAIN_CODE = "NAME_NOT_PLAIN";
+/** The code of the 400 a sign-up or a code sign-in gets for a profile image, which Skedul never asks for (auth hook, P6 X1). */
+export const IMAGE_NOT_ACCEPTED_CODE = "IMAGE_NOT_ACCEPTED";
+/** Its sentence: only a request that skips Skedul's forms sends an image, so the forms show the generic one. */
+export const IMAGE_NOT_ACCEPTED = "Une image de profil ne peut pas être envoyée ici.";
 
 function isServerError(error: AuthClientError): boolean {
   return typeof error?.status === "number" && error.status >= 500;
@@ -39,6 +43,9 @@ export function authFormErrorMessage(error: AuthClientError): string {
     // Admin plugin: a suspended user cannot open a session.
     case "BANNED_USER":
       return ACCOUNT_SUSPENDED;
+    // The sign-up hook's name check (P6 X1): the form checks it first, this is for a form older than the rule.
+    case NAME_NOT_PLAIN_CODE:
+      return COPY.PLAIN_NAME;
     default:
       return GENERIC_ERROR;
   }

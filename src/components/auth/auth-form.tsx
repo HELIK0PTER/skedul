@@ -8,7 +8,9 @@ import { Loader2 } from "lucide-react";
 import { signIn, signUp } from "@/lib/auth-client";
 import { authFormErrorMessage } from "@/lib/auth-messages";
 import { COPY } from "@/lib/public/messages";
+import { plainNameSchema } from "@/lib/public/plain-name";
 import { authFormGoogleCallbacks } from "@/lib/public/sign-in-flow";
+import { BOUNDS } from "@/lib/tickets-vocab";
 import { resolvePostSignIn, type PostSignIn } from "@/server/entry";
 import { EntryChooser } from "@/components/auth/entry-chooser";
 import { GoogleLogo } from "@/components/auth/google-logo";
@@ -68,7 +70,18 @@ export function AuthForm({
     const form = new FormData(e.currentTarget);
     const email = String(form.get("email"));
     const password = String(form.get("password"));
-    const name = String(form.get("name") ?? "");
+    let name = "";
+    if (isSignUp) {
+      // P6 X1: the server's rule for the account's name (it reaches the pros' records, the admin pages and the mails),
+      // checked here first; the trimmed name is the one sent.
+      const checked = plainNameSchema.safeParse(String(form.get("name") ?? ""));
+      if (!checked.success) {
+        setError(COPY.PLAIN_NAME);
+        setLoading(false);
+        return;
+      }
+      name = checked.data;
+    }
 
     const result = isSignUp
       ? await signUp.email({ email, password, name })
@@ -142,7 +155,7 @@ export function AuthForm({
         {isSignUp && (
           <div className="space-y-1.5">
             <Label htmlFor="name">Nom complet</Label>
-            <Input id="name" name="name" placeholder="Camille Laurent" required />
+            <Input id="name" name="name" placeholder="Camille Laurent" autoComplete="name" maxLength={BOUNDS.name} required />
           </div>
         )}
         <div className="space-y-1.5">

@@ -11,7 +11,7 @@ import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { ADMIN_HTTP_ENDPOINTS, adminPlugin } from "@/lib/auth-admin";
-import { NAME_NOT_PLAIN_CODE } from "@/lib/auth-messages";
+import { IMAGE_NOT_ACCEPTED, IMAGE_NOT_ACCEPTED_CODE, NAME_NOT_PLAIN_CODE } from "@/lib/auth-messages";
 import type { Db } from "@/lib/db/atomic";
 import * as schema from "@/lib/db/schema";
 import { loginCodeEmail } from "@/lib/emails/login-code";
@@ -91,8 +91,10 @@ export const OTP_DISABLED_PATHS: string[] = Object.values(
  * link is ever mailed, and /send-verification-email would send address codes
  * outside the per-address cap of hooks.before (only 3 per 60 s per IP).
  * Sign-up still sends its code: core sign-up calls the sender in-process.
+ * /update-user (P6 X1): Skedul never calls it, and open it lets any session set its account's name and profile image
+ * with neither the plain-name rule nor the image refusal of hooks.before.
  */
-export const CORE_DISABLED_PATHS: string[] = ["/send-verification-email", "/verify-email"];
+export const CORE_DISABLED_PATHS: string[] = ["/send-verification-email", "/verify-email", "/update-user"];
 
 /** Closed over HTTP only; in-process `auth.api.*` calls keep working. */
 export const AUTH_DISABLED_PATHS: string[] = [...ADMIN_HTTP_ENDPOINTS, ...OTP_DISABLED_PATHS, ...CORE_DISABLED_PATHS];
@@ -157,6 +159,23 @@ export function otpCapEmail(body: { email?: unknown; type?: unknown } | undefine
 export function isAcceptedOtpName(name: unknown): boolean {
   if (name === undefined || name === "") return true;
   return plainNameSchema.safeParse(name).success;
+}
+
+/**
+ * The `name` of a /sign-up/email body the hook lets through (P6 X1): a string that passes plainNameSchema. A sign-up
+ * always names its account (the form's field is required), so no name is refused too, unlike a code sign-in.
+ */
+export function isAcceptedSignUpName(name: unknown): boolean {
+  return plainNameSchema.safeParse(name).success;
+}
+
+/**
+ * The `image` of a /sign-up/email or /sign-in/email-otp body the hook lets through (P6 X1): none (absent or empty).
+ * Skedul never asks for one, and a URL there would become the account's avatar on /admin/users/[id], loaded by the
+ * admin's browser. A Google sign-in keeps the picture Google gives (it comes through the OAuth callback, not a body).
+ */
+export function isAcceptedProfileImage(image: unknown): boolean {
+  return image === undefined || image === "";
 }
 
 /**
@@ -378,13 +397,17 @@ export function buildAuthOptions(deps: AuthDeps) {
       // sent in process by core emailVerification.sendOnSignUp and never comes
       // through this path.
       before: createAuthMiddleware(async (ctx) => {
-        if (ctx.path === OTP_SIGN_IN_PATH) {
-          // P6 A9: the name of a first code sign-in becomes the account's name, which reaches the pros' client
-          // records and their mails. The browser checks it; this is the same check for a request that skips the
-          // browser. It runs before the route reads the code (an attempt is not used up) and before any lookup, so
-          // the answer is the same whether or not the address has an account.
-          if (!isAcceptedOtpName((ctx.body as { name?: unknown } | undefined)?.name)) {
-            throw new APIError("BAD_REQUEST", { message: COPY.PLAIN_NAME, code: NAME_NOT_PLAIN_CODE });
+        if (ctx.path === OTP_SIGN_IN_PATH || ctx.path === SIGN_UP_PATH) {
+          // P6 A9, X1: the name of a first code sign-in or of a sign-up becomes the account's name, which reaches the
+          // pros' client records, the admin pages and the mails. The browser checks it; this is the same check for a
+          // request that skips the browser. A profile image is refused on both (Skedul never asks for one: it would
+          // be the admin's avatar). It runs before the route reads the code (an attempt is not used up), before any
+          // lookup and before anything is written, so the answer is the same whether or not the address has an account.
+          const body = ctx.body as { name?: unknown; image?: unknown } | undefined;
+          const nameOk = ctx.path === SIGN_UP_PATH ? isAcceptedSignUpName(body?.name) : isAcceptedOtpName(body?.name);
+          if (!nameOk) throw new APIError("BAD_REQUEST", { message: COPY.PLAIN_NAME, code: NAME_NOT_PLAIN_CODE });
+          if (!isAcceptedProfileImage(body?.image)) {
+            throw new APIError("BAD_REQUEST", { message: IMAGE_NOT_ACCEPTED, code: IMAGE_NOT_ACCEPTED_CODE });
           }
           return;
         }

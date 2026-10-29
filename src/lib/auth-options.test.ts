@@ -20,6 +20,8 @@ import {
   buildAuthOptions,
   buildOtpMailer,
   isAcceptedOtpName,
+  isAcceptedProfileImage,
+  isAcceptedSignUpName,
   isOtpVerificationTransition,
   type AuthMail,
 } from "./auth-options";
@@ -38,6 +40,23 @@ test("isAcceptedOtpName: no name, or a plain one of at most BOUNDS.name characte
   // Whatever the form sends passes the server check.
   for (const typed of ["  Marie  ", "Léa", `${"é".repeat(BOUNDS.name)}zz`, "Marie 06 12 34 56 78", "   "]) {
     assert.equal(isAcceptedOtpName(nameToSend(typed)), true, typed);
+  }
+});
+
+test("isAcceptedSignUpName: a plain name of 1 to BOUNDS.name characters, required; never a link, an address, a number or a non-string (P6 X1)", () => {
+  for (const name of ["Marie", "Marie-Anne d'Arc", "J. Dupont", "Anne 1234", "  Léa  ", "x".repeat(BOUNDS.name)]) {
+    assert.equal(isAcceptedSignUpName(name), true, JSON.stringify(name));
+  }
+  // A sign-up always names its account (the form's field is required): no name is refused, unlike a code sign-in.
+  for (const name of [undefined, "", "   ", "Marie 06 12 34 56 78", "bit.ly", "a/b", "marie@exemple.fr", "www.x", "x".repeat(BOUNDS.name + 1), null, 42, ["Marie"]]) {
+    assert.equal(isAcceptedSignUpName(name), false, JSON.stringify(name));
+  }
+});
+
+test("isAcceptedProfileImage: Skedul never takes a profile image from a sign-up or a code sign-in, only none (P6 X1)", () => {
+  for (const image of [undefined, ""]) assert.equal(isAcceptedProfileImage(image), true, JSON.stringify(image));
+  for (const image of ["https://tracker.example/pixel.png", "data:image/png;base64,AAAA", "/avatar.png", " ", null, 0, {}]) {
+    assert.equal(isAcceptedProfileImage(image), false, JSON.stringify(image));
   }
 });
 
@@ -60,9 +79,11 @@ test("every emailOTP endpoint except send, sign-in and verify-email is closed ov
   assert.ok(OTP_DISABLED_PATHS.length >= 6, String(OTP_DISABLED_PATHS.length));
 });
 
-test("the admin and core link-verification endpoints stay closed", () => {
+test("the admin and core link-verification endpoints stay closed, and so does /update-user (P6 X1)", () => {
   for (const path of ADMIN_HTTP_ENDPOINTS) assert.ok(AUTH_DISABLED_PATHS.includes(path), path);
   for (const path of ["/send-verification-email", "/verify-email"]) assert.ok(AUTH_DISABLED_PATHS.includes(path), path);
+  // Skedul never calls it; open, it lets any session set its account's name and profile image (the admin's avatar).
+  assert.ok(CORE_DISABLED_PATHS.includes("/update-user"));
   assert.equal(
     AUTH_DISABLED_PATHS.length,
     ADMIN_HTTP_ENDPOINTS.length + OTP_DISABLED_PATHS.length + CORE_DISABLED_PATHS.length,

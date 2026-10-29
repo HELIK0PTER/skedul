@@ -7,6 +7,8 @@ import {
   authFormErrorMessage,
   CODE_SENT,
   GENERIC_ERROR,
+  IMAGE_NOT_ACCEPTED,
+  IMAGE_NOT_ACCEPTED_CODE,
   NAME_NOT_PLAIN_CODE,
   RATE_LIMITED,
   SEND_FAILED,
@@ -34,6 +36,13 @@ test("sign-in and sign-up: an existing address, a wrong password, a banned accou
   assert.equal(authFormErrorMessage({ status: 403, code: "BANNED_USER" }), oauthErrorMessage("BANNED_USER"));
   assert.equal(WRONG_CREDENTIALS, "Email ou mot de passe incorrect.");
   assert.match(ACCOUNT_EXISTS, /^Un compte existe déjà avec cet email\. Connectez-vous ou réinitialisez votre mot de passe\.$/);
+});
+
+test("sign-up: a name the server refuses reads the plain-name sentence; a profile image (never sent by the form) the generic one (P6 X1)", () => {
+  assert.equal(authFormErrorMessage({ status: 400, code: NAME_NOT_PLAIN_CODE }), COPY.PLAIN_NAME);
+  assert.equal(IMAGE_NOT_ACCEPTED_CODE, "IMAGE_NOT_ACCEPTED");
+  assert.equal(authFormErrorMessage({ status: 400, code: IMAGE_NOT_ACCEPTED_CODE }), GENERIC_ERROR);
+  assert.match(IMAGE_NOT_ACCEPTED, /^Une image de profil ne peut pas être envoyée ici\.$/);
 });
 
 test("sign-in and sign-up: anything else is the generic sentence, never the English message", () => {

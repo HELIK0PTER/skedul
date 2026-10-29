@@ -82,6 +82,19 @@ test("the sign-in and sign-up form says it is busy and announces its failure: pe
   assert.match(form, /<form method="post" onSubmit=\{onSubmit\}/);
 });
 
+test("the sign-up form checks the name with the server's rule before it signs up, sends the checked name and never an image (P6 X1)", () => {
+  const form = source("src/components/auth/auth-form.tsx");
+  assert.match(form, /import \{ plainNameSchema \} from "@\/lib\/public\/plain-name";/);
+  assert.match(form, /import \{ BOUNDS \} from "@\/lib\/tickets-vocab";/);
+  const checkAt = form.indexOf('const checked = plainNameSchema.safeParse(String(form.get("name") ?? ""));');
+  assert.ok(checkAt !== -1, "the typed name goes through plainNameSchema");
+  assert.match(form.slice(checkAt), /^[^\n]*\n\s*if \(!checked\.success\) \{\s*setError\(COPY\.PLAIN_NAME\);\s*setLoading\(false\);\s*return;\s*\}\s*name = checked\.data;/);
+  const signUpAt = form.indexOf("await signUp.email({ email, password, name })");
+  assert.ok(signUpAt > checkAt, "the check comes first; the trimmed name is the one sent");
+  assert.match(form, /<Input id="name" name="name" placeholder="Camille Laurent" autoComplete="name" maxLength=\{BOUNDS\.name\} required \/>/);
+  assert.doesNotMatch(form, /\bimage\b/, "no profile image is ever sent");
+});
+
 test("the reset link is logged only by a dev build without Resend, never by a production build (no token in logs)", () => {
   const auth = source("src/lib/auth.ts");
   assert.match(auth, /logResetLink: !env\.RESEND_ENABLED && process\.env\.NODE_ENV !== "production",/);
