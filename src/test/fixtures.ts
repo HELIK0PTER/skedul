@@ -4,7 +4,7 @@
  * always consistent (checkInvariants runs after every dbTest). Each maker
  * throws on an engine failure: a fixture that fails is a broken test.
  */
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
 import { createOffer, createTicketType } from "../lib/booking/catalog";
@@ -23,6 +23,17 @@ export type TicketRow = typeof ticket.$inferSelect;
 function check<T extends { ok: boolean }>(what: string, res: T): Extract<T, { ok: true }> {
   if (!res.ok) throw new Error(`${what} failed: ${JSON.stringify(res)}`);
   return res as Extract<T, { ok: true }>;
+}
+
+/** True when the pro has any ticket_type, event, customer or time_off row (the « empty page » assertion of the catalog and content tests). */
+export async function hasDomainData(db: Db, professionalId: string): Promise<boolean> {
+  const res = await db.execute<{ found: boolean }>(sql`select (
+    exists (select 1 from ticket_type where professional_id = ${professionalId})
+    or exists (select 1 from event where professional_id = ${professionalId})
+    or exists (select 1 from customer where professional_id = ${professionalId})
+    or exists (select 1 from time_off where professional_id = ${professionalId})
+  ) as found`);
+  return res.rows[0]?.found === true;
 }
 
 /** Local date `days` after today in the pro's time zone. */

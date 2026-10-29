@@ -12,12 +12,12 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { nanoid } from "nanoid";
-import type { NeonHttpDatabase } from "drizzle-orm/neon-http";
 
-import type * as schemaModule from "../lib/db/schema";
+// Type-only: erased at run time, so the harness still loads the schema and the driver only after its guards.
+import type { Db } from "../lib/db/atomic";
 
-/** Same type as `Db` in src/lib/db/atomic.ts (Task 14); declared here because the harness lands first. */
-export type Db = NeonHttpDatabase<typeof schemaModule>;
+/** The one `Db` type (src/lib/db/atomic.ts), re-exported for the DB tests. */
+export type { Db };
 
 export const DB_SKIP: string | false = process.env.DATABASE_URL_TEST
   ? false

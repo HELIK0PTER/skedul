@@ -120,7 +120,7 @@ export type BootstrapOutcome =
   | { ok: false; reason: "unknown_pro" | "has_data" };
 
 /**
- * Catalog or clients already present. Unlike hasDomainData (catalog.ts), a
+ * Catalog or clients already present. Unlike the test helper hasDomainData (src/test/fixtures.ts), a
  * time off does not count: time_off is kept from v1 (spec § 6.1), never
  * conflicts with the catalog, and the owner's real page may have some (P6).
  */

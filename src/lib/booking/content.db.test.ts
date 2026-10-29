@@ -7,7 +7,7 @@ import { dbTest } from "../../test/db";
 import { dayOfWeek, diffDays, instantAt, todayKey } from "../civil-date";
 import type { Db } from "../db/atomic";
 import * as schema from "../db/schema";
-import { hasDomainData } from "./catalog";
+import { hasDomainData } from "../../test/fixtures";
 
 async function countRows(db: Db, table: string, professionalId: string): Promise<number> {
   const res = await db.execute<{ n: number }>(

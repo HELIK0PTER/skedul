@@ -100,14 +100,6 @@ export const OCCURRENCE_STATUS_LABELS: Record<OccurrenceStatus, string> = {
   cancelled: "Annulée",
 };
 
-export const TICKET_STATUS_LABELS: Record<TicketStatus, string> = {
-  available: "Disponible",
-  booked: "Réservé",
-  used: "Utilisé",
-  expired: "Expiré",
-  closed: "Clos",
-};
-
 export const CLOSE_REASON_LABELS: Record<TicketCloseReason, string> = {
   rembourse: "Remboursé hors Skedul",
   compense: "Compensé",

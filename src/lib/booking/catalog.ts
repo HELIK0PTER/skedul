@@ -517,14 +517,3 @@ export async function updateBookingSettings(
   ]);
   return res.ok ? { ok: true, effects: [] } : failOf(res);
 }
-
-/** True when the pro has any ticket_type, event, customer or time_off row (bootstrap-content guard). */
-export async function hasDomainData(db: Db, professionalId: string): Promise<boolean> {
-  const res = await db.execute<{ found: boolean }>(sql`select (
-    exists (select 1 from ticket_type where professional_id = ${professionalId})
-    or exists (select 1 from event where professional_id = ${professionalId})
-    or exists (select 1 from customer where professional_id = ${professionalId})
-    or exists (select 1 from time_off where professional_id = ${professionalId})
-  ) as found`);
-  return res.rows[0]?.found === true;
-}

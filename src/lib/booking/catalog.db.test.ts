@@ -14,13 +14,13 @@ import {
 import type { Db } from "@/lib/db/atomic";
 
 import { createTestPro, dbTest, deleteTestUser, type TestPro } from "../../test/db";
+import { hasDomainData } from "../../test/fixtures";
 import { rowBooking, rowCustomer, rowEvent, rowLink, rowPurchase, rowRdv, rowTicket } from "../../test/rows";
 import {
   createOffer,
   createTicketType,
   deleteOffer,
   deleteTicketType,
-  hasDomainData,
   setAvailabilityRules,
   setTicketTypeArchived,
   setTypeQuestions,
