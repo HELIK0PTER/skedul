@@ -161,6 +161,9 @@ export function isOtpVerificationTransition(
  * the purge statement then reads a snapshot taken after that lock, and a
  * password sign-in's check (dropSessionWithoutPassword, FOR SHARE on the same
  * row) waits until the purge commits, so it sees the password account gone.
+ * The same transaction marks the address verified (P6 A2): a sign-up that links
+ * its password after this commit finds the user verified (refuseSignUpSession),
+ * with no gap before Better Auth's own update of the row.
  */
 async function purgeUnverifiedPassword(db: Db, email: string): Promise<number> {
   const [, result] = await db.batch([
@@ -175,8 +178,33 @@ async function purgeUnverifiedPassword(db: Db, email: string): Promise<number> {
         delete from session where user_id in (select user_id from gone) returning id
       )
       select count(*)::int as purged from gone`),
+    db.execute(sql`update "user" set email_verified = true, updated_at = now() where email = ${email} and email_verified = false`),
   ]);
   return Number(result.rows[0]?.purged ?? 0);
+}
+
+/**
+ * Sign-up's half of the takeover fix (P6 A2). /sign-up/email inserts the user
+ * (unverified), then its password account, then its session; a code sign-in on
+ * the same address can verify it in between (purge and verification are one
+ * transaction, purgeUnverifiedPassword), which would leave the stranger's
+ * password and session on a verified user. Run after the session insert: locks
+ * the user row FOR SHARE (waits for a purge in progress), then, when the
+ * address is verified now, deletes this request's password account and this
+ * session; a sign-up user without a password account loses the session too.
+ * True = refused.
+ */
+async function refuseSignUpSession(db: Db, session: { id: string; userId: string }): Promise<boolean> {
+  const verified = sql`exists (select 1 from "user" where id = ${session.userId} and email_verified)`;
+  const [, , gone] = await db.batch([
+    db.execute(sql`select id from "user" where id = ${session.userId} for share`),
+    db.execute(sql`delete from account where user_id = ${session.userId} and provider_id = 'credential' and ${verified}`),
+    db.execute<{ id: string }>(sql`
+      delete from session where id = ${session.id}
+        and (${verified} or not exists (select 1 from account where user_id = ${session.userId} and provider_id = 'credential'))
+      returning id`),
+  ]);
+  return gone.rows.length > 0;
 }
 
 /**
@@ -335,7 +363,9 @@ export function buildAuthOptions(deps: AuthDeps) {
           // sessions, first checks that its password account still exists
           // (dropSessionWithoutPassword): if a code sign-in purged it meanwhile,
           // the session is deleted and the request fails (closed; a failing
-          // check fails it too). Then "Dernière connexion" (real
+          // check fails it too). A password sign-up checks that no code sign-in
+          // verified the address meanwhile (refuseSignUpSession, P6 A2). Better
+          // Auth runs this hook at the end of the request. Then "Dernière connexion" (real
           // sign-ins only, not impersonation), best-effort. No customer row is
           // linked here (Decision 72, FR:SEC-5): a row gets its user_id only from
           // that user's own act at that pro (upsertCustomer, linkCustomerUser), so
@@ -348,6 +378,9 @@ export function buildAuthOptions(deps: AuthDeps) {
               (await dropSessionWithoutPassword(db, session))
             ) {
               throw new Error("[auth] password session refused: the password account was removed meanwhile");
+            }
+            if (ctx?.path === SIGN_UP_PATH && (await refuseSignUpSession(db, session))) {
+              throw new Error("[auth] sign-up session refused: the address was verified by a code meanwhile");
             }
             if (session.impersonatedBy) return;
             try {

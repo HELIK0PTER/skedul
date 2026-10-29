@@ -653,6 +653,164 @@ test("IDE1 a password session inserted while the purge statement runs is caught 
   }
 });
 
+/** A gate a race test opens once: `reached` resolves when a route stops at it, `release()` lets the route go on. */
+function makeGate() {
+  let reached!: () => void;
+  const atGate = new Promise<void>((resolve) => (reached = resolve));
+  let release!: () => void;
+  const open = new Promise<void>((resolve) => (release = resolve));
+  return { atGate, release, async stop() { reached(); await open; } };
+}
+
+/** A pending call settled as its response or its error (a refused session can reject the handler). */
+function settled(call: Promise<{ status: number; json: Record<string, unknown> | null }>) {
+  return call.then(
+    (res) => res,
+    (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
+  );
+}
+
+test("A2 a password sign-up paused before its password account while a code sign-in verifies the address keeps no password and no session", OPTS, async (ctx) => {
+  const db = await getTestDb();
+  let armed = false;
+  const gate = makeGate();
+  const t = makeTestAuth(db, {
+    async beforeAccountInsert(hookCtx) {
+      if (!armed || hookCtx?.path !== "/sign-up/email") return;
+      armed = false;
+      await gate.stop();
+    },
+  });
+  const logs = captureLogs(ctx);
+  const email = testEmail("a2acct");
+  try {
+    const attacker = browser(t);
+    armed = true;
+    const pending = settled(attacker("/sign-up/email", { email, password: PASSWORD, name: "Intrus" }));
+    await gate.atGate;
+    const user = await userByEmail(db, email);
+    assert.equal(user.emailVerified, false);
+    assert.equal(await credentialCount(db, user.id), 0, "paused before the password account");
+
+    const victim = browser(t);
+    assert.equal((await codeSignIn(t, victim, email)).status, 200);
+    assert.equal((await userByEmail(db, email)).emailVerified, true);
+    const victimSessions = await sessionIds(db, user.id);
+    assert.equal(victimSessions.length, 1);
+
+    gate.release();
+    const outcome = await pending;
+    assert.ok(outcome instanceof Error || outcome.status !== 200, `the paused sign-up must fail: ${JSON.stringify(outcome)}`);
+    if (outcome instanceof Error) assert.ok(!outcome.message.includes(email), "no address in the error");
+    assert.equal(await credentialCount(db, user.id), 0, "the sign-up's password is gone");
+    assert.equal((await attacker("/get-session?disableCookieCache=true")).json, null, "the attacker holds no live session");
+    assert.deepEqual(await sessionIds(db, user.id), victimSessions, "only the victim's session is left");
+    assert.equal(sessionEmail((await victim("/get-session?disableCookieCache=true")).json), email);
+    assert.ok(!logs.some((l) => l.includes(email)), "no address in the logs");
+  } finally {
+    gate.release();
+    await deleteUsersByEmail(db, [email]);
+  }
+});
+
+test("A2 a password sign-up paused before its session while a code sign-in purges the password gets no session", OPTS, async (ctx) => {
+  const db = await getTestDb();
+  let armed = false;
+  const gate = makeGate();
+  const t = makeTestAuth(db, {
+    async beforeSessionInsert(hookCtx) {
+      if (!armed || hookCtx?.path !== "/sign-up/email") return;
+      armed = false;
+      await gate.stop();
+    },
+  });
+  const logs = captureLogs(ctx);
+  const email = testEmail("a2sess");
+  try {
+    const attacker = browser(t);
+    armed = true;
+    const pending = settled(attacker("/sign-up/email", { email, password: PASSWORD, name: "Intrus" }));
+    await gate.atGate;
+    const user = await userByEmail(db, email);
+    assert.equal(await credentialCount(db, user.id), 1, "paused after the password account");
+
+    const victim = browser(t);
+    assert.equal((await codeSignIn(t, victim, email)).status, 200);
+    assert.equal(await credentialCount(db, user.id), 0, "the purge ran");
+    const victimSessions = await sessionIds(db, user.id);
+    assert.equal(victimSessions.length, 1);
+
+    gate.release();
+    const outcome = await pending;
+    assert.ok(outcome instanceof Error || outcome.status !== 200, `the paused sign-up must fail: ${JSON.stringify(outcome)}`);
+    if (outcome instanceof Error) assert.ok(!outcome.message.includes(email), "no address in the error");
+    assert.equal((await attacker("/get-session?disableCookieCache=true")).json, null, "the attacker holds no live session");
+    assert.deepEqual(await sessionIds(db, user.id), victimSessions, "only the victim's session is left");
+    assert.equal(await credentialCount(db, user.id), 0, "no password came back");
+    assert.ok(!logs.some((l) => l.includes(email)), "no address in the logs");
+  } finally {
+    gate.release();
+    await deleteUsersByEmail(db, [email]);
+  }
+});
+
+test("A2 a sign-up that links its password between the code sign-in's purge and its verification keeps neither", OPTS, async (ctx) => {
+  const db = await getTestDb();
+  let signUpArmed = false;
+  let purgeArmed = false;
+  const signUpGate = makeGate();
+  const purgeGate = makeGate();
+  const t = makeTestAuth(db, {
+    async beforeAccountInsert(hookCtx) {
+      if (!signUpArmed || hookCtx?.path !== "/sign-up/email") return;
+      signUpArmed = false;
+      await signUpGate.stop();
+    },
+    async afterOtpPurge(hookCtx) {
+      if (!purgeArmed || hookCtx?.path !== "/sign-in/email-otp") return;
+      purgeArmed = false;
+      await purgeGate.stop();
+    },
+  });
+  const logs = captureLogs(ctx);
+  const email = testEmail("a2gap");
+  try {
+    // 1. The attacker's sign-up has inserted the user, not yet its password account.
+    const attacker = browser(t);
+    signUpArmed = true;
+    const pending = settled(attacker("/sign-up/email", { email, password: PASSWORD, name: "Intrus" }));
+    await signUpGate.atGate;
+    const user = await userByEmail(db, email);
+
+    // 2. The victim's code sign-in has run its purge (nothing to purge yet), not yet Better Auth's own update.
+    const victim = browser(t);
+    purgeArmed = true;
+    const signedIn = settled(codeSignIn(t, victim, email));
+    await purgeGate.atGate;
+
+    // 3. The attacker links its password and inserts its session in that gap.
+    signUpGate.release();
+    const outcome = await pending;
+    assert.ok(outcome instanceof Error || outcome.status !== 200, `the sign-up must fail: ${JSON.stringify(outcome)}`);
+    if (outcome instanceof Error) assert.ok(!outcome.message.includes(email), "no address in the error");
+
+    // 4. The victim's sign-in ends.
+    purgeGate.release();
+    const done = await signedIn;
+    assert.ok(!(done instanceof Error) && done.status === 200, `the code sign-in succeeds: ${JSON.stringify(done)}`);
+    assert.equal((await userByEmail(db, email)).emailVerified, true);
+    assert.equal(await credentialCount(db, user.id), 0, "the attacker's password is gone");
+    assert.equal((await attacker("/get-session?disableCookieCache=true")).json, null, "the attacker holds no live session");
+    assert.equal((await sessionIds(db, user.id)).length, 1, "only the victim's session is left");
+    assert.equal(sessionEmail((await victim("/get-session?disableCookieCache=true")).json), email);
+    assert.ok(!logs.some((l) => l.includes(email)), "no address in the logs");
+  } finally {
+    signUpGate.release();
+    purgeGate.release();
+    await deleteUsersByEmail(db, [email]);
+  }
+});
+
 /* ───────── mail caps ───────── */
 
 test("password-reset mails are capped per address: counted when sent, not when rejected, same answer past the cap", OPTS, async (ctx) => {

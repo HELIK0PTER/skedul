@@ -213,8 +213,8 @@ test("the OTP verification locks the user row, purges the password and every ses
     { emailVerified: true },
     { path: OTP_SIGN_IN_PATH, body: { email: "Lea@Example.com", otp: "123456" } } as never,
   );
-  assert.equal(queries.length, 2);
-  const [lock, query] = queries;
+  assert.equal(queries.length, 3);
+  const [lock, query, verify] = queries;
   // First the user row (FOR NO KEY UPDATE), so a password sign-in's check waits for the purge to commit.
   assert.match(lock.sql, /^select id from "user" where email = \$1 for no key update$/);
   assert.deepEqual(lock.params, ["lea@example.com"]);
@@ -223,6 +223,9 @@ test("the OTP verification locks the user row, purges the password and every ses
   assert.match(query.sql, /delete from account/);
   assert.match(query.sql, /delete from session/);
   assert.match(query.sql, /email_verified = false/);
+  // The same transaction marks the address verified: no gap before Better Auth's own update (P6 A2).
+  assert.match(verify.sql, /^update "user" set email_verified = true, updated_at = now\(\) where email = \$1 and email_verified = false$/);
+  assert.deepEqual(verify.params, ["lea@example.com"]);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].to, "lea@example.com");
   assert.equal(sent[0].subject, "Votre mot de passe Skedul a été désactivé");
@@ -236,8 +239,30 @@ test("no password account to purge: no mail", async () => {
     { emailVerified: true },
     { path: OTP_SIGN_IN_PATH, body: { email: "a@b.com" } } as never,
   );
-  assert.equal(queries.length, 2);
+  assert.equal(queries.length, 3, "the address is still marked verified in the same transaction");
   assert.equal(sent.length, 0);
+});
+
+test("a password sign-up whose address a code sign-in verified meanwhile loses its password and its session (P6 A2)", async () => {
+  const after = (db: Db) => build(db).options.databaseHooks.session.create.after;
+  const session = { id: "s1", userId: "u1", token: "t", expiresAt: new Date(), createdAt: new Date(), updatedAt: new Date() };
+
+  const gone = stubDb([{ id: "s1" }]);
+  await assert.rejects(after(gone.db)(session as never, { path: "/sign-up/email" } as never), (err: Error) => {
+    assert.match(err.message, /sign-up session refused/);
+    return true;
+  });
+  assert.equal(gone.queries.length, 3);
+  assert.match(gone.queries[0].sql, /^select id from "user" where id = \$1 for share$/);
+  assert.match(gone.queries[1].sql, /^delete from account where user_id = \$1 and provider_id = 'credential' and exists \(select 1 from "user" where id = \$2 and email_verified\)$/);
+  assert.match(gone.queries[2].sql, /delete from session where id = \$1/);
+  assert.match(gone.queries[2].sql, /email_verified/);
+  for (const q of gone.queries) assert.ok(q.params.every((p) => p === "u1" || p === "s1"), JSON.stringify(q.params));
+
+  // Still unverified: the sign-up goes on (the best-effort steps then fail on this stub and are only logged).
+  const kept = stubDb([]);
+  await captureConsole(() => after(kept.db)(session as never, { path: "/sign-up/email" } as never));
+  assert.match(kept.queries[2]?.sql ?? "", /delete from session/);
 });
 
 test("a password sign-in or password change whose password account is gone is refused; other sessions are not checked", async () => {

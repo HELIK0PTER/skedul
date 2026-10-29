@@ -11,7 +11,7 @@
 import { betterAuth } from "better-auth";
 import { sql } from "drizzle-orm";
 
-import { buildAuthOptions, type AuthDeps, type AuthMail } from "../lib/auth-options";
+import { buildAuthOptions, isOtpVerificationTransition, type AuthDeps, type AuthMail } from "../lib/auth-options";
 import { textArray, type Db } from "../lib/db/atomic";
 import { testIp } from "./db";
 
@@ -21,7 +21,10 @@ export const TEST_BASE_URL = "http://localhost:3000";
 /** Codes lead the subject (src/lib/emails/login-code.ts, verify-email-code.ts). */
 const CODE_RE = /^(\d{6})\b/;
 
-/** Test-only seams of the instance (none by default). */
+/**
+ * Test-only seams of the instance (none by default). Better Auth runs every `*.before` database hook inline, at the
+ * write, but defers the `*.after` ones to the end of the request: a gate only pauses a route inside a `before` hook.
+ */
 export type TestAuthHooks = {
   /**
    * Awaited in `session.create.before`, i.e. inside a sign-in route after it
@@ -29,6 +32,16 @@ export type TestAuthHooks = {
    * here pauses `/sign-in/email` past its password check (race tests).
    */
   beforeSessionInsert?: (ctx: { path?: string } | null) => Promise<void>;
+  /**
+   * Awaited in `account.create.before`: inside `/sign-up/email`, after the user
+   * row was inserted and before its password account is (race tests, P6 A2).
+   */
+  beforeAccountInsert?: (ctx: { path?: string } | null) => Promise<void>;
+  /**
+   * Awaited in `user.update.before` once the code sign-in's purge has run, before
+   * Better Auth writes the update itself (race tests, P6 A2).
+   */
+  afterOtpPurge?: (ctx: { path?: string } | null) => Promise<void>;
 };
 
 function buildInstance(db: Db, sendEmail: AuthDeps["sendEmail"], hooks: TestAuthHooks = {}) {
@@ -47,6 +60,22 @@ function buildInstance(db: Db, sendEmail: AuthDeps["sendEmail"], hooks: TestAuth
           ...options.databaseHooks.session.create,
           before: async (_session, ctx) => {
             await hooks.beforeSessionInsert?.(ctx ?? null);
+          },
+        },
+      },
+      account: {
+        create: {
+          before: async (_account, ctx) => {
+            await hooks.beforeAccountInsert?.(ctx ?? null);
+          },
+        },
+      },
+      user: {
+        ...options.databaseHooks.user,
+        update: {
+          before: async (data, ctx) => {
+            await options.databaseHooks.user.update.before(data, ctx);
+            if (isOtpVerificationTransition(data, ctx)) await hooks.afterOtpPurge?.(ctx ?? null);
           },
         },
       },
