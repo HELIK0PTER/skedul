@@ -17,7 +17,7 @@ import {
 import { instantAt } from "../civil-date";
 import { event, eventTicketType } from "../db/schema";
 import { cancelByClient } from "./cancel";
-import { bookWithHeldTicket, registerPro, startBuyAndBook } from "./claims";
+import { attachCheckoutSession, bookWithHeldTicket, registerPro, startBuyAndBook } from "./claims";
 import { bookingsExpiringBefore, editEventInPlace, updateOccurrence } from "./series";
 import type { Effect } from "./types";
 
@@ -581,7 +581,7 @@ async function seanceWithHold({ db, pro }: DbHarness, now: Date) {
   must(hold, "buy + book");
   const holdEnd = (await getBooking(db, hold.bookingId)).holdExpiresAt;
   assert.ok(holdEnd);
-  return { eventId, occ, confirmedId: confirmed.bookingId, holdId: hold.bookingId, holdEnd };
+  return { eventId, occ, confirmedId: confirmed.bookingId, holdId: hold.bookingId, purchaseId: hold.purchaseId, holdEnd };
 }
 
 dbTest("A13 cette séance: a capacity cut releases a lapsed hold first, and the move tells the live registrants only", async (h) => {
@@ -624,6 +624,33 @@ dbTest("A13 éditeur: a capacity cut releases the lapsed holds of the séances i
   assert.equal(o.capacity, 1);
   assert.equal(o.seatsTaken, 1);
   assert.equal((await getBooking(db, s.holdId)).status, "expired");
+});
+
+dbTest("X3 éditeur: a lapsed hold the capacity cut releases has its open Checkout session expired after the release; a live hold keeps its session", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithHold(h, new Date());
+  const sessionId = "cs_test_x3_lapsed";
+  must(await attachCheckoutSession(db, { purchaseId: s.purchaseId, checkoutSessionId: sessionId, checkoutUrl: "https://checkout.example.test/x3" }), "attach");
+  const base = { professionalId: pro.proId, actorUserId: pro.userId, eventId: s.eventId };
+  const expiries = (effects: Effect[]) => effects.filter((e) => e.type === "stripe.expire_session");
+
+  // While the hold is live, a capacity change releases nothing and closes no session.
+  const live = await editEventInPlace(db, { ...base, seenVersion: 1, patch: { capacity: 3 } }, addMinutes(s.holdEnd, -1));
+  must(live, "edit while the hold is live");
+  assert.deepEqual(expiries(live.effects), []);
+  assert.equal((await getBooking(db, s.holdId)).status, "pending");
+
+  // Once it lapsed: the batch releases it (expired, by the system) and the effects close its session, nothing else.
+  const lapsed = await editEventInPlace(db, { ...base, seenVersion: 2, patch: { capacity: 1 } }, s.holdEnd);
+  must(lapsed, "edit once the hold lapsed");
+  const hold = await getBooking(db, s.holdId);
+  assert.equal(hold.status, "expired");
+  assert.equal(hold.endedBy, "system");
+  assert.deepEqual(expiries(lapsed.effects), [{ type: "stripe.expire_session", purchaseId: s.purchaseId, checkoutSessionId: sessionId }]);
+  assert.ok(
+    !lapsed.effects.some((e) => (e.type === "email.booking_cancelled" || e.type === "email.occurrence_changed") && JSON.stringify(e).includes(s.holdId)),
+    "the released hold hears nothing (A13)",
+  );
 });
 
 /* P6 A17: the editor reads the version first, writes nothing for an empty patch, and takes its recipients from its batch. */

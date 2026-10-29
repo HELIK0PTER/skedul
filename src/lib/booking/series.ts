@@ -38,6 +38,7 @@ import {
   recurrenceRuleSchema,
   windowOverridesSchema,
   type BookingMode,
+  type BookingStatus,
   type QuestionInput,
   type RecurrenceRuleInput,
   type WindowOverrides,
@@ -312,6 +313,10 @@ const inPlaceSchema = z.object({
  * « Question inconnue »); an empty patch writes nothing and keeps the version;
  * the « séance modifiée » recipients and the Google syncs come from a select of
  * the batch itself (after its writes), so no read follows the commit.
+ * P6 X3: the lapsed holds a capacity cut releases (A13) have their pending
+ * purchase's Checkout session expired by the effects (stripe.expire_session),
+ * from a select of the batch too: released first, then expired, as on the
+ * other release paths.
  */
 export async function editEventInPlace(
   db: Db,
@@ -326,6 +331,7 @@ export async function editEventInPlace(
 
   const outcome = { locationChanged: false, describedChanged: false, capacityChanged: false };
   let futureAt = -1;
+  let releasedAt = -1;
   const res = await tryAtomic(db, async () => {
     const [ev] = await db
       .select({
@@ -453,6 +459,18 @@ export async function editEventInPlace(
             update occurrence set capacity = greatest(${p.capacity}::int, seats_taken), updated_at = ${ts(now)}
             where ${propagated}`),
         );
+        // P6 X3: the open Checkout sessions of the holds just released, read in the batch (A17) and expired by the
+        // effects once the release is committed (expireSessionEffects, the rule of the other release paths).
+        releasedAt =
+          queries.push(
+            db.execute(sql`
+              select b.id as booking_id, b.occurrence_id, b.status, b.purchase_id,
+                p.status = 'pending' as purchase_pending, p.checkout_session_id
+              from booking b
+              left join ticket_purchase p on p.id = b.purchase_id
+              where b.ended_action_id = ${aid}
+              order by b.id`),
+          ) - 1;
       }
       // The Google event of a séance shows its title, its place and its capacity: a capacity edit re-syncs too.
       // Last, after every write: the future séances and their registrants (holdsSeat) as this action leaves them.
@@ -475,6 +493,21 @@ export async function editEventInPlace(
   if (empty) return { ok: true, effects: [], version: input.seenVersion };
 
   const effects: Effect[] = [];
+  if (releasedAt >= 0) {
+    const released = (res.results[releasedAt] as { rows: ReleasedHoldRow[] }).rows;
+    effects.push(
+      ...expireSessionEffects(
+        released.map((r) => ({
+          bookingId: r.booking_id,
+          occurrenceId: r.occurrence_id,
+          status: r.status,
+          purchaseId: r.purchase_id,
+          purchasePending: r.purchase_pending === true,
+          checkoutSessionId: r.checkout_session_id,
+        })),
+      ),
+    );
+  }
   if (futureAt >= 0) {
     const rows = (res.results[futureAt] as { rows: FutureSeanceRow[] }).rows;
     const booked = new Map<string, { followsEvent: boolean; ownCapacity: boolean; bookingIds: string[] }>();
@@ -497,6 +530,16 @@ export async function editEventInPlace(
 
 /** One row of editEventInPlace's final select: a future séance, and one of its registrants (null when it has none). */
 type FutureSeanceRow = { occurrence_id: string; follows_event: boolean; capacity_override: boolean; booking_id: string | null };
+
+/** One booking editEventInPlace's capacity cut ended (a lapsed hold, P6 A13), with its purchase state (P6 X3). */
+type ReleasedHoldRow = {
+  booking_id: string;
+  occurrence_id: string;
+  status: BookingStatus;
+  purchase_id: string | null;
+  purchase_pending: boolean | null;
+  checkout_session_id: string | null;
+};
 
 /* ───────────────────── « Cette séance et les suivantes » ───────────────────── */
 
