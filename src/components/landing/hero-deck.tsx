@@ -12,15 +12,21 @@ import { addDays, format } from "date-fns";
 import { fr } from "date-fns/locale";
 import { Check } from "lucide-react";
 
-import {
-  DEMO_BRAND,
-  DEMO_PACK,
-  DEMO_SERVICES,
-  DEMO_SLOT_TIMES,
-} from "@/components/demo/demo-data";
+import { DEMO_BRAND } from "@/components/demo/demo-data";
 import { parseDayKey } from "@/lib/calendar-grid";
 import { cn, formatMoney } from "@/lib/utils";
 import styles from "./landing.module.css";
+
+/*
+ * The hero's own sample data, kept as it was when the guided tour was rewritten (P6 C1): the hero's look and copy are
+ * Group C2's to redo (C6), the tour no longer exports these.
+ */
+const DEMO_PACK = { name: "Pack 10 heures", credits: 10, priceCents: 20000 };
+const DEMO_SERVICES = [
+  { title: "Séance découverte", durationMinutes: 60, priceCents: 2500 },
+  { title: "Cours collectif", durationMinutes: 90, priceCents: 1800 },
+] as const;
+const DEMO_SLOT_TIMES = ["09:00", "10:30", "12:00", "14:00", "16:30", "18:00"];
 
 /**
  * Hero object: a deck of three product cards, dealt in a fixed order.

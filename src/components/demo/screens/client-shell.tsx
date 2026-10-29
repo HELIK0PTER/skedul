@@ -2,9 +2,10 @@ import type { ReactNode } from "react";
 
 import { DEMO_BRAND } from "../demo-data";
 
-export function ClientShell({ children }: { children: ReactNode }) {
+/** The public shell of the demo pro: its banner, avatar and name, then the page. `overlay` draws over the whole frame (a dialog). */
+export function ClientShell({ children, overlay }: { children: ReactNode; overlay?: ReactNode }) {
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div className="relative flex h-full flex-col bg-background">
       <div className="border-b border-border">
         <div
           className="h-14"
@@ -21,6 +22,7 @@ export function ClientShell({ children }: { children: ReactNode }) {
         </div>
       </div>
       <div className="mx-auto w-full max-w-3xl flex-1 overflow-hidden px-6 py-5">{children}</div>
+      {overlay}
     </div>
   );
 }

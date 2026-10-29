@@ -5,8 +5,8 @@ import { ArrowRight } from "lucide-react";
 
 import { DEMO_BRAND } from "@/components/demo/demo-data";
 import { INITIAL_STATE, type DemoState } from "@/components/demo/demo-script";
-import { ClientProfile } from "@/components/demo/screens/client-profile";
-import { ProPacks } from "@/components/demo/screens/pro-packs";
+import { ClientPage } from "@/components/demo/screens/client-page";
+import { ProTickets } from "@/components/demo/screens/pro-tickets";
 import { HeroDeck } from "@/components/landing/hero-deck";
 import { ctaPrimary, ctaSecondary } from "@/components/landing/cta";
 import { DemoLink } from "@/components/landing/demo-link";
@@ -147,8 +147,8 @@ const PLANNING_STATE: DemoState = {
 };
 const PACKS_STATE: DemoState = {
   ...INITIAL_STATE,
-  screen: "pro-packs",
-  packFormOpen: true,
+  screen: "pro-tickets",
+  ticketTypeOpen: true,
 };
 
 function Points({ items, className }: { items: Point[]; className?: string }) {
@@ -256,13 +256,13 @@ export default function Home() {
                   crop={660}
                   className={styles.reveal}
                 >
-                  <ClientProfile />
+                  <ClientPage />
                 </ProductShot>
                 <h3 className={cn(H3, "mt-10")}>
                   Une boutique où réserver est simple
                 </h3>
                 <Points items={CLIENT_POINTS} className="mt-6" />
-                <DemoLink step="profile" className="mt-7">
+                <DemoLink step="page-publique" className="mt-7">
                   Voir la réservation en démo
                 </DemoLink>
               </article>
@@ -293,13 +293,13 @@ export default function Home() {
                 bleed
                 className={styles.reveal}
               >
-                <ProPacks state={PACKS_STATE} />
+                <ProTickets state={PACKS_STATE} />
               </ProductShot>
             </div>
             <div className={styles.packsText}>
               <Points items={PACK_POINTS} className="space-y-7" />
-              {/* The client buys a carnet, then books with a credit: 10 → 9. */}
-              <DemoLink step="buy-pack" className="mt-8">
+              {/* The tour's step where the client buys a carnet on her first séance. */}
+              <DemoLink step="carnet" className="mt-8">
                 Voir un carnet en démo
               </DemoLink>
             </div>

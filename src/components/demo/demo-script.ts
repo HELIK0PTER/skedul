@@ -1,44 +1,61 @@
-import {
-  BOOKED_TIME,
-  CREDIT_TIME,
-  DEMO_CLIENT,
-  bookedDayKey,
-  creditDayKey,
-} from "./demo-data";
+import { CARNET_OFFER_ID, DEMO_CARNET, DEMO_CLIENT, DEMO_CODE, LEA_RDV, LEA_SEANCE_IDS, type DemoSeance } from "./demo-data";
 
 export type ScreenId =
-  | "client-profile"
-  | "client-booking"
-  | "client-pack"
-  | "client-confirmation"
+  | "client-page"
+  | "client-seance"
+  | "client-merci"
+  | "client-rdv"
+  | "client-espace"
   | "pro-planning"
-  | "pro-event-types"
-  | "pro-packs"
+  | "pro-events"
+  | "pro-tickets"
   | "pro-availability"
+  | "pro-client"
   | "pro-branding"
   | "outro";
 
+/**
+ * Everything the screens draw. The tour is a scripted simulation: a state only says what to show, it never calls the
+ * booking engine, never writes the database and never signs anyone in.
+ */
 export interface DemoState {
   screen: ScreenId;
   url: string;
-  bookingSelectedDay: string | null;
-  bookingSelectedTime: string | null;
+  /** The public page: its planning at the top, or its lower part (the rendez-vous cards and the Boutique). */
+  pageSection: "planning" | "lower";
+  /** The « J'ai déjà des tickets » dialog: closed, asking for the address, or for the code. */
+  signIn: "closed" | "email" | "code";
+  /** Léa is signed in with the code: the page shows her tickets instead of the « J'ai déjà des tickets » bar. */
+  signedIn: boolean;
+  /** Which séance page is open. */
+  seance: "monday" | "wednesday";
+  /** The offer chosen in « Acheter et réserver »; null keeps the first one (as the real form does). */
+  offerPicked: string | null;
   formName: string;
   formEmail: string;
+  formCode: string;
   paying: boolean;
-  hasCredits: boolean;
-  creditsRemaining: number;
-  confirmation: "booking-paid" | "pack" | "booking-credit" | null;
+  /** The seat is held while the payment runs. */
+  held: boolean;
+  mondayBooked: boolean;
+  wednesdayBooked: boolean;
+  rdvDayIndex: number | null;
+  rdvTime: string | null;
+  rdvBooked: boolean;
+  /** Léa's rendez-vous shows in the pro planning. */
   planningHasLea: boolean;
-  eventTypeFormOpen: boolean;
-  packFormOpen: boolean;
+  planningSeanceOpen: boolean;
+  eventEditorOpen: boolean;
+  ticketTypeOpen: boolean;
   saturdayEnabled: boolean;
+  giveOpen: boolean;
+  ticketGiven: boolean;
   brandColor: string;
   headerLayout: "profil" | "vitrine";
 }
 
 export type Patch = Partial<DemoState>;
-export type TextField = "formName" | "formEmail";
+export type TextField = "formName" | "formEmail" | "formCode";
 export type TargetFinder = (frame: HTMLElement) => HTMLElement | null;
 
 export type DemoAction =
@@ -53,207 +70,186 @@ export interface DemoStep {
   chapter: "client" | "pro" | "outro";
   title: string;
   description: string;
-  /** Patch appliqué à l'entrée de l'étape (changement d'écran, resets…). */
+  /** Patch appliqué à l'entrée de l'étape (changement d'écran, remises à zéro). */
   enter?: Patch;
   timeline: DemoAction[];
 }
 
-const AT = "skedul.app/altinha-paris";
-const DASH = "skedul.app/dashboard";
+const SITE = "myskedul.com";
+const AT = `${SITE}/altinha-paris`;
+const DASH = `${SITE}/dashboard`;
 
 export const INITIAL_STATE: DemoState = {
-  screen: "client-profile",
+  screen: "client-page",
   url: AT,
-  bookingSelectedDay: null,
-  bookingSelectedTime: null,
+  pageSection: "planning",
+  signIn: "closed",
+  signedIn: false,
+  seance: "monday",
+  offerPicked: null,
   formName: "",
   formEmail: "",
+  formCode: "",
   paying: false,
-  hasCredits: false,
-  creditsRemaining: 0,
-  confirmation: null,
+  held: false,
+  mondayBooked: false,
+  wednesdayBooked: false,
+  rdvDayIndex: null,
+  rdvTime: null,
+  rdvBooked: false,
   planningHasLea: false,
-  eventTypeFormOpen: false,
-  packFormOpen: false,
+  planningSeanceOpen: false,
+  eventEditorOpen: false,
+  ticketTypeOpen: false,
   saturdayEnabled: false,
+  giveOpen: false,
+  ticketGiven: false,
   brandColor: "#6d5cf6",
   headerLayout: "profil",
 };
 
-/**
- * Nième bouton de jour cliquable du calendrier (ordre chronologique).
- * Le 1er jour disponible est toujours le jour réservé (J+2), le 2e = J+3.
- * On filtre sur `.grid-cols-7` pour exclure les chevrons de navigation.
- */
-function availableCalendarDay(nth: number): TargetFinder {
-  return (frame) => {
-    const grid = frame.querySelector('[data-demo="calendar"]');
-    if (!grid) return null;
-    const buttons = Array.from(
-      grid.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"),
-    ).filter((b) => b.closest(".grid-cols-7"));
-    return buttons[nth] ?? null;
-  };
+/** Léa's Cours collectif tickets: her carnet of 4, one per séance she booked, plus the one the pro gave her. */
+export function leaTicketsLeft(state: DemoState): number {
+  const fromCarnet = state.mondayBooked ? DEMO_CARNET.quantity - 1 - (state.wednesdayBooked ? 1 : 0) : 0;
+  return fromCarnet + (state.ticketGiven ? 1 : 0);
+}
+
+/** Places left on a séance of the shown week, once Léa's own bookings are counted. */
+export function seatsLeft(seance: DemoSeance, state: DemoState): number {
+  const lea =
+    (seance.id === LEA_SEANCE_IDS.monday && state.mondayBooked) ||
+    (seance.id === LEA_SEANCE_IDS.wednesday && state.wednesdayBooked);
+  return seance.capacity - seance.taken - (lea ? 1 : 0);
 }
 
 /** Interrupteur du samedi dans le WeeklyHoursEditor (le libellé du jour est dans le bouton). */
 const saturdayToggle: TargetFinder = (frame) =>
-  Array.from(
-    frame.querySelectorAll<HTMLButtonElement>('[data-demo="availability"] button'),
-  ).find((b) => b.textContent?.includes("Samedi")) ?? null;
+  Array.from(frame.querySelectorAll<HTMLButtonElement>('[data-demo="availability"] button')).find((b) =>
+    b.textContent?.includes("Samedi"),
+  ) ?? null;
 
 export const DEMO_STEPS: DemoStep[] = [
   {
-    id: "profile",
+    id: "page-publique",
     chapter: "client",
     title: "La page publique",
     description:
-      "Chaque pro dispose d'une page de réservation à son image : prestations, packs d'heures, disponibilités en temps réel.",
+      "Le planning de la semaine, les rendez-vous à prendre et la Boutique des tickets : vos clients trouvent tout sur une seule page.",
     timeline: [
-      { type: "move", target: "service-decouverte" },
-      { type: "wait", delay: 600 },
-      { type: "move", target: "pack-card" },
+      { type: "move", target: "week-grid" },
+      { type: "wait", delay: 500 },
+      { type: "apply", patch: { pageSection: "lower" }, delay: 900 },
+      { type: "move", target: "boutique-collectif" },
     ],
   },
   {
-    id: "choose-service",
+    id: "carnet",
     chapter: "client",
-    title: "Réserver une prestation",
-    description: "Léa choisit la séance découverte : 60 minutes, 25 €.",
-    timeline: [
-      { type: "move", target: "service-decouverte-cta" },
-      {
-        type: "click",
-        target: "service-decouverte-cta",
-        patch: { screen: "client-booking", url: `${AT}/book/decouverte` },
-      },
-    ],
-  },
-  {
-    id: "pick-slot",
-    chapter: "client",
-    title: "Choisir un créneau",
+    title: "Un carnet dès la première séance",
     description:
-      "Le calendrier ne montre que les jours réellement disponibles, calculés depuis les horaires du pro.",
+      "Léa s'inscrit au cours débutants de lundi. Elle prend un carnet de 4 tickets : un pour ce cours, trois pour la suite.",
+    enter: { screen: "client-page", url: AT, pageSection: "planning" },
     timeline: [
-      { type: "move", target: "calendar-day", find: availableCalendarDay(0) },
+      { type: "move", target: "seance-debutants-0" },
       {
         type: "click",
-        target: "calendar-day",
-        find: availableCalendarDay(0),
-        patch: { bookingSelectedDay: bookedDayKey() },
+        target: "seance-debutants-0",
+        patch: { screen: "client-seance", url: `${AT}/seance/debutants-lundi`, seance: "monday" },
       },
-      { type: "move", target: `slot-${BOOKED_TIME}` },
-      {
-        type: "click",
-        target: `slot-${BOOKED_TIME}`,
-        patch: { bookingSelectedTime: BOOKED_TIME },
-      },
-    ],
-  },
-  {
-    id: "pay",
-    chapter: "client",
-    title: "Confirmer et payer",
-    description:
-      "Nom, email, paiement sécurisé — la réservation est confirmée en quelques secondes.",
-    timeline: [
-      { type: "type", target: "field-name", field: "formName", text: DEMO_CLIENT.name },
-      { type: "type", target: "field-email", field: "formEmail", text: DEMO_CLIENT.email },
-      { type: "move", target: "pay-button" },
-      { type: "click", target: "pay-button", patch: { paying: true }, delay: 1000 },
-      {
-        type: "apply",
-        patch: {
-          paying: false,
-          screen: "client-confirmation",
-          confirmation: "booking-paid",
-          url: `${AT}/merci`,
-        },
-      },
-    ],
-  },
-  {
-    id: "buy-pack",
-    chapter: "client",
-    title: "Acheter un pack d'heures",
-    description:
-      "Le différenciateur Skedul : des carnets prépayés. Léa prend 10 heures d'un coup.",
-    enter: {
-      screen: "client-profile",
-      url: AT,
-      confirmation: null,
-      formName: "",
-      formEmail: "",
-    },
-    timeline: [
-      { type: "move", target: "pack-buy" },
-      {
-        type: "click",
-        target: "pack-buy",
-        patch: { screen: "client-pack", url: `${AT}/pack/10h` },
-      },
+      { type: "move", target: `offer-${CARNET_OFFER_ID}` },
+      { type: "click", target: `offer-${CARNET_OFFER_ID}`, patch: { offerPicked: CARNET_OFFER_ID } },
       { type: "type", target: "field-name", field: "formName", text: DEMO_CLIENT.name, delay: 150 },
       { type: "type", target: "field-email", field: "formEmail", text: DEMO_CLIENT.email, delay: 150 },
-      { type: "move", target: "pack-pay" },
-      { type: "click", target: "pack-pay", patch: { paying: true }, delay: 1000 },
-      {
-        type: "apply",
-        patch: {
-          paying: false,
-          screen: "client-confirmation",
-          confirmation: "pack",
-          creditsRemaining: 10,
-          hasCredits: true,
-          url: `${AT}/merci`,
-        },
-      },
     ],
   },
   {
-    id: "book-credit",
+    id: "paiement",
     chapter: "client",
-    title: "Réserver avec un crédit",
+    title: "Une place gardée pendant le paiement",
     description:
-      "Son email est reconnu : plus de paiement, la réservation se règle en un clic avec un crédit du pack.",
-    enter: { formName: DEMO_CLIENT.name, formEmail: DEMO_CLIENT.email },
+      "Le temps du paiement en ligne, sa place est réservée : personne ne peut la prendre. Le paiement reçu, l'inscription est confirmée.",
     timeline: [
-      { type: "move", target: "book-with-credit" },
-      {
-        type: "click",
-        target: "book-with-credit",
-        patch: {
-          screen: "client-booking",
-          url: `${AT}/book/decouverte`,
-          bookingSelectedDay: null,
-          bookingSelectedTime: null,
-        },
-      },
-      { type: "move", target: "calendar-day", find: availableCalendarDay(1) },
-      {
-        type: "click",
-        target: "calendar-day",
-        find: availableCalendarDay(1),
-        patch: { bookingSelectedDay: creditDayKey() },
-      },
-      { type: "move", target: `slot-${CREDIT_TIME}` },
-      {
-        type: "click",
-        target: `slot-${CREDIT_TIME}`,
-        patch: { bookingSelectedTime: CREDIT_TIME },
-      },
-      { type: "move", target: "credit-button" },
-      { type: "click", target: "credit-button", patch: { paying: true }, delay: 700 },
+      { type: "move", target: "pay-button" },
+      { type: "click", target: "pay-button", patch: { paying: true, held: true }, delay: 1800 },
       {
         type: "apply",
-        patch: {
-          paying: false,
-          screen: "client-confirmation",
-          confirmation: "booking-credit",
-          creditsRemaining: 9,
-          url: `${AT}/merci`,
-        },
+        patch: { paying: false, held: false, mondayBooked: true, screen: "client-merci", url: `${AT}/merci` },
       },
+      { type: "move", target: "merci-tickets" },
+    ],
+  },
+  {
+    id: "deja-des-tickets",
+    chapter: "client",
+    title: "« J'ai déjà des tickets »",
+    description:
+      "Quelques jours plus tard, Léa revient. Un code reçu par email suffit pour retrouver ses tickets, rien à retenir.",
+    enter: { screen: "client-page", url: AT, pageSection: "planning", formName: "", formEmail: "", formCode: "" },
+    timeline: [
+      { type: "move", target: "have-tickets" },
+      { type: "click", target: "have-tickets", patch: { signIn: "email" } },
+      { type: "type", target: "code-email", field: "formEmail", text: DEMO_CLIENT.email, delay: 150 },
+      { type: "move", target: "send-code" },
+      { type: "click", target: "send-code", patch: { signIn: "code" } },
+      { type: "type", target: "code-field", field: "formCode", text: DEMO_CODE, delay: 150 },
+      { type: "move", target: "check-code" },
+      { type: "click", target: "check-code", patch: { signIn: "closed", signedIn: true } },
+      { type: "move", target: "wallet-panel" },
+    ],
+  },
+  {
+    id: "utiliser-un-ticket",
+    chapter: "client",
+    title: "Réserver avec un ticket",
+    description:
+      "Connectée, Léa réserve le cours de mercredi en un clic : un ticket de son carnet est utilisé, il lui en reste deux.",
+    enter: { screen: "client-page", url: AT, pageSection: "planning" },
+    timeline: [
+      { type: "move", target: "seance-debutants-2" },
+      {
+        type: "click",
+        target: "seance-debutants-2",
+        patch: { screen: "client-seance", url: `${AT}/seance/debutants-mercredi`, seance: "wednesday" },
+      },
+      { type: "move", target: "spend-button" },
+      { type: "click", target: "spend-button", patch: { paying: true }, delay: 800 },
+      { type: "apply", patch: { paying: false, wednesdayBooked: true } },
+    ],
+  },
+  {
+    id: "rendez-vous",
+    chapter: "client",
+    title: "Prendre rendez-vous",
+    description:
+      "Pour un appel découverte gratuit, Léa choisit un créneau libre. Les créneaux se calculent depuis vos disponibilités.",
+    enter: { screen: "client-page", url: AT, pageSection: "lower" },
+    timeline: [
+      { type: "move", target: "rdv-card-decouverte" },
+      {
+        type: "click",
+        target: "rdv-card-decouverte",
+        patch: { screen: "client-rdv", url: `${AT}/rdv/appel-decouverte` },
+      },
+      { type: "move", target: `rdv-day-${LEA_RDV.dayIndex}` },
+      { type: "click", target: `rdv-day-${LEA_RDV.dayIndex}`, patch: { rdvDayIndex: LEA_RDV.dayIndex } },
+      { type: "move", target: `rdv-slot-${LEA_RDV.time}` },
+      { type: "click", target: `rdv-slot-${LEA_RDV.time}`, patch: { rdvTime: LEA_RDV.time } },
+      { type: "move", target: "rdv-book" },
+      { type: "click", target: "rdv-book", patch: { paying: true }, delay: 700 },
+      { type: "apply", patch: { paying: false, rdvBooked: true } },
+    ],
+  },
+  {
+    id: "espace-client",
+    chapter: "client",
+    title: "Son espace client",
+    description:
+      "Ses réservations à venir et ses tickets, au même endroit. Elle peut annuler en ligne jusqu'au délai que vous fixez.",
+    enter: { screen: "client-espace", url: `${AT}/espace` },
+    timeline: [
+      { type: "move", target: "espace-upcoming" },
+      { type: "wait", delay: 600 },
+      { type: "move", target: "espace-tickets" },
     ],
   },
   {
@@ -261,61 +257,84 @@ export const DEMO_STEPS: DemoStep[] = [
     chapter: "pro",
     title: "Le planning",
     description:
-      "Côté pro, la réservation de Léa vient d'arriver — séances, cours de groupe et jauges, tout est là.",
+      "Côté pro, les séances de vos événements et les rendez-vous remplissent la semaine. Un clic sur une séance montre ses inscrits.",
     enter: { screen: "pro-planning", url: `${DASH}/planning` },
     timeline: [
       { type: "wait", delay: 600 },
       { type: "apply", patch: { planningHasLea: true }, delay: 400 },
-      { type: "move", target: "session-lea" },
+      { type: "move", target: "rdv-lea" },
+      { type: "wait", delay: 400 },
+      { type: "move", target: "pro-seance-debutants-0" },
+      { type: "click", target: "pro-seance-debutants-0", patch: { planningSeanceOpen: true } },
+      { type: "move", target: "seance-attendees" },
     ],
   },
   {
-    id: "event-types",
+    id: "evenements",
     chapter: "pro",
-    title: "Vos prestations",
+    title: "Des événements récurrents",
     description:
-      "Durée, prix, capacité, couleur : chaque prestation se configure en quelques champs.",
-    enter: { screen: "pro-event-types", url: `${DASH}/event-types` },
+      "Un cours chaque lundi et mercredi, un atelier le 1er dimanche du mois : chaque événement crée ses séances, avec ses places et les tickets acceptés.",
+    enter: { screen: "pro-events", url: `${DASH}/events` },
     timeline: [
-      { type: "move", target: "edit-service" },
-      { type: "click", target: "edit-service", patch: { eventTypeFormOpen: true } },
+      { type: "move", target: "event-debutants" },
+      {
+        type: "click",
+        target: "event-debutants",
+        patch: { eventEditorOpen: true, url: `${DASH}/events/altinha-debutants` },
+      },
+      { type: "move", target: "event-recurrence" },
     ],
   },
   {
-    id: "packs",
+    id: "tickets",
     chapter: "pro",
-    title: "Vos packs",
+    title: "Tickets et offres",
     description:
-      "Créez des carnets de crédits — prix, nombre de séances, prestations couvertes. Ici : déjà 12 vendus.",
-    enter: { screen: "pro-packs", url: `${DASH}/packs` },
+      "Un type de ticket, c'est ce qu'une séance accepte. Ses offres le vendent à l'unité ou en carnet, avec une validité si vous le souhaitez.",
+    enter: { screen: "pro-tickets", url: `${DASH}/tickets` },
     timeline: [
-      { type: "move", target: "edit-pack" },
-      { type: "click", target: "edit-pack", patch: { packFormOpen: true } },
+      { type: "move", target: "edit-collectif" },
+      {
+        type: "click",
+        target: "edit-collectif",
+        patch: { ticketTypeOpen: true, url: `${DASH}/tickets/cours-collectif` },
+      },
+      { type: "move", target: `pro-offer-${CARNET_OFFER_ID}` },
     ],
   },
   {
-    id: "availability",
+    id: "disponibilites",
     chapter: "pro",
     title: "Vos disponibilités",
     description:
-      "Les créneaux proposés aux clients découlent de vos horaires récurrents. On ouvre le samedi matin ?",
+      "Les rendez-vous se prennent dans vos horaires, en dehors de vos séances. On ouvre le samedi matin ?",
     enter: { screen: "pro-availability", url: `${DASH}/availability` },
     timeline: [
       { type: "move", target: "saturday-toggle", find: saturdayToggle },
-      {
-        type: "click",
-        target: "saturday-toggle",
-        find: saturdayToggle,
-        patch: { saturdayEnabled: true },
-      },
+      { type: "click", target: "saturday-toggle", find: saturdayToggle, patch: { saturdayEnabled: true } },
     ],
   },
   {
-    id: "branding",
+    id: "fiche-client",
     chapter: "pro",
-    title: "Votre image",
+    title: "La fiche client",
     description:
-      "Couleur, mise en page, avatar : la page publique se personnalise avec un aperçu en direct.",
+      "Les tickets de Léa par type avec leur échéance, ses inscriptions et ses achats. Un geste commercial ? Offrez-lui un ticket.",
+    enter: { screen: "pro-client", url: `${DASH}/clients/lea-martin` },
+    timeline: [
+      { type: "move", target: "give-ticket" },
+      { type: "click", target: "give-ticket", patch: { giveOpen: true } },
+      { type: "move", target: "give-confirm" },
+      { type: "click", target: "give-confirm", patch: { giveOpen: false, ticketGiven: true } },
+      { type: "move", target: "wallet-collectif" },
+    ],
+  },
+  {
+    id: "couleurs",
+    chapter: "pro",
+    title: "Votre page à vos couleurs",
+    description: "Couleur, mise en page, avatar : la page publique se personnalise avec un aperçu en direct.",
     enter: { screen: "pro-branding", url: `${DASH}/settings` },
     timeline: [
       { type: "move", target: "swatch-turquoise" },
@@ -326,16 +345,16 @@ export const DEMO_STEPS: DemoStep[] = [
     ],
   },
   {
-    id: "outro",
+    id: "a-vous",
     chapter: "outro",
     title: "À vous",
-    description: "Créez votre page en quelques minutes — gratuit pour démarrer.",
-    enter: { screen: "outro", url: "skedul.app" },
+    description: "Créez votre page en quelques minutes, gratuitement pour démarrer.",
+    enter: { screen: "outro", url: SITE },
     timeline: [],
   },
 ];
 
-/** Lien vers la visite, ouverte sur l'étape `id` (`/demo?step=packs`). */
+/** Lien vers la visite, ouverte sur l'étape `id` (`/demo?step=tickets`). */
 export function demoHref(id?: string): string {
   return id ? `/demo?step=${encodeURIComponent(id)}` : "/demo";
 }
@@ -343,7 +362,10 @@ export function demoHref(id?: string): string {
 /** Index de l'étape `?step=` ; la première si le paramètre est absent ou inconnu. */
 export function stepIndex(id: string | string[] | undefined): number {
   if (typeof id !== "string") return 0;
-  return Math.max(DEMO_STEPS.findIndex((s) => s.id === id), 0);
+  return Math.max(
+    DEMO_STEPS.findIndex((s) => s.id === id),
+    0,
+  );
 }
 
 /** Fusion de tous les patches d'une timeline (les saisies comptent comme leur texte final). */
