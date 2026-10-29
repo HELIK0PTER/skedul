@@ -9,14 +9,13 @@ import { authFormErrorMessage, GENERIC_ERROR } from "@/lib/auth-messages";
 import { oauthErrorMessage } from "@/lib/oauth-errors";
 import { linkGoogleCallbacks } from "@/lib/public/sign-in-flow";
 import { GoogleLogo } from "@/components/auth/google-logo";
+import { FormError } from "@/components/dashboard/form-error";
 import { useGoogleRedirect } from "@/components/auth/use-google-redirect";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 const LINK_FAILED = oauthErrorMessage("unable_to_link_account") ?? GENERIC_ERROR;
-/** The failure line. Its region is always mounted (empty and sr-only until a failure), so the text is announced when it arrives. */
-const ERROR_CLASS = "rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive";
 
 /**
  * Links Google to an existing email/password account. Better Auth refuses to
@@ -75,9 +74,7 @@ export function LinkGoogleForm({
         <p className="text-sm text-muted-foreground">
           {`Vous êtes connecté avec ${signedInEmail}. Choisissez sur Google le compte qui utilise cette adresse.`}
         </p>
-        <p role="alert" className={error ? ERROR_CLASS : "sr-only"}>
-          {error}
-        </p>
+        <FormError alwaysMounted message={error} />
         <Button
           type="button"
           variant="secondary"
@@ -138,9 +135,7 @@ export function LinkGoogleForm({
         />
       </div>
 
-      <p role="alert" className={error ? ERROR_CLASS : "sr-only"}>
-        {error}
-      </p>
+      <FormError alwaysMounted message={error} />
 
       <Button type="submit" className="w-full" disabled={loading}>
         {loading && <Loader2 className="size-4 animate-spin" />}

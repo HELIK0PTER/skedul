@@ -9,19 +9,15 @@ import test from "node:test";
 
 const source = (path: string): string => readFileSync(path, "utf8");
 
-test("both error lines of the Google link form are always-mounted alert regions (LED:405, UI rule)", () => {
+test("both error lines of the Google link form are FormError, always mounted (LED:405, UI rule, P6 A43)", () => {
   const form = source("src/components/auth/link-google-form.tsx");
-  // One region per step (the Google step and the password step), rendered from the first render with `{error}` as its
-  // only child: a live region inserted together with its text is not reliably announced. Empty, it is visually hidden
-  // (sr-only, out of the layout) rather than absent.
-  const regions = form.match(/<p\b[^>]*role="alert"[^>]*>[\s\S]*?<\/p>/g) ?? [];
-  assert.equal(regions.length, 2, "the Google step and the password step");
-  for (const region of regions) {
-    assert.match(region, /className=\{error \? ERROR_CLASS : "sr-only"\}/, region);
-    assert.match(region, />\s*\{error\}\s*<\/p>$/, "the text is the region's only child");
-  }
+  // One region per step (the Google step and the password step), rendered from the first render: a live region inserted
+  // together with its text is not reliably announced. P6 A43: the shared FormError, so the line is the one of every other
+  // form (text-rose-700 on the tint, AA) and the form keeps no class string or alert of its own.
+  assert.match(form, /import \{ FormError \} from "@\/components\/dashboard\/form-error";/);
+  assert.equal((form.match(/<FormError alwaysMounted message=\{error\} \/>/g) ?? []).length, 2, "the Google step and the password step");
+  assert.doesNotMatch(form, /\bERROR_CLASS\b|role="alert"/, "no local class string, no alert of its own");
   assert.doesNotMatch(form, /\{error && \(/, "no conditionally mounted error line");
-  assert.match(form, /const ERROR_CLASS = "rounded-lg bg-destructive\/10 px-3 py-2 text-sm text-destructive";/);
   // The French mapping of P3 444f102 stays: never the English message of Better Auth.
   assert.match(form, /authFormErrorMessage\(result\.error\)/);
 });
