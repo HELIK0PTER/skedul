@@ -57,7 +57,6 @@ export function GoogleCalendarCard(props: {
       await disconnectGoogleCalendar();
     } finally {
       setBusy(false);
-      router.refresh();
     }
   };
 

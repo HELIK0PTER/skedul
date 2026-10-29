@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { ArrowDown, ArrowUp, Eye, EyeOff, Pencil, Plus, Trash2 } from "lucide-react";
 
@@ -32,7 +31,6 @@ type Editing =
   | { kind: "article"; categoryId: string; article: FaqArticle | null };
 
 export function FaqEditor({ categories }: { categories: FaqCategory[] }) {
-  const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
@@ -49,7 +47,6 @@ export function FaqEditor({ categories }: { categories: FaqCategory[] }) {
           return;
         }
         onDone?.();
-        router.refresh();
       } catch {
         setError("Connexion perdue. Réessayez.");
       }

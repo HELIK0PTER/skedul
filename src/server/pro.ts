@@ -1,6 +1,7 @@
 "use server";
 
 import { eq } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 
@@ -150,5 +151,7 @@ export async function disconnectGoogleCalendar(): Promise<{ ok: boolean }> {
     console.error(`[google] unlink failed: ${logSafeMessage(err)}`);
   }
   await clearGoogleLink(db, pro.id);
+  // P6 A34: the card reads « connecté » from this page; the action refreshes it, the card never calls router.refresh().
+  revalidatePath("/dashboard/settings");
   return { ok: true };
 }

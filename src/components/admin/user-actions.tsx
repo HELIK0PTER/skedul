@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { Ban, LogIn, LogOut, ShieldCheck, ShieldOff, Undo2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -38,7 +37,6 @@ export function UserActions({
   isPro: boolean;
   suspended: boolean;
 }) {
-  const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [confirming, setConfirming] = useState<ActionId | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -57,7 +55,6 @@ export function UserActions({
         return;
       }
       setNotice(success);
-      router.refresh();
     });
   }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useTransition } from "react";
 import {
   Activity,
@@ -39,7 +39,6 @@ export function AdminSidebar({
   supportToHandle: number;
 }) {
   const pathname = usePathname();
-  const router = useRouter();
   const [pending, startTransition] = useTransition();
 
   return (
@@ -103,7 +102,6 @@ export function AdminSidebar({
               onClick={() =>
                 startTransition(async () => {
                   await forgetEntryChoice();
-                  router.refresh();
                 })
               }
               className="mt-1 block font-medium text-primary hover:underline disabled:opacity-50"
