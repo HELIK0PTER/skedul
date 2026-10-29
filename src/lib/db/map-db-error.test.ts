@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { mapDbError } from "./map-db-error";
+import { fallbackNote, mapDbError } from "./map-db-error";
 
 /** A NeonDbError as thrown inside db.batch. */
 function pg(code: string, extra: { constraint?: string; message?: string } = {}): Error {
@@ -78,4 +78,32 @@ test("anything else is unknown", () => {
   assert.deepEqual(mapDbError(pg("22001"), "write"), { type: "unknown" });
   assert.deepEqual(mapDbError(new Error("fetch failed"), "write"), { type: "unknown" });
   assert.deepEqual(mapDbError("not an error", "write"), { type: "unknown" });
+});
+
+// P6 A18: an answer that comes from a fallback able to hide an engine bug leaves one line for the owner: the SQLSTATE,
+// the constraint name and the code, never the error's message, detail or parameters.
+test("fallbackNote: a CHECK (23514) and a foreign key (23503) are noted with their constraint and code, nothing else", () => {
+  const seats = pg("23514", { constraint: "occurrence_seats_chk", message: "params: 3, x@skedul.test" });
+  for (const err of both(seats)) {
+    assert.equal(fallbackNote(err, mapDbError(err, "write")), "[db] 23514 occurrence_seats_chk -> full");
+  }
+  const unnamed = pg("23514");
+  assert.equal(fallbackNote(unnamed, mapDbError(unnamed, "write")), "[db] 23514 unnamed -> invalid");
+  const fk = pg("23503", { constraint: "booking_occurrence_id_occurrence_id_fk" });
+  assert.equal(fallbackNote(fk, mapDbError(fk, "write")), "[db] 23503 booking_occurrence_id_occurrence_id_fk -> stale");
+  assert.equal(fallbackNote(fk, mapDbError(fk, "delete")), "[db] 23503 booking_occurrence_id_occurrence_id_fk -> in_use");
+  const odd = pg("23514", { constraint: "bad name; drop" });
+  assert.equal(fallbackNote(odd, mapDbError(odd, "write")), "[db] 23514 unnamed -> invalid", "a name that is not an identifier is not copied");
+});
+
+test("fallbackNote: the precise answers are not noted", () => {
+  for (const err of [
+    pg("P0001", { message: "skedul:stale" }),
+    pg("23505", { constraint: "booking_active_uq" }),
+    pg("23P01", { constraint: "occurrence_rdv_excl" }),
+    pg("40P01"),
+    pg("22001"),
+  ]) {
+    assert.equal(fallbackNote(err, mapDbError(err, "write")), null);
+  }
 });

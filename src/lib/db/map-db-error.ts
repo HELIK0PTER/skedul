@@ -47,3 +47,20 @@ export function mapDbError(err: unknown, ctx: "write" | "delete"): MappedDbError
       return { type: "unknown" };
   }
 }
+
+/** A constraint name as Postgres writes ours (snake case, at most 63 characters); anything else is not copied. */
+const CONSTRAINT_NAME = /^[a-z0-9_]{1,63}$/;
+
+/**
+ * The line tryAtomic logs (console.warn) when an answer comes from a fallback that can also hide an engine bug (P6
+ * A18): a CHECK (23514: `occurrence_seats_chk` reads `full` for a seat count below 0 too, an unnamed or other CHECK
+ * reads `invalid`) and a foreign key (23503: `stale` or `in_use`). Only the SQLSTATE, the constraint name and the
+ * code: never the error's message, detail or parameters (they can carry a client's data). Null for a precise answer.
+ */
+export function fallbackNote(err: unknown, mapped: MappedDbError): string | null {
+  if (mapped.type !== "code") return null;
+  const info = pgErrorInfo(err);
+  if (info.code !== "23514" && info.code !== "23503") return null;
+  const name = info.constraint && CONSTRAINT_NAME.test(info.constraint) ? info.constraint : "unnamed";
+  return `[db] ${info.code} ${name} -> ${mapped.code}`;
+}

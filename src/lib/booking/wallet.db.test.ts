@@ -342,6 +342,36 @@ dbTest("Déplacer un inscrit: eligibility, expiry (force) and seats on both séa
   assert.equal((await getOccurrence(db, sameType.id)).seatsTaken, 1);
 });
 
+// P6 A18: a booking cancelled between the plan and the batch is a race: stale, never `full` from the seat CHECK.
+dbTest("Déplacer un inscrit: a booking cancelled between the plan and the batch is stale, nothing moves", async ({ db, pro }) => {
+  const typeA = await makeType(db, pro);
+  const {
+    occurrences: [src],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeA], rule: { startDate: dayIn(pro, 3) } });
+  const {
+    occurrences: [target],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeA], rule: { startDate: dayIn(pro, 5) } });
+  const customerId = await makeCustomer(db, pro);
+  await giveTickets(db, pro, customerId, typeA, 1);
+  const b = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: src.id, customerId, seenStartsAt: src.startsAt, actorUserId: pro.userId });
+  must(b, "book");
+  const res = await moveAttendee(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, bookingId: b.bookingId, targetOccurrenceId: target.id, force: false },
+    new Date(),
+    {
+      afterPlan: async () => {
+        must(await cancelByClient(db, { professionalId: pro.proId, customerId, bookingId: b.bookingId, actorUserId: null }), "cancel inside afterPlan");
+      },
+    },
+  );
+  assert.deepEqual(res, { ok: false, code: "stale" });
+  const after = await getBooking(db, b.bookingId);
+  assert.equal(after.occurrenceId, src.id);
+  assert.equal(after.status, "cancelled");
+  assert.equal((await getOccurrence(db, src.id)).seatsTaken, 0);
+  assert.equal((await getOccurrence(db, target.id)).seatsTaken, 0);
+});
 dbTest("Déplacer un inscrit: a full target is `full`, a target already booked by the client is `already_booked`", async ({ db, pro }) => {
   const typeA = await makeType(db, pro);
   const {

@@ -13,7 +13,7 @@ import type { NeonHttpDatabase } from "drizzle-orm/neon-http";
 import type { Actor, EngineErrorCode } from "@/lib/tickets";
 import type * as schema from "./schema";
 import { lapsedHold } from "./hold-sql";
-import { mapDbError } from "./map-db-error";
+import { fallbackNote, mapDbError } from "./map-db-error";
 
 export type Db = NeonHttpDatabase<typeof schema>;
 export type Query = BatchItem<"pg">;
@@ -73,7 +73,10 @@ export type TryAtomicResult =
  * With `replanOnStale`, a `stale` re-runs `plan()` once: new reads, new ids,
  * new aid (E7 following, E8, ensureHorizon). `afterPlan` (tests only) runs
  * between the FIRST plan and its batch, to stage a deterministic race.
- * Unknown errors (programming errors, other 23505) are rethrown.
+ * Unknown errors (programming errors, other 23505) are rethrown. P6 A18: a
+ * deadlock that comes back after atomic's one replay answers `stale` (no
+ * re-plan), and an answer read off a CHECK or a foreign key is noted by
+ * fallbackNote; both log one console.warn line without the error itself.
  */
 export async function tryAtomic(
   db: Db,
@@ -91,7 +94,14 @@ export async function tryAtomic(
       }
       const mapped = mapDbError(err, ctx);
       if (mapped.type === "duplicate") return { ok: false, code: "duplicate" };
+      if (mapped.type === "deadlock") {
+        // atomic() already replayed the batch once: a race the caller retries, not a crash.
+        console.warn("[db] 40P01 after one replay -> stale");
+        return { ok: false, code: "stale" };
+      }
       if (mapped.type !== "code") throw err;
+      const note = fallbackNote(err, mapped);
+      if (note !== null) console.warn(note);
       if (mapped.code === "stale" && opts.replanOnStale && attempt === 0) continue;
       return { ok: false, code: mapped.code };
     }

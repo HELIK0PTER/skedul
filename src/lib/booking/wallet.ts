@@ -667,6 +667,12 @@ export async function moveAttendee(
         lockRows(db, "occurrence", [b.occurrenceId, tgt.id]),
         R(c, b.occurrenceId),
         R(c, tgt.id),
+        // P6 A18: a booking ended or moved since the plan is a race (stale), before SEAT(src, −1) can break the seat CHECK (`full`).
+        G(
+          db,
+          sql`exists (select 1 from booking where id = ${b.id} and occurrence_id = ${b.occurrenceId} and status = 'confirmed')`,
+          "stale",
+        ),
         assertNotBooked(c, tgt.id, b.customerId),
         SEAT(c, b.occurrenceId, -1),
         SEAT(c, tgt.id, 1),
