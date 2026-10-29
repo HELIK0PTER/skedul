@@ -21,6 +21,7 @@ import { verifyEmailCodeEmail } from "@/lib/emails/verify-email-code";
 import { logSafeMessage } from "@/lib/log-safe";
 import { COPY } from "@/lib/public/messages";
 import { plainNameSchema } from "@/lib/public/plain-name";
+import { CODE_LENGTH } from "@/lib/public/sign-in-flow";
 import { consumeThrottle, otpThrottleKey, resetThrottleKey } from "@/lib/throttle";
 import { OTP_EMAIL_LIMIT } from "@/lib/tickets";
 
@@ -69,7 +70,7 @@ export const OTP_HTTP_PATHS = [OTP_SEND_PATH, OTP_SIGN_IN_PATH, OTP_VERIFY_EMAIL
  * is inert: the sign-up code comes from core emailVerification.sendOnSignUp.
  */
 export const OTP_PLUGIN_OPTIONS = {
-  otpLength: 6,
+  otpLength: CODE_LENGTH,
   expiresIn: 300,
   allowedAttempts: 3,
   storeOTP: "encrypted",

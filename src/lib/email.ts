@@ -3,6 +3,7 @@ import { Resend } from "resend";
 
 import { env } from "@/lib/env";
 import { mockMailLog, mockMailRefusal } from "@/lib/emails/mock-log";
+import { htmlToText } from "@/lib/emails/plain-text";
 import { redactSubject } from "@/lib/emails/redact-subject";
 import { logSafeMessage } from "@/lib/log-safe";
 
@@ -16,6 +17,8 @@ interface SendArgs {
   to: string;
   subject: string;
   html: string;
+  /** The text part; read off the HTML when absent (P6 A26), so no mail goes out as HTML only. */
+  text?: string;
 }
 
 type SendResult =
@@ -29,7 +32,7 @@ type SendResult =
  * after a booking or payment is already saved, so a Resend outage or a rejected
  * sender must not turn a successful booking into an error for the customer.
  */
-export async function sendEmail({ to, subject, html }: SendArgs): Promise<SendResult> {
+export async function sendEmail({ to, subject, html, text }: SendArgs): Promise<SendResult> {
   if (!resend) {
     // Development aid: the whole mail (recipient, code, links), so a flow can be followed without a
     // mailbox. A production build (preview deployments included) prints the redacted subject only (SEC-3).
@@ -37,11 +40,13 @@ export async function sendEmail({ to, subject, html }: SendArgs): Promise<SendRe
     return { id: "mock", mocked: true };
   }
   try {
+    const body = text ?? htmlToText(html);
     const { data, error } = await resend.emails.send({
       from: env.EMAIL_FROM,
       to,
       subject,
       html,
+      text: body,
     });
     if (error) {
       console.error(`[email] Resend rejected "${redactSubject(subject)}": ${logSafeMessage(error)}`);
