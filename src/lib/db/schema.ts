@@ -565,9 +565,14 @@ export const ticketPurchase = pgTable(
     index("ticket_purchase_pro_status_paid_idx").on(t.professionalId, t.status, t.paidAt),
     index("ticket_purchase_customer_idx").on(t.customerId),
     index("ticket_purchase_status_expires_idx").on(t.status, t.checkoutExpiresAt),
+    // 0013: FK support (an offer or type delete, the offer `sold` and `purchases` counts)
+    index("ticket_purchase_offer_idx").on(t.offerId),
+    index("ticket_purchase_type_idx").on(t.ticketTypeId),
     check("ticket_purchase_quantity_chk", sql`quantity BETWEEN 1 AND 100`),
     check("ticket_purchase_amount_chk", sql`amount_cents > 0`),
     check("ticket_purchase_paid_chk", sql`(status = 'paid') = (paid_at IS NOT NULL)`),
+    // 0013 (A20): the validity snapshot is whole or absent, like ticket_offer_validity_chk
+    check("ticket_purchase_validity_chk", sql`(validity_count IS NULL) = (validity_unit IS NULL)`),
   ],
 );
 
@@ -607,6 +612,13 @@ export const booking = pgTable(
     index("booking_customer_idx").on(t.customerId),
     index("booking_ended_action_idx").on(t.endedActionId),
     index("booking_hold_idx").on(t.holdExpiresAt).where(sql`status = 'pending'`),
+    // 0013: the pro cascade of deleteUser and the per-pro status reads
+    index("booking_pro_status_idx").on(t.professionalId, t.status),
+    // 0013: the admin feeds (newest confirmed first) and the 30-day count; DESC with
+    // Postgres's own NULLS FIRST so it matches `order by created_at desc, id desc`
+    index("booking_confirmed_created_idx")
+      .on(t.createdAt.desc().nullsFirst(), t.id.desc().nullsFirst())
+      .where(sql`status = 'confirmed'`),
     check(
       "booking_pending_chk",
       sql`status <> 'pending' OR (hold_expires_at IS NOT NULL AND purchase_id IS NOT NULL)`,
@@ -638,6 +650,9 @@ export const bookingAnswer = pgTable(
   (t) => [
     unique("booking_answer_uq").on(t.bookingId, t.questionId),
     index("booking_answer_booking_idx").on(t.bookingId),
+    // 0013: FK support (the pro cascade, the SET NULL of a question delete)
+    index("booking_answer_pro_idx").on(t.professionalId),
+    index("booking_answer_question_idx").on(t.questionId),
   ],
 );
 
@@ -672,6 +687,8 @@ export const ticket = pgTable(
     index("ticket_by_purchase_idx").on(t.purchaseId),
     index("ticket_by_type_idx").on(t.ticketTypeId),
     index("ticket_expires_idx").on(t.expiresAt).where(sql`status = 'available'`),
+    // 0013: the pro cascade (every status, so not partial) and the per-pro `status = 'available'` reads
+    index("ticket_pro_status_idx").on(t.professionalId, t.status),
     check("ticket_booked_chk", sql`(status = 'booked') = (booking_id IS NOT NULL)`),
     check("ticket_closed_chk", sql`(status = 'closed') = (closed_reason IS NOT NULL)`),
     check(
@@ -721,6 +738,12 @@ export const ticketMovement = pgTable(
     index("ticket_movement_ticket_seq_idx").on(t.ticketId, t.seq),
     index("ticket_movement_action_idx").on(t.actionId),
     index("ticket_movement_pro_idx").on(t.professionalId),
+    // 0013: FK support (the NO ACTION checks of a delete, the SET NULL of a user delete)
+    index("ticket_movement_booking_idx").on(t.bookingId),
+    index("ticket_movement_purchase_idx").on(t.purchaseId),
+    index("ticket_movement_type_idx").on(t.ticketTypeId),
+    index("ticket_movement_from_type_idx").on(t.fromTicketTypeId),
+    index("ticket_movement_actor_user_idx").on(t.actorUserId),
   ],
 );
 
@@ -856,7 +879,11 @@ export const supportMessage = pgTable(
     resolution: supportResolution("resolution"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
-  (t) => [index("support_message_request_idx").on(t.requestId, t.createdAt)],
+  (t) => [
+    index("support_message_request_idx").on(t.requestId, t.createdAt),
+    // 0013: FK support (the SET NULL of a user delete)
+    index("support_message_author_idx").on(t.authorId),
+  ],
 );
 
 export const supportAttachment = pgTable(

@@ -92,6 +92,13 @@
       "when": 1791838813522,
       "tag": "0012_tickets_manual",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1793297754437,
+      "tag": "0013_fk_indexes_unaccent",
+      "breakpoints": true
     }
   ]
 }

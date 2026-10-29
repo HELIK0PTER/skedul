@@ -1,15 +1,18 @@
 /**
  * Schema smoke tests on tickets-test: the manual SQL of migration 0012
- * (btree_gist, occurrence_rdv_excl, skedul_assert) and rule R2 (deleting a
- * pro's user removes every domain row, through NO ACTION references).
+ * (btree_gist, occurrence_rdv_excl, skedul_assert), migration 0013 (unaccent,
+ * the foreign key support indexes, the purchase validity CHECK) and rule R2
+ * (deleting a pro's user removes every domain row, through NO ACTION references).
  */
 import assert from "node:assert/strict";
 import { eq, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
+import { textArray } from "../lib/db/atomic";
 import { pgErrorInfo, skedulCode } from "../lib/db/pg-error";
 import * as schema from "../lib/db/schema";
 import { addMinutes, createTestPro, dbTest, deleteTestUser, testEmail } from "./db";
+import { rowCustomer, rowOffer, rowType } from "./rows";
 
 async function failure(p: Promise<unknown>): Promise<unknown> {
   try {
@@ -34,6 +37,85 @@ dbTest("migration 0012 installed btree_gist and skedul_assert", async ({ db }) =
   assert.equal(excl.rows.length, 1);
   const ok = await db.execute<{ ok: boolean }>(sql`select skedul_assert(true, 'unused') as ok`);
   assert.equal(ok.rows[0].ok, true);
+});
+
+/** The indexes migration 0013 adds, with the key part of their definition (pg_indexes.indexdef after « USING »). */
+const INDEXES_0013: Record<string, string> = {
+  ticket_purchase_offer_idx: "btree (offer_id)",
+  ticket_purchase_type_idx: "btree (ticket_type_id)",
+  booking_pro_status_idx: "btree (professional_id, status)",
+  booking_confirmed_created_idx: "btree (created_at DESC, id DESC) WHERE (status = 'confirmed'::booking_status)",
+  booking_answer_pro_idx: "btree (professional_id)",
+  booking_answer_question_idx: "btree (question_id)",
+  ticket_pro_status_idx: "btree (professional_id, status)",
+  ticket_movement_booking_idx: "btree (booking_id)",
+  ticket_movement_purchase_idx: "btree (purchase_id)",
+  ticket_movement_type_idx: "btree (ticket_type_id)",
+  ticket_movement_from_type_idx: "btree (from_ticket_type_id)",
+  ticket_movement_actor_user_idx: "btree (actor_user_id)",
+  support_message_author_idx: "btree (author_id)",
+};
+
+dbTest("migration 0013 installed unaccent, its indexes and ticket_purchase_validity_chk", async ({ db }) => {
+  const ext = await db.execute<{ folded: string }>(sql`select unaccent('Élodie Œuvre') as folded`);
+  assert.equal(ext.rows[0].folded, "Elodie OEuvre");
+  const idx = await db.execute<{ indexname: string; indexdef: string }>(
+    sql`select indexname, indexdef from pg_indexes where schemaname = 'public' and indexname = any(${textArray(Object.keys(INDEXES_0013))})`,
+  );
+  const found = Object.fromEntries(idx.rows.map((r) => [r.indexname, r.indexdef.replace(/^.* USING /, "")]));
+  assert.deepEqual(found, INDEXES_0013);
+  const chk = await db.execute<{ def: string }>(
+    sql`select pg_get_constraintdef(oid) as def from pg_constraint where conname = 'ticket_purchase_validity_chk' and contype = 'c' and convalidated`,
+  );
+  assert.equal(chk.rows.length, 1);
+});
+
+// The pro cascade of deleteUser and every NO ACTION / SET NULL check of a parent delete look the child rows up by the
+// foreign key column: without an index leading with it, each parent row costs a full scan of the child table.
+dbTest("every foreign key column leads a non-partial index (0013)", async ({ db }) => {
+  const multi = await db.execute<{ conname: string }>(
+    sql`select conname from pg_constraint where contype = 'f' and connamespace = 'public'::regnamespace and cardinality(conkey) <> 1`,
+  );
+  assert.deepEqual(multi.rows, [], "a composite foreign key needs this check widened");
+  const bare = await db.execute<{ fk: string }>(sql`
+    select c.conrelid::regclass::text || '.' || a.attname as fk
+    from pg_constraint c
+    join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[1]
+    where c.contype = 'f' and c.connamespace = 'public'::regnamespace
+      and not exists (
+        select 1 from pg_index i where i.indrelid = c.conrelid and i.indpred is null and i.indkey[0] = c.conkey[1]
+      )
+    order by 1`);
+  assert.deepEqual(bare.rows.map((r) => r.fk), []);
+});
+
+dbTest("ticket_purchase_validity_chk refuses a half-set validity snapshot (A20)", async ({ db, pro }) => {
+  const typeId = await rowType(db, pro);
+  const offerId = await rowOffer(db, pro, typeId);
+  const customerId = await rowCustomer(db, pro);
+  const purchase = (validityCount: number | null, validityUnit: "day" | "month" | null) =>
+    db.insert(schema.ticketPurchase).values({
+      id: nanoid(),
+      professionalId: pro.proId,
+      customerId,
+      offerId,
+      ticketTypeId: typeId,
+      label: "Carnet de 10",
+      quantity: 10,
+      amountCents: 19_000,
+      currency: "eur",
+      validityCount,
+      validityUnit,
+      checkoutExpiresAt: new Date("2030-01-01T00:00:00.000Z"),
+    });
+  for (const [count, unit] of [[3, null], [null, "month"]] as const) {
+    const err = await failure(db.batch([purchase(count, unit)]));
+    assert.equal(pgErrorInfo(err).code, "23514");
+    assert.equal(pgErrorInfo(err).constraint, "ticket_purchase_validity_chk");
+  }
+  await purchase(null, null);
+  await purchase(6, "month");
+  await db.delete(schema.ticketPurchase).where(eq(schema.ticketPurchase.professionalId, pro.proId));
 });
 
 dbTest("skedul_assert raises P0001 skedul:<code> and rolls its batch back", async ({ db, pro }) => {
