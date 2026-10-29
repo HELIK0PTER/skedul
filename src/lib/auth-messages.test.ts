@@ -7,6 +7,7 @@ import {
   authFormErrorMessage,
   CODE_SENT,
   GENERIC_ERROR,
+  NAME_NOT_PLAIN_CODE,
   RATE_LIMITED,
   SEND_FAILED,
   sendCodeFailure,
@@ -17,6 +18,7 @@ import {
   WRONG_CREDENTIALS,
 } from "./auth-messages";
 import { oauthErrorMessage } from "./oauth-errors";
+import { COPY } from "./public/messages";
 
 test("a rate-limited answer is the French sentence, whatever its code", () => {
   assert.equal(authFormErrorMessage({ status: 429 }), RATE_LIMITED);
@@ -100,6 +102,13 @@ test("checking a code: a suspended account reads the suspension sentence, not «
   assert.equal(verifyCodeFailure({ status: 429, code: "BANNED_USER" }), RATE_LIMITED);
   assert.equal(verifyCodeFailure({ status: 500, code: "BANNED_USER" }), VERIFY_FAILED);
   assert.equal(verifyCodeFailure({ status: 403, code: "SOMETHING_ELSE" }), WRONG_CODE);
+});
+
+test("checking a code: a name the server refuses reads the plain-name sentence, never « code incorrect » (P6 A9)", () => {
+  assert.equal(NAME_NOT_PLAIN_CODE, "NAME_NOT_PLAIN");
+  assert.equal(verifyCodeFailure({ status: 400, code: NAME_NOT_PLAIN_CODE }), COPY.PLAIN_NAME);
+  assert.equal(verifyCodeFailure({ status: 429, code: NAME_NOT_PLAIN_CODE }), RATE_LIMITED);
+  assert.equal(verifyCodeFailure({ status: 500, code: NAME_NOT_PLAIN_CODE }), VERIFY_FAILED);
 });
 
 test("sending a code: a 200 and a 400 answer keep the neutral sentence, so the answer never depends on the address (S22)", () => {

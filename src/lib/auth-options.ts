@@ -11,6 +11,7 @@ import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { ADMIN_HTTP_ENDPOINTS, adminPlugin } from "@/lib/auth-admin";
+import { NAME_NOT_PLAIN_CODE } from "@/lib/auth-messages";
 import type { Db } from "@/lib/db/atomic";
 import * as schema from "@/lib/db/schema";
 import { loginCodeEmail } from "@/lib/emails/login-code";
@@ -18,6 +19,8 @@ import { passwordDisabledEmail } from "@/lib/emails/password-disabled";
 import { passwordResetEmail } from "@/lib/emails/password-reset";
 import { verifyEmailCodeEmail } from "@/lib/emails/verify-email-code";
 import { logSafeMessage } from "@/lib/log-safe";
+import { COPY } from "@/lib/public/messages";
+import { plainNameSchema } from "@/lib/public/plain-name";
 import { consumeThrottle, otpThrottleKey, resetThrottleKey } from "@/lib/throttle";
 import { OTP_EMAIL_LIMIT } from "@/lib/tickets";
 
@@ -143,6 +146,16 @@ export function otpCapEmail(body: { email?: unknown; type?: unknown } | undefine
   if (typeof raw !== "string" || raw !== raw.trim()) return null;
   const email = raw.toLowerCase();
   return z.email().safeParse(email).success ? email : null;
+}
+
+/**
+ * The `name` of a /sign-in/email-otp body the hook lets through (P6 A9): none (absent or empty: the route then stores
+ * an empty name, as the form sends none when its field is empty), or a string that passes plainNameSchema (trimmed,
+ * 1 to BOUNDS.name characters, isPlainName). Anything else, a non-string included, is refused.
+ */
+export function isAcceptedOtpName(name: unknown): boolean {
+  if (name === undefined || name === "") return true;
+  return plainNameSchema.safeParse(name).success;
 }
 
 /**
@@ -362,6 +375,16 @@ export function buildAuthOptions(deps: AuthDeps) {
       // sent in process by core emailVerification.sendOnSignUp and never comes
       // through this path.
       before: createAuthMiddleware(async (ctx) => {
+        if (ctx.path === OTP_SIGN_IN_PATH) {
+          // P6 A9: the name of a first code sign-in becomes the account's name, which reaches the pros' client
+          // records and their mails. The browser checks it; this is the same check for a request that skips the
+          // browser. It runs before the route reads the code (an attempt is not used up) and before any lookup, so
+          // the answer is the same whether or not the address has an account.
+          if (!isAcceptedOtpName((ctx.body as { name?: unknown } | undefined)?.name)) {
+            throw new APIError("BAD_REQUEST", { message: COPY.PLAIN_NAME, code: NAME_NOT_PLAIN_CODE });
+          }
+          return;
+        }
         if (ctx.path === LINK_SOCIAL_PATH) {
           // P6 A6: an admin acting as a pro never links a Google account to the pro's account. Read fresh (never the
           // 5-minute cookie cache), like the impersonation itself is: the route then builds no URL and stores no state.

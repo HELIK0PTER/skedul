@@ -19,11 +19,27 @@ import {
   RESET_REQUEST_PATH,
   buildAuthOptions,
   buildOtpMailer,
+  isAcceptedOtpName,
   isOtpVerificationTransition,
   type AuthMail,
 } from "./auth-options";
 import type { Db } from "./db/atomic";
+import { nameToSend } from "./public/sign-in-flow";
 import { otpThrottleKey, resetThrottleKey } from "./throttle";
+import { BOUNDS } from "./tickets-vocab";
+
+test("isAcceptedOtpName: no name, or a plain one of at most BOUNDS.name characters; never a link, an address, a number or a non-string (P6 A9)", () => {
+  for (const name of [undefined, "", "Marie", "Marie-Anne d'Arc", "J. Dupont", "Anne 1234", "x".repeat(BOUNDS.name)]) {
+    assert.equal(isAcceptedOtpName(name), true, JSON.stringify(name));
+  }
+  for (const name of ["Marie 06 12 34 56 78", "bit.ly", "a/b", "marie@exemple.fr", "www.x", "x".repeat(BOUNDS.name + 1), "   ", null, 42, ["Marie"], { name: "Marie" }]) {
+    assert.equal(isAcceptedOtpName(name), false, JSON.stringify(name));
+  }
+  // Whatever the form sends passes the server check.
+  for (const typed of ["  Marie  ", "Léa", `${"é".repeat(BOUNDS.name)}zz`, "Marie 06 12 34 56 78", "   "]) {
+    assert.equal(isAcceptedOtpName(nameToSend(typed)), true, typed);
+  }
+});
 
 test("every emailOTP endpoint except send, sign-in and verify-email is closed over HTTP", () => {
   for (const path of [

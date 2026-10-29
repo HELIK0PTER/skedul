@@ -1,4 +1,5 @@
 import { oauthErrorMessage } from "./oauth-errors";
+import { COPY } from "./public/messages";
 
 /**
  * French sentences for the failures of Better Auth client calls (sign-in, sign-up, the e-mail code of the
@@ -19,6 +20,8 @@ export const TOO_MANY_ATTEMPTS = "Trop d'essais. Demandez un nouveau code.";
 export const CODE_SENT = "Si l'adresse est valide, un code a été envoyé.";
 /** A suspended account cannot open a session (Better Auth admin plugin, code BANNED_USER). */
 export const ACCOUNT_SUSPENDED = oauthErrorMessage("BANNED_USER") ?? GENERIC_ERROR;
+/** The code of the 400 a code sign-in gets for a name that is not isPlainName (auth hook, P6 A9). */
+export const NAME_NOT_PLAIN_CODE = "NAME_NOT_PLAIN";
 
 function isServerError(error: AuthClientError): boolean {
   return typeof error?.status === "number" && error.status >= 500;
@@ -56,12 +59,13 @@ export function sendCodeFailure(error: AuthClientError): string | null {
  * After « Confirmer »: the sentence of a refused code. Better Auth answers 400 INVALID_OTP or OTP_EXPIRED, then
  * 403 TOO_MANY_ATTEMPTS once the 3 attempts of a code are used (the way out is a new code). A suspended account
  * (403 BANNED_USER, raised when the sign-in tries to open its session) reads the suspension sentence, never
- * « code incorrect ».
+ * « code incorrect »; so does a name the server refuses (400 NAME_NOT_PLAIN, the code itself untouched).
  */
 export function verifyCodeFailure(error: AuthClientError): string {
   if (error?.status === 429) return RATE_LIMITED;
   if (isServerError(error)) return VERIFY_FAILED;
   if (error?.code === "TOO_MANY_ATTEMPTS") return TOO_MANY_ATTEMPTS;
   if (error?.code === "BANNED_USER") return ACCOUNT_SUSPENDED;
+  if (error?.code === NAME_NOT_PLAIN_CODE) return COPY.PLAIN_NAME;
   return WRONG_CODE;
 }

@@ -9,7 +9,10 @@ import assert from "node:assert/strict";
 import { and, eq, sql, type Query } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
+import { NAME_NOT_PLAIN_CODE } from "./auth-messages";
 import { LINK_REFUSED_WHILE_IMPERSONATING } from "./auth-options";
+import { COPY } from "./public/messages";
+import { BOUNDS } from "./tickets-vocab";
 import { browser, deleteUsersByEmail, makeTestAuth, TEST_BASE_URL, type BrowserCall, type TestAuth } from "../test/auth";
 import { createTestPro, DB_SKIP, deleteTestUser, getTestDb, testEmail, testIp } from "../test/db";
 import type { Db } from "./db/atomic";
@@ -1126,6 +1129,47 @@ test("A6 a session an admin impersonates cannot start a Google link, even with a
     assert.equal(await linkStates(user.id), statesBefore, "and no link state stored for the refused request");
   } finally {
     await deleteUsersByEmail(db, [email]);
+  }
+});
+
+test("A9 a code sign-in with a name that is not plain is refused before the code is used, alike for a new and a known address", OPTS, async () => {
+  const db = await getTestDb();
+  const t = makeTestAuth(db);
+  const fresh = testEmail("a9new");
+  const known = testEmail("a9known");
+  const badNames: unknown[] = [
+    "Marie 06 12 34 56 78",
+    "Marie bit.ly/promo",
+    "marie@exemple.fr",
+    "x".repeat(BOUNDS.name + 1),
+    "   ",
+    42,
+  ];
+  try {
+    await signUp(t, known);
+    const knownBefore = await userByEmail(db, known);
+    for (const email of [fresh, known]) {
+      const call = browser(t);
+      assert.equal((await call("/email-otp/send-verification-otp", { email, type: "sign-in" })).status, 200);
+      const otp = t.lastCode(email);
+      assert.ok(otp, `no sign-in code for ${email}`);
+      // More refusals than the 3 attempts of a code: none of them reached the code.
+      for (const name of badNames) {
+        const res = await call("/sign-in/email-otp", { email, otp, name });
+        assert.equal(res.status, 400, `${email} ${JSON.stringify(name)}`);
+        assert.equal(res.json?.code, NAME_NOT_PLAIN_CODE, `${email} ${JSON.stringify(name)}`);
+        assert.equal(res.json?.message, COPY.PLAIN_NAME);
+      }
+      const signedIn = await call("/sign-in/email-otp", { email, otp, name: "Marie Dupont" });
+      assert.equal(signedIn.status, 200, `the same code still signs ${email} in`);
+    }
+    assert.equal((await userByEmail(db, fresh)).name, "Marie Dupont", "a new account takes the plain name");
+    assert.equal((await userByEmail(db, known)).name, knownBefore.name, "a known account keeps its own");
+    // No name at all is still a sign-in (the form sends none when the field is empty).
+    const call = browser(t);
+    assert.equal((await codeSignIn(t, call, fresh)).status, 200);
+  } finally {
+    await deleteUsersByEmail(db, [fresh, known]);
   }
 });
 
