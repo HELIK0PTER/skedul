@@ -11,6 +11,7 @@ import type { RecurrenceRuleInput } from "../tickets";
 import { checkInvariants } from "./invariants";
 import { archiveFinishedEvents, ensureAllHorizons, expireTickets, purgeThrottle, runNightly } from "./nightly";
 import { horizonEnd, type ensureHorizon } from "./occurrences";
+import type { sweepHolds } from "./release";
 
 const weekly = (startDate: string, extra: Partial<RecurrenceRuleInput> = {}): RecurrenceRuleInput => ({
   startDate,
@@ -239,4 +240,18 @@ dbTest("E12 runNightly: a failing horizon reaches report.errors as `ensureAllHor
   assert.equal(report.invariantViolations, 0, "step 7 still ran");
   assert.equal(report.horizon.inserted, 0);
   assert.ok(report.horizon.pros >= 1);
+});
+
+// P6 A16: the sweep reports its failed occurrences instead of throwing, and hands its Google syncs to the route.
+dbTest("E12 runNightly: the sweep's failures reach report.errors as `sweepHolds: ...`, its Google syncs reach report.syncs, the other steps still run", async ({ db }) => {
+  const sweep: typeof sweepHolds = async () => ({
+    expiredBookings: 2,
+    effects: [{ type: "google.sync_occurrence", occurrenceId: "a16-swept" }],
+    failures: ["occurrence a16-drifted: boom"],
+  });
+  const report = await runNightly(db, new Date(), { sweep, horizon: { ensure: ensureDone, deadline: Date.now() + 600_000 } });
+  assert.equal(report.expiredBookings, 2);
+  assert.deepEqual(report.errors, ["sweepHolds: occurrence a16-drifted: boom"]);
+  assert.deepEqual(report.syncs, [{ type: "google.sync_occurrence", occurrenceId: "a16-swept" }]);
+  assert.equal(report.invariantViolations, 0, "step 7 still ran");
 });

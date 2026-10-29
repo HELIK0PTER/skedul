@@ -101,5 +101,8 @@ test("the cron route answers counts only, 500 when the night had errors, and log
   assert.match(ROUTE, /status: ok \? 200 : 500/);
   assert.match(ROUTE, /logSafeMessage\(\{ message: error \}\)/, "each entry goes through the masking of logSafeMessage");
   assert.deepEqual(rawErrorLogs(ROUTE), [], "no console call receives a raw error object");
-  assert.doesNotMatch(ROUTE, /runEffects/, "the nightly job sends nothing (OUT:118), so no mail budget is ever chosen here");
+  // P6 A16: the sweep's Google syncs (typed SyncEffect[], never a mail) run after the answer; the job sends no mail (OUT:118).
+  assert.match(ROUTE, /if \(report\.syncs\.length > 0\) after\(\(\) => runEffects\(report\.syncs, "none"\)\);/);
+  assert.equal(ROUTE.match(/runEffects\(/g)?.length, 1, "nothing but the syncs is ever run here");
+  assert.match(readFileSync("src/lib/booking/nightly.ts", "utf8"), /syncs: SyncEffect\[\];/, "the report can only carry Google syncs");
 });

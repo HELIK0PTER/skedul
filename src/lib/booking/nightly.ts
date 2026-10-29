@@ -16,6 +16,7 @@ import { THROTTLE_PURGE_DAYS } from "@/lib/tickets";
 import { checkInvariants } from "./invariants";
 import { ensureHorizon, ruleOf } from "./occurrences";
 import { expireStalePurchases, sweepHolds } from "./release";
+import type { SyncEffect } from "./types";
 
 /** ensureHorizon calls per pro and night (each inserts at most MATERIALIZE_MAX_ROWS rows). */
 const HORIZON_CALLS_PER_PRO = 10;
@@ -135,16 +136,21 @@ export type NightlyReport = {
   archivedEvents: number;
   purgedThrottle: number;
   invariantViolations: number;
-  /** "step: message" for each step that threw (the next steps still run) */
+  /** "step: message" for each step that threw (the next steps still run), and each occurrence the sweep could not release */
   errors: string[];
+  /** the sweep's Google re-syncs (P6 A16), run by the cron route after it answers; never a mail (OUT:118) */
+  syncs: SyncEffect[];
 };
 
 /** Steps 1 to 7 in order, each isolated; step 7 stores the violation count in `health:invariant_violations`. */
 export async function runNightly(
   db: Db,
   now: Date = new Date(),
-  /** Test-only: an injected `ensure` or `deadline` for step 4 (ensureAllHorizons), so a failure can be provoked without touching other runs' data. */
-  opts: { horizon?: Parameters<typeof ensureAllHorizons>[2] } = {},
+  /**
+   * Test-only: an injected `ensure` or `deadline` for step 4 (ensureAllHorizons), and an injected `sweep` for step 1,
+   * so a failure can be provoked without touching other runs' data.
+   */
+  opts: { horizon?: Parameters<typeof ensureAllHorizons>[2]; sweep?: typeof sweepHolds } = {},
 ): Promise<NightlyReport> {
   const report: NightlyReport = {
     expiredBookings: 0,
@@ -155,6 +161,7 @@ export async function runNightly(
     purgedThrottle: 0,
     invariantViolations: 0,
     errors: [],
+    syncs: [],
   };
   const step = async (name: string, run: () => Promise<void>) => {
     try {
@@ -164,7 +171,11 @@ export async function runNightly(
     }
   };
   await step("sweepHolds", async () => {
-    report.expiredBookings = (await sweepHolds(db, now)).expiredBookings;
+    const swept = await (opts.sweep ?? sweepHolds)(db, now);
+    report.expiredBookings = swept.expiredBookings;
+    report.syncs = swept.effects;
+    // One batch per occurrence (P6 A16): an occurrence that could not be released is an error of the night, the others ran.
+    for (const failure of swept.failures) report.errors.push(`sweepHolds: ${failure}`);
   });
   await step("expireStalePurchases", async () => {
     report.expiredPurchases = (await expireStalePurchases(db, now)).expired;

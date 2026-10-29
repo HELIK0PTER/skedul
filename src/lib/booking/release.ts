@@ -3,7 +3,7 @@
  * depends on the nightly job: R(o) also releases elapsed holds before every
  * claim on o, and E4 releases the RDVs it overlaps.
  */
-import { and, count, eq, isNull, lt, sql } from "drizzle-orm";
+import { and, count, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 
 import {
   PlanError,
@@ -11,6 +11,7 @@ import {
   atomic,
   lockRows,
   releaseEndedSeats,
+  textArray,
   ts,
   tryAtomic,
   type BatchCtx,
@@ -20,7 +21,7 @@ import { booking, ticketPurchase } from "@/lib/db/schema";
 import { STALE_PURCHASE_GRACE_MINUTES } from "@/lib/tickets";
 
 import { expireElapsedHolds, lapsedHold } from "./holds";
-import { failOf, syncEffects, type EngineResult } from "./types";
+import { failOf, syncEffects, type EngineResult, type SyncEffect } from "./types";
 
 /**
  * Idempotent. Callers (P4): the `checkout.session.expired` and
@@ -71,34 +72,53 @@ export async function releasePurchase(
   return { ok: true, effects: syncEffects(ended.map((b) => b.occurrenceId)), released: ended.length > 0 };
 }
 
+export type SweepReport = {
+  expiredBookings: number;
+  /** one Google re-sync per occurrence that had a hold released (an RDV left at 0 seats is cancelled) */
+  effects: SyncEffect[];
+  /** "occurrence <id>: <message>" for each occurrence whose batch threw; the next occurrences still ran */
+  failures: string[];
+};
+
 /**
- * Nightly step 1 (E12). Batch: lock every occurrence with an elapsed hold (id
- * asc; EXISTS because Postgres refuses FOR NO KEY UPDATE with DISTINCT), expire those
- * bookings (aid), then release the seats in aggregate (N per occurrence; an
- * RDV at 0 is cancelled). No batch at all when nothing elapsed.
+ * Nightly step 1 (E12). Reads the occurrences with an elapsed hold (id asc), then ONE batch per occurrence (P6 A16:
+ * a drifted séance no longer blocks the others): lock it, expire its elapsed holds (aid), release those seats (an RDV
+ * at 0 is cancelled). A batch that throws is reported in `failures` and wrote nothing; the next occurrence still
+ * runs. Effects: google.sync_occurrence for each occurrence that had a hold released, as releasePurchase does.
  */
-export async function sweepHolds(db: Db, now: Date = new Date()): Promise<{ expiredBookings: number }> {
-  const elapsed = sql`select o.id from occurrence o
-    where exists (select 1 from booking b
-                  where b.occurrence_id = o.id and ${lapsedHold(now, sql`b`)})`;
-  const done = await atomic(db, async () => {
-    const [pending] = await db
-      .select({ n: count() })
-      .from(booking)
-      .where(lapsedHold(now));
-    if (!pending || pending.n === 0) return () => [];
-    return (aid) => {
-      const c: BatchCtx = { db, aid, now };
-      return [
-        db.execute(sql`${elapsed} order by o.id for no key update`),
-        expireElapsedHolds(c, elapsed),
-        releaseEndedSeats(c),
-      ];
-    };
-  });
-  if (done.results.length === 0) return { expiredBookings: 0 };
-  const [ended] = await db.select({ n: count() }).from(booking).where(eq(booking.endedActionId, done.aid));
-  return { expiredBookings: ended?.n ?? 0 };
+export async function sweepHolds(db: Db, now: Date = new Date()): Promise<SweepReport> {
+  const elapsed = await db.execute<{ id: string }>(sql`select o.id from occurrence o
+    where exists (select 1 from booking b where b.occurrence_id = o.id and ${lapsedHold(now, sql`b`)})
+    order by o.id`);
+  const aids: string[] = [];
+  const failures: string[] = [];
+  for (const { id } of elapsed.rows) {
+    try {
+      const done = await atomic(db, async () => (aid) => {
+        const c: BatchCtx = { db, aid, now };
+        return [
+          lockRows(db, "occurrence", [id]),
+          expireElapsedHolds(c, sql`select unnest(${textArray([id])})`),
+          releaseEndedSeats(c),
+        ];
+      });
+      aids.push(done.aid);
+    } catch (err) {
+      failures.push(`occurrence ${id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  if (aids.length === 0) return { expiredBookings: 0, effects: [], failures };
+  const ended = await db
+    .select({ occurrenceId: booking.occurrenceId, n: count() })
+    .from(booking)
+    .where(inArray(booking.endedActionId, aids))
+    .groupBy(booking.occurrenceId)
+    .orderBy(booking.occurrenceId);
+  return {
+    expiredBookings: ended.reduce((sum, r) => sum + r.n, 0),
+    effects: syncEffects(ended.map((r) => r.occurrenceId)),
+    failures,
+  };
 }
 
 /**

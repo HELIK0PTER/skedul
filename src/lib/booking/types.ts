@@ -39,11 +39,12 @@ export type EngineResult<T extends object = object> = EngineOk<T> | EngineFail;
 /** A pro acting from the back-office. */
 export type ProActor = { professionalId: string; userId: string };
 
+/** A Google re-sync, the only effect the nightly job runs (P6 A16; it sends no e-mail, OUT:118). */
+export type SyncEffect = Extract<Effect, { type: "google.sync_occurrence" }>;
+
 /** One google.sync_occurrence effect per distinct occurrence id, in first-seen order. */
-export function syncEffects(occurrenceIds: readonly string[]): Effect[] {
-  return [...new Set(occurrenceIds)].map(
-    (occurrenceId): Effect => ({ type: "google.sync_occurrence", occurrenceId }),
-  );
+export function syncEffects(occurrenceIds: readonly string[]): SyncEffect[] {
+  return [...new Set(occurrenceIds)].map((occurrenceId): SyncEffect => ({ type: "google.sync_occurrence", occurrenceId }));
 }
 
 /** `{ ok: false, code }`, with `message` only when one is given. */

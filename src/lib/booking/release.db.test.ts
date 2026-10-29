@@ -187,6 +187,31 @@ dbTest("sweepHolds cancels an RDV whose hold elapsed and leaves live holds alone
   assert.equal((await getOccurrence(h.db, live.occ.id)).seatsTaken, 1);
 });
 
+// P6 A16: the sweep is one batch per occurrence, so one drifted séance no longer blocks the night's other releases.
+dbTest("sweepHolds: an occurrence whose release fails is reported, the others are still swept, each with its Google sync", async (h) => {
+  const now = new Date();
+  const drifted = await hold(h, now);
+  const fine = await hold(h, now);
+  // A drifted séance: its count already lost the hold's seat, so releasing that seat again breaks occurrence_seats_chk.
+  await h.db.update(occurrence).set({ seatsTaken: 0 }).where(eq(occurrence.id, drifted.occ.id));
+  try {
+    const swept = await sweepHolds(h.db, addMinutes(now, 46));
+    const ours = swept.failures.filter((f) => f.startsWith(`occurrence ${drifted.occ.id}: `));
+    assert.equal(ours.length, 1, JSON.stringify(swept.failures));
+    assert.ok(!swept.failures.some((f) => f.includes(fine.occ.id)), JSON.stringify(swept.failures));
+    assert.equal((await getBooking(h.db, drifted.bookingId)).status, "pending", "the failed batch wrote nothing");
+    const released = await getBooking(h.db, fine.bookingId);
+    assert.equal(released.status, "expired");
+    assert.equal(released.endedBy, "system");
+    assert.equal((await getOccurrence(h.db, fine.occ.id)).seatsTaken, 0);
+    assert.ok(swept.expiredBookings >= 1);
+    const synced = swept.effects.map((e) => e.occurrenceId);
+    assert.ok(synced.includes(fine.occ.id), JSON.stringify(swept.effects));
+    assert.ok(!synced.includes(drifted.occ.id), "nothing changed on the drifted séance");
+  } finally {
+    await h.db.update(occurrence).set({ seatsTaken: 1 }).where(eq(occurrence.id, drifted.occ.id));
+  }
+});
 dbTest("expireStalePurchases: grace period, processing purchases kept", async (h) => {
   const typeId = await makeType(h.db, h.pro);
   const offerId = await makeOffer(h.db, h.pro, typeId);

@@ -1,8 +1,11 @@
+import { after } from "next/server";
+
 import { runNightly, type NightlyReport } from "@/lib/booking/nightly";
 import { cronAuthorized } from "@/lib/cron-auth";
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { logSafeMessage } from "@/lib/log-safe";
+import { runEffects } from "@/server/notify";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -17,7 +20,8 @@ const NO_STORE = { "Cache-Control": "no-store" } as const;
  * steps and answers counts only, never an id or an address. The `errors` of
  * the report are authoritative: 200 when there is none, 500 otherwise, and
  * each is logged once through logSafeMessage. The job sends no e-mail
- * (OUT:118), so the route runs no effect.
+ * (OUT:118): the only effects it runs are the sweep's Google re-syncs
+ * (`report.syncs`, typed SyncEffect[], P6 A16), after the answer.
  */
 export async function GET(request: Request): Promise<Response> {
   const secret = env.CRON_CONFIGURED ? env.CRON_SECRET : undefined;
@@ -33,6 +37,7 @@ export async function GET(request: Request): Promise<Response> {
     return Response.json({ ok: false, errors: 1 }, { status: 500, headers: NO_STORE });
   }
   for (const error of report.errors) console.error(`[cron] ${logSafeMessage({ message: error })}`);
+  if (report.syncs.length > 0) after(() => runEffects(report.syncs, "none"));
 
   const ok = report.errors.length === 0;
   return Response.json(
