@@ -156,6 +156,18 @@ test("the buy form lists the offers covering the chosen start only, with the tes
   assert.match(SOURCE, /<p className="text-sm text-zinc-600">\{COPY\.RDV_NO_OFFER\}<\/p>/);
 });
 
+test("a paid type with no offer on sale says it is for ticket holders and points to the prompt, not « Aucune offre ne couvre cette date » (R3)", () => {
+  assert.match(
+    SOURCE,
+    /\{mode\.kind === "tickets_only" \? \(\s*<p className="text-sm text-zinc-600">\{rdvTicketsOnlyLine\(hint\)\}<\/p>\s*\) : mode\.kind === "buy" && offer === null \? \(\s*<p className="text-sm text-zinc-600">\{COPY\.RDV_NO_OFFER\}<\/p>/,
+    "the holders-only line first, the no-covering-offer line only when offers are on sale",
+  );
+  assert.equal(inCodeCount(/rdvTicketsOnlyLine\(/g), 1);
+  assert.match(SOURCE, /if \(mode\.kind === "tickets_only"\) return;/, "no submit without a form");
+  const prompt = SOURCE.indexOf('{hint === "prompt" && <HaveTicketsPrompt p={p} />}');
+  assert.ok(prompt !== -1 && prompt < SOURCE.indexOf("rdvTicketsOnlyLine(hint)"), "the prompt it points to sits above, in the same card");
+});
+
 test("every sentence the block shows is RDV wording: no séance, inscription or place, and no dash (P5 copy rule)", () => {
   const SEANCE_WORDS = /[Ss][ée]ance|[Ii]nscri|(^|[^a-zà-ÿ])place([^a-zà-ÿ]|$)/;
   const dash = new RegExp("[" + String.fromCharCode(0x2013, 0x2014) + "]");

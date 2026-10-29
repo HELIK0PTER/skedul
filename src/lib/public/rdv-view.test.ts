@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { COPY } from "@/lib/public/messages";
 import { formatMoney } from "@/lib/utils";
 
 import {
@@ -27,6 +28,7 @@ import {
   rdvSignInHint,
   rdvSlotCountLabel,
   rdvSlotMode,
+  rdvTicketsOnlyLine,
   rdvTimesLabel,
   rdvWeekHref,
   rdvWeekKey,
@@ -219,6 +221,32 @@ test("rdvSlotMode: otherwise a paid type buys, with the offers covering this sta
   assert.deepEqual(rdvSlotMode({ isFree: false, startsAtIso: late, ownerTickets: null, offers: [OFFERS[0]] }), { kind: "buy", offers: [] });
 });
 
+test("rdvSlotMode: a paid type with no offer on sale at all is for ticket holders only, never « no offer covers this date » (R3)", () => {
+  for (const ownerTickets of [null, [], [{ expiresAt: START }]]) {
+    assert.deepEqual(rdvSlotMode({ isFree: false, startsAtIso: START, ownerTickets, offers: [] }), { kind: "tickets_only" }, JSON.stringify(ownerTickets));
+  }
+  assert.deepEqual(
+    rdvSlotMode({ isFree: false, startsAtIso: START, ownerTickets: [{ expiresAt: null }], offers: [] }),
+    { kind: "held", leftAfter: 0 },
+    "a ticket usable at the start still books it",
+  );
+  // Offers on sale that do not cover the start keep the buy mode with no offer (COPY.RDV_NO_OFFER).
+  const late = "2026-12-03T09:00:00.000Z";
+  assert.deepEqual(rdvSlotMode({ isFree: false, startsAtIso: late, ownerTickets: null, offers: [OFFERS[0]] }), { kind: "buy", offers: [] });
+});
+
+test("rdvTicketsOnlyLine: the type is booked with a ticket already held; an anonymous visitor is pointed to « J'ai déjà des tickets » (R3)", () => {
+  assert.equal(COPY.RDV_TICKETS_ONLY, "Aucune offre n'est en vente en ligne : ce rendez-vous se réserve avec un ticket que vous avez déjà.");
+  assert.equal(
+    rdvTicketsOnlyLine("prompt"),
+    "Aucune offre n'est en vente en ligne : ce rendez-vous se réserve avec un ticket que vous avez déjà. Pour l'utiliser, cliquez sur « J'ai déjà des tickets ».",
+  );
+  assert.ok(rdvTicketsOnlyLine("prompt").endsWith(`« ${COPY.HAVE_TICKETS} ».`), "the label of the prompt's own button");
+  assert.equal(rdvTicketsOnlyLine("confirm"), COPY.RDV_TICKETS_ONLY, "an unverified visitor already reads « Confirmez votre email pour utiliser vos tickets. »");
+  assert.equal(rdvTicketsOnlyLine(null), COPY.RDV_TICKETS_ONLY, "a signed-in visitor has no prompt to point to");
+  assert.notEqual(COPY.RDV_TICKETS_ONLY, COPY.RDV_NO_OFFER);
+});
+
 test("rdvSignInHint: an anonymous visitor of a paid type is offered the code sign-in, an unverified one is asked to confirm", () => {
   assert.equal(rdvSignInHint({ isFree: false, state: "anonymous" }), "prompt");
   assert.equal(rdvSignInHint({ isFree: false, state: "unverified" }), "confirm");
@@ -328,6 +356,8 @@ test("no RDV text names a séance, an inscription or a place, and none holds a d
     rdvBookedLine("x", true),
     rdvDurationLabel(90),
     rdvPriceLabel({ isFree: false, fromPriceCents: 100 }, "eur") ?? "",
+    rdvTicketsOnlyLine("prompt"),
+    rdvTicketsOnlyLine(null),
   ];
   for (const text of texts) {
     assert.doesNotMatch(text, SEANCE_WORDS, text);

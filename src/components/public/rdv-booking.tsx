@@ -37,6 +37,7 @@ import {
   rdvSignInHint,
   rdvSlotCountLabel,
   rdvSlotMode,
+  rdvTicketsOnlyLine,
   rdvTimesLabel,
   type RdvDayVM,
   type RdvSlotVM,
@@ -259,6 +260,7 @@ export function RdvBooking(p: RdvBookingProps) {
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (pending || slot === null || mode === null) return;
+    if (mode.kind === "tickets_only") return;
     const chosenOffer = mode.kind === "buy" ? offer : null;
     if (mode.kind === "buy" && chosenOffer === null) return;
     clearOutcome();
@@ -395,7 +397,9 @@ export function RdvBooking(p: RdvBookingProps) {
                   <span className="font-semibold">{`${RDV_CHOSEN_LABEL} : `}</span>
                   {slot.whenLabel}
                 </p>
-                {mode.kind === "buy" && offer === null ? (
+                {mode.kind === "tickets_only" ? (
+                  <p className="text-sm text-zinc-600">{rdvTicketsOnlyLine(hint)}</p>
+                ) : mode.kind === "buy" && offer === null ? (
                   <p className="text-sm text-zinc-600">{COPY.RDV_NO_OFFER}</p>
                 ) : (
                   <form ref={root} method="post" onSubmit={submit} noValidate className="space-y-4">

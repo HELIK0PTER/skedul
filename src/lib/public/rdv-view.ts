@@ -172,13 +172,18 @@ export function offersCoveringAt<T extends { coversUntil: string | null }>(offer
   return offers.filter((o) => o.coversUntil === null || Date.parse(o.coversUntil) > start);
 }
 
-export type RdvSlotMode<T> = { kind: "free" } | { kind: "held"; leftAfter: number } | { kind: "buy"; offers: T[] };
+export type RdvSlotMode<T> =
+  | { kind: "free" }
+  | { kind: "held"; leftAfter: number }
+  | { kind: "tickets_only" }
+  | { kind: "buy"; offers: T[] };
 
 /**
  * What the form of a chosen slot is (§ 3.6, the séance page's TicketsBooking rule): a free type books for free; a paid
- * type spends the Owner's ticket when one is usable at this start (and shows nothing else); otherwise it buys, with the
- * offers covering this start only (none: the page says COPY.RDV_NO_OFFER). `ownerTickets` is null for anyone but the
- * Owner: a typed address, a guest cookie or an impersonating admin never spends.
+ * type spends the Owner's ticket when one is usable at this start (and shows nothing else); with no offer on sale at all
+ * it is for ticket holders only (`tickets_only`, rdvTicketsOnlyLine: R3); otherwise it buys, with the offers covering
+ * this start only (none: the page says COPY.RDV_NO_OFFER). `offers` are the type's offers on sale. `ownerTickets` is
+ * null for anyone but the Owner: a typed address, a guest cookie or an impersonating admin never spends.
  */
 export function rdvSlotMode<T extends { coversUntil: string | null }>(a: {
   isFree: boolean;
@@ -191,7 +196,16 @@ export function rdvSlotMode<T extends { coversUntil: string | null }>(a: {
     const spend = canSpendAt(a.ownerTickets, a.startsAtIso);
     if (spend.canSpend) return { kind: "held", leftAfter: spend.leftAfter };
   }
+  if (a.offers.length === 0) return { kind: "tickets_only" };
   return { kind: "buy", offers: offersCoveringAt(a.offers, a.startsAtIso) };
+}
+
+/**
+ * The line of a paid type with no offer on sale (R3): it is booked with a ticket already held. An anonymous visitor, the
+ * one the card shows « J'ai déjà des tickets » to (`hint` "prompt"), is pointed to it; the others have no such prompt.
+ */
+export function rdvTicketsOnlyLine(hint: "prompt" | "confirm" | null): string {
+  return hint === "prompt" ? `${COPY.RDV_TICKETS_ONLY} Pour l'utiliser, cliquez sur « ${COPY.HAVE_TICKETS} ».` : COPY.RDV_TICKETS_ONLY;
 }
 
 /**
