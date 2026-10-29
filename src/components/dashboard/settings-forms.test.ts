@@ -50,3 +50,22 @@ test("the address and branding forms cannot throw into React and leave the refre
   // The upload answer is read without throwing: a body that is not JSON is an upload failure, not an unhandled rejection.
   assert.doesNotMatch(brand, /\(await res\.json\(\)\) as/);
 });
+
+// P6 A40: the shared regions, always mounted so a screen reader hears the text when it comes, and no check-mark glyph.
+test("the address and branding forms say « saved » through SavedStatus and fail through an always-mounted FormError (P6 A40)", () => {
+  const slug = source("src/components/dashboard/slug-editor.tsx");
+  const brand = source("src/components/dashboard/branding-form.tsx");
+  for (const [file, text] of [["slug-editor", slug], ["branding-form", brand]] as const) {
+    assert.doesNotMatch(text, /✓/, `${file}: no check-mark glyph`);
+    assert.match(text, /import \{ SavedStatus \} from "@\/components\/dashboard\/saved-status";/, file);
+    assert.match(text, /import \{ FormError \} from "@\/components\/dashboard\/form-error";/, file);
+    assert.match(text, /<FormError alwaysMounted message=\{error\} \/>/, `${file}: its failure line stays mounted`);
+    assert.doesNotMatch(text, /role="(?:status|alert)"/, `${file}: the shared components carry the live regions`);
+    assert.equal(text.split("<SavedStatus").length - 1, 1, `${file}: one status region`);
+  }
+  // The address editor swaps its row for a form: the status sits after that switch, in the one returned tree, so it is
+  // the same region in both modes and is never inserted together with its text.
+  assert.match(slug, /\)\}\s*<SavedStatus saved=\{saved && !editing\} message="Adresse mise à jour" \/>\s*<\/div>\s*\);\s*\}\s*$/);
+  assert.equal(slug.split("\n  return (").length - 1, 1, "one return");
+  assert.match(brand, /<SavedStatus saved=\{saved && !dirty\} \/>/);
+});

@@ -10,6 +10,8 @@ import { callOrFail } from "@/lib/pro-messages";
 import { shrinkImage } from "@/lib/shrink-image";
 import { MAX_SOURCE_IMAGE_BYTES } from "@/lib/support";
 import { THEME_PRESETS, brandThemeVars, presetColor } from "@/lib/color";
+import { FormError } from "@/components/dashboard/form-error";
+import { SavedStatus } from "@/components/dashboard/saved-status";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { cn, initials } from "@/lib/utils";
@@ -565,7 +567,7 @@ export function BrandingForm({
         </div>
       </div>
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      <FormError alwaysMounted message={error} />
       <div className="flex items-center gap-3 pt-1">
         <Button type="button" onClick={save} disabled={pending || !dirty}>
           {pending && <Loader2 className="size-4 animate-spin" />} Enregistrer
@@ -578,9 +580,7 @@ export function BrandingForm({
         >
           Annuler
         </Button>
-        <span role="status" className="text-sm text-green-700">
-          {saved && !dirty ? "Enregistré ✓" : null}
-        </span>
+        <SavedStatus saved={saved && !dirty} />
       </div>
     </div>
   );
