@@ -42,13 +42,7 @@ function claimBatch(c: BatchCtx, pro: TestPro, args: { occurrenceId: string; cus
       createdAt: c.now,
       updatedAt: c.now,
     }),
-    spendTicket(c, {
-      bookingId: args.bookingId,
-      customerId: args.customerId,
-      occurrenceId: args.occurrenceId,
-      ticketId: args.ticketId,
-      by: { actor: "client", userId: null },
-    }),
+    spendTicket(c, { bookingId: args.bookingId, ticketId: args.ticketId, by: { actor: "client", userId: null } }),
     assertSpent(c, args.bookingId),
   ];
 }
@@ -167,6 +161,61 @@ dbTest("a forced ticket is spent only if eligible; no eligible ticket raises no_
     claimBatch({ db, aid, now }, pro, { occurrenceId: seance, customerId: nobody, bookingId: nanoid() }),
   );
   assert.deepEqual(none, { ok: false, code: "no_ticket" });
+});
+
+dbTest("spendTicket reads the customer and the séance off the booking: a caller's other ids never cross-link a ticket (P6 A21)", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await rowType(db, pro);
+  const eventId = await rowEvent(db, pro);
+  await rowLink(db, pro, eventId, typeId);
+  const seance = await rowSeance(db, pro, eventId);
+  const freeEvent = await rowEvent(db, pro, { bookingMode: "free" });
+  const freeSeance = await rowSeance(db, pro, freeEvent);
+  const holder = await rowCustomer(db, pro);
+  const other = await rowCustomer(db, pro);
+  const held = await rowTicket(db, pro, { customerId: holder, ticketTypeId: typeId });
+
+  /** A booking of `bookedFor` on `bookedOn`, then a spend that names other ids (what a caller's mistake would pass). */
+  const crossed = (bookingId: string, bookedFor: string, bookedOn: string, named: { customerId: string; occurrenceId: string }) =>
+    tryAtomic(db, async () => (aid) => {
+      const c: BatchCtx = { db, aid, now };
+      return [
+        lockRows(c.db, "occurrence", [bookedOn]),
+        SEAT(c, bookedOn, 1),
+        c.db.insert(booking).values({
+          id: bookingId,
+          professionalId: pro.proId,
+          occurrenceId: bookedOn,
+          customerId: bookedFor,
+          status: "confirmed",
+          coverage: "ticket",
+          createdBy: "client",
+          confirmedAt: now,
+          createdAt: now,
+          updatedAt: now,
+        }),
+        spendTicket(c, { bookingId, ...named, by: { actor: "client", userId: null } } as Parameters<typeof spendTicket>[1]),
+        assertSpent(c, bookingId),
+      ];
+    });
+
+  // The holder's ticket on another customer's booking: refused, nothing written.
+  assert.deepEqual(await crossed(nanoid(), other, seance, { customerId: holder, occurrenceId: seance }), { ok: false, code: "no_ticket" });
+  // The holder's own booking on a séance that takes no ticket, the spend naming an eligible séance: refused too.
+  assert.deepEqual(await crossed(nanoid(), holder, freeSeance, { customerId: holder, occurrenceId: seance }), { ok: false, code: "no_ticket" });
+  const [still] = await db.select().from(ticket).where(eq(ticket.id, held));
+  assert.equal(still.status, "available");
+  assert.equal(still.bookingId, null);
+  assert.equal(await seatsOf(db, seance), 0);
+  assert.equal(await seatsOf(db, freeSeance), 0);
+
+  // The holder's own booking on the séance: the ticket is spent, on that booking.
+  const bookingId = nanoid();
+  const spent = await crossed(bookingId, holder, seance, { customerId: other, occurrenceId: freeSeance });
+  assert.equal(spent.ok, true);
+  const [booked] = await db.select().from(ticket).where(eq(ticket.id, held));
+  assert.equal(booked.bookingId, bookingId);
+  assert.equal(booked.customerId, holder);
 });
 
 dbTest("assertHoldQuota counts live holds only; expireElapsedHolds marks them with the action id", async ({ db, pro }) => {

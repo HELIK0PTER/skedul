@@ -633,12 +633,7 @@ export async function bookWithHeldTicket(
       ];
       planned.spendAt = queries.length;
       queries.push(
-        spendTicket(c, {
-          bookingId,
-          customerId,
-          occurrenceId,
-          by: { actor: "client", userId: input.actorUserId },
-        }),
+        spendTicket(c, { bookingId, by: { actor: "client", userId: input.actorUserId } }),
         assertSpent(c, bookingId),
         ...insertAnswers(c, { professionalId, bookingId, rows: answerRows }),
       );
@@ -801,13 +796,7 @@ export async function registerPro(
       if (coverage === "ticket") {
         planned.spendAt = queries.length;
         queries.push(
-          spendTicket(c, {
-            bookingId,
-            customerId,
-            occurrenceId,
-            ticketId: forced,
-            by: { actor: "pro", userId: input.actorUserId },
-          }),
+          spendTicket(c, { bookingId, ticketId: forced, by: { actor: "pro", userId: input.actorUserId } }),
           assertSpent(c, bookingId),
         );
       }
@@ -1130,12 +1119,7 @@ export async function bookRdv(
         if (input.mode === "held_ticket") {
           queries.push(
             insertBooking(c, { ...base, status: "confirmed", coverage: "ticket" }),
-            spendTicket(c, {
-              bookingId,
-              customerId,
-              occurrenceId,
-              by: { actor: "client", userId: input.actorUserId },
-            }),
+            spendTicket(c, { bookingId, by: { actor: "client", userId: input.actorUserId } }),
             assertSpent(c, bookingId),
           );
         } else if (input.mode === "free") {

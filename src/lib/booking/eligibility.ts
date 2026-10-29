@@ -22,11 +22,14 @@ export const ELIGIBLE: SQL = sql`(
   )
 )`;
 
+/** An id given as a value, or as a scalar subquery (the spend reads its ids off the booking). */
+type IdRef = string | SQL;
+
 /**
  * The FROM clause ELIGIBLE expects, for one customer and one occurrence. Every joined row is the occurrence's pro's
  * (the domain foreign keys are single-column): a ticket, type or event of another pro never makes a ticket eligible.
  */
-function eligibleFrom(customerId: string, occurrenceId: string): SQL {
+function eligibleFrom(customerId: IdRef, occurrenceId: IdRef): SQL {
   return sql`from ticket t
     join occurrence o on o.id = ${occurrenceId}
     join ticket_type tt on tt.id = t.ticket_type_id and tt.professional_id = o.professional_id
@@ -41,7 +44,7 @@ const CONSUMPTION_ORDER = sql`order by t.expires_at asc nulls last, t.created_at
  * then oldest), or the forced `ticketId` if it is eligible. FOR NO KEY UPDATE OF t
  * SKIP LOCKED: two concurrent spends never pick the same row; NULL when none.
  */
-export function pickTicket(args: { customerId: string; occurrenceId: string; ticketId?: string | null }): SQL {
+export function pickTicket(args: { customerId: IdRef; occurrenceId: IdRef; ticketId?: string | null }): SQL {
   const forced = args.ticketId ? sql` and t.id = ${args.ticketId}` : sql``;
   return sql`(select t.id ${eligibleFrom(args.customerId, args.occurrenceId)}${forced}
     ${CONSUMPTION_ORDER}
@@ -52,19 +55,24 @@ export function pickTicket(args: { customerId: string; occurrenceId: string; tic
 /**
  * One statement: book the picked ticket on `bookingId` and write its `spend`
  * movement (marked with the action id). The booking INSERT must come before
- * it in the batch (FK); follow with assertSpent. The statement ends with
+ * it in the batch (FK); follow with assertSpent. The customer and the séance
+ * are read off that booking row (P6 A21), never taken from the caller, so a
+ * ticket can only be booked on a booking of its own holder, for the séance
+ * it was found eligible on. The statement ends with
  * RETURNING ticket_id: the id of the ticket it booked is in the batch result
  * (`results[i].rows[0].ticket_id`), so no read after the commit is needed.
  */
-export function spendTicket(
-  c: BatchCtx,
-  args: { bookingId: string; customerId: string; occurrenceId: string; ticketId?: string | null; by: ActorRef },
-): Query {
+export function spendTicket(c: BatchCtx, args: { bookingId: string; ticketId?: string | null; by: ActorRef }): Query {
+  const picked = pickTicket({
+    customerId: sql`(select b.customer_id from booking b where b.id = ${args.bookingId})`,
+    occurrenceId: sql`(select b.occurrence_id from booking b where b.id = ${args.bookingId})`,
+    ticketId: args.ticketId,
+  });
   return c.db.execute(sql`
     with u as (
       update ticket set status = 'booked', booking_id = ${args.bookingId},
         status_changed_at = ${ts(c.now)}, updated_at = ${ts(c.now)}
-      where id = ${pickTicket(args)} and status = 'available'
+      where id = ${picked} and status = 'available'
       returning id, professional_id, customer_id, ticket_type_id, purchase_id
     )
     insert into ticket_movement (professional_id, customer_id, ticket_id, action_id, kind, from_status,

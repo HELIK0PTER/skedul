@@ -326,7 +326,7 @@ dbTest("spendTicket returns the id of the ticket it booked (INSERT … RETURNING
         createdAt: now,
         updatedAt: now,
       }),
-      spendTicket(c, { bookingId, customerId, occurrenceId: occ.id, by: { actor: "pro", userId: h.pro.userId } }),
+      spendTicket(c, { bookingId, by: { actor: "pro", userId: h.pro.userId } }),
       assertSpent(c, bookingId),
     ];
   });
