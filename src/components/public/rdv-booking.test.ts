@@ -97,6 +97,22 @@ test("the status and alert regions are always mounted, outside the slot form, so
   assert.match(SOURCE, /<form ref=\{root\} method="post" onSubmit=\{submit\} noValidate/);
 });
 
+test("the block says an empty week itself, so a booking or a refusal that takes the last slot keeps its status, alert and resume link (R2, G4c)", () => {
+  assert.match(SOURCE, /\n {2}\/\*\* The next week's address while it is within the horizon, else null[^\n]*\*\/\r?\n {2}nextWeekHref: string \| null;\r?\n/);
+  assert.match(SOURCE, /const emptyWeek = withSlots\.length === 0;/, "an empty week is decided by the block, from the days it was given");
+  const empty = SOURCE.indexOf("{emptyWeek ? (");
+  const sentence = SOURCE.indexOf("{COPY.RDV_EMPTY_WEEK}");
+  const slotsEnd = SOURCE.lastIndexOf("</>");
+  const formEnd = SOURCE.lastIndexOf("</form>");
+  const status = SOURCE.indexOf('<div role="status">');
+  const alert = SOURCE.indexOf("<FormError alwaysMounted message={error} ref={errorBox} tabIndex={-1} />");
+  const resume = SOURCE.indexOf("{resumeHref !== null && (");
+  assert.ok(empty !== -1 && sentence > empty, "the empty-week sentence is the first branch of the switch");
+  assert.ok(formEnd > sentence && slotsEnd > formEnd, "the week, its chips and the slot form are the other branch");
+  assert.ok(status > slotsEnd && alert > status && resume > alert, "the regions come after the switch: they are mounted in both branches");
+  assert.match(SOURCE, /\{p\.nextWeekHref && \(\s*<p className="text-sm">\s*<Link href=\{p\.nextWeekHref\} scroll=\{false\} className=\{INLINE_LINK_CLASS\}>\s*\{COPY\.RDV_NEXT_WEEK\}/, "the next week while it is within the horizon");
+});
+
 test("the day and time chips are toggles named by their full date and time; below 640 px the week is a list per day (R52)", () => {
   assert.match(SOURCE, /aria-pressed=\{pressed\}\s+aria-label=\{slot\.ariaLabel\}/, "a time chip");
   assert.match(SOURCE, /aria-pressed=\{pressed\}\s+aria-label=\{rdvDayChipLabel\(day\)\}/, "a day chip");

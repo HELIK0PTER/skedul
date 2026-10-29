@@ -16,7 +16,6 @@ import { WalletPanel } from "@/components/public/wallet-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { INLINE_LINK_CLASS } from "@/components/ui/link-class";
 import { formatWhenShort } from "@/lib/back-office/format";
 import { formatTime } from "@/lib/datetime";
 import { env } from "@/lib/env";
@@ -165,7 +164,6 @@ export default async function RdvPage({ params, searchParams }: Props) {
     }));
 
   const days = rdvDaysVM(week.days, tz);
-  const hasSlots = days.some((day) => day.slots.length > 0);
   const nav = rdvWeekNav({ slug: pro.slug, ticketTypeId: type.ticketTypeId, weekKey, now, tz, window: type.window });
   const closed = type.neverBookable || week.neverBookable;
   const price = rdvPriceLabel({ isFree: type.isFree, fromPriceCents: lowestPriceCents(type.offers) }, pro.currency);
@@ -237,51 +235,40 @@ export default async function RdvPage({ params, searchParams }: Props) {
             </p>
           </div>
           <WeekNav nav={nav} />
-          {hasSlots ? (
-            <RdvBooking
-              key={`${nav.weekKey}:${visitor.state}:${refView?.purchaseId ?? ""}`}
-              slug={pro.slug}
-              ticketTypeId={type.ticketTypeId}
-              businessName={pro.businessName}
-              currency={pro.currency}
-              isFree={type.isFree}
-              days={days}
-              questions={type.questions.map((q) => ({
-                id: q.id,
-                label: q.label,
-                type: q.type,
-                options: q.options,
-                required: q.required,
-              }))}
-              offers={type.offers.map((o) => ({
-                offerId: o.offerId,
-                label: o.label,
-                priceCents: o.priceCents,
-                validityText: o.validityText,
-                coversUntil: o.coversUntil,
-              }))}
-              ownerTickets={ownerTickets}
-              visitor={{
-                state: visitor.state,
-                email: visitor.state === "verified" ? visitor.email : null,
-                name: visitor.state === "verified" ? visitor.name : null,
-              }}
-              googleEnabled={env.GOOGLE_CALENDAR_ENABLED}
-              returnTo={`/${pro.slug}/rdv/${type.ticketTypeId}`}
-              testMode={testMode}
-            />
-          ) : (
-            <Card className="space-y-2 px-5 py-6 text-center">
-              <p className="text-sm font-medium">{COPY.RDV_EMPTY_WEEK}</p>
-              {nav.nextHref && (
-                <p className="text-sm">
-                  <Link href={nav.nextHref} scroll={false} className={INLINE_LINK_CLASS}>
-                    {COPY.RDV_NEXT_WEEK}
-                  </Link>
-                </p>
-              )}
-            </Card>
-          )}
+          {/* Mounted for every week, an empty one included: it says the empty week itself, so a booking or a refusal whose refetch takes the last slot keeps its status, alert and resume link (R2). */}
+          <RdvBooking
+            key={`${nav.weekKey}:${visitor.state}:${refView?.purchaseId ?? ""}`}
+            slug={pro.slug}
+            ticketTypeId={type.ticketTypeId}
+            businessName={pro.businessName}
+            currency={pro.currency}
+            isFree={type.isFree}
+            days={days}
+            nextWeekHref={nav.nextHref}
+            questions={type.questions.map((q) => ({
+              id: q.id,
+              label: q.label,
+              type: q.type,
+              options: q.options,
+              required: q.required,
+            }))}
+            offers={type.offers.map((o) => ({
+              offerId: o.offerId,
+              label: o.label,
+              priceCents: o.priceCents,
+              validityText: o.validityText,
+              coversUntil: o.coversUntil,
+            }))}
+            ownerTickets={ownerTickets}
+            visitor={{
+              state: visitor.state,
+              email: visitor.state === "verified" ? visitor.email : null,
+              name: visitor.state === "verified" ? visitor.name : null,
+            }}
+            googleEnabled={env.GOOGLE_CALENDAR_ENABLED}
+            returnTo={`/${pro.slug}/rdv/${type.ticketTypeId}`}
+            testMode={testMode}
+          />
         </section>
       )}
     </PublicShell>

@@ -64,6 +64,8 @@ export type RdvBookingProps = {
   isFree: boolean;
   /** The seven days of the shown week, every label and every ISO start rendered by the server in the pro's zone. */
   days: RdvDayVM[];
+  /** The next week's address while it is within the horizon, else null: an empty week links to it (R51). */
+  nextWeekHref: string | null;
   questions: QuestionFieldDef[];
   offers: RdvOfferProp[];
   /** The Owner's tickets of THIS type (their ISO expiry), null for anyone else and on a free type. */
@@ -155,7 +157,8 @@ function TimeChips({
  * 640 px a row of day toggles and the times of the chosen day, below it a list per day), then the form of the chosen
  * slot in the mode § 3.6 gives it: free, held ticket (the Owner only) or buy with the offers covering that start. The
  * start it posts is the server's ISO string, never a rebuilt wall time. The status and alert regions live here, outside
- * the slot form, so a success or a refusal stays said when the revalidation or the refetch takes the slot away.
+ * the slot form, so a success or a refusal stays said when the revalidation or the refetch takes the slot away; a week
+ * left with no slot is said by this block too, so it stays mounted (R2).
  */
 export function RdvBooking(p: RdvBookingProps) {
   const { visitor } = p;
@@ -211,6 +214,9 @@ export function RdvBooking(p: RdvBookingProps) {
   }, [selectedIso]);
 
   const withSlots = p.days.filter((day) => day.slots.length > 0);
+  // A week with no slot is said here, not by the page: a booking or a refusal whose refetch takes the last slot keeps
+  // this block, its status and alert regions, its focus target and its resume link (R2).
+  const emptyWeek = withSlots.length === 0;
   const slotDay = selectedIso === null ? null : (p.days.find((day) => day.slots.some((s) => s.iso === selectedIso)) ?? null);
   const slot = slotDay?.slots.find((s) => s.iso === selectedIso) ?? null;
   const shownDay =
@@ -320,118 +326,133 @@ export function RdvBooking(p: RdvBookingProps) {
   return (
     <Card>
       <CardContent className="space-y-5 p-4 sm:p-6">
-        {hint === "prompt" && <HaveTicketsPrompt p={p} />}
-        {hint === "confirm" && <p className="text-sm text-zinc-600">{COPY.CONFIRM_EMAIL_TO_SPEND}</p>}
-
-        {/* From 640 px: the seven day toggles, then the times of the chosen day. */}
-        <div className="hidden space-y-4 sm:block">
-          <div role="group" aria-label={RDV_DAYS_LABEL} className="grid grid-cols-7 gap-2">
-            {p.days.map((day) => {
-              const pressed = shownDay?.key === day.key;
-              const empty = day.slots.length === 0;
-              return (
-                <button
-                  key={day.key}
-                  type="button"
-                  aria-pressed={pressed}
-                  aria-label={rdvDayChipLabel(day)}
-                  disabled={empty}
-                  onClick={() => chooseDay(day.key)}
-                  className={cn(
-                    "flex min-w-0 cursor-pointer flex-col items-center gap-0.5 rounded-xl border px-1 py-2 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50",
-                    pressed
-                      ? "border-primary bg-primary-muted text-accent-foreground"
-                      : "border-border bg-card text-foreground hover:border-ring hover:bg-accent",
-                  )}
-                >
-                  <span className="text-sm font-semibold first-letter:uppercase">{day.shortLabel}</span>
-                  <span className={cn("text-xs", pressed ? "text-accent-foreground" : "text-zinc-600")}>{rdvSlotCountLabel(day.slots.length)}</span>
-                </button>
-              );
-            })}
-          </div>
-          {shownDay && (
-            <div className="space-y-2">
-              <p className="text-sm font-medium text-zinc-700 first-letter:uppercase">{shownDay.label}</p>
-              <TimeChips day={shownDay} selectedIso={selectedIso} onSelect={chooseSlot} />
-            </div>
-          )}
-        </div>
-
-        {/* Below 640 px: a list per day, the days with a slot only (P4 Decision 46). */}
-        <div className="space-y-5 sm:hidden">
-          {withSlots.map((day) => (
-            <section key={day.key} aria-labelledby={`${uid}-day-${day.key}`} className="space-y-2">
-              <h4 id={`${uid}-day-${day.key}`} className="text-sm font-semibold text-zinc-700 first-letter:uppercase">
-                {day.label}
-              </h4>
-              <TimeChips day={day} selectedIso={selectedIso} onSelect={chooseSlot} />
-            </section>
-          ))}
-        </div>
-
-        {slot !== null && mode !== null && (
-          <div ref={panel} className="scroll-mt-4 space-y-4 rounded-2xl border border-border bg-background p-4 sm:p-5">
-            <p className="text-sm wrap-anywhere">
-              <span className="font-semibold">{`${RDV_CHOSEN_LABEL} : `}</span>
-              {slot.whenLabel}
-            </p>
-            {mode.kind === "buy" && offer === null ? (
-              <p className="text-sm text-zinc-600">{COPY.RDV_NO_OFFER}</p>
-            ) : (
-              <form ref={root} method="post" onSubmit={submit} noValidate className="space-y-4">
-                {mode.kind === "buy" && offer !== null && (
-                  <section aria-labelledby={`${uid}-buy`} className="space-y-4">
-                    <h4 id={`${uid}-buy`} className="text-base font-semibold">
-                      {BUY_TITLE}
-                    </h4>
-                    {p.testMode && <TestPaymentsBanner mode={p.testMode} />}
-                    <fieldset className="space-y-2">
-                      <legend className="text-sm font-medium">{OFFERS_LEGEND}</legend>
-                      {covering.map((o) => {
-                        const id = `${uid}-offer-${o.offerId}`;
-                        return (
-                          <label
-                            key={o.offerId}
-                            htmlFor={id}
-                            className="flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-card p-3 text-sm has-checked:border-ring has-checked:bg-accent"
-                          >
-                            <input
-                              id={id}
-                              type="radio"
-                              name={`${uid}-offer`}
-                              value={o.offerId}
-                              checked={offer.offerId === o.offerId}
-                              onChange={() => setOfferId(o.offerId)}
-                              className="mt-0.5 size-4 shrink-0 accent-primary"
-                            />
-                            <span className="min-w-0 wrap-anywhere">{offerOptionLabel({ ...o, covers: true }, p.currency)}</span>
-                          </label>
-                        );
-                      })}
-                    </fieldset>
-                  </section>
-                )}
-                {mode.kind !== "held" && (
-                  <IdentityFields
-                    idPrefix={uid}
-                    value={effective}
-                    onChange={setIdentity}
-                    emailLocked={emailLocked}
-                    errors={errors}
-                    businessName={p.businessName}
-                    website={website}
-                    onWebsite={setWebsite}
-                  />
-                )}
-                <QuestionFields idPrefix={uid} questions={p.questions} value={values} onChange={setValues} errors={errors} />
-                <Button type="submit" disabled={pending} className="w-full sm:w-auto">
-                  {pending && <Loader2 className="animate-spin" aria-hidden />}
-                  {pending ? pendingLabel : submitLabel}
-                </Button>
-              </form>
+        {emptyWeek ? (
+          <div className="space-y-2 py-2 text-center">
+            <p className="text-sm font-medium">{COPY.RDV_EMPTY_WEEK}</p>
+            {p.nextWeekHref && (
+              <p className="text-sm">
+                <Link href={p.nextWeekHref} scroll={false} className={INLINE_LINK_CLASS}>
+                  {COPY.RDV_NEXT_WEEK}
+                </Link>
+              </p>
             )}
           </div>
+        ) : (
+          <>
+            {hint === "prompt" && <HaveTicketsPrompt p={p} />}
+            {hint === "confirm" && <p className="text-sm text-zinc-600">{COPY.CONFIRM_EMAIL_TO_SPEND}</p>}
+
+            {/* From 640 px: the seven day toggles, then the times of the chosen day. */}
+            <div className="hidden space-y-4 sm:block">
+              <div role="group" aria-label={RDV_DAYS_LABEL} className="grid grid-cols-7 gap-2">
+                {p.days.map((day) => {
+                  const pressed = shownDay?.key === day.key;
+                  const empty = day.slots.length === 0;
+                  return (
+                    <button
+                      key={day.key}
+                      type="button"
+                      aria-pressed={pressed}
+                      aria-label={rdvDayChipLabel(day)}
+                      disabled={empty}
+                      onClick={() => chooseDay(day.key)}
+                      className={cn(
+                        "flex min-w-0 cursor-pointer flex-col items-center gap-0.5 rounded-xl border px-1 py-2 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50",
+                        pressed
+                          ? "border-primary bg-primary-muted text-accent-foreground"
+                          : "border-border bg-card text-foreground hover:border-ring hover:bg-accent",
+                      )}
+                    >
+                      <span className="text-sm font-semibold first-letter:uppercase">{day.shortLabel}</span>
+                      <span className={cn("text-xs", pressed ? "text-accent-foreground" : "text-zinc-600")}>{rdvSlotCountLabel(day.slots.length)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {shownDay && (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-zinc-700 first-letter:uppercase">{shownDay.label}</p>
+                  <TimeChips day={shownDay} selectedIso={selectedIso} onSelect={chooseSlot} />
+                </div>
+              )}
+            </div>
+
+            {/* Below 640 px: a list per day, the days with a slot only (P4 Decision 46). */}
+            <div className="space-y-5 sm:hidden">
+              {withSlots.map((day) => (
+                <section key={day.key} aria-labelledby={`${uid}-day-${day.key}`} className="space-y-2">
+                  <h4 id={`${uid}-day-${day.key}`} className="text-sm font-semibold text-zinc-700 first-letter:uppercase">
+                    {day.label}
+                  </h4>
+                  <TimeChips day={day} selectedIso={selectedIso} onSelect={chooseSlot} />
+                </section>
+              ))}
+            </div>
+
+            {slot !== null && mode !== null && (
+              <div ref={panel} className="scroll-mt-4 space-y-4 rounded-2xl border border-border bg-background p-4 sm:p-5">
+                <p className="text-sm wrap-anywhere">
+                  <span className="font-semibold">{`${RDV_CHOSEN_LABEL} : `}</span>
+                  {slot.whenLabel}
+                </p>
+                {mode.kind === "buy" && offer === null ? (
+                  <p className="text-sm text-zinc-600">{COPY.RDV_NO_OFFER}</p>
+                ) : (
+                  <form ref={root} method="post" onSubmit={submit} noValidate className="space-y-4">
+                    {mode.kind === "buy" && offer !== null && (
+                      <section aria-labelledby={`${uid}-buy`} className="space-y-4">
+                        <h4 id={`${uid}-buy`} className="text-base font-semibold">
+                          {BUY_TITLE}
+                        </h4>
+                        {p.testMode && <TestPaymentsBanner mode={p.testMode} />}
+                        <fieldset className="space-y-2">
+                          <legend className="text-sm font-medium">{OFFERS_LEGEND}</legend>
+                          {covering.map((o) => {
+                            const id = `${uid}-offer-${o.offerId}`;
+                            return (
+                              <label
+                                key={o.offerId}
+                                htmlFor={id}
+                                className="flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-card p-3 text-sm has-checked:border-ring has-checked:bg-accent"
+                              >
+                                <input
+                                  id={id}
+                                  type="radio"
+                                  name={`${uid}-offer`}
+                                  value={o.offerId}
+                                  checked={offer.offerId === o.offerId}
+                                  onChange={() => setOfferId(o.offerId)}
+                                  className="mt-0.5 size-4 shrink-0 accent-primary"
+                                />
+                                <span className="min-w-0 wrap-anywhere">{offerOptionLabel({ ...o, covers: true }, p.currency)}</span>
+                              </label>
+                            );
+                          })}
+                        </fieldset>
+                      </section>
+                    )}
+                    {mode.kind !== "held" && (
+                      <IdentityFields
+                        idPrefix={uid}
+                        value={effective}
+                        onChange={setIdentity}
+                        emailLocked={emailLocked}
+                        errors={errors}
+                        businessName={p.businessName}
+                        website={website}
+                        onWebsite={setWebsite}
+                      />
+                    )}
+                    <QuestionFields idPrefix={uid} questions={p.questions} value={values} onChange={setValues} errors={errors} />
+                    <Button type="submit" disabled={pending} className="w-full sm:w-auto">
+                      {pending && <Loader2 className="animate-spin" aria-hidden />}
+                      {pending ? pendingLabel : submitLabel}
+                    </Button>
+                  </form>
+                )}
+              </div>
+            )}
+          </>
         )}
 
         {/* Always mounted: the text is inserted into a region that already exists (G4c), and outlives the slot it names. */}

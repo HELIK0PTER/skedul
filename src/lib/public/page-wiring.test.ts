@@ -702,13 +702,26 @@ test("the RDV booking block gets picked strings only: no row, no Date, no identi
   );
 });
 
-test("the RDV page says when nothing can be booked: never bookable, an empty week with its next-week link, and the time-zone line (O14, R51, O30)", () => {
+test("the RDV page says when nothing can be booked: never bookable, an empty week through the block with its next-week link, and the time-zone line (O14, R51, O30)", () => {
   const page = rdvPage();
   assert.match(page, /const closed = type\.neverBookable \|\| week\.neverBookable;/);
   assert.match(page, /\{COPY\.RDV_CLOSED\}/);
-  assert.match(page, /\{COPY\.RDV_EMPTY_WEEK\}/);
-  assert.match(page, /\{nav\.nextHref && \(/, "the next week only while it is within the horizon");
+  assert.match(openingTags(page, "RdvBooking")[0].text, /nextWeekHref=\{nav\.nextHref\}/, "the next week only while it is within the horizon");
   assert.match(page, /rdvWeekNav\(\{ slug: pro\.slug, ticketTypeId: type\.ticketTypeId, weekKey, now, tz, window: type\.window \}\)/);
   assert.match(page, /\{rdvTimeZoneLine\(timeZoneLabel\(tz\)\)\}/);
   assert.match(page, /testMode=\{testMode\}/);
+});
+
+test("the RDV page keeps the booking block mounted when a refetch empties the week: only a never-bookable type replaces it (R2, G4c)", () => {
+  const page = rdvPage();
+  assert.doesNotMatch(codeView(page), /\bhasSlots\b/, "no switch on the slots of the week around the block");
+  assert.doesNotMatch(page, /COPY\.RDV_EMPTY_WEEK/, "the block says the empty week itself, next to its status and alert regions");
+  const closedAt = page.indexOf("{closed ? (");
+  const blockAt = page.indexOf("<RdvBooking");
+  assert.ok(closedAt !== -1 && blockAt > closedAt, "inside the not-closed branch");
+  assert.match(
+    page.slice(page.indexOf("<WeekNav nav={nav} />"), blockAt),
+    /^<WeekNav nav=\{nav\} \/>\s*(?:\{\/\*[^*]*\*\/\}\s*)?$/,
+    "right after the week navigation (a comment aside), with no condition of its own",
+  );
 });
