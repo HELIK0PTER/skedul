@@ -34,6 +34,13 @@ export type AuthDeps = {
   now?: () => Date;
   /** Mock e-mail mode: also print the password-reset link. */
   logResetLink?: boolean;
+  /**
+   * Where Better Auth hands the work it does not need to wait for: every mail send (reset link, sign-in and
+   * confirmation codes) and its rate-limit cleanup. The app passes Next's after(), the tests a collector. Then
+   * /request-password-reset answers in the same time whether or not the address has an account (P6 A3). Without it,
+   * Better Auth awaits each send.
+   */
+  backgroundTasks?: (task: Promise<unknown>) => void;
 };
 
 export const OTP_SEND_PATH = "/email-otp/send-verification-otp";
@@ -259,6 +266,8 @@ export function buildAuthOptions(deps: AuthDeps) {
     baseURL: deps.baseURL,
     secret: deps.secret,
     logger: { log: writeAuthLog },
+    // Better Auth wraps each task in a catch that logs « Failed to run background task » (through writeAuthLog).
+    advanced: deps.backgroundTasks ? { backgroundTasks: { handler: deps.backgroundTasks } } : undefined,
     database: drizzleAdapter(db, {
       provider: "pg",
       schema: {
@@ -286,15 +295,23 @@ export function buildAuthOptions(deps: AuthDeps) {
       // nothing is sent and nothing is thrown, so the
       // endpoint answers like for any valid request. If the counter itself
       // throws, no mail goes out (closed); Better Auth's runInBackgroundOrAwait
-      // catches and logs the error, so the answer does not change either.
-      sendResetPassword: async ({ user, url }) => {
-        if (!(await consumeThrottle(db, resetThrottleKey(user.email), OTP_EMAIL_LIMIT, now()))) return;
-        await deps.sendEmail({
-          to: user.email,
-          subject: "Réinitialisez votre mot de passe Skedul",
-          html: passwordResetEmail({ name: user.name, url }),
-        });
-        if (deps.logResetLink) console.info(`   reset link: ${url}\n`);
+      // catches and logs the error, so the answer does not change either. It
+      // runs as a background task (deps.backgroundTasks, P6 A3): the answer
+      // never waits for it. A link that is not mailed loses its token row.
+      sendResetPassword: async ({ user, url, token }) => {
+        let mailed = false;
+        try {
+          if (!(await consumeThrottle(db, resetThrottleKey(user.email), OTP_EMAIL_LIMIT, now()))) return;
+          mailed = true;
+          await deps.sendEmail({
+            to: user.email,
+            subject: "Réinitialisez votre mot de passe Skedul",
+            html: passwordResetEmail({ name: user.name, url }),
+          });
+          if (deps.logResetLink) console.info(`   reset link: ${url}\n`);
+        } finally {
+          if (!mailed) await db.execute(sql`delete from verification where identifier = ${`reset-password:${token}`}`);
+        }
       },
       // A reset may come from someone who had the old password: end every session.
       revokeSessionsOnPasswordReset: true,

@@ -42,14 +42,22 @@ export type TestAuthHooks = {
    * Better Auth writes the update itself (race tests, P6 A2).
    */
   afterOtpPurge?: (ctx: { path?: string } | null) => Promise<void>;
+  /** Awaited before a mail is captured: a gate here holds a send (equal-time test, P6 A3). */
+  beforeMail?: (mail: AuthMail) => Promise<void>;
 };
 
-function buildInstance(db: Db, sendEmail: AuthDeps["sendEmail"], hooks: TestAuthHooks = {}) {
+function buildInstance(
+  db: Db,
+  sendEmail: AuthDeps["sendEmail"],
+  backgroundTasks: AuthDeps["backgroundTasks"],
+  hooks: TestAuthHooks = {},
+) {
   const options = buildAuthOptions({
     db,
     baseURL: TEST_BASE_URL,
     secret: process.env.BETTER_AUTH_SECRET ?? "test-secret-0123456789abcdefghijklmnop",
     sendEmail,
+    backgroundTasks,
   });
   return betterAuth({
     ...options,
@@ -92,20 +100,31 @@ export type TestAuth = {
   mails: AuthMail[];
   /** the 6-digit code of the last code e-mail sent to `email` */
   lastCode(email: string): string | undefined;
+  /**
+   * Waits for the background tasks started so far (the mail sends Better Auth hands to `backgroundTasks`, as the app
+   * hands them to Next's after()). `browser()` calls it after every request unless told not to.
+   */
+  settle(): Promise<void>;
 };
 
 export function makeTestAuth(db: Db, hooks: TestAuthHooks = {}): TestAuth {
   const mails: AuthMail[] = [];
+  const tasks: Promise<unknown>[] = [];
   const auth = buildInstance(
     db,
     async (mail) => {
+      await hooks.beforeMail?.(mail);
       mails.push(mail);
     },
+    (task) => void tasks.push(task),
     hooks,
   );
   return {
     auth,
     mails,
+    async settle() {
+      while (tasks.length > 0) await Promise.allSettled(tasks.splice(0));
+    },
     lastCode(email) {
       const to = email.toLowerCase();
       for (let i = mails.length - 1; i >= 0; i--) {
@@ -137,9 +156,10 @@ function parseJson(text: string): Record<string, unknown> | null {
  * One cookie jar = one browser. Origin = TEST_BASE_URL (passes the CSRF
  * origin check); x-forwarded-for = `ip`, a fresh random one by default, so
  * every browser gets its own Better Auth rate-limit buckets. GET when `body`
- * is undefined, else a JSON POST.
+ * is undefined, else a JSON POST. Each call then waits for the background tasks
+ * (t.settle) unless `settle: false`: a test that times the answer itself.
  */
-export function browser(t: TestAuth, ip: string = testIp()): BrowserCall {
+export function browser(t: TestAuth, ip: string = testIp(), opts: { settle?: boolean } = {}): BrowserCall {
   const jar = new Map<string, string>();
   return async (path, body) => {
     const headers = new Headers({ origin: TEST_BASE_URL, "x-forwarded-for": ip });
@@ -160,7 +180,9 @@ export function browser(t: TestAuth, ip: string = testIp()): BrowserCall {
       if (!value || attrs.some((a) => /^\s*max-age=0\s*$/i.test(a))) jar.delete(name);
       else jar.set(name, value);
     }
-    return { status: res.status, json: parseJson(await res.text()) };
+    const json = parseJson(await res.text());
+    if (opts.settle !== false) await t.settle();
+    return { status: res.status, json };
   };
 }
 

@@ -52,6 +52,14 @@ async function sessionIds(db: Db, userId: string): Promise<string[]> {
   return rows.map((r) => r.id).sort();
 }
 
+/** Live password-reset tokens of a user (Better Auth stores `reset-password:<token>` with the user id as value). */
+async function resetTokens(db: Db, userId: string): Promise<number> {
+  const res = await db.execute<{ n: number }>(
+    sql`select count(*)::int as n from verification where value = ${userId} and identifier like 'reset-password:%'`,
+  );
+  return Number(res.rows[0]?.n ?? 0);
+}
+
 /** Hits of a `throttle` row, or null when the key has no row. */
 async function throttleHits(db: Db, key: string): Promise<number | null> {
   const [row] = await db.select({ hits: schema.throttle.hits }).from(schema.throttle).where(eq(schema.throttle.key, key));
@@ -848,11 +856,13 @@ test("password-reset mails are capped per address: counted when sent, not when r
 
     for (let i = 3; i <= 5; i++) assert.equal((await reset(email)).status, 200, `request ${i}`);
     assert.equal(resetMails().length, 5, "5 valid requests, 5 mails");
+    assert.equal(await resetTokens(db, user.id), 5, "one live token per mailed link");
     const sixth = await reset(email);
     assert.equal(sixth.status, 200);
     assert.equal(resetMails().length, 5, "the 6th valid request sends nothing");
     assert.equal(await hits(), 6);
     assert.deepEqual(sixth.json, first.json, "and answers exactly like any other valid request");
+    assert.equal(await resetTokens(db, user.id), 5, "a request the cap refuses leaves no token behind (P6 A3)");
 
     // Its own counter: reset spam does not use up the sign-in codes of the address.
     assert.equal(await throttleHits(db, otpThrottleKey(email)), null);
@@ -899,11 +909,13 @@ test("a failing reset counter sends no mail, and the request still gets the usua
     assert.deepEqual(failed.json, usual.json, "the same answer as for an unknown address");
     assert.equal(resetMails().length, 0, "closed: no counter, no mail");
     assert.equal(await throttleHits(db, resetThrottleKey(email)), null);
+    assert.equal(await resetTokens(db, user.id), 0, "and no unmailed token (P6 A3)");
 
     // Per request, not for good: the next request counts and mails.
     assert.equal((await reset(email)).status, 200);
     assert.equal(resetMails().length, 1);
     assert.equal(await throttleHits(db, resetThrottleKey(email)), 1);
+    assert.equal(await resetTokens(db, user.id), 1);
 
     assert.equal(logs.length, 2, logs.join("\n"));
     assert.ok(logs.some((l) => l.includes("User not found")), "the unknown address");
@@ -912,6 +924,54 @@ test("a failing reset counter sends no mail, and the request still gets the usua
       "the counter failure is logged by Better Auth",
     );
   } finally {
+    await deleteUsersByEmail(db, [email]);
+  }
+});
+
+test("A3 a reset request for an account answers without waiting for its mail, exactly like one for an unknown address", OPTS, async (ctx) => {
+  const db = await getTestDb();
+  const logs = captureLogs(ctx);
+  let hold = false;
+  const gate = makeGate();
+  // Holds the reset mail of the account: an answer that waits for it never comes before the release.
+  const t = makeTestAuth(db, {
+    async beforeMail(mail) {
+      if (!hold || mail.subject !== RESET_SUBJECT) return;
+      hold = false;
+      await gate.stop();
+    },
+  });
+  const email = testEmail("a3time");
+  const unknown = testEmail("nobody");
+  const resetMails = () => t.mails.filter((m) => m.to === email && m.subject === RESET_SUBJECT);
+  // Its own browser and IP per request, and no settle: the test times the answer itself.
+  const reset = (typed: string) =>
+    browser(t, testIp(), { settle: false })("/request-password-reset", { email: typed, redirectTo: RESET_REDIRECT });
+  try {
+    await signUp(t, email);
+    const user = await userByEmail(db, email);
+    await db.update(schema.user).set({ emailVerified: true }).where(eq(schema.user.id, user.id));
+
+    hold = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const waited = new Promise<"waiting">((resolve) => (timer = setTimeout(() => resolve("waiting"), 10_000)));
+    const known = await Promise.race([reset(email), waited]);
+    clearTimeout(timer);
+    if (known === "waiting") assert.fail("the answer waited for the reset mail");
+    await gate.atGate;
+    assert.equal(resetMails().length, 0, "the mail is still held when the answer is in");
+
+    const nobody = await reset(unknown);
+    assert.equal(known.status, 200);
+    assert.deepEqual(known.json, nobody.json, "the same answer for an account and for an unknown address");
+
+    gate.release();
+    await t.settle();
+    assert.equal(resetMails().length, 1, "the mail goes out once released");
+    assert.deepEqual(logs, ["[auth] Reset Password: User not found"], "the unknown address only, and no address");
+  } finally {
+    gate.release();
+    await t.settle();
     await deleteUsersByEmail(db, [email]);
   }
 });

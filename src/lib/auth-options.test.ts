@@ -358,7 +358,17 @@ test("sendResetPassword counts only the mails it sends: past the cap it sends no
   const b = build(over.db);
   await sendReset(b.options, "lea@example.com");
   assert.equal(b.sent.length, 0);
-  assert.equal(over.queries.length, 1);
+  // The link is not mailed: its token row goes too (P6 A3).
+  assert.equal(over.queries.length, 2);
+  assert.match(over.queries[1].sql, /^delete from verification where identifier = \$1$/);
+  assert.deepEqual(over.queries[1].params, ["reset-password:t0k3n-secret"]);
+});
+
+test("backgroundTasks becomes Better Auth's background handler; without it Better Auth awaits each send (P6 A3)", () => {
+  const handler = (task: Promise<unknown>) => void task;
+  const withTasks = buildAuthOptions({ db: stubDb([]).db, baseURL: "http://localhost:3000", secret: SECRET, sendEmail: async () => {}, backgroundTasks: handler });
+  assert.equal(withTasks.advanced?.backgroundTasks.handler, handler);
+  assert.equal(build(stubDb([]).db).options.advanced, undefined);
 });
 
 test("a failing counter makes sendResetPassword throw before any mail is sent (the HTTP answer is checked in auth.db.test.ts)", async () => {
