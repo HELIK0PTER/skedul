@@ -1,23 +1,72 @@
 /**
  * Invariants I1 to I6 (spec § 14), checked after every DB test
- * (src/test/db.ts) and every night (runNightly). Each invariant is ONE
- * read-only statement (one snapshot); the six run in one db.batch, so one
+ * (src/test/db.ts) and every night (runNightly), plus I7 (same tenant) on the
+ * unscoped nightly run only. Each invariant is ONE
+ * read-only statement (one snapshot); they run in one db.batch, so one
  * round trip. [] = consistent.
  */
 import { sql, type SQL } from "drizzle-orm";
 
-import type { Db } from "@/lib/db/atomic";
+import type { Db, Query } from "@/lib/db/atomic";
 
-export type InvariantId = "I1" | "I2" | "I3" | "I4" | "I5" | "I6";
+export type InvariantId = "I1" | "I2" | "I3" | "I4" | "I5" | "I6" | "I7";
 export type InvariantViolation = { invariant: InvariantId; rowId: string; detail: string };
 
 type Row = { invariant: InvariantId; row_id: string; detail: string };
+
+/**
+ * I7, same tenant: every domain foreign key is single-column (no composite (professional_id, id) key), so the database
+ * accepts a row of one pro that points at a row of another. Each link below is checked by the nightly run, which is
+ * unscoped; the per-pro check after every DB test skips I7, because many tests build such a row on purpose to prove a
+ * guard refuses it. A pure test keeps the list equal to the schema's domain foreign keys.
+ */
+export const SAME_TENANT_LINKS: readonly { child: string; column: string; parent: string }[] = [
+  { child: "ticket_offer", column: "ticket_type_id", parent: "ticket_type" },
+  { child: "availability_rule", column: "ticket_type_id", parent: "ticket_type" },
+  { child: "event_ticket_type", column: "event_id", parent: "event" },
+  { child: "event_ticket_type", column: "ticket_type_id", parent: "ticket_type" },
+  { child: "question", column: "event_id", parent: "event" },
+  { child: "question", column: "ticket_type_id", parent: "ticket_type" },
+  { child: "occurrence", column: "event_id", parent: "event" },
+  { child: "occurrence", column: "ticket_type_id", parent: "ticket_type" },
+  { child: "ticket_purchase", column: "customer_id", parent: "customer" },
+  { child: "ticket_purchase", column: "offer_id", parent: "ticket_offer" },
+  { child: "ticket_purchase", column: "ticket_type_id", parent: "ticket_type" },
+  { child: "booking", column: "occurrence_id", parent: "occurrence" },
+  { child: "booking", column: "customer_id", parent: "customer" },
+  { child: "booking", column: "purchase_id", parent: "ticket_purchase" },
+  { child: "booking_answer", column: "booking_id", parent: "booking" },
+  { child: "booking_answer", column: "question_id", parent: "question" },
+  { child: "ticket", column: "customer_id", parent: "customer" },
+  { child: "ticket", column: "ticket_type_id", parent: "ticket_type" },
+  { child: "ticket", column: "purchase_id", parent: "ticket_purchase" },
+  { child: "ticket", column: "booking_id", parent: "booking" },
+  { child: "ticket_movement", column: "customer_id", parent: "customer" },
+  { child: "ticket_movement", column: "ticket_id", parent: "ticket" },
+  { child: "ticket_movement", column: "ticket_type_id", parent: "ticket_type" },
+  { child: "ticket_movement", column: "from_ticket_type_id", parent: "ticket_type" },
+  { child: "ticket_movement", column: "booking_id", parent: "booking" },
+  { child: "ticket_movement", column: "purchase_id", parent: "ticket_purchase" },
+];
+
+/** The I7 statement: one UNION ALL over SAME_TENANT_LINKS (identifiers are the constants above, never input). */
+function sameTenantStatement(): SQL {
+  const parts = SAME_TENANT_LINKS.map(({ child, column, parent }) => {
+    // event_ticket_type has no id column: its key is (event_id, ticket_type_id).
+    const rowId = child === "event_ticket_type" ? "c.event_id || '/' || c.ticket_type_id" : "c.id";
+    return sql.raw(`select 'I7' as invariant, ${rowId} as row_id,
+        '${child}.${column} ' || c.${column} || ' belongs to another pro' as detail
+      from ${child} c join ${parent} p on p.id = c.${column}
+      where p.professional_id <> c.professional_id`);
+  });
+  return sql`${sql.join(parts, sql` union all `)} order by row_id, detail`;
+}
 
 export async function checkInvariants(db: Db, opts: { proId?: string } = {}): Promise<InvariantViolation[]> {
   const pro = (alias: string): SQL =>
     opts.proId ? sql`and ${sql.raw(alias)}.professional_id = ${opts.proId}` : sql``;
 
-  const results = await db.batch([
+  const statements: Query[] = [
     // I1: seats_taken = pending + confirmed bookings
     db.execute<Row>(sql`
       select 'I1' as invariant, o.id as row_id,
@@ -92,8 +141,10 @@ export async function checkInvariants(db: Db, opts: { proId?: string } = {}): Pr
       where ((p.status = 'paid' and (p.paid_at is null or p.fulfilled_action_id is null))
         or (p.livemode and p.payment_intent_id is null)) ${pro("p")}
       order by p.id`),
-  ]);
+  ];
+  if (!opts.proId) statements.push(db.execute<Row>(sameTenantStatement()));
 
+  const results = (await db.batch(statements as [Query, ...Query[]])) as { rows: Row[] }[];
   return results.flatMap((r) =>
     r.rows.map((row) => ({ invariant: row.invariant, rowId: row.row_id, detail: row.detail })),
   );

@@ -107,9 +107,10 @@ export async function getPayments(
         typeName: ticketType.name,
       })
       .from(booking)
-      .innerJoin(occurrence, eq(occurrence.id, booking.occurrenceId))
-      .leftJoin(event, eq(event.id, occurrence.eventId))
-      .leftJoin(ticketType, eq(ticketType.id, occurrence.ticketTypeId))
+      // The pro's own occurrence, event and type only (single-column foreign keys): a crossed row shows none of their fields.
+      .innerJoin(occurrence, and(eq(occurrence.id, booking.occurrenceId), eq(occurrence.professionalId, professionalId)))
+      .leftJoin(event, and(eq(event.id, occurrence.eventId), eq(event.professionalId, professionalId)))
+      .leftJoin(ticketType, and(eq(ticketType.id, occurrence.ticketTypeId), eq(ticketType.professionalId, professionalId)))
       .where(and(eq(booking.professionalId, professionalId), inArray(booking.purchaseId, ids))),
     db
       .select({

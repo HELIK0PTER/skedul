@@ -15,14 +15,16 @@ export type RevenueScope = { live: boolean; professionalId?: string; since?: Dat
 /**
  * status = 'paid' AND livemode = live [AND professional_id] [AND paid_at ≥ since].
  * Columns are qualified with "ticket_purchase": use it in queries on that
- * table without an alias.
+ * table without an alias. No professionalId = the whole platform (the admin
+ * figure); an EMPTY one is refused (it throws), never read as « no scope ».
  */
 export function paidPurchaseOf(opts: RevenueScope): SQL {
+  if (opts.professionalId === "") throw new Error("paidPurchaseOf: empty professionalId");
   const parts: SQL[] = [
     sql`${ticketPurchase.status} = 'paid'`,
     sql`${ticketPurchase.livemode} = ${opts.live}`,
   ];
-  if (opts.professionalId) parts.push(sql`${ticketPurchase.professionalId} = ${opts.professionalId}`);
+  if (opts.professionalId !== undefined) parts.push(sql`${ticketPurchase.professionalId} = ${opts.professionalId}`);
   if (opts.since) parts.push(sql`${ticketPurchase.paidAt} >= ${ts(opts.since)}`);
   return sql`(${sql.join(parts, sql` and `)})`;
 }

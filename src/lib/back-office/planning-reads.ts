@@ -127,8 +127,9 @@ function selectOccurrences(db: Db, where: SQL | undefined) {
       typeColor: ticketType.color,
     })
     .from(occurrence)
-    .leftJoin(event, eq(event.id, occurrence.eventId))
-    .leftJoin(ticketType, eq(ticketType.id, occurrence.ticketTypeId))
+    // The pro's own event and type only (single-column foreign keys): a crossed row shows none of their fields.
+    .leftJoin(event, and(eq(event.id, occurrence.eventId), eq(event.professionalId, occurrence.professionalId)))
+    .leftJoin(ticketType, and(eq(ticketType.id, occurrence.ticketTypeId), eq(ticketType.professionalId, occurrence.professionalId)))
     .where(where)
     .orderBy(asc(occurrence.startsAt), asc(occurrence.id));
 }
@@ -180,8 +181,8 @@ async function loadAttendees(db: Db, professionalId: string, occurrenceIds: read
     })
     .from(booking)
     .innerJoin(customer, and(eq(customer.id, booking.customerId), eq(customer.professionalId, professionalId)))
-    .leftJoin(ticket, eq(ticket.bookingId, booking.id))
-    .leftJoin(ticketType, eq(ticketType.id, ticket.ticketTypeId))
+    .leftJoin(ticket, and(eq(ticket.bookingId, booking.id), eq(ticket.professionalId, professionalId)))
+    .leftJoin(ticketType, and(eq(ticketType.id, ticket.ticketTypeId), eq(ticketType.professionalId, professionalId)))
     .where(
       and(
         eq(booking.professionalId, professionalId),
@@ -195,7 +196,7 @@ async function loadAttendees(db: Db, professionalId: string, occurrenceIds: read
   const answerRows = await db
     .select({ bookingId: bookingAnswer.bookingId, label: bookingAnswer.questionLabel, value: bookingAnswer.value })
     .from(bookingAnswer)
-    .leftJoin(question, eq(question.id, bookingAnswer.questionId))
+    .leftJoin(question, and(eq(question.id, bookingAnswer.questionId), eq(question.professionalId, professionalId)))
     .where(
       and(
         eq(bookingAnswer.professionalId, professionalId),
@@ -246,7 +247,7 @@ async function loadAcceptedTypes(
   const rows = await db
     .select({ eventId: eventTicketType.eventId, id: ticketType.id, name: ticketType.name, color: ticketType.color })
     .from(eventTicketType)
-    .innerJoin(ticketType, eq(ticketType.id, eventTicketType.ticketTypeId))
+    .innerJoin(ticketType, and(eq(ticketType.id, eventTicketType.ticketTypeId), eq(ticketType.professionalId, professionalId)))
     .where(and(eq(eventTicketType.professionalId, professionalId), inArray(eventTicketType.eventId, [...eventIds])))
     .orderBy(asc(ticketType.position), asc(ticketType.name), asc(ticketType.id));
   for (const r of rows) {
@@ -461,7 +462,7 @@ export async function registerOptions(
   const [seance] = await db
     .select({ mode: event.bookingMode })
     .from(occurrence)
-    .innerJoin(event, eq(event.id, occurrence.eventId))
+    .innerJoin(event, and(eq(event.id, occurrence.eventId), eq(event.professionalId, professionalId)))
     .where(and(eq(occurrence.id, occurrenceId), eq(occurrence.professionalId, professionalId)));
   if (!seance) return null;
   const [owner] = await db
@@ -527,7 +528,7 @@ function acceptsOrConverts(db: Db, professionalId: string, heldTypeId: string): 
     db
       .select({ one: sql`1` })
       .from(eventTicketType)
-      .innerJoin(ticketType, eq(ticketType.id, eventTicketType.ticketTypeId))
+      .innerJoin(ticketType, and(eq(ticketType.id, eventTicketType.ticketTypeId), eq(ticketType.professionalId, professionalId)))
       .where(
         and(
           eq(eventTicketType.eventId, event.id),
@@ -552,7 +553,7 @@ async function loadTargetLinks(db: Db, professionalId: string, eventIds: readonl
       rdvFree: ticketType.rdvFree,
     })
     .from(eventTicketType)
-    .innerJoin(ticketType, eq(ticketType.id, eventTicketType.ticketTypeId))
+    .innerJoin(ticketType, and(eq(ticketType.id, eventTicketType.ticketTypeId), eq(ticketType.professionalId, professionalId)))
     .where(and(eq(eventTicketType.professionalId, professionalId), inArray(eventTicketType.eventId, [...eventIds])))
     .orderBy(asc(ticketType.position), asc(ticketType.name), asc(ticketType.id));
   for (const l of rows) {
@@ -657,7 +658,7 @@ export async function moveTargets(
     db
       .select({ eventId: event.id, seriesRootId: event.seriesRootId, title: event.title })
       .from(occurrence)
-      .innerJoin(event, eq(event.id, occurrence.eventId))
+      .innerJoin(event, and(eq(event.id, occurrence.eventId), eq(event.professionalId, professionalId)))
       .where(reachable)
       .groupBy(event.id)
       .orderBy(asc(min(occurrence.startsAt)), asc(event.id))
@@ -674,7 +675,7 @@ export async function moveTargets(
         seatsTaken: occurrence.seatsTaken,
       })
       .from(occurrence)
-      .innerJoin(event, eq(event.id, occurrence.eventId))
+      .innerJoin(event, and(eq(event.id, occurrence.eventId), eq(event.professionalId, professionalId)))
       .where(and(reachable, inSeries))
       .orderBy(asc(occurrence.startsAt), asc(occurrence.id))
       .limit(cap),

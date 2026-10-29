@@ -22,12 +22,15 @@ export const ELIGIBLE: SQL = sql`(
   )
 )`;
 
-/** The FROM clause ELIGIBLE expects, for one customer and one occurrence. */
+/**
+ * The FROM clause ELIGIBLE expects, for one customer and one occurrence. Every joined row is the occurrence's pro's
+ * (the domain foreign keys are single-column): a ticket, type or event of another pro never makes a ticket eligible.
+ */
 function eligibleFrom(customerId: string, occurrenceId: string): SQL {
   return sql`from ticket t
-    join ticket_type tt on tt.id = t.ticket_type_id
     join occurrence o on o.id = ${occurrenceId}
-    left join event e on e.id = o.event_id
+    join ticket_type tt on tt.id = t.ticket_type_id and tt.professional_id = o.professional_id
+    left join event e on e.id = o.event_id and e.professional_id = o.professional_id
     where t.customer_id = ${customerId} and t.professional_id = o.professional_id and ${ELIGIBLE}`;
 }
 

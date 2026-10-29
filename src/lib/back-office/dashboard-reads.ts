@@ -197,7 +197,7 @@ async function gettingStarted(db: Db, professionalId: string): Promise<Dashboard
     db
       .select({ n: count() })
       .from(ticketOffer)
-      .innerJoin(ticketType, eq(ticketType.id, ticketOffer.ticketTypeId))
+      .innerJoin(ticketType, and(eq(ticketType.id, ticketOffer.ticketTypeId), eq(ticketType.professionalId, professionalId)))
       .where(
         and(
           eq(ticketOffer.professionalId, professionalId),
@@ -258,14 +258,15 @@ async function upcomingBookings(
     .from(booking)
     .innerJoin(occurrence, and(eq(occurrence.id, booking.occurrenceId), eq(occurrence.professionalId, pro.id)))
     .innerJoin(customer, and(eq(customer.id, booking.customerId), eq(customer.professionalId, pro.id)))
-    .leftJoin(event, eq(event.id, occurrence.eventId))
-    .leftJoin(rdvType, eq(rdvType.id, occurrence.ticketTypeId))
+    // The pro's own event and types only (single-column foreign keys): a crossed row shows none of their fields.
+    .leftJoin(event, and(eq(event.id, occurrence.eventId), eq(event.professionalId, pro.id)))
+    .leftJoin(rdvType, and(eq(rdvType.id, occurrence.ticketTypeId), eq(rdvType.professionalId, pro.id)))
     .leftJoin(ticketPurchase, and(eq(ticketPurchase.id, booking.purchaseId), eq(ticketPurchase.professionalId, pro.id)))
     .leftJoin(
       ticket,
       and(eq(ticket.bookingId, booking.id), eq(ticket.status, "booked"), eq(ticket.professionalId, pro.id)),
     )
-    .leftJoin(heldType, eq(heldType.id, ticket.ticketTypeId))
+    .leftJoin(heldType, and(eq(heldType.id, ticket.ticketTypeId), eq(heldType.professionalId, pro.id)))
     .where(
       and(
         eq(booking.professionalId, pro.id),

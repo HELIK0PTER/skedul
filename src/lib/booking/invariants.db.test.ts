@@ -3,11 +3,12 @@ import { count, eq } from "drizzle-orm";
 
 import { ticketMovement, ticketPurchase } from "@/lib/db/schema";
 
-import { dbTest, type DbHarness } from "../../test/db";
+import { createTestPro, dbTest, deleteTestUser, type DbHarness } from "../../test/db";
 import {
   rowBooking,
   rowCustomer,
   rowEvent,
+  rowLink,
   rowMovement,
   rowOffer,
   rowPurchase,
@@ -169,6 +170,55 @@ dbTest(
     const seance = await rowSeance(h.db, h.pro, eventId, { seatsTaken: 2 });
     const all = await checkInvariants(h.db);
     assert.ok(all.some((v) => v.invariant === "I1" && v.rowId === seance));
+  },
+  BAD,
+);
+
+dbTest(
+  "I7 (nightly, unscoped only): a row of one pro pointing at a row of another pro (P6 A1)",
+  async (h) => {
+    const { db, pro } = h;
+    const other = await createTestPro(db);
+    try {
+      const theirType = await rowRdvType(db, other);
+      const theirOffer = await rowOffer(db, other, theirType);
+      const theirCustomer = await rowCustomer(db, other);
+      const theirEvent = await rowEvent(db, other);
+      const theirSeance = await rowSeance(db, other, theirEvent, { seatsTaken: 1 });
+
+      // Rows of MINE built by hand on purpose (every domain foreign key is single-column): each points at THEIR row.
+      const crossedSeance = await rowSeance(db, pro, theirEvent, { startsAt: new Date(Date.now() + 3 * 86_400_000) });
+      const crossedPurchase = await rowPurchase(db, pro, { customerId: theirCustomer, offerId: theirOffer, ticketTypeId: theirType });
+      const crossedBooking = await rowBooking(db, pro, { occurrenceId: theirSeance, customerId: theirCustomer });
+      const crossedTicket = await rowTicket(db, pro, { customerId: theirCustomer, ticketTypeId: theirType, movements: false });
+      await rowLink(db, pro, theirEvent, theirType);
+      // The control: a consistent chain of mine is never reported.
+      const myType = await rowType(db, pro);
+      const myOffer = await rowOffer(db, pro, myType);
+      const myCustomer = await rowCustomer(db, pro);
+      const myPurchase = await rowPurchase(db, pro, { customerId: myCustomer, offerId: myOffer, ticketTypeId: myType });
+
+      const all = (await checkInvariants(db)).filter((v) => v.invariant === "I7");
+      const on = (rowId: string, link: string) => all.some((v) => v.rowId === rowId && v.detail.startsWith(link));
+      assert.ok(on(crossedSeance, "occurrence.event_id"), JSON.stringify(all));
+      assert.ok(on(crossedPurchase, "ticket_purchase.customer_id"), JSON.stringify(all));
+      assert.ok(on(crossedPurchase, "ticket_purchase.offer_id"), JSON.stringify(all));
+      assert.ok(on(crossedPurchase, "ticket_purchase.ticket_type_id"), JSON.stringify(all));
+      assert.ok(on(crossedBooking, "booking.occurrence_id"), JSON.stringify(all));
+      assert.ok(on(crossedBooking, "booking.customer_id"), JSON.stringify(all));
+      assert.ok(on(crossedTicket, "ticket.customer_id"), JSON.stringify(all));
+      assert.ok(on(crossedTicket, "ticket.ticket_type_id"), JSON.stringify(all));
+      assert.ok(on(`${theirEvent}/${theirType}`, "event_ticket_type.event_id"), JSON.stringify(all));
+      assert.ok(on(`${theirEvent}/${theirType}`, "event_ticket_type.ticket_type_id"), JSON.stringify(all));
+      for (const id of [myType, myOffer, myCustomer, myPurchase]) assert.ok(!all.some((v) => v.rowId === id), id);
+
+      // Scoped (after every DB test) it stays silent: many tests build such rows on purpose to prove a guard.
+      assert.ok(!(await checkInvariants(db, { proId: pro.proId })).some((v) => v.invariant === "I7"));
+    } finally {
+      // Mine first (my rows are the ones that point across), then theirs: no NO ACTION link is left to block it.
+      await deleteTestUser(db, pro.userId);
+      await deleteTestUser(db, other.userId);
+    }
   },
   BAD,
 );

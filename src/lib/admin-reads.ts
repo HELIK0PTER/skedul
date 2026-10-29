@@ -74,8 +74,8 @@ export async function activityCounts30d(db: Db, now: Date): Promise<{ activePros
 /**
  * « Encaissé » for the admin: the paid purchases of the asked mode summed per
  * currency (biggest first, zeros dropped). An empty professionalId is refused
- * with an empty result: paidPurchaseOf treats a falsy id as "no scope", which
- * would silently widen the figure to the whole platform.
+ * with an empty result here (paidPurchaseOf itself throws on it, so that it is
+ * never read as "no scope", which would widen the figure to the whole platform).
  */
 export async function platformRevenue(
   db: Db,
