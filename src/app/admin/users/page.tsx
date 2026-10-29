@@ -53,7 +53,7 @@ export default async function AdminUsersPage({
       />
 
       {params.deleted === "1" && (
-        <p role="status" className="mb-4 rounded-xl bg-success-muted px-4 py-3 text-sm text-success">
+        <p role="status" className="mb-4 rounded-xl bg-success-muted px-4 py-3 text-sm text-green-800">
           Compte supprimé.
         </p>
       )}

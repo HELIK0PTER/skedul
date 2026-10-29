@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { Ban, LogIn, LogOut, ShieldCheck, ShieldOff, Undo2 } from "lucide-react";
 
+import { FormError } from "@/components/dashboard/form-error";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -187,16 +188,11 @@ export function UserActions({
               )}
           </>
         )}
-        {error && (
-          <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {error}
-          </p>
-        )}
-        {notice && (
-          <p role="status" className="rounded-lg bg-success-muted px-3 py-2 text-sm text-success">
-            {notice}
-          </p>
-        )}
+        {/* Both lines stay mounted and only their text changes (P6 A42): green-800 reads 6.5:1 on the success tint. */}
+        <FormError alwaysMounted message={error} />
+        <p role="status" className={notice ? "rounded-lg bg-success-muted px-3 py-2 text-sm text-green-800" : "sr-only"}>
+          {notice}
+        </p>
       </CardContent>
     </Card>
   );

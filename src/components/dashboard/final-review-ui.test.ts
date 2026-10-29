@@ -9,6 +9,8 @@ import test from "node:test";
 
 import { INLINE_LINK_CLASS } from "@/components/ui/link-class";
 
+import { sourceFilesUnder } from "../../test/source-guards";
+
 const source = (path: string): string => readFileSync(path, "utf8");
 
 test("the event page says its seats as « N inscrits sur M », not « N / M places » (final review UI-10)", () => {
@@ -114,9 +116,16 @@ test("success lines live in an always-mounted status region, in green-700 (final
     assert.doesNotMatch(text, /\{notice !== null && \(\s*<p role="status"/, `${file}: the notice region is not mounted with its text`);
     assert.match(text, /<p role="status" className=\{notice/, `${file}: an always-mounted notice region`);
   }
-  // small success text is green-700: the success token (3.3:1 on white) is for fills and icons
-  for (const file of readdirSync(dir).filter((f) => f.endsWith(".tsx"))) {
-    source(`${dir}/${file}`)
+  // small success text is green-700: the success token (3.3:1 on white) is for fills and icons. P6 A42: the admin pages
+  // and components are read too (their notices sat at about 3:1 on bg-success-muted).
+  const files = [
+    ...readdirSync(dir).filter((f) => f.endsWith(".tsx")).map((f) => `${dir}/${f}`),
+    ...sourceFilesUnder("src/app/admin").filter((f) => f.endsWith(".tsx")),
+    ...sourceFilesUnder("src/components/admin").filter((f) => f.endsWith(".tsx")),
+  ];
+  assert.ok(files.includes("src/app/admin/users/page.tsx") && files.includes("src/components/admin/user-actions.tsx"));
+  for (const file of files) {
+    source(file)
       .split("\n")
       .forEach((line, i) => {
         if (/(?<![-\w])text-success(?![-\w])/.test(line) && !/\bsize-\d+ shrink-0 text-success\b/.test(line)) {
@@ -124,6 +133,18 @@ test("success lines live in an always-mounted status region, in green-700 (final
         }
       });
   }
+});
+
+test("an admin success notice on the success tint reads green-800, 6.5:1 (green-700 is only 4.6:1 there) (P6 A42)", () => {
+  assert.match(
+    source("src/app/admin/users/page.tsx"),
+    /<p role="status" className="[^"]*\bbg-success-muted\b[^"]*\btext-green-800\b[^"]*">\s*Compte supprimé\./,
+  );
+  // The user actions answer in place: both lines stay mounted, so a screen reader hears them when they come.
+  const actions = source("src/components/admin/user-actions.tsx");
+  assert.match(actions, /<FormError alwaysMounted message=\{error\} \/>/);
+  assert.match(actions, /<p role="status" className=\{notice \? "[^"]*\bbg-success-muted\b[^"]*\btext-green-800\b[^"]*" : "sr-only"\}>\s*\{notice\}\s*<\/p>/);
+  assert.doesNotMatch(actions, /\{(?:error|notice) && \(/, "no region mounted together with its text");
 });
 
 test("no dashboard text uses the raw brand colour, and the shared inline link is underlined (final review UI-2)", () => {
