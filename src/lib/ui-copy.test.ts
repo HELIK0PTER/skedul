@@ -29,18 +29,10 @@ const ROOT_FILES = ["vercel.ts", "next.config.ts"];
 /**
  * Left out of the scan (a file, or a directory with everything under it). Keep it
  * short: an entry needs a reason, must exist and must still hold a dash, so the
- * entry goes away with the last dash it excuses.
+ * entry goes away with the last dash it excuses. Empty since P6 C9: the /demo tour
+ * (src/app/demo, src/components/demo), its last entries, was rewritten without a dash.
  */
-const ALLOWLIST: readonly { path: string; why: string }[] = [
-  {
-    path: "src/app/demo",
-    why: "the /demo tour (main's landing work, not the tickets redesign): its copy goes to the P6 copy pass",
-  },
-  {
-    path: "src/components/demo",
-    why: "the /demo tour screens, script and fixture data shared with the landing (main's work): P6 copy pass",
-  },
-];
+const ALLOWLIST: readonly { path: string; why: string }[] = [];
 
 /**
  * The P5 « RDV libre » paths: always scanned the moment they exist, never allowlisted.
@@ -116,7 +108,9 @@ test("within and allowedBy match a file or a whole directory, never a name prefi
   assert.equal(within("src/app/demo/page.tsx", "src/app/demo"), true);
   assert.equal(within("src/app/demo", "src/app/demo"), true);
   assert.equal(within("src/app/demonstration/page.tsx", "src/app/demo"), false);
-  assert.equal(allowedBy("src/components/demo/demo-data.ts"), "src/components/demo");
+  // Nothing is allowlisted any more: the demo tour is scanned like the rest of src/.
+  assert.equal(allowedBy("src/components/demo/demo-data.ts"), undefined);
+  assert.equal(allowedBy("src/app/demo/page.tsx"), undefined);
   assert.equal(allowedBy("src/components/public/rdv-booking.tsx"), undefined);
 });
 
@@ -142,6 +136,11 @@ test("the scan walks the whole of src/, tests and the folders earlier phases lef
     "src/lib/notify-core.ts",
     "vercel.ts",
     "next.config.ts",
+    // the /demo tour, allowlisted until P6 C9
+    "src/app/demo/page.tsx",
+    "src/components/demo/demo-script.ts",
+    "src/components/demo/demo-data.ts",
+    "src/components/demo/screens/client-page.tsx",
     // tests and helpers are scanned too
     "src/lib/ui-copy.test.ts",
     "src/lib/booking/rdv.db.test.ts",

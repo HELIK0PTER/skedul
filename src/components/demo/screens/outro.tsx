@@ -9,7 +9,7 @@ export function Outro({ onRestart }: { onRestart: () => void }) {
   return (
     <div className="rounded-3xl bg-ink px-8 py-14 text-center text-ink-foreground shadow-(--shadow-card)">
       <p className="font-mono text-[11px] uppercase tracking-widest text-ink-foreground/70">
-        Fin de la visite — à vous de jouer
+        Fin de la visite, à vous de jouer
       </p>
       <h2 className="mx-auto mt-3 max-w-md font-display text-3xl font-bold tracking-tight">
         Votre page de réservation, prête ce soir.
