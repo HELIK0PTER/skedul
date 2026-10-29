@@ -246,6 +246,28 @@ dbTest("ensureHorizon re-plans once when the event changes between its read and 
   assert.deepEqual([res.inserted, res.complete], [missing.length, true], "the re-plan used the new version");
 });
 
+// P6 A19: two horizon plans that commit out of order never move generated_until back.
+dbTest("ensureHorizon: a plan that commits after a later one never moves generated_until back", async ({ db, pro }) => {
+  const now = new Date();
+  const past = addDaysMs(now, -20);
+  const rule = DAILY_NEVER(todayKey(past, pro.tz));
+  const created = must(await createEvent(db, { professionalId: pro.proId, event: { title: "Course", rule } }, past));
+  const later = addDaysMs(now, 10);
+  const res = must(
+    await ensureHorizon(db, pro.proId, now, {
+      afterPlan: async () => {
+        must(await ensureHorizon(db, pro.proId, later));
+      },
+    }),
+  );
+  assert.equal(res.inserted, 0, "the later plan already wrote every date of this one");
+  assert.equal((await eventRow(db, created.eventId)).generatedUntil, horizonEnd(later, pro.tz), "the later horizon stands");
+  assert.deepEqual(
+    (await rowsOf(db, created.eventId)).map((r) => r.seriesDate),
+    expandDates(asRule(rule), rule.startDate, horizonEnd(later, pro.tz)),
+    "every date once",
+  );
+});
 dbTest("a split during ensureHorizon leaves no phantom séance after the new until_date", async ({ db, pro }) => {
   const now = new Date();
   const past = addDaysMs(now, -10);

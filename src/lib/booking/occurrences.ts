@@ -242,7 +242,8 @@ export async function createEvent(
  * Brings every active segment of the pro to today + MATERIALIZE_DAYS (or its
  * last date), at most MATERIALIZE_MAX_ROWS rows per call, in ONE batch:
  * lock the events (first rank of the lock order, id asc), version-guarded
- * inserts, version-guarded generated_until, then G(version unchanged,
+ * inserts, version-guarded generated_until (GREATEST: it never moves back,
+ * P6 A19), then G(version unchanged,
  * 'stale'). A segment edited between the read and the batch (split, delete)
  * makes the batch stale: it re-plans once on fresh rows. `complete` = nothing
  * left to generate. Effects: none.
@@ -308,8 +309,10 @@ export async function ensureHorizon(
             );
           }
           qs.push(
+            // P6 A19: never backwards. A plan that commits after a later one (its version unchanged: ensureHorizon bumps
+            // none) would otherwise set its older horizon over the later one's.
             db.execute(sql`
-              update event set generated_until = ${w.generatedUntil}::date, updated_at = ${ts(now)}
+              update event set generated_until = greatest(generated_until, ${w.generatedUntil}::date), updated_at = ${ts(now)}
               where id = ${w.row.id} and version = ${w.row.version}::int and archived_at is null`),
             G(db, sql`(select version from event where id = ${w.row.id}) = ${w.row.version}::int`, "stale"),
           );
