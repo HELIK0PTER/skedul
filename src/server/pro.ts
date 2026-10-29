@@ -11,7 +11,7 @@ import { professional } from "@/lib/db/schema";
 import { env } from "@/lib/env";
 import { createSkedulCalendar } from "@/lib/google-calendar";
 import { logSafeMessage } from "@/lib/log-safe";
-import { getCurrentProfessional, getCurrentUser } from "@/lib/session";
+import { getCurrentProfessional, getCurrentUser, getFreshSession } from "@/lib/session";
 import type { ActionFail, ActionResult } from "@/lib/back-office/result";
 import {
   createProfessionalProfileCore,
@@ -88,11 +88,19 @@ export async function saveAvailabilityAction(rules: AvailabilityRuleInput[]): Pr
 
 /* ─────────────────────── Google Calendar ───────────────────────── */
 
-/** After the Google OAuth redirect: create the Skedul calendar + store its id. */
+const GOOGLE_REFUSED_WHILE_IMPERSONATING =
+  "La connexion à Google Agenda n'est pas possible pendant que vous agissez au nom de ce pro.";
+
+/**
+ * After the Google OAuth redirect: create the Skedul calendar + store its id. Refused while an admin impersonates the
+ * pro (P6 A6, read fresh): the calendar of a pro is linked by the pro only.
+ */
 export async function finalizeGoogleConnection(): Promise<{
   ok: boolean;
   error?: string;
 }> {
+  const session = await getFreshSession();
+  if (session?.session.impersonatedBy) return { ok: false, error: GOOGLE_REFUSED_WHILE_IMPERSONATING };
   const pro = await getCurrentProfessional();
   if (!pro) return { ok: false, error: "Non authentifié." };
   if (!env.GOOGLE_CALENDAR_ENABLED) return { ok: false, error: "Désactivé." };

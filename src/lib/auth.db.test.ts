@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { and, eq, sql, type Query } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
+import { LINK_REFUSED_WHILE_IMPERSONATING } from "./auth-options";
 import { browser, deleteUsersByEmail, makeTestAuth, TEST_BASE_URL, type BrowserCall, type TestAuth } from "../test/auth";
 import { createTestPro, DB_SKIP, deleteTestUser, getTestDb, testEmail, testIp } from "../test/db";
 import type { Db } from "./db/atomic";
@@ -1084,6 +1085,45 @@ test("a confirmation code counts a session only when it is read fresh: a revoked
     assert.deepEqual(revoked.json, { success: true }, "the usual answer");
     assert.equal(confirmationMails().length, 2, "no new mail: the session is read from the database, not from the cache");
     assert.equal(await throttleHits(db, otpThrottleKey(email)), 1, "and nothing is counted");
+  } finally {
+    await deleteUsersByEmail(db, [email]);
+  }
+});
+
+test("A6 a session an admin impersonates cannot start a Google link, even with a live cookie cache; the user's own session can", OPTS, async () => {
+  const db = await getTestDb();
+  const t = makeTestAuth(db, {}, { google: true });
+  const email = testEmail("a6link");
+  const link = (call: BrowserCall) =>
+    call("/link-social", {
+      provider: "google",
+      scopes: ["https://www.googleapis.com/auth/calendar"],
+      callbackURL: "/dashboard/settings?google=connected",
+      disableRedirect: true,
+    });
+  const linkStates = async (userId: string) => {
+    const res = await db.execute<{ n: number }>(
+      sql`select count(*)::int as n from verification where value like ${`%${userId}%`}`,
+    );
+    return Number(res.rows[0]?.n ?? 0);
+  };
+  try {
+    const own = await signUp(t, email);
+    const user = await userByEmail(db, email);
+    const mine = await link(own);
+    assert.equal(mine.status, 200, "the user's own session reaches Google");
+    assert.match(String(mine.json?.url), /^https:\/\/accounts\.google\.com\//);
+    const statesBefore = await linkStates(user.id);
+    assert.ok(statesBefore >= 1, "the link state of the user's own request is stored");
+
+    // The same session now carries an impersonation (what /admin/impersonate-user writes), while the browser still
+    // holds the 5-minute cookie cache that says otherwise: the route reads the session fresh.
+    await db.update(schema.session).set({ impersonatedBy: `admin-${nanoid(6)}` }).where(eq(schema.session.userId, user.id));
+    const asAdmin = await link(own);
+    assert.equal(asAdmin.status, 403);
+    assert.equal(asAdmin.json?.message, LINK_REFUSED_WHILE_IMPERSONATING);
+    assert.equal(asAdmin.json?.url, undefined, "no authorisation URL");
+    assert.equal(await linkStates(user.id), statesBefore, "and no link state stored for the refused request");
   } finally {
     await deleteUsersByEmail(db, [email]);
   }

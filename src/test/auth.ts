@@ -46,11 +46,21 @@ export type TestAuthHooks = {
   beforeMail?: (mail: AuthMail) => Promise<void>;
 };
 
+/** Options of the test instance (none by default). */
+export type TestAuthOptions = {
+  /**
+   * A Google provider with a dummy client: /link-social then builds its authorisation URL (no network call is made
+   * before the user would leave for Google), so the tests of that route reach it (P6 A6).
+   */
+  google?: boolean;
+};
+
 function buildInstance(
   db: Db,
   sendEmail: AuthDeps["sendEmail"],
   backgroundTasks: AuthDeps["backgroundTasks"],
   hooks: TestAuthHooks = {},
+  opts: TestAuthOptions = {},
 ) {
   const options = buildAuthOptions({
     db,
@@ -58,6 +68,7 @@ function buildInstance(
     secret: process.env.BETTER_AUTH_SECRET ?? "test-secret-0123456789abcdefghijklmnop",
     sendEmail,
     backgroundTasks,
+    google: opts.google ? { clientId: "test-client.apps.googleusercontent.com", clientSecret: "test-client-secret" } : null,
   });
   return betterAuth({
     ...options,
@@ -107,7 +118,7 @@ export type TestAuth = {
   settle(): Promise<void>;
 };
 
-export function makeTestAuth(db: Db, hooks: TestAuthHooks = {}): TestAuth {
+export function makeTestAuth(db: Db, hooks: TestAuthHooks = {}, opts: TestAuthOptions = {}): TestAuth {
   const mails: AuthMail[] = [];
   const tasks: Promise<unknown>[] = [];
   const auth = buildInstance(
@@ -118,6 +129,7 @@ export function makeTestAuth(db: Db, hooks: TestAuthHooks = {}): TestAuth {
     },
     (task) => void tasks.push(task),
     hooks,
+    opts,
   );
   return {
     auth,

@@ -598,8 +598,9 @@ test("buildAuthOptions declares its logger and keeps Better Auth's default level
   assert.match(body, /\n {4}logger: \{ log: writeAuthLog \},\r?\n/, "the returned options carry the logger");
 });
 
-test("the confirmation-code hook reads the session fresh, never from the 5-minute cookie cache (Identity)", () => {
+test("the hooks read the session fresh, never from the 5-minute cookie cache (Identity, P6 A6)", () => {
   const source = readFileSync("src/lib/auth-options.ts", "utf8");
-  assert.equal((source.match(/getSessionFromCtx\(/g) ?? []).length, 1, "the hook is the only reader of the session here");
-  assert.match(source, /getSessionFromCtx\(ctx, \{ disableCookieCache: true \}\)/);
+  // The confirmation-code hook and the /link-social refusal of an impersonated session (P6 A6) are the only readers.
+  assert.equal((source.match(/getSessionFromCtx\(/g) ?? []).length, 2, "two readers of the session here");
+  assert.equal((source.match(/getSessionFromCtx\(ctx, \{ disableCookieCache: true \}\)/g) ?? []).length, 2, "both read it fresh");
 });

@@ -5,7 +5,7 @@
  */
 import type { BetterAuthOptions } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
+import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { emailOTP } from "better-auth/plugins";
 import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -52,6 +52,10 @@ export const CHANGE_PASSWORD_PATH = "/change-password";
 /** Routes that read the password account, then insert a session (dropSessionWithoutPassword). */
 export const PASSWORD_SESSION_PATHS: readonly string[] = [PASSWORD_SIGN_IN_PATH, CHANGE_PASSWORD_PATH];
 export const RESET_REQUEST_PATH = "/request-password-reset";
+/** Starts linking a social account (the Google Calendar connection) to the session's user. */
+export const LINK_SOCIAL_PATH = "/link-social";
+export const LINK_REFUSED_WHILE_IMPERSONATING =
+  "Impossible de lier un compte Google pendant que vous agissez au nom d'un autre utilisateur.";
 /** The only emailOTP endpoints served over HTTP. */
 export const OTP_HTTP_PATHS = [OTP_SEND_PATH, OTP_SIGN_IN_PATH, OTP_VERIFY_EMAIL_PATH] as const;
 
@@ -358,6 +362,14 @@ export function buildAuthOptions(deps: AuthDeps) {
       // sent in process by core emailVerification.sendOnSignUp and never comes
       // through this path.
       before: createAuthMiddleware(async (ctx) => {
+        if (ctx.path === LINK_SOCIAL_PATH) {
+          // P6 A6: an admin acting as a pro never links a Google account to the pro's account. Read fresh (never the
+          // 5-minute cookie cache), like the impersonation itself is: the route then builds no URL and stores no state.
+          const session = await getSessionFromCtx(ctx, { disableCookieCache: true });
+          const impersonatedBy = (session?.session as { impersonatedBy?: string | null } | undefined)?.impersonatedBy;
+          if (impersonatedBy) throw new APIError("FORBIDDEN", { message: LINK_REFUSED_WHILE_IMPERSONATING });
+          return;
+        }
         if (ctx.path !== OTP_SEND_PATH) return;
         const body = ctx.body as { email?: unknown; type?: unknown } | undefined;
         // Reset by code is closed (OTP_DISABLED_PATHS): never mail a forget-password code.
