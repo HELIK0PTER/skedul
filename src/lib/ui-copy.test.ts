@@ -40,14 +40,6 @@ const ALLOWLIST: readonly { path: string; why: string }[] = [
     path: "src/components/demo",
     why: "the /demo tour screens, script and fixture data shared with the landing (main's work): P6 copy pass",
   },
-  {
-    path: "src/components/hero-cards.tsx",
-    why: "the old landing hero, no importer left, its deletion awaits the owner (landing redesign)",
-  },
-  {
-    path: "src/components/ticket-cta.tsx",
-    why: "the old landing ticket CTA, no importer left, its deletion awaits the owner (landing redesign)",
-  },
 ];
 
 /**
