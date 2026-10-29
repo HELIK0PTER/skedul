@@ -183,7 +183,7 @@ export const STALE_PURCHASE_GRACE_MINUTES = 60;
 export const MAX_PENDING_HOLDS = 2;
 
 export const THROTTLE_WINDOW_SEC = 3600;
-/** Public actions that consume throttle keys (src/lib/throttle.ts `actionThrottleKeys`). « mail », « horizon », « otp » and « reset » name other key families of the same table and are never actions. */
+/** Public actions that consume throttle keys (src/lib/throttle.ts `actionThrottleKeys`). « mail », « horizon », « otp », « reset » and « track » name other key families of the same table and are never actions. */
 export const THROTTLE_ACTIONS = ["free", "buybook", "rdv", "shop", "held", "cancel", "release"] as const;
 export type ThrottleAction = (typeof THROTTLE_ACTIONS)[number];
 /**
@@ -211,6 +211,12 @@ export const THROTTLE_LIMITS: Record<ThrottleAction, ThrottleLimits> = {
   cancel: { ip: 20, ip48: 60, email: 10, emailGlobal: 20, perOccurrenceIp: null, perProIp: null },
   release: { ip: 30, ip48: 90, email: 30, emailGlobal: 30, perOccurrenceIp: null, perProIp: null },
 };
+/**
+ * Page-view beacons (/api/track) per THROTTLE_WINDOW_SEC (P6 A8): `ip` per IPv4 address or IPv6 /64, `ip48` per IPv6
+ * /48. A reader sends one beacon per page, so 600 an hour (10 a minute, all hour long) leaves room for a shared
+ * address (an office, a school) and still bounds the rows a script can write into the traffic stats.
+ */
+export const TRACK_THROTTLE_LIMITS = { ip: 600, ip48: 1800 } as const;
 /** Sign-in / verification codes sent to one address per hour (auth hook). */
 export const OTP_EMAIL_LIMIT = { limit: 5, windowSec: 3600 } as const;
 /** `throttle` rows older than this are purged by the nightly job. */

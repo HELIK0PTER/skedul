@@ -7,13 +7,15 @@ import {
   IP_HASH_RE,
   actionThrottleKeys,
   checkActionThrottle,
+  checkTrackThrottle,
   nextWindow,
   otpThrottleKey,
   resetThrottleKey,
   throttleKey,
+  trackThrottleKeys,
   type ActionThrottleArgs,
 } from "./throttle";
-import { THROTTLE_ACTIONS, THROTTLE_LIMITS, type ThrottleAction } from "./tickets-vocab";
+import { THROTTLE_ACTIONS, THROTTLE_LIMITS, TRACK_THROTTLE_LIMITS, type ThrottleAction } from "./tickets-vocab";
 
 const T0 = new Date("2026-10-12T10:00:00Z");
 const later = (sec: number) => new Date(T0.getTime() + sec * 1000);
@@ -222,5 +224,27 @@ test("actionThrottleKeys: no key holds an address, and the key families never me
       assert.equal(key.startsWith(`t:${action}:`), true, key);
       assert.equal(key.startsWith("t:mail:") || key.startsWith("t:horizon:"), false, key);
     }
+  }
+});
+
+test("trackThrottleKeys: the page-view beacon has its own IP key and /48 key, with the TRACK_THROTTLE_LIMITS (P6 A8)", () => {
+  assert.deepEqual(trackThrottleKeys({ ipHash: IP, wideIpHash: null }), [{ key: `t:track:ip:${IP}`, limit: TRACK_THROTTLE_LIMITS.ip }]);
+  assert.deepEqual(trackThrottleKeys({ ipHash: IP, wideIpHash: WIDE }), [
+    { key: `t:track:ip:${IP}`, limit: TRACK_THROTTLE_LIMITS.ip },
+    { key: `t:track:ip48:${WIDE}`, limit: TRACK_THROTTLE_LIMITS.ip48 },
+  ]);
+  assert.equal(trackThrottleKeys({ ipHash: IP, wideIpHash: null })[0].key, throttleKey("track", "ip", IP));
+  // Its own family: a reader's beacons never use up the booking or sign-in limits of the same address.
+  assert.ok(!THROTTLE_ACTIONS.some((action) => actionThrottleKeys(argsOf({ action, occurrenceId: "occ_1" }))[0].key === `t:track:ip:${IP}`));
+});
+
+test("checkTrackThrottle: an IP hash that is not one rejects before the database is touched (P6 A8)", async () => {
+  const untouched = new Proxy({}, {
+    get: () => {
+      throw new Error("the database was touched");
+    },
+  }) as Parameters<typeof checkTrackThrottle>[0];
+  for (const bad of [{ ipHash: "203.0.113.7", wideIpHash: null }, { ipHash: IP, wideIpHash: "2001:db8:abcd::/48" }]) {
+    await assert.rejects(checkTrackThrottle(untouched, bad, T0), /^Error: checkTrackThrottle: ipHash must be/, JSON.stringify(bad));
   }
 });

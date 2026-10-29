@@ -14,7 +14,7 @@ import { inArray, sql } from "drizzle-orm";
 import type { NeonHttpDatabase } from "drizzle-orm/neon-http";
 
 import * as schema from "@/lib/db/schema";
-import { normalizeEmail, THROTTLE_LIMITS, THROTTLE_WINDOW_SEC, type ThrottleAction } from "@/lib/tickets";
+import { normalizeEmail, THROTTLE_LIMITS, THROTTLE_WINDOW_SEC, TRACK_THROTTLE_LIMITS, type ThrottleAction } from "@/lib/tickets";
 
 /** Same type as `Db` of src/lib/db/atomic.ts (Task 14), declared here because this module comes first. */
 type ThrottleDb = NeonHttpDatabase<typeof schema>;
@@ -35,8 +35,8 @@ function emailDigest(email: string): string {
   return createHash("sha256").update(normalizeEmail(email)).digest("hex").slice(0, 32);
 }
 
-/** `t:<action>:ip:<ipHash>` / `t:<action>:e:<sha256(normalizedEmail) first 32 hex>`; actions "otp" and "reset" are the auth mail caps. */
-export function throttleKey(action: ThrottleAction | "otp" | "reset", kind: "ip" | "email", value: string): string {
+/** `t:<action>:ip:<ipHash>` / `t:<action>:e:<sha256(normalizedEmail) first 32 hex>`; actions "otp" and "reset" are the auth mail caps, "track" the page-view beacon. */
+export function throttleKey(action: ThrottleAction | "otp" | "reset" | "track", kind: "ip" | "email", value: string): string {
   if (kind === "ip") return `t:${action}:ip:${value}`;
   return `t:${action}:e:${emailDigest(value)}`;
 }
@@ -141,6 +141,27 @@ export async function checkActionThrottle(db: ThrottleDb, args: ActionThrottleAr
   const keys = actionThrottleKeys(args);
   const results = await Promise.all(
     keys.map(({ key, limit }) => consumeThrottle(db, key, { limit, windowSec: THROTTLE_WINDOW_SEC }, now)),
+  );
+  return results.every(Boolean);
+}
+
+/** The two hashes of a client address: ipHash(daily salt, bucket) of ipBuckets(ip).narrow, and of .wide (null for IPv4). */
+export type IpHashes = { ipHash: string; wideIpHash: string | null };
+
+/** Pure: the keys of the page-view beacon (P6 A8), `t:track:ip:<ipHash>` then `t:track:ip48:<wideIpHash>` when there is one, with TRACK_THROTTLE_LIMITS. */
+export function trackThrottleKeys(hashes: IpHashes): { key: string; limit: number }[] {
+  const keys: { key: string; limit: number }[] = [{ key: throttleKey("track", "ip", hashes.ipHash), limit: TRACK_THROTTLE_LIMITS.ip }];
+  if (hashes.wideIpHash !== null) keys.push({ key: `t:track:ip48:${hashes.wideIpHash}`, limit: TRACK_THROTTLE_LIMITS.ip48 });
+  return keys;
+}
+
+/** checkActionThrottle for the page-view beacon: throws (nothing consumed) on a hash that is not one, else consumes every key in ONE Promise.all; false if any is over. */
+export async function checkTrackThrottle(db: ThrottleDb, hashes: IpHashes, now: Date): Promise<boolean> {
+  if (!IP_HASH_RE.test(hashes.ipHash) || (hashes.wideIpHash !== null && !IP_HASH_RE.test(hashes.wideIpHash))) {
+    throw new Error("checkTrackThrottle: ipHash must be the 32 hex characters of ipHash()");
+  }
+  const results = await Promise.all(
+    trackThrottleKeys(hashes).map(({ key, limit }) => consumeThrottle(db, key, { limit, windowSec: THROTTLE_WINDOW_SEC }, now)),
   );
   return results.every(Boolean);
 }
