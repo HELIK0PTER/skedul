@@ -11,6 +11,7 @@ import test from "node:test";
 import { bodyOf, rawErrorLogs } from "@/test/source-guards";
 
 const SOURCE = readFileSync("src/server/pro-context.ts", "utf8");
+const CORE = readFileSync("src/lib/back-office/run-pro-action.ts", "utf8");
 
 test("requireProContext reads the session fresh and refuses a suspended user like no session (SEC-2)", () => {
   const body = bodyOf(SOURCE, "requireProContext");
@@ -22,10 +23,28 @@ test("requireProContext reads the session fresh and refuses a suspended user lik
 
 test("requireProContext carries the impersonating admin in the context, runProAction logs each successful action of one (SEC-6)", () => {
   assert.match(bodyOf(SOURCE, "requireProContext"), /impersonatedBy: session\.session\.impersonatedBy \?\? null/);
-  const run = bodyOf(SOURCE, "runProAction");
+  // The rules live in the tested core since P6 A28 (src/lib/back-office/run-pro-action.test.ts runs them with fakes).
+  const run = bodyOf(CORE, "runProActionWith");
   assert.match(run, /impersonationLogLine\(name, ctx\)/);
   // After the failure return: a refused or failed action leaves no « done » line.
   assert.ok(run.indexOf("if (!res.ok) return res;") < run.indexOf("impersonationLogLine"), "logged on success only");
+});
+
+test("both wrappers read the context inside their try, so an outage answers UNEXPECTED_ERROR instead of rejecting (P6 A28)", () => {
+  for (const name of ["runProActionWith", "runProQueryWith"]) {
+    const body = bodyOf(CORE, name);
+    const opened = body.indexOf("try {");
+    assert.ok(opened !== -1 && opened < body.indexOf("await deps.context()"), `${name}: the context is read inside the try`);
+    assert.match(body, /catch \(err\) \{\s*return unexpected\(deps, name, err\);/, `${name}: every throw goes through unexpected`);
+  }
+  assert.match(CORE, /function unexpected\([^)]*\): ActionFail \{\s*deps\.rethrowIfControlFlow\(err\);\s*deps\.log\(/, "a redirect still reaches Next, first");
+  for (const name of ["runProAction", "runProQuery"]) {
+    const body = bodyOf(SOURCE, name);
+    assert.match(body, new RegExp(`return ${name}With\\(`), `${name} hands over to its core`);
+    assert.doesNotMatch(body, /await requireProContext\(\)/, `${name}: no context read outside the core's try`);
+  }
+  assert.match(SOURCE, /context: requireProContext,/);
+  assert.match(SOURCE, /rethrowIfControlFlow: unstable_rethrow,/);
 });
 
 test("a signed-in user without a pro page goes to /mon-espace, never to the pro onboarding (L1396)", () => {
@@ -45,7 +64,9 @@ test("a signed-in user without a pro page goes to /mon-espace, never to the pro 
 });
 
 test("runProAction is the one caller that spends the pro's mail budget: runEffects(effects, \"pro\") (Decision 74, FR:SEC-1)", () => {
-  assert.match(bodyOf(SOURCE, "runProAction"), /after\(\(\) => runEffects\(effects, "pro"\)\)/);
+  // The wrappers share one set of dependencies; the action schedules its effects with the pro's budget.
+  assert.match(SOURCE, /schedule: \(effects\) => after\(\(\) => runEffects\(effects, "pro"\)\),/);
+  assert.match(bodyOf(SOURCE, "runProAction"), /return runProActionWith\(PRO_DEPS, /);
   // Any spelling of the client budget is refused here, not only `effects`: `runEffects(res.effects, "none")` is one too (G3b).
   const noneBudget = /runEffects\([^)]*"none"/;
   for (const spelling of ['runEffects(effects, "none")', 'runEffects(res.effects, "none")', 'runEffects(toRun,"none" )']) {

@@ -4,17 +4,8 @@ import { revalidatePath } from "next/cache";
 import { redirect, unstable_rethrow } from "next/navigation";
 import { after } from "next/server";
 
-import {
-  UNEXPECTED_ERROR,
-  actionFail,
-  impersonationLogLine,
-  revalidationTargets,
-  withoutEffects,
-  type ActionResult,
-  type CoreResult,
-  type ProCtx,
-} from "@/lib/back-office/result";
-import { logSafeMessage } from "@/lib/log-safe";
+import type { ActionResult, CoreResult, ProCtx } from "@/lib/back-office/result";
+import { runProActionWith, runProQueryWith, type RunProDeps } from "@/lib/back-office/run-pro-action";
 import { getCurrentProfessional, getFreshSession, getSession } from "@/lib/session";
 import { actingSession } from "@/lib/suspension";
 import { runEffects } from "@/server/notify";
@@ -60,8 +51,20 @@ export async function requireProContext(): Promise<ProCtx> {
   };
 }
 
+/** The real dependencies of the two wrappers: their rules are src/lib/back-office/run-pro-action.ts, tested with fakes. */
+const PRO_DEPS: RunProDeps = {
+  context: requireProContext,
+  schedule: (effects) => after(() => runEffects(effects, "pro")),
+  revalidate: (target) => revalidatePath(target.path, target.type),
+  log: (line) => console.error(line),
+  info: (line) => console.info(line),
+  rethrowIfControlFlow: unstable_rethrow,
+  now: () => new Date(),
+};
+
 /**
- * The wrapper of every pro write. Builds the context, takes ONE `now`, runs the
+ * The wrapper of every pro write. Builds the context (inside the core's try since P6 A28: an outage while reading the
+ * session answers UNEXPECTED_ERROR, the redirect of no session still reaches Next), takes ONE `now`, runs the
  * core. A thrown error that is not a Next.js control-flow error is logged
  * (« [pro] <name> failed: <message> », without address or token) and answered
  * with UNEXPECTED_ERROR. On success: the dashboard layout is revalidated (and
@@ -76,22 +79,7 @@ export async function runProAction<T extends object>(
   fn: (ctx: ProCtx, now: Date) => Promise<CoreResult<T>>,
   opts: { publicPage?: boolean } = {},
 ): Promise<ActionResult<T>> {
-  const ctx = await requireProContext();
-  let res: CoreResult<T>;
-  try {
-    res = await fn(ctx, new Date());
-  } catch (err) {
-    unstable_rethrow(err);
-    console.error(`[pro] ${name} failed: ${logSafeMessage(err)}`);
-    return actionFail(UNEXPECTED_ERROR);
-  }
-  if (!res.ok) return res;
-  const impersonation = impersonationLogLine(name, ctx);
-  if (impersonation) console.info(impersonation);
-  for (const target of revalidationTargets(opts.publicPage === true)) revalidatePath(target.path, target.type);
-  const effects = res.effects;
-  if (effects.length > 0) after(() => runEffects(effects, "pro"));
-  return withoutEffects(res);
+  return runProActionWith(PRO_DEPS, name, fn, opts);
 }
 
 /** The wrapper of read cores (search, previews): context and error handling like runProAction, no revalidation, no effect. */
@@ -99,12 +87,5 @@ export async function runProQuery<T extends object>(
   name: string,
   fn: (ctx: ProCtx, now: Date) => Promise<ActionResult<T>>,
 ): Promise<ActionResult<T>> {
-  const ctx = await requireProContext();
-  try {
-    return await fn(ctx, new Date());
-  } catch (err) {
-    unstable_rethrow(err);
-    console.error(`[pro] ${name} failed: ${logSafeMessage(err)}`);
-    return actionFail(UNEXPECTED_ERROR);
-  }
+  return runProQueryWith(PRO_DEPS, name, fn);
 }
