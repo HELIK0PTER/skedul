@@ -11,6 +11,7 @@ import { db } from "@/lib/db";
 import { professional, session, user } from "@/lib/db/schema";
 import { getAdminUser, type AdminUser } from "@/lib/admin";
 import { DELETION_STRIPE_OPTIONS, expireOpenCheckoutsCore } from "@/lib/admin-deletion";
+import { adminFailure } from "@/lib/admin-failures";
 import {
   BAN_DURATIONS,
   deletionConfirmed,
@@ -80,14 +81,6 @@ function refresh(userId: string) {
   revalidatePath(`/admin/users/${userId}`);
 }
 
-function failure(err: unknown): AdminActionResult {
-  console.error(`[admin] action failed: ${logSafeMessage(err)}`);
-  return {
-    ok: false,
-    error: err instanceof Error ? err.message : "Action impossible.",
-  };
-}
-
 /**
  * The /admin/users search (P6 A4): a read sent as a Server Action, so the term an admin types (a name, an e-mail)
  * never reaches a URL, the history or the request log. The admin is the session's, re-read from the database; the
@@ -142,7 +135,7 @@ export async function suspendUser(input: {
       },
     });
   } catch (err) {
-    return failure(err);
+    return adminFailure("suspend", err);
   }
   refresh(target.id);
   return { ok: true };
@@ -160,7 +153,7 @@ export async function reactivateUser(userId: string): Promise<AdminActionResult>
   try {
     await auth.api.unbanUser({ headers: await headers(), body: { userId } });
   } catch (err) {
-    return failure(err);
+    return adminFailure("reactivate", err);
   }
   refresh(userId);
   return { ok: true };
@@ -175,7 +168,7 @@ export async function signOutEverywhere(userId: string): Promise<AdminActionResu
   try {
     await auth.api.revokeUserSessions({ headers: await headers(), body: { userId } });
   } catch (err) {
-    return failure(err);
+    return adminFailure("signOut", err);
   }
   refresh(userId);
   return { ok: true };
@@ -196,7 +189,7 @@ export async function startImpersonation(userId: string): Promise<AdminActionRes
   try {
     await auth.api.impersonateUser({ headers: await headers(), body: { userId } });
   } catch (err) {
-    return failure(err);
+    return adminFailure("impersonate", err);
   }
   redirect("/dashboard");
 }
@@ -217,10 +210,14 @@ export async function setAdminRole(input: {
   // role is our user_role enum: write it directly (the plugin's setRole would
   // only re-check the admin permission verified above).
   const role: UserRole = input.admin ? "admin" : target.isPro ? "pro" : "client";
-  await db.update(user).set({ role }).where(eq(user.id, target.id));
-  if (!input.admin) {
-    // A demoted admin must not keep impersonating pros until the sessions expire.
-    await db.delete(session).where(eq(session.impersonatedBy, target.id));
+  try {
+    const setRole = db.update(user).set({ role }).where(eq(user.id, target.id));
+    // A demoted admin must not keep impersonating pros until the sessions expire: one batch (one transaction), so a
+    // failure leaves both the role and the sessions as they were (P6 X2).
+    if (input.admin) await setRole;
+    else await db.batch([setRole, db.delete(session).where(eq(session.impersonatedBy, target.id))]);
+  } catch (err) {
+    return adminFailure("role", err);
   }
   refresh(target.id);
   return { ok: true };
@@ -256,7 +253,7 @@ export async function deleteUser(input: {
   try {
     await db.delete(user).where(eq(user.id, target.id));
   } catch (err) {
-    return failure(err);
+    return adminFailure("delete", err);
   }
   console.info(`[admin] user ${target.id} deleted by admin ${admin.id}`);
   if (target.proId) await deleteBrandingImages(target.proId);
