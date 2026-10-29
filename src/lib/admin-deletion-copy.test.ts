@@ -17,21 +17,21 @@ const STATS = { events: 7, ticketTypes: 5, confirmedBookings: 12, upcoming: 3, c
 test("pageContentNote: the page, its slug and the counts, each with its own plural", () => {
   assert.equal(
     pageContentNote("altinha-paris", STATS),
-    "La page /altinha-paris et tout son contenu : 7 événements, 5 types de ticket, 12 inscriptions confirmées, 7 clients, 4 achats payés.",
+    "La page /altinha-paris et tout son contenu : 7 événements, 5 types de ticket, 12 réservations confirmées, 7 clients, 4 achats payés.",
   );
   assert.equal(
     pageContentNote("solo", { events: 1, ticketTypes: 1, confirmedBookings: 1, upcoming: 0, clients: 1, paidPurchases: 1 }),
-    "La page /solo et tout son contenu : 1 événement, 1 type de ticket, 1 inscription confirmée, 1 client, 1 achat payé.",
+    "La page /solo et tout son contenu : 1 événement, 1 type de ticket, 1 réservation confirmée, 1 client, 1 achat payé.",
   );
   assert.equal(
     pageContentNote("big", { ...STATS, confirmedBookings: 1234 }),
-    "La page /big et tout son contenu : 7 événements, 5 types de ticket, 1 234 inscriptions confirmées, 7 clients, 4 achats payés.",
+    "La page /big et tout son contenu : 7 événements, 5 types de ticket, 1 234 réservations confirmées, 7 clients, 4 achats payés.",
   );
 });
 
 test("upcomingNote and ticketsNote: singular and plural agree with the count", () => {
-  assert.equal(upcomingNote(1), "1 inscription à venir disparaîtra sans que le client soit prévenu.");
-  assert.equal(upcomingNote(3), "3 inscriptions à venir disparaîtront sans que les clients soient prévenus.");
+  assert.equal(upcomingNote(1), "1 réservation à venir disparaîtra sans que le client soit prévenu.");
+  assert.equal(upcomingNote(3), "3 réservations à venir disparaîtront sans que les clients soient prévenus.");
   assert.equal(ticketsNote(1), "1 ticket en circulation sera perdu pour ses clients, sans remboursement automatique.");
   assert.equal(ticketsNote(13), "13 tickets en circulation seront perdus pour ses clients, sans remboursement automatique.");
 });

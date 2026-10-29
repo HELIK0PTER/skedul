@@ -195,7 +195,7 @@ export type AdminBookingRow = {
   title: string;
 };
 
-/** /admin/activity « Inscriptions »: newest first (created_at), ACTIVITY_LIMIT rows, optionally one status. */
+/** /admin/activity « Réservations »: newest first (created_at), ACTIVITY_LIMIT rows, optionally one status. */
 export async function listRecentBookings(db: Db, status: BookingStatus | null): Promise<AdminBookingRow[]> {
   return bookingRows(db)
     .where(inArray(booking.id, newestBookingIds(db, status, ACTIVITY_LIMIT)))

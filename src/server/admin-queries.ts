@@ -299,7 +299,7 @@ export async function getUserDetail(userId: string, now: Date = new Date()) {
 
 /* ───────────────────────────── Activity lists ───────────────────────────── */
 
-/** /admin/activity « Inscriptions »: the latest bookings, optionally one status. */
+/** /admin/activity « Réservations »: the latest bookings, optionally one status. */
 export function listRecentBookings(status: BookingStatus | null) {
   return readRecentBookings(db, status);
 }

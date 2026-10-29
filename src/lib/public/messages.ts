@@ -140,7 +140,7 @@ export const COPY = {
   ENDED_EXPIRED: "Votre place n'est plus réservée.",
   PENDING_HOLDS_TITLE: "Paiements en attente",
   CONFIRM_EMAIL_FIRST: "Confirmez votre adresse pour voir vos réservations.",
-  NO_UPCOMING: "Aucune inscription à venir.",
+  NO_UPCOMING: "Aucune réservation à venir.",
   ORPHAN_TYPE: "Aucune séance à venir n'accepte ce type pour le moment.",
   RETURN_LINK: "Reprendre ou libérer ma réservation",
   PENDING_SEND: "Envoi…",

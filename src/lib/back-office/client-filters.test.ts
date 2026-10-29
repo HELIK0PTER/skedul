@@ -35,7 +35,7 @@ test("CLIENT_FILTERS and their labels", () => {
   assert.deepEqual(CLIENT_FILTER_LABELS, {
     tous: "Tous",
     tickets: "Avec tickets",
-    "a-venir": "Inscriptions à venir",
+    "a-venir": "Réservations à venir",
     alertes: "Alertes",
   });
 });

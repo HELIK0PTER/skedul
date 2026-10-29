@@ -128,7 +128,7 @@ export function ProClient({ state }: { state: DemoState }) {
         <div className="space-y-3">
           <Card>
             <CardHeader className="p-4 pb-3">
-              <CardTitle>Inscriptions</CardTitle>
+              <CardTitle>Réservations</CardTitle>
             </CardHeader>
             <CardContent className="p-4 pt-0">
               <ul className="divide-y divide-border">

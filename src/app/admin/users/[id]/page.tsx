@@ -126,7 +126,7 @@ export default async function AdminUserPage({
                   {[
                     { label: "Événements", value: stats.events },
                     { label: "Types de ticket", value: stats.ticketTypes },
-                    { label: "Inscriptions confirmées", value: stats.confirmedBookings },
+                    { label: "Réservations confirmées", value: stats.confirmedBookings },
                     { label: "À venir", value: stats.upcoming },
                     { label: "Clients", value: stats.clients },
                     { label: "Achats payés", value: stats.paidPurchases },

@@ -11,12 +11,12 @@ import { formatCount, plural, pluralWord } from "@/lib/back-office/format";
 
 /** What the pro page holds and loses with the account. */
 export function pageContentNote(slug: string, stats: ProStats): string {
-  return `La page /${slug} et tout son contenu : ${plural(stats.events, "événement", "événements")}, ${plural(stats.ticketTypes, "type de ticket", "types de ticket")}, ${plural(stats.confirmedBookings, "inscription confirmée", "inscriptions confirmées")}, ${plural(stats.clients, "client", "clients")}, ${plural(stats.paidPurchases, "achat payé", "achats payés")}.`;
+  return `La page /${slug} et tout son contenu : ${plural(stats.events, "événement", "événements")}, ${plural(stats.ticketTypes, "type de ticket", "types de ticket")}, ${plural(stats.confirmedBookings, "réservation confirmée", "réservations confirmées")}, ${plural(stats.clients, "client", "clients")}, ${plural(stats.paidPurchases, "achat payé", "achats payés")}.`;
 }
 
 export function upcomingNote(count: number): string {
   const told = count === 1 ? "sans que le client soit prévenu" : "sans que les clients soient prévenus";
-  return `${plural(count, "inscription à venir disparaîtra", "inscriptions à venir disparaîtront")} ${told}.`;
+  return `${plural(count, "réservation à venir disparaîtra", "réservations à venir disparaîtront")} ${told}.`;
 }
 
 export function ticketsNote(count: number): string {

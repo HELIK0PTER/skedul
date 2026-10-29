@@ -9,7 +9,7 @@ export type ClientFilter = (typeof CLIENT_FILTERS)[number];
 export const CLIENT_FILTER_LABELS: Record<ClientFilter, string> = {
   tous: "Tous",
   tickets: "Avec tickets",
-  "a-venir": "Inscriptions à venir",
+  "a-venir": "Réservations à venir",
   alertes: "Alertes",
 };
 

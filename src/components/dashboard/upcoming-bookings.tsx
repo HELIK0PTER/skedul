@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { BookingDetailVM } from "@/lib/back-office/dashboard-reads";
 
 /**
- * Dashboard « Prochaines inscriptions »: each row opens the booking's details. The dialog is held by id, so an
+ * Dashboard « Prochaines réservations »: each row opens the booking's details. The dialog is held by id, so an
  * unenrolled booking closes it once the list refreshes. The success line of an unenrollment is the shared
  * PlanningNotice (an always-mounted status region that takes the focus with a new line): the dialog and the row it
  * came from are gone by then.
@@ -23,12 +23,12 @@ export function UpcomingBookings({ bookings }: { bookings: BookingDetailVM[] }) 
   return (
     <Card className="mt-6">
       <CardHeader>
-        <CardTitle>Prochaines inscriptions</CardTitle>
+        <CardTitle>Prochaines réservations</CardTitle>
       </CardHeader>
       <CardContent>
         <PlanningNotice notice={notice} />
         {bookings.length === 0 ? (
-          <p className="py-6 text-center text-sm text-zinc-600">Aucune inscription à venir pour le moment.</p>
+          <p className="py-6 text-center text-sm text-zinc-600">Aucune réservation à venir pour le moment.</p>
         ) : (
           <ul className="-mx-2 -my-2 divide-y divide-border">
             {bookings.map((b) => (

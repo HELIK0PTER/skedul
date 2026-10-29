@@ -84,7 +84,7 @@ function BookingList({
 }
 
 /**
- * « Inscriptions »: what the client is signed up to, to come, then the cancelled or expired ones of séances still to
+ * « Réservations »: what the client is signed up to, to come, then the cancelled or expired ones of séances still to
  * come, then the past ones (a séance that has ended), with « Voir dans le planning », « Déplacer » and « Désinscrire ».
  */
 export function ClientBookings({
@@ -179,7 +179,7 @@ export function ClientBookings({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Inscriptions</CardTitle>
+        <CardTitle>Réservations</CardTitle>
       </CardHeader>
       <CardContent>
         {/* Always mounted, so that a screen reader announces the text when it appears. */}
@@ -193,13 +193,13 @@ export function ClientBookings({
         </div>
 
         {all.length === 0 ? (
-          <p className="text-sm text-zinc-600">Aucune inscription.</p>
+          <p className="text-sm text-zinc-600">Aucune réservation.</p>
         ) : (
           <div className="space-y-4">
             <section>
               <h4 className="text-sm font-medium">À venir</h4>
               {upcoming.length === 0 ? (
-                <p className="mt-1 text-sm text-zinc-600">Aucune inscription à venir.</p>
+                <p className="mt-1 text-sm text-zinc-600">Aucune réservation à venir.</p>
               ) : (
                 <BookingList rows={upcoming} onMove={openMove} onUnenroll={openUnenroll} />
               )}

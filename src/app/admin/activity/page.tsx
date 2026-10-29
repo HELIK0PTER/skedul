@@ -198,7 +198,7 @@ export default async function AdminActivityPage({
           label="Type d'opération"
           active={tab}
           options={[
-            { value: "bookings", label: "Inscriptions", href: href({ tab: "bookings", status: null }) },
+            { value: "bookings", label: "Réservations", href: href({ tab: "bookings", status: null }) },
             { value: "purchases", label: "Achats", href: href({ tab: "purchases", status: null }) },
           ]}
         />
