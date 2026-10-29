@@ -2,6 +2,7 @@ import Link from "next/link";
 import { CalendarDays, ChevronLeft, ChevronRight, MapPin } from "lucide-react";
 
 import { EmptyState } from "@/components/dashboard/empty-state";
+import { WeekStepLink } from "@/components/public/week-step-link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -112,6 +113,8 @@ export function PublicPlanning({
   shopHref: string | null;
 }) {
   const withSeances = days.filter((day) => day.seances.length > 0);
+  // The shown week in the shown view: what a week step keeps at an end.
+  const shownHref = view === "semaine" ? nav.weekHref : nav.listHref;
   return (
     <section aria-labelledby={PLANNING_HEADING_ID} className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -148,34 +151,17 @@ export function PublicPlanning({
         />
       ) : (
         <>
+          {/* The same link for each step at every week, aria-disabled at an end: the focus stays on it (P6 A44). */}
           <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
-            {nav.prevHref ? (
-              <Button asChild variant="secondary" size="sm" className="flex-1 sm:flex-none">
-                <Link href={nav.prevHref}>
-                  <ChevronLeft aria-hidden />
-                  Semaine précédente
-                </Link>
-              </Button>
-            ) : (
-              <Button variant="secondary" size="sm" disabled className="flex-1 sm:flex-none">
-                <ChevronLeft aria-hidden />
-                Semaine précédente
-              </Button>
-            )}
+            <WeekStepLink href={nav.prevHref} fallbackHref={shownHref}>
+              <ChevronLeft aria-hidden />
+              Semaine précédente
+            </WeekStepLink>
             <p className="order-first w-full text-center text-sm font-semibold sm:order-none sm:w-auto sm:flex-1">{nav.title}</p>
-            {nav.nextHref ? (
-              <Button asChild variant="secondary" size="sm" className="flex-1 sm:flex-none">
-                <Link href={nav.nextHref}>
-                  Semaine suivante
-                  <ChevronRight aria-hidden />
-                </Link>
-              </Button>
-            ) : (
-              <Button variant="secondary" size="sm" disabled className="flex-1 sm:flex-none">
-                Semaine suivante
-                <ChevronRight aria-hidden />
-              </Button>
-            )}
+            <WeekStepLink href={nav.nextHref} fallbackHref={shownHref}>
+              Semaine suivante
+              <ChevronRight aria-hidden />
+            </WeekStepLink>
           </div>
 
           {empty === "week" && (

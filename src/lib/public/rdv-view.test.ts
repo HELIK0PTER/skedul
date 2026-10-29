@@ -82,23 +82,26 @@ test("rdvWeekKey: a past week or a week beyond the horizon gives the default wee
   assert.equal(rdvWeekKey("2099-01-05", NOW, PARIS, WINDOW), "2026-10-26");
 });
 
-test("rdvWeekNav: no previous week before the current week, no next week past the horizon week", () => {
+test("rdvWeekNav: no previous week before the current week, no next week past the horizon week, and the shown week's own address (P6 A44)", () => {
   const short = { bookingHorizonDays: 14, minNoticeMinutes: 120 };
   const base = { slug: "altinha-paris", ticketTypeId: "tt_1", now: NOW, tz: PARIS, window: short };
   assert.deepEqual(rdvWeekNav({ ...base, weekKey: "2026-10-26" }), {
     weekKey: "2026-10-26",
     title: "26 octobre au 1er novembre 2026",
+    selfHref: "/altinha-paris/rdv/tt_1?semaine=2026-10-26",
     prevHref: null,
     nextHref: "/altinha-paris/rdv/tt_1?semaine=2026-11-02",
   });
   assert.deepEqual(rdvWeekNav({ ...base, weekKey: "2026-11-02" }), {
     weekKey: "2026-11-02",
     title: "2 au 8 novembre 2026",
+    selfHref: "/altinha-paris/rdv/tt_1?semaine=2026-11-02",
     prevHref: "/altinha-paris/rdv/tt_1?semaine=2026-10-26",
     nextHref: "/altinha-paris/rdv/tt_1?semaine=2026-11-09",
   });
   const last = rdvWeekNav({ ...base, weekKey: "2026-11-11" });
   assert.equal(last.weekKey, "2026-11-09", "any day reads as its Monday");
+  assert.equal(last.selfHref, "/altinha-paris/rdv/tt_1?semaine=2026-11-09", "the Monday's address, what an end step keeps");
   assert.equal(last.prevHref, "/altinha-paris/rdv/tt_1?semaine=2026-11-02");
   assert.equal(last.nextHref, null, "the horizon week is the last");
 });

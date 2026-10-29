@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { cache } from "react";
 import { CalendarX2, ChevronLeft, ChevronRight, Clock, Globe } from "lucide-react";
@@ -13,8 +12,8 @@ import { PublicShell } from "@/components/public/public-shell";
 import { RdvBooking } from "@/components/public/rdv-booking";
 import { ReleaseStatus } from "@/components/public/release-status";
 import { WalletPanel } from "@/components/public/wallet-panel";
+import { WeekStepLink } from "@/components/public/week-step-link";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { formatWhenShort } from "@/lib/back-office/format";
 import { formatTime } from "@/lib/datetime";
@@ -78,37 +77,22 @@ export async function generateMetadata({ params, searchParams }: Props): Promise
   return rdvMetadata(loaded, await searchParams);
 }
 
-/** The week navigation of the page: a link per reachable week, a disabled button at either end (the horizon, today). */
+/**
+ * The week navigation of the page: the same link for each step at every week, aria-disabled at either end (today's
+ * week, the horizon), so the focus stays on it when a keyboard user reaches an end (P6 A44).
+ */
 function WeekNav({ nav }: { nav: RdvWeekNav }) {
   return (
     <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
-      {nav.prevHref ? (
-        <Button asChild variant="secondary" size="sm" className="flex-1 sm:flex-none">
-          <Link href={nav.prevHref} scroll={false}>
-            <ChevronLeft aria-hidden />
-            {RDV_PREV_WEEK}
-          </Link>
-        </Button>
-      ) : (
-        <Button variant="secondary" size="sm" disabled className="flex-1 sm:flex-none">
-          <ChevronLeft aria-hidden />
-          {RDV_PREV_WEEK}
-        </Button>
-      )}
+      <WeekStepLink href={nav.prevHref} fallbackHref={nav.selfHref} scroll={false}>
+        <ChevronLeft aria-hidden />
+        {RDV_PREV_WEEK}
+      </WeekStepLink>
       <p className="order-first w-full text-center text-sm font-semibold sm:order-none sm:w-auto sm:flex-1">{nav.title}</p>
-      {nav.nextHref ? (
-        <Button asChild variant="secondary" size="sm" className="flex-1 sm:flex-none">
-          <Link href={nav.nextHref} scroll={false}>
-            {COPY.RDV_NEXT_WEEK}
-            <ChevronRight aria-hidden />
-          </Link>
-        </Button>
-      ) : (
-        <Button variant="secondary" size="sm" disabled className="flex-1 sm:flex-none">
-          {COPY.RDV_NEXT_WEEK}
-          <ChevronRight aria-hidden />
-        </Button>
-      )}
+      <WeekStepLink href={nav.nextHref} fallbackHref={nav.selfHref} scroll={false}>
+        {COPY.RDV_NEXT_WEEK}
+        <ChevronRight aria-hidden />
+      </WeekStepLink>
     </div>
   );
 }

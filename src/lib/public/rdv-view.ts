@@ -79,6 +79,8 @@ export type RdvWeekNav = {
   weekKey: DateKey;
   /** « 26 octobre au 1er novembre 2026 » */
   title: string;
+  /** the shown week's own address: what a week step at an end keeps, so it stays the same link (P6 A44) */
+  selfHref: string;
   /** null on the current week: nothing before it can be booked */
   prevHref: string | null;
   /** null on the horizon week: nothing after it can be booked */
@@ -100,6 +102,7 @@ export function rdvWeekNav(a: {
   return {
     weekKey: monday,
     title: weekTitle(days),
+    selfHref: rdvWeekHref(a.slug, a.ticketTypeId, monday),
     prevHref: monday > bounds.current ? rdvWeekHref(a.slug, a.ticketTypeId, addDays(monday, -7)) : null,
     nextHref: monday < bounds.horizon ? rdvWeekHref(a.slug, a.ticketTypeId, addDays(monday, 7)) : null,
   };
