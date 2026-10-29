@@ -336,9 +336,15 @@ dbTest("occurrence_cancelled mails the confirmed client only: a lapsed hold hear
     await cancelOccurrence(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: occ.id }, now),
   );
   const cancelled = effectOf(res.effects, "email.occurrence_cancelled");
-  assert.equal(cancelled.bookingIds.length, 2);
+  // P6 A13: the engine expires the lapsed hold first and lists the confirmed booking only
+  assert.equal(cancelled.bookingIds.length, 1);
+  assert.equal(res.bookingsCancelled, 1);
 
-  const mails = emailsOf(await planEffect(db, cancelled, depsAt(now)), pro.proId);
+  // the send-time filter still drops a lapsed hold handed to it in the list
+  const mails = emailsOf(
+    await planEffect(db, { ...cancelled, bookingIds: [...cancelled.bookingIds, hold.bookingId] }, depsAt(now)),
+    pro.proId,
+  );
   assert.equal(mails.length, 1);
   assert.equal(mails[0].to, confirmedEmail);
   assert.equal(mails[0].subject, "Séance annulée : Altinha du soir");
@@ -1292,4 +1298,24 @@ dbTest("S6: the receipt names a booking only when it is the purchase's own custo
     if (purchases.length > 0) await db.delete(ticketPurchase).where(inArray(ticketPurchase.id, purchases));
     await deleteTestUser(db, other.userId);
   }
+});
+
+// P6 A14: « rendu » means the client can use the ticket again; one that comes back past its expiry comes back expired.
+dbTest("a ticket that comes back already expired is not « rendu »: not in the client's mail, not in the pro's notice, not in ticketReturned", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await makeType(db, pro, { name: "Cours collectif" });
+  const { occurrences: [occ] } = await makeEvent(db, pro, { title: "Altinha du soir", ticketTypeIds: [typeId] });
+  const customerId = await makeCustomer(db, pro, { name: "Thomas Leroy", email: testEmail("expired-return") });
+  await giveTickets(db, pro, customerId, typeId, 1);
+  const reg = must(
+    await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: occ.id, customerId, asGuest: false }, now),
+  );
+  await db.update(ticket).set({ expiresAt: addMinutes(now, -1) }).where(eq(ticket.bookingId, reg.bookingId));
+
+  const cancel = must(await cancelByClient(db, { professionalId: pro.proId, customerId, bookingId: reg.bookingId, actorUserId: null }, now));
+  assert.equal(cancel.ticketReturned, false);
+  const [clientMail] = emailsOf(await planEffect(db, effectOf(cancel.effects, "email.booking_cancelled"), depsAt(now)), pro.proId);
+  assert.equal(clientMail.html.includes("Votre ticket a été rendu"), false);
+  const [proMail] = emailsOf(await planEffect(db, effectOf(cancel.effects, "email.pro_booking_cancelled"), depsAt(now)), pro.proId);
+  assert.equal(proMail.html.includes("Son ticket lui a été rendu."), false);
 });

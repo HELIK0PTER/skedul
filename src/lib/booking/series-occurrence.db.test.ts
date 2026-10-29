@@ -9,6 +9,7 @@ import {
   giveTickets,
   makeCustomer,
   makeEvent,
+  makeOffer,
   makeType,
   occurrencesOf,
   ticketsOf,
@@ -16,7 +17,7 @@ import {
 import { instantAt } from "../civil-date";
 import { event, eventTicketType } from "../db/schema";
 import { cancelByClient } from "./cancel";
-import { bookWithHeldTicket, registerPro } from "./claims";
+import { bookWithHeldTicket, registerPro, startBuyAndBook } from "./claims";
 import { bookingsExpiringBefore, editEventInPlace, updateOccurrence } from "./series";
 import type { Effect } from "./types";
 
@@ -553,4 +554,74 @@ dbTest("E7 éditeur: a repeated question id is kept once and the repeat becomes 
   );
   assert.equal(after[0].id, keptId);
   assert.notEqual(after[1].id, keptId);
+});
+
+/* P6 A13: a hold that already lapsed is released before a capacity cut and is not told about a change. */
+
+/** A séance of capacity 2 (3 days ahead) with one confirmed ticket booking and one buy + book hold, both made at `now`. */
+async function seanceWithHold({ db, pro }: DbHarness, now: Date) {
+  const typeId = await makeType(db, pro);
+  const offerId = await makeOffer(db, pro, typeId);
+  const { eventId, occurrences } = await makeEvent(db, pro, { ticketTypeIds: [typeId], capacity: 2 }, now);
+  const occ = occurrences[0];
+  const kept = await makeCustomer(db, pro);
+  await giveTickets(db, pro, kept, typeId, 1);
+  const confirmed = await bookWithHeldTicket(
+    db,
+    { professionalId: pro.proId, occurrenceId: occ.id, customerId: kept, seenStartsAt: occ.startsAt, actorUserId: pro.userId },
+    now,
+  );
+  must(confirmed, "held ticket");
+  const buyer = await makeCustomer(db, pro);
+  const hold = await startBuyAndBook(
+    db,
+    { professionalId: pro.proId, occurrenceId: occ.id, customerId: buyer, seenStartsAt: occ.startsAt, offerId },
+    now,
+  );
+  must(hold, "buy + book");
+  const holdEnd = (await getBooking(db, hold.bookingId)).holdExpiresAt;
+  assert.ok(holdEnd);
+  return { eventId, occ, confirmedId: confirmed.bookingId, holdId: hold.bookingId, holdEnd };
+}
+
+dbTest("A13 cette séance: a capacity cut releases a lapsed hold first, and the move tells the live registrants only", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithHold(h, new Date());
+  const res = await updateOccurrence(
+    db,
+    {
+      professionalId: pro.proId,
+      actorUserId: pro.userId,
+      occurrenceId: s.occ.id,
+      seenStartsAt: s.occ.startsAt,
+      patch: { capacity: 1, startsAt: addMinutes(s.occ.startsAt, 60) },
+    },
+    s.holdEnd,
+  );
+  must(res, "capacity + move");
+  const o = await getOccurrence(db, s.occ.id);
+  assert.equal(o.capacity, 1, "the lapsed hold no longer keeps the capacity up");
+  assert.equal(o.seatsTaken, 1);
+  const lapsed = await getBooking(db, s.holdId);
+  assert.equal(lapsed.status, "expired");
+  assert.equal(lapsed.endedBy, "system");
+  const changed = res.effects.find((e) => e.type === "email.occurrence_changed");
+  assert.ok(changed && changed.type === "email.occurrence_changed");
+  assert.deepEqual(changed.bookingIds, [s.confirmedId]);
+  assert.ok(!res.effects.some((e) => e.type === "email.booking_cancelled"), "an expired hold is not « désinscrit »");
+});
+
+dbTest("A13 éditeur: a capacity cut releases the lapsed holds of the séances it reaches", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithHold(h, new Date());
+  const res = await editEventInPlace(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, eventId: s.eventId, seenVersion: 1, patch: { capacity: 1 } },
+    s.holdEnd,
+  );
+  must(res, "edit in place");
+  const o = await getOccurrence(db, s.occ.id);
+  assert.equal(o.capacity, 1);
+  assert.equal(o.seatsTaken, 1);
+  assert.equal((await getBooking(db, s.holdId)).status, "expired");
 });

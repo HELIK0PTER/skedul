@@ -9,6 +9,7 @@ import {
   giveTickets,
   makeCustomer,
   makeEvent,
+  makeOffer,
   makeType,
   occurrencesOf,
   ticketsOf,
@@ -19,7 +20,7 @@ import { event } from "../db/schema";
 import { expandDates } from "../recurrence";
 import type { RecurrenceRuleInput } from "../tickets";
 import { cancelOccurrence, restoreOccurrence } from "./cancel";
-import { registerPro } from "./claims";
+import { registerPro, startBuyAndBook } from "./claims";
 import { ensureHorizon, horizonEnd } from "./occurrences";
 import { deleteSeriesFrom, editSeriesFrom, previewSeriesEdit, updateOccurrence } from "./series";
 
@@ -254,6 +255,40 @@ dbTest("E7 suivantes: booked orphans cancelled on request return their tickets",
   assert.equal((await getBooking(db, reg.bookingId)).status, "cancelled");
   const [t] = await ticketsOf(db, customerId);
   assert.equal(t.status, "available");
+});
+
+// P6 A13: a hold that already lapsed is not an orphan's registrant: the preview does not count it, and the split
+// releases it before it cancels the empty séance (no stale loop on its seat).
+dbTest("A13 suivantes: a séance whose date goes, held only by a lapsed hold, is cancelled empty; the hold expires", async (h) => {
+  const { db, pro } = h;
+  const now = new Date();
+  const { typeId, eventId, d } = await pastSeries(h, now);
+  const friday = (await occurrencesOf(db, eventId)).find((o) => (o.seriesDate ?? "") >= d && dayOfWeek(o.seriesDate ?? "") === 5);
+  assert.ok(friday);
+  const offerId = await makeOffer(db, pro, typeId);
+  const buyer = await makeCustomer(db, pro);
+  const hold = await startBuyAndBook(
+    db,
+    { professionalId: pro.proId, occurrenceId: friday.id, customerId: buyer, seenStartsAt: friday.startsAt, offerId },
+    now,
+  );
+  must(hold, "buy + book");
+  const at = (await getBooking(db, hold.bookingId)).holdExpiresAt;
+  assert.ok(at);
+
+  const input = { professionalId: pro.proId, eventId, fromDate: d, rule: weekly(d, [1, 3]), durationMin: 60 };
+  const preview = await previewSeriesEdit(db, input, at);
+  must(preview, "preview");
+  assert.equal(preview.summary.orphans, 0, "the lapsed hold is no registrant");
+  const res = await editSeriesFrom(db, { ...input, actorUserId: pro.userId, seenVersion: 1, orphans: "keep" }, at);
+  must(res, "split");
+  assert.ok(!res.effects.some((e) => e.type === "email.occurrence_cancelled"), "nobody to tell");
+  const o = await getOccurrence(db, friday.id);
+  assert.equal(o.status, "cancelled");
+  assert.equal(o.seatsTaken, 0);
+  const b = await getBooking(db, hold.bookingId);
+  assert.equal(b.status, "expired");
+  assert.equal(b.endedBy, "system");
 });
 
 dbTest("E7 suivantes: count mode keeps the remaining total (« Il reste K séances »)", async ({ db, pro }) => {

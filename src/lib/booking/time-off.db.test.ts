@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { sql } from "drizzle-orm";
 
 import { dbTest, inParallel } from "../../test/db";
-import { dayIn, getBooking, getOccurrence, giveTickets, makeCustomer, makeEvent, makeType, ticketsOf } from "../../test/fixtures";
+import { dayIn, getBooking, getOccurrence, giveTickets, makeCustomer, makeEvent, makeOffer, makeType, ticketsOf } from "../../test/fixtures";
 import { addDays, instantAt } from "../civil-date";
 import type { Db } from "../db/atomic";
 import { createTimeOffWithConflicts, previewTimeOffConflicts } from "./cancel";
 import { setAvailabilityRules } from "./catalog";
-import { bookRdv, bookWithHeldTicket, registerPro } from "./claims";
+import { bookRdv, bookWithHeldTicket, registerPro, startBuyAndBook } from "./claims";
 
 type Outcome = { ok: boolean; code?: string };
 
@@ -326,4 +326,40 @@ dbTest("E6c: the preview counts every active booking of a conflicting séance, a
     preview.map((p) => [p.occurrenceId, p.activeBookings, p.ticketBookings]),
     [[occ.id, 2, 1]],
   );
+});
+
+// P6 A13: a hold that already lapsed is not a registrant: the preview leaves its séance out, and the batch expires it
+// first, so a time off made with that preview is not stale.
+dbTest("A13 E6c: a séance held only by a lapsed hold is no conflict; the time off expires the hold and keeps the séance", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await makeType(db, pro);
+  const offerId = await makeOffer(db, pro, typeId);
+  const {
+    occurrences: [occ],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeId] }, now);
+  const buyer = await makeCustomer(db, pro);
+  const hold = await startBuyAndBook(
+    db,
+    { professionalId: pro.proId, occurrenceId: occ.id, customerId: buyer, seenStartsAt: occ.startsAt, offerId },
+    now,
+  );
+  must(hold, "buy + book");
+  const at = (await getBooking(db, hold.bookingId)).holdExpiresAt;
+  assert.ok(at);
+  const range = { startAt: occ.startsAt, endAt: occ.endsAt };
+  assert.deepEqual(await previewTimeOffConflicts(db, { professionalId: pro.proId, ...range }, at), [], "no live registrant");
+
+  const res = await createTimeOffWithConflicts(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, ...range, allDay: false, reason: null, seenOccurrenceIds: [], cancelBooked: true },
+    at,
+  );
+  must(res, "time off");
+  assert.equal(res.cancelledOccurrences, 0);
+  const b = await getBooking(db, hold.bookingId);
+  assert.equal(b.status, "expired");
+  assert.equal(b.endedBy, "system");
+  const o = await getOccurrence(db, occ.id);
+  assert.equal(o.status, "scheduled");
+  assert.equal(o.seatsTaken, 0);
 });

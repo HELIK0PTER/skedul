@@ -164,7 +164,10 @@ async function readOccurrence(db: Db, professionalId: string, occurrenceId: stri
   return row ?? null;
 }
 
-/** The bookings (of this pro) that got a ticket back when they ended. */
+/**
+ * The bookings (of this pro) that got a usable ticket back when they ended: a `return` to `available`. One that
+ * came back past its expiry came back expired, and the mail does not call it « rendu » (P6 A14).
+ */
 async function returnedBookingIds(db: Db, professionalId: string, bookingIds: readonly string[]): Promise<Set<string>> {
   if (bookingIds.length === 0) return new Set();
   const rows = await db
@@ -174,6 +177,7 @@ async function returnedBookingIds(db: Db, professionalId: string, bookingIds: re
       and(
         eq(ticketMovement.professionalId, professionalId),
         eq(ticketMovement.kind, "return"),
+        eq(ticketMovement.toStatus, "available"),
         inArray(ticketMovement.bookingId, [...bookingIds]),
       ),
     );

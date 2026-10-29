@@ -12,6 +12,7 @@ import {
   RET,
   SEAT,
   lockRows,
+  releaseEndedSeats,
   textArray,
   ts,
   tryAtomic,
@@ -21,16 +22,20 @@ import {
   type Query,
 } from "@/lib/db/atomic";
 import { booking, event, occurrence, ticketPurchase, ticketType, timeOff } from "@/lib/db/schema";
-import { BOUNDS } from "@/lib/tickets";
+import { BOUNDS, type BookingStatus } from "@/lib/tickets";
 
+import { expireElapsedHolds, holdsSeat } from "./holds";
 import { fail, failOf, syncEffects, type Effect, type EngineResult } from "./types";
 
 /* ───────────────────────── Shared helpers ───────────────────────── */
 
-/** `return` movements written by one action. */
+/**
+ * `return` movements written by one action whose ticket came back usable (to_status available). A ticket past its
+ * expires_at comes back expired (RET): it is not « rendu », so it counts for nothing here (P6 A14).
+ */
 async function countReturned(db: Db, aid: string): Promise<number> {
   const res = await db.execute<{ n: number }>(
-    sql`select count(*)::int as n from ticket_movement where action_id = ${aid} and kind = 'return'`,
+    sql`select count(*)::int as n from ticket_movement where action_id = ${aid} and kind = 'return' and to_status = 'available'`,
   );
   return Number(res.rows[0]?.n ?? 0);
 }
@@ -57,27 +62,49 @@ export function endBookings(
     where professional_id = ${args.professionalId} and status in ('pending', 'confirmed') and ${scope}`);
 }
 
-/** UPDATE occurrence → cancelled, cancelled_at = now, seats_taken = 0 WHERE id = any AND pro AND scheduled. */
+/**
+ * UPDATE occurrence → cancelled, cancelled_at = now, seats_taken = 0 WHERE id = any AND pro AND scheduled,
+ * RETURNING id: the batch result lists the séances this statement cancelled (none on a repeat).
+ */
 export function cancelOccurrencesQuery(
   c: BatchCtx,
   args: { professionalId: string; occurrenceIds: readonly string[] },
 ): Query {
   return c.db.execute(sql`
     update occurrence set status = 'cancelled', cancelled_at = ${ts(c.now)}, seats_taken = 0, updated_at = ${ts(c.now)}
-    where id = any(${textArray(args.occurrenceIds)}) and professional_id = ${args.professionalId} and status = 'scheduled'`);
+    where id = any(${textArray(args.occurrenceIds)}) and professional_id = ${args.professionalId} and status = 'scheduled'
+    returning id`);
 }
 
-/** Final read after commit: bookings ended by `aid`, with their purchase state (for effects). */
+/** The ids a RETURNING id statement of the batch gave back (`res.results[index]`). */
+function returnedIds(results: readonly unknown[], index: number): string[] {
+  const rows = (results[index] as { rows?: { id: string }[] } | undefined)?.rows ?? [];
+  return rows.map((r) => r.id);
+}
+
+/**
+ * Final read after commit: bookings ended by `aid`, with their status and their purchase state (for effects).
+ * `cancelled` ones were registrants the action ended; `expired` ones were lapsed holds it released first (P6 A13):
+ * they hear nothing and count for nothing, only their open Checkout session is expired.
+ */
 export async function readEndedByAction(
   db: Db,
   aid: string,
 ): Promise<
-  { bookingId: string; occurrenceId: string; purchaseId: string | null; purchasePending: boolean; checkoutSessionId: string | null }[]
+  {
+    bookingId: string;
+    occurrenceId: string;
+    status: BookingStatus;
+    purchaseId: string | null;
+    purchasePending: boolean;
+    checkoutSessionId: string | null;
+  }[]
 > {
   const rows = await db
     .select({
       bookingId: booking.id,
       occurrenceId: booking.occurrenceId,
+      status: booking.status,
       purchaseId: booking.purchaseId,
       purchaseStatus: ticketPurchase.status,
       checkoutSessionId: ticketPurchase.checkoutSessionId,
@@ -89,10 +116,16 @@ export async function readEndedByAction(
   return rows.map((r) => ({
     bookingId: r.bookingId,
     occurrenceId: r.occurrenceId,
+    status: r.status,
     purchaseId: r.purchaseId,
     purchasePending: r.purchaseStatus === "pending",
     checkoutSessionId: r.checkoutSessionId,
   }));
+}
+
+/** The bookings an action cancelled (its registrants), never the lapsed holds it expired on the way. */
+export function cancelledOf(ended: Awaited<ReturnType<typeof readEndedByAction>>): Awaited<ReturnType<typeof readEndedByAction>> {
+  return ended.filter((b) => b.status === "cancelled");
 }
 
 /** stripe.expire_session for every ended booking whose purchase is still pending with a session. */
@@ -108,8 +141,10 @@ export function expireSessionEffects(ended: Awaited<ReturnType<typeof readEndedB
 
 /**
  * E6b effects for séances cancelled by action `aid`: one « séance annulée »
- * e-mail per séance that had bookings, Stripe expiry for pending purchases,
- * a Google sync per séance. Shared with series.ts (orphans cancelled).
+ * e-mail per séance that had registrants (cancelled bookings only: a lapsed
+ * hold the action expired first hears nothing, P6 A13), Stripe expiry for
+ * pending purchases, a Google sync per séance cancelled or with a booking
+ * ended. Shared with series.ts (orphans cancelled).
  */
 export async function occurrenceCancelledEffects(
   db: Db,
@@ -117,13 +152,14 @@ export async function occurrenceCancelledEffects(
   occurrenceIds: readonly string[],
 ): Promise<{ effects: Effect[]; bookingsCancelled: number }> {
   const ended = await readEndedByAction(db, aid);
+  const registrants = cancelledOf(ended);
   const effects: Effect[] = [];
-  for (const occurrenceId of occurrenceIds) {
-    const bookingIds = ended.filter((b) => b.occurrenceId === occurrenceId).map((b) => b.bookingId);
+  for (const occurrenceId of new Set([...occurrenceIds, ...registrants.map((b) => b.occurrenceId)])) {
+    const bookingIds = registrants.filter((b) => b.occurrenceId === occurrenceId).map((b) => b.bookingId);
     if (bookingIds.length > 0) effects.push({ type: "email.occurrence_cancelled", occurrenceId, bookingIds });
   }
-  effects.push(...expireSessionEffects(ended), ...syncEffects(occurrenceIds));
-  return { effects, bookingsCancelled: ended.length };
+  effects.push(...expireSessionEffects(ended), ...syncEffects([...occurrenceIds, ...ended.map((b) => b.occurrenceId)]));
+  return { effects, bookingsCancelled: registrants.length };
 }
 
 /* ───────────────────────── E5: client cancellation ───────────────────────── */
@@ -244,7 +280,7 @@ export async function cancelBookingsByPro(
   if (!res.ok) return failOf(res);
   const ended = await readEndedByAction(db, res.aid);
   const effects: Effect[] = [
-    ...ended.map((b): Effect => ({ type: "email.booking_cancelled", bookingId: b.bookingId, by: "pro" })),
+    ...cancelledOf(ended).map((b): Effect => ({ type: "email.booking_cancelled", bookingId: b.bookingId, by: "pro" })),
     ...expireSessionEffects(ended),
     ...syncEffects([input.occurrenceId]),
   ];
@@ -254,15 +290,18 @@ export async function cancelBookingsByPro(
 /* ───────────────────────── E6b: pro cancels a séance ───────────────────────── */
 
 /**
- * E6b, idempotent: the guarded UPDATE locks the occurrence (→ cancelled,
- * seats 0); G(cancelled, 'not_found'); end every pending|confirmed booking;
- * RET(pro). An already cancelled séance is a success with nothing to do.
+ * E6b, idempotent. Batch: lock the occurrence (P6 A14, also on a repeat);
+ * expire its lapsed holds (system, P6 A13: not registrants); the guarded
+ * UPDATE (→ cancelled, seats 0); G(cancelled, 'not_found'); end every
+ * pending|confirmed booking left; RET(pro). An already cancelled séance is a
+ * success with nothing to do and no effect (no Google sync either).
  */
 export async function cancelOccurrence(
   db: Db,
   input: { professionalId: string; actorUserId: string; occurrenceId: string },
   now: Date = new Date(),
 ): Promise<EngineResult<{ bookingsCancelled: number; ticketsReturned: number }>> {
+  let cancelAt = -1;
   const res = await tryAtomic(db, async () => {
     const [o] = await db
       .select({ id: occurrence.id })
@@ -272,8 +311,9 @@ export async function cancelOccurrence(
     return (aid) => {
       const c: BatchCtx = { db, aid, now };
       const by: ActorRef = { actor: "pro", userId: input.actorUserId };
-      return [
-        cancelOccurrencesQuery(c, { professionalId: input.professionalId, occurrenceIds: [o.id] }),
+      const queries: Query[] = [lockRows(db, "occurrence", [o.id]), expireElapsedHolds(c, sql`select unnest(${textArray([o.id])})`)];
+      cancelAt = queries.push(cancelOccurrencesQuery(c, { professionalId: input.professionalId, occurrenceIds: [o.id] })) - 1;
+      queries.push(
         G(
           db,
           sql`(select status from occurrence where id = ${o.id} and professional_id = ${input.professionalId}) = 'cancelled'`,
@@ -281,11 +321,14 @@ export async function cancelOccurrence(
         ),
         endBookings(c, { professionalId: input.professionalId, scope: { occurrenceIds: [o.id] }, by }),
         RET(c, by),
-      ];
+      );
+      return queries;
     };
   });
   if (!res.ok) return failOf(res);
-  const { effects, bookingsCancelled } = await occurrenceCancelledEffects(db, res.aid, [input.occurrenceId]);
+  // Effects come from the batch: the séance this action cancelled (none on a repeat) and the bookings it ended.
+  const cancelledNow = returnedIds(res.results, cancelAt);
+  const { effects, bookingsCancelled } = await occurrenceCancelledEffects(db, res.aid, cancelledNow);
   return { ok: true, effects, bookingsCancelled, ticketsReturned: await countReturned(db, res.aid) };
 }
 
@@ -365,10 +408,11 @@ function overlapsRange(startAt: Date, endAt: Date) {
 
 /**
  * E6c preview: scheduled occurrences (séances and RDV) overlapping the range
- * that have seats taken and have NOT started yet (`starts_at > now`), id asc.
- * A started séance is never a conflict: it took place, and E6c never offers nor
- * cancels it (the pro uses cancelOccurrence for that). An empty or inverted
- * range has no conflict.
+ * that have a registrant (a confirmed booking or a live hold: holdsSeat; a
+ * lapsed hold is none, P6 A13) and have NOT started yet (`starts_at > now`),
+ * id asc. A started séance is never a conflict: it took place, and E6c never
+ * offers nor cancels it (the pro uses cancelOccurrence for that). An empty or
+ * inverted range has no conflict.
  */
 export async function previewTimeOffConflicts(
   db: Db,
@@ -376,6 +420,7 @@ export async function previewTimeOffConflicts(
   now: Date = new Date(),
 ): Promise<TimeOffConflict[]> {
   if (!(input.endAt.getTime() > input.startAt.getTime())) return [];
+  const registrant = holdsSeat(now, sql`b`);
   const rows = await db
     .select({
       occurrenceId: occurrence.id,
@@ -383,10 +428,10 @@ export async function previewTimeOffConflicts(
       endsAt: occurrence.endsAt,
       eventTitle: event.title,
       typeName: ticketType.name,
-      activeBookings: sql<number>`(select count(*)::int from booking b where b.occurrence_id = ${occurrence.id} and b.status in ('pending', 'confirmed'))`.mapWith(
+      activeBookings: sql<number>`(select count(*)::int from booking b where b.occurrence_id = ${occurrence.id} and ${registrant})`.mapWith(
         Number,
       ),
-      ticketBookings: sql<number>`(select count(*)::int from booking b where b.occurrence_id = ${occurrence.id} and b.status in ('pending', 'confirmed') and b.coverage = 'ticket')`.mapWith(
+      ticketBookings: sql<number>`(select count(*)::int from booking b where b.occurrence_id = ${occurrence.id} and ${registrant} and b.coverage = 'ticket')`.mapWith(
         Number,
       ),
     })
@@ -397,7 +442,7 @@ export async function previewTimeOffConflicts(
       and(
         eq(occurrence.professionalId, input.professionalId),
         eq(occurrence.status, "scheduled"),
-        sql`${occurrence.seatsTaken} > 0`,
+        sql`exists (select 1 from booking b where b.occurrence_id = ${occurrence.id} and ${registrant})`,
         sql`${occurrence.startsAt} > ${ts(now)}`,
         overlapsRange(input.startAt, input.endAt),
       ),
@@ -415,7 +460,8 @@ export async function previewTimeOffConflicts(
 
 /**
  * E6c. Batch: lock professional; lock every scheduled occurrence overlapping
- * the range (empty and started ones too, id asc: harmless); INSERT time_off;
+ * the range (empty and started ones too, id asc: harmless); expire their
+ * lapsed holds and release those seats (P6 A13); INSERT time_off;
  * G(set of overlapping scheduled occurrences with seats taken that have not
  * started (`starts_at > now`) = seen set, 'stale'); cancelBooked → E6b on that
  * set. A started séance is never in the set, so E6c never cancels it. Returns
@@ -455,6 +501,9 @@ export async function createTimeOffWithConflicts(
       const queries: Query[] = [
         lockRows(db, "professional", [input.professionalId]),
         db.execute(sql`select id from occurrence where ${overlap} order by id for no key update`),
+        // P6 A13: the lapsed holds of the locked séances are released first, so a seat held only by one is no conflict.
+        expireElapsedHolds(c, sql`select id from occurrence where ${overlap}`),
+        releaseEndedSeats(c),
         db.insert(timeOff).values({
           id: timeOffId,
           professionalId: input.professionalId,
@@ -490,6 +539,7 @@ export async function createTimeOffWithConflicts(
     { afterPlan: opts.afterPlan },
   );
   if (!res.ok) return failOf(res);
-  const effects = toCancel.length > 0 ? (await occurrenceCancelledEffects(db, res.aid, toCancel)).effects : [];
+  // Also syncs a séance or an RDV whose lapsed hold the batch released (an RDV left at 0 seats is cancelled).
+  const { effects } = await occurrenceCancelledEffects(db, res.aid, toCancel);
   return { ok: true, effects, timeOffId, cancelledOccurrences: toCancel.length };
 }

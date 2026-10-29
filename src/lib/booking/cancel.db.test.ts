@@ -460,3 +460,97 @@ dbTest("E6b on an RDV with a pending purchase: cancelled, its hold ends, the Che
   assert.equal(tickets.length, 2);
   assert.ok(tickets.every((t) => t.status === "available" && t.bookingId === null));
 });
+
+/* ───────────── P6 A13: a hold that already lapsed is not a registrant ───────────── */
+
+/** A séance with one confirmed ticket booking and one buy + book hold, both made at `now`. */
+async function seanceWithHold(h: DbHarness, now: Date) {
+  const { db, pro } = h;
+  const typeId = await makeType(db, pro);
+  const offerId = await makeOffer(db, pro, typeId);
+  const {
+    occurrences: [occ],
+  } = await makeEvent(db, pro, { ticketTypeIds: [typeId] }, now);
+  const kept = await makeCustomer(db, pro);
+  await giveTickets(db, pro, kept, typeId, 1);
+  const confirmed = await bookWithHeldTicket(
+    db,
+    { professionalId: pro.proId, occurrenceId: occ.id, customerId: kept, seenStartsAt: occ.startsAt, actorUserId: pro.userId },
+    now,
+  );
+  must(confirmed, "held ticket");
+  const buyer = await makeCustomer(db, pro);
+  const hold = await startBuyAndBook(
+    db,
+    { professionalId: pro.proId, occurrenceId: occ.id, customerId: buyer, seenStartsAt: occ.startsAt, offerId },
+    now,
+  );
+  must(hold, "buy + book");
+  const holdEnd = (await getBooking(db, hold.bookingId)).holdExpiresAt;
+  assert.ok(holdEnd);
+  return { occ, confirmedId: confirmed.bookingId, holdId: hold.bookingId, holdEnd };
+}
+
+dbTest("A13 E6b: a hold that lapsed (at hold_expires_at) expires as system, is not mailed and is not counted", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithHold(h, new Date());
+  const res = await cancelOccurrence(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: s.occ.id }, s.holdEnd);
+  must(res, "cancelOccurrence");
+  assert.equal(res.bookingsCancelled, 1, "only the confirmed booking was a registrant");
+  assert.equal(res.ticketsReturned, 1);
+  const mail = res.effects.find((e) => e.type === "email.occurrence_cancelled");
+  assert.ok(mail && mail.type === "email.occurrence_cancelled");
+  assert.deepEqual(mail.bookingIds, [s.confirmedId]);
+  const lapsed = await getBooking(db, s.holdId);
+  assert.equal(lapsed.status, "expired");
+  assert.equal(lapsed.endedBy, "system");
+  assert.equal((await getBooking(db, s.confirmedId)).status, "cancelled");
+  assert.equal((await getOccurrence(db, s.occ.id)).seatsTaken, 0);
+});
+
+dbTest("A13 E6b: a hold still live 1 ms before its end is a registrant (cancelled by the pro, mailed)", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithHold(h, new Date());
+  const res = await cancelOccurrence(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: s.occ.id },
+    new Date(s.holdEnd.getTime() - 1),
+  );
+  must(res, "cancelOccurrence");
+  assert.equal(res.bookingsCancelled, 2);
+  const mail = res.effects.find((e) => e.type === "email.occurrence_cancelled");
+  assert.ok(mail && mail.type === "email.occurrence_cancelled");
+  assert.deepEqual([...mail.bookingIds].sort(), [s.confirmedId, s.holdId].sort());
+  assert.equal((await getBooking(db, s.holdId)).endedBy, "pro");
+});
+
+/* ───────────── P6 A14: the repeat cancel and the « ticket rendu » flag ───────────── */
+
+dbTest("A14 E6b repeat: cancelling a séance already cancelled changes nothing and asks for no sync", async (h) => {
+  const { db, pro } = h;
+  const s = await bookedSeance(h);
+  must(await cancelOccurrence(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: s.occ.id }), "cancel");
+  const again = await cancelOccurrence(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: s.occ.id });
+  must(again, "second cancel");
+  assert.deepEqual(again.effects, [], "a no-op has no Google sync and no mail");
+  assert.equal(again.bookingsCancelled, 0);
+  assert.equal(again.ticketsReturned, 0);
+});
+
+dbTest("A14 E5: a ticket that comes back already expired is not reported as given back", async (h) => {
+  const { db, pro } = h;
+  const s = await bookedSeance(h);
+  const cancelAt = addMinutes(s.occ.startsAt, -25 * 60);
+  await db.execute(sql`update ticket set expires_at = ${ts(addMinutes(cancelAt, -1))} where id = ${s.ticketId}`);
+  const res = await cancelByClient(
+    db,
+    { professionalId: pro.proId, customerId: s.customerId, bookingId: s.bookingId, actorUserId: null },
+    cancelAt,
+  );
+  must(res, "cancel");
+  assert.equal(res.ticketReturned, false, "an expired ticket cannot be used again");
+  const [t] = await ticketsOf(db, s.customerId);
+  assert.equal(t.status, "expired");
+  assert.equal(t.bookingId, null);
+  assert.equal((await getBooking(db, s.bookingId)).status, "cancelled");
+});

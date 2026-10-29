@@ -11,9 +11,11 @@ import { addDays, formatDayMonthYear, minKey, todayKey, type DateKey } from "@/l
 import {
   G,
   PlanError,
+  R,
   RET,
   SEAT,
   lockRows,
+  releaseEndedSeats,
   textArray,
   ts,
   tsArray,
@@ -43,11 +45,13 @@ import {
 
 import {
   cancelOccurrencesQuery,
+  cancelledOf,
   endBookings,
   expireSessionEffects,
   occurrenceCancelledEffects,
   readEndedByAction,
 } from "./cancel";
+import { expireElapsedHolds, holdsSeat } from "./holds";
 import { horizonEnd, insertOccurrences, ruleOf, type EventRow, type OccurrenceDraft } from "./occurrences";
 import { fail, failOf, syncEffects, type Effect, type EngineResult } from "./types";
 
@@ -59,14 +63,14 @@ const durationOk = (min: number) =>
   min <= BOUNDS.eventDurationMin.max &&
   min % BOUNDS.eventDurationMin.step === 0;
 
-/** Active (pending + confirmed) bookings of these occurrences, grouped by occurrence. */
-async function activeBookingsByOccurrence(db: Db, occurrenceIds: readonly string[]): Promise<Map<string, string[]>> {
+/** Registrants of these occurrences at `now` (confirmed or live hold: holdsSeat, P6 A13), grouped by occurrence. */
+async function activeBookingsByOccurrence(db: Db, occurrenceIds: readonly string[], now: Date): Promise<Map<string, string[]>> {
   const byOcc = new Map<string, string[]>();
   if (occurrenceIds.length === 0) return byOcc;
   const rows = await db
     .select({ id: booking.id, occurrenceId: booking.occurrenceId })
     .from(booking)
-    .where(and(inArray(booking.occurrenceId, [...occurrenceIds]), inArray(booking.status, ["pending", "confirmed"])))
+    .where(and(inArray(booking.occurrenceId, [...occurrenceIds]), holdsSeat(now, sql`${booking}`)))
     .orderBy(booking.id);
   for (const r of rows) byOcc.set(r.occurrenceId, [...(byOcc.get(r.occurrenceId) ?? []), r.id]);
   return byOcc;
@@ -84,7 +88,8 @@ export type OccurrencePatch = { startsAt?: Date; durationMin?: number; capacity?
 /**
  * « Cette séance » (event séances only; an RDV is moved by cancel + rebook).
  * Batch: lock; G(scheduled ∧ event séance ∧ starts_at = seen, 'changed');
- * optional E6a on unenrollBookingIds (end, G, SEAT(o, 0)); UPDATE occurrence
+ * R(o) (its lapsed holds, P6 A13); optional E6a on unenrollBookingIds (end,
+ * G); SEAT(o, 0) once; UPDATE occurrence
  * (time_detached + changed_at when date/time/duration change; capacity =
  * GREATEST(cap, seats_taken) + capacity_override; location_override); G(the
  * row has the planned times, 'changed'); RET(pro) when bookings ended.
@@ -193,18 +198,22 @@ export async function updateOccurrence(
             and ends_at = ${ts(o.endsAt)})`,
           "changed",
         ),
+        // P6 A13: a lapsed hold is released before the capacity is cut (it keeps no seat) and hears of no change.
+        R(c, o.id),
       ];
       if (unenroll.length > 0) {
         queries.push(
           endBookings(c, { professionalId: input.professionalId, scope: { occurrenceId: o.id, bookingIds: unenroll }, by }),
           G(
             db,
+            // a lapsed hold picked here was already ended by R above: it is out either way
             sql`(select count(*)::int from booking where ended_action_id = ${aid} and id = any(${textArray(unenroll)})) = ${unenroll.length}::int`,
             "changed",
           ),
-          SEAT(c, o.id, 0),
         );
       }
+      // Once, after every booking end on o: the released holds and the unenrolled bookings give their seats back.
+      queries.push(SEAT(c, o.id, 0));
       queries.push(
         db.execute(sql`update occurrence set ${sql.join(sets, sql`, `)}
           where id = ${o.id} and status = 'scheduled' and event_id is not null`),
@@ -222,13 +231,12 @@ export async function updateOccurrence(
   if (!res.ok) return failOf(res);
 
   const effects: Effect[] = [];
-  if (unenroll.length > 0) {
-    const ended = await readEndedByAction(db, res.aid);
-    for (const b of ended) effects.push({ type: "email.booking_cancelled", bookingId: b.bookingId, by: "pro" });
-    effects.push(...expireSessionEffects(ended));
-  }
+  // The unenrolled bookings are « désinscrits »; a lapsed hold R released only has its Checkout session expired.
+  const ended = await readEndedByAction(db, res.aid);
+  for (const b of cancelledOf(ended)) effects.push({ type: "email.booking_cancelled", bookingId: b.bookingId, by: "pro" });
+  effects.push(...expireSessionEffects(ended));
   if (outcome.timeChanged || outcome.locationChanged) {
-    const bookingIds = (await activeBookingsByOccurrence(db, [input.occurrenceId])).get(input.occurrenceId) ?? [];
+    const bookingIds = (await activeBookingsByOccurrence(db, [input.occurrenceId], now)).get(input.occurrenceId) ?? [];
     if (bookingIds.length > 0) effects.push({ type: "email.occurrence_changed", occurrenceId: input.occurrenceId, bookingIds });
   }
   effects.push(...syncEffects([input.occurrenceId]));
@@ -424,10 +432,14 @@ export async function editEventInPlace(
       if (p.capacity !== undefined && outcome.capacityChanged) {
         const propagated = sql`event_id = ${ev.id} and professional_id = ${input.professionalId} and status = 'scheduled'
           and starts_at > ${ts(now)} and not capacity_override`;
+        const c: BatchCtx = { db, aid, now };
         queries.push(
           // Lock first, id asc (event → occurrence): a fan-out UPDATE alone would lock in scan order
           // and could deadlock with sweepHolds, E6c or moveAttendee.
           db.execute(sql`select id from occurrence where ${propagated} order by id for no key update`),
+          // P6 A13: their lapsed holds give their seats back before the cut (GREATEST reads seats_taken).
+          expireElapsedHolds(c, sql`select id from occurrence where ${propagated}`),
+          releaseEndedSeats(c),
           db.execute(sql`
             update occurrence set capacity = greatest(${p.capacity}::int, seats_taken), updated_at = ${ts(now)}
             where ${propagated}`),
@@ -452,6 +464,7 @@ export async function editEventInPlace(
     const byOcc = await activeBookingsByOccurrence(
       db,
       future.map((o) => o.id),
+      now,
     );
     if (outcome.locationChanged) {
       for (const o of future) {
@@ -550,7 +563,7 @@ async function loadSeriesContext(
       endsAt: occurrence.endsAt,
       status: occurrence.status,
       timeDetached: occurrence.timeDetached,
-      activeBookings: sql<number>`(select count(*)::int from booking b where b.occurrence_id = occurrence.id and b.status in ('pending', 'confirmed'))`.mapWith(
+      activeBookings: sql<number>`(select count(*)::int from booking b where b.occurrence_id = occurrence.id and ${holdsSeat(now, sql`b`)})`.mapWith(
         Number,
       ),
       ticketBookings: sql<number>`(select count(*)::int from booking b where b.occurrence_id = occurrence.id and b.status = 'confirmed' and b.coverage = 'ticket')`.mapWith(
@@ -776,8 +789,13 @@ export async function editSeriesFrom(
           }
         }
 
-        // 3. lock the rows ≥ d; 4. reparent them (split), then the planned-row-count guard
-        queries.push(db.execute(sql`select id from occurrence where ${segmentRows} order by id for no key update`));
+        // 3. lock the rows ≥ d and release their lapsed holds (P6 A13: the plan counted them as no registrant);
+        // 4. reparent them (split), then the planned-row-count guard
+        queries.push(
+          db.execute(sql`select id from occurrence where ${segmentRows} order by id for no key update`),
+          expireElapsedHolds(c, sql`select id from occurrence where ${segmentRows}`),
+          releaseEndedSeats(c),
+        );
         if (ctx.split) {
           queries.push(
             db.execute(sql`update occurrence set event_id = ${targetId}, updated_at = ${ts(now)} where ${segmentRows}`),
@@ -878,10 +896,9 @@ export async function editSeriesFrom(
   if (!plan) throw new Error("editSeriesFrom: no committed plan");
 
   const changedIds = plan.retime.filter((r) => r.timeChanged).map((r) => r.id);
-  const effects = changedEffects(await activeBookingsByOccurrence(db, changedIds));
-  if (plan.orphanBooked.length > 0 && input.orphans === "cancel") {
-    effects.push(...(await occurrenceCancelledEffects(db, res.aid, plan.orphanBooked)).effects);
-  }
+  const effects = changedEffects(await activeBookingsByOccurrence(db, changedIds, now));
+  // The cancelled orphans' mails, and the Google sync and Stripe expiry of the holds released in step 3.
+  effects.push(...(await occurrenceCancelledEffects(db, res.aid, input.orphans === "cancel" ? plan.orphanBooked : [])).effects);
   return { ok: true, effects, eventId: committed.targetId, summary: plan.summary };
 }
 
@@ -962,6 +979,8 @@ export async function deleteSeriesFrom(
         }
         if (toCancel.length > 0) {
           queries.push(
+            // P6 A13: a lapsed hold expires (system) instead of being cancelled by the pro and told so
+            expireElapsedHolds(c, sql`select unnest(${textArray(toCancel)})`),
             cancelOccurrencesQuery(c, { professionalId: input.professionalId, occurrenceIds: toCancel }),
             G(
               db,
