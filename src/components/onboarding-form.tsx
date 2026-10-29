@@ -22,12 +22,14 @@ export function OnboardingForm() {
         setError(null);
         startTransition(async () => {
           try {
-            await createProfessionalProfile({
+            // A success redirects to the dashboard; a refusal (an invalid name, an address taken meanwhile) comes back.
+            const res = await createProfessionalProfile({
               businessName: String(formData.get("businessName")),
               headline: String(formData.get("headline") ?? ""),
               bio: String(formData.get("bio") ?? ""),
               timezone: String(formData.get("timezone") ?? "Europe/Paris"),
             });
+            if (res && !res.ok) setError(res.error);
           } catch (e) {
             // redirect() throws a special error we must ignore
             if (

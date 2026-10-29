@@ -2,11 +2,11 @@ import { put } from "@vercel/blob";
 import { nanoid } from "nanoid";
 import { NextResponse } from "next/server";
 
-import { BRANDING_MAX_BYTES } from "@/lib/branding-upload";
+import { BRANDING_MAX_BYTES, BRANDING_TYPES, brandingBlobPath } from "@/lib/branding-upload";
 import { env } from "@/lib/env";
 import { getCurrentProfessional } from "@/lib/session";
 
-const TYPES = ["image/jpeg", "image/png", "image/webp"];
+const isBrandingType = (type: string): type is keyof typeof BRANDING_TYPES => Object.hasOwn(BRANDING_TYPES, type);
 
 export async function POST(req: Request) {
   if (!env.BLOB_ENABLED) {
@@ -24,7 +24,7 @@ export async function POST(req: Request) {
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "Fichier manquant" }, { status: 400 });
   }
-  if (!TYPES.includes(file.type)) {
+  if (!isBrandingType(file.type)) {
     return NextResponse.json(
       { error: "Format non supporté (jpeg, png, webp)" },
       { status: 415 },
@@ -38,8 +38,8 @@ export async function POST(req: Request) {
     );
   }
 
-  const ext = file.type.split("/")[1];
-  const blob = await put(`branding/${pro.id}/${kind}-${nanoid()}.${ext}`, file, {
+  // The path the branding action accepts back (isOwnBrandingUpload): the pro's folder, the kind, a jpeg, png or webp.
+  const blob = await put(brandingBlobPath(pro.id, kind, nanoid(), BRANDING_TYPES[file.type]), file, {
     access: "public",
     token: env.BLOB_READ_WRITE_TOKEN,
   });

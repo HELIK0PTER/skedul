@@ -1,12 +1,12 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Loader2, Upload } from "lucide-react";
 
 import { updateBranding } from "@/server/pro";
 import { AVATAR_PACK, packSrc } from "@/lib/avatar-pack";
 import { uploadErrorMessage, type BrandingKind } from "@/lib/branding-upload";
+import { callOrFail } from "@/lib/pro-messages";
 import { shrinkImage } from "@/lib/shrink-image";
 import { MAX_SOURCE_IMAGE_BYTES } from "@/lib/support";
 import { THEME_PRESETS, brandThemeVars, presetColor } from "@/lib/color";
@@ -49,7 +49,6 @@ export function BrandingForm({
   headline?: string | null;
   blobEnabled: boolean;
 }) {
-  const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [saved, setSaved] = useState(false);
 
@@ -185,25 +184,39 @@ export function BrandingForm({
       setError(uploadErrorMessage(res.status, await res.json().catch(() => null)));
       return null;
     }
-    const body = (await res.json()) as { url: string };
+    const body: unknown = await res.json().catch(() => null);
+    if (!body || typeof body !== "object" || !("url" in body) || typeof body.url !== "string") {
+      setError(uploadErrorMessage(500, null));
+      return null;
+    }
     return body.url;
   }
 
+  /**
+   * Saves through the action, whose revalidation refreshes the page and so the saved values (no refresh of the router). A
+   * refused or failed call shows its message and keeps the edits (P6 A5).
+   */
   function save() {
     setSaved(false);
+    setError(null);
     startTransition(async () => {
-      await updateBranding({
-        themePreset,
-        customColor,
-        bannerUrl: banner,
-        headerLayout: layout,
-        avatarKind: avatar.kind,
-        avatarStyle: avatar.style,
-        avatarSeed: avatar.seed,
-        avatarUrl: avatar.url,
-      });
+      const res = await callOrFail(() =>
+        updateBranding({
+          themePreset,
+          customColor,
+          bannerUrl: banner,
+          headerLayout: layout,
+          avatarKind: avatar.kind,
+          avatarStyle: avatar.style,
+          avatarSeed: avatar.seed,
+          avatarUrl: avatar.url,
+        }),
+      );
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
       setSaved(true);
-      router.refresh();
     });
   }
 

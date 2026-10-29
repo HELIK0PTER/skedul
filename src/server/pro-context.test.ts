@@ -35,12 +35,12 @@ test("a signed-in user without a pro page goes to /mon-espace, never to the pro 
     assert.match(body, /redirect\("\/sign-in"\)/, `${name}: no session still sends to /sign-in`);
     assert.doesNotMatch(body, /\/onboarding/, `${name}: the onboarding is reached through « Vous êtes pro ? » and the sign-up funnel only`);
   }
-  // The dashboard layout and the private guard of the pro actions follow the same rule.
+  // The dashboard layout follows the same rule; the pro actions of pro.ts all go through runProAction since P6 A5 (its
+  // private requirePro guard is gone, src/components/dashboard/settings-forms.test.ts pins it).
   const layout = readFileSync("src/app/dashboard/layout.tsx", "utf8");
   assert.match(layout, /if \(!pro\) redirect\("\/mon-espace"\);/);
   assert.doesNotMatch(layout, /\/onboarding/);
   const pro = readFileSync("src/server/pro.ts", "utf8");
-  assert.match(pro, /async function requirePro\(\) \{[^}]*redirect\("\/mon-espace"\)/);
   assert.doesNotMatch(pro, /redirect\("\/onboarding"\)/);
 });
 

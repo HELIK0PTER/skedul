@@ -4,18 +4,25 @@
  * none imports server-only, next/*, env or the session, so the DB tests call
  * them directly. src/server/pro.ts wraps them with runProAction.
  */
-import { eq, sql, type SQL } from "drizzle-orm";
+import { and, eq, sql, type SQL } from "drizzle-orm";
+import { nanoid } from "nanoid";
 import { z } from "zod";
 
+import { isGeneratedStyle } from "@/lib/avatar";
+import { isPackAvatarUrl } from "@/lib/avatar-pack";
 import { readProWindow } from "@/lib/back-office/catalog-reads";
 import { NOTICE_TOO_LONG, noticeExceedsHorizon, settingsWouldClose } from "@/lib/back-office/notice";
-import { actionFail, fromEngine, type CoreResult, type ProCtx } from "@/lib/back-office/result";
+import { actionFail, fromEngine, type ActionFail, type CoreResult, type ProCtx } from "@/lib/back-office/result";
 import { mergeAvailabilityRules } from "@/lib/back-office/week-hours";
 import { setAvailabilityRules, updateBookingSettings } from "@/lib/booking/catalog";
 import { failOf } from "@/lib/booking/types";
 import { effectiveWindow, type BookingWindow } from "@/lib/booking-window";
+import { isOwnBrandingUpload } from "@/lib/branding-upload";
+import { isHexColor, presetColor } from "@/lib/color";
 import { G, lockRows, tryAtomic, ts, type Db } from "@/lib/db/atomic";
-import { professional } from "@/lib/db/schema";
+import { pgErrorInfo } from "@/lib/db/pg-error";
+import { availabilityRule, professional, user } from "@/lib/db/schema";
+import { checkSlug, uniqueSlugWith } from "@/lib/slug";
 import {
   availabilityRuleInputSchema,
   bookingSettingsSchema,
@@ -88,6 +95,184 @@ export async function updateProfileCore(db: Db, ctx: ProCtx, input: ProfileInput
       .where(eq(professional.id, pid)),
   ]);
   if (!res.ok) return fromEngine(failOf(res), "profile");
+  return { ok: true, effects: [] };
+}
+
+/* ───────────── Onboarding, public address and branding (P6 A5) ───────────── */
+
+export const onboardingInputSchema = z.object({
+  businessName: profileInputSchema.shape.businessName,
+  headline: z.string().trim().max(160).optional(),
+  bio: z.string().trim().max(BOUNDS.description).optional(),
+  timezone: z.string().max(100).optional(),
+});
+export type OnboardingInput = z.input<typeof onboardingInputSchema>;
+
+export const PROFILE_NOT_CREATED = "Votre espace pro n'a pas pu être créé. Réessayez dans un instant.";
+
+/** The default RDV hours of a new pro: Monday to Friday, 9:00 to 17:00 (global rules). */
+const DEFAULT_HOURS = [1, 2, 3, 4, 5].map((dayOfWeek) => ({ dayOfWeek, startMinute: 540, endMinute: 1020 }));
+
+/**
+ * The pro page of a signed-up account, in ONE batch (P6 A5): the role becomes « pro » (a client only, an admin keeps
+ * its role), the page is inserted with the first free address of its name (an unknown zone falls back to Paris), and
+ * the default hours with it. An address taken between its check and the batch (or a second page for the account)
+ * fails the whole batch: the account is left as it was and PROFILE_NOT_CREATED is answered. `afterSlug` (tests only)
+ * runs between the address check and the batch, to stage that race.
+ */
+export async function createProfessionalProfileCore(
+  db: Db,
+  userId: string,
+  input: OnboardingInput,
+  opts: { afterSlug?: (slug: string) => Promise<void> } = {},
+): Promise<{ ok: true; professionalId: string; slug: string } | ActionFail> {
+  const parsed = parseFr(onboardingInputSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  const p = parsed.data;
+  const slug = await uniqueSlugWith(p.businessName, async (candidate) => {
+    const taken = await db.select({ id: professional.id }).from(professional).where(eq(professional.slug, candidate)).limit(1);
+    return taken.length > 0;
+  });
+  await opts.afterSlug?.(slug);
+  const professionalId = nanoid();
+  try {
+    await db.batch([
+      db.update(user).set({ role: "pro" }).where(and(eq(user.id, userId), eq(user.role, "client"))),
+      db.insert(professional).values({
+        id: professionalId,
+        userId,
+        slug,
+        businessName: p.businessName,
+        headline: p.headline || null,
+        bio: p.bio || null,
+        timezone: p.timezone && isValidTimeZone(p.timezone) ? p.timezone : "Europe/Paris",
+      }),
+      db.insert(availabilityRule).values(DEFAULT_HOURS.map((h) => ({ ...h, professionalId }))),
+    ]);
+  } catch (err) {
+    if (pgErrorInfo(err).code === "23505") return actionFail(PROFILE_NOT_CREATED);
+    throw err;
+  }
+  return { ok: true, professionalId, slug };
+}
+
+export const SLUG_TAKEN = "Cette adresse est déjà prise.";
+
+const slugInputSchema = z.strictObject({ slug: z.string().max(200) });
+
+/**
+ * The public address (spec: no redirect, the old address stops at once). checkSlug gives the final form or why it
+ * cannot be used; ONE guarded UPDATE then takes it only while no other pro holds it, and the unique index settles a
+ * race between two pros. The pro's own address again is a success that changes nothing. The pro is the context's.
+ */
+export async function updateSlugCore(
+  db: Db,
+  ctx: ProCtx,
+  input: { slug: string },
+  now: Date,
+): Promise<CoreResult<{ slug: string }>> {
+  const parsed = parseFr(slugInputSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  const check = checkSlug(parsed.data.slug);
+  if (!check.ok) return actionFail(check.error);
+  const { slug } = check;
+  const pid = ctx.professionalId;
+  let updated: { id: string }[];
+  try {
+    updated = await db
+      .update(professional)
+      .set({ slug, updatedAt: now })
+      .where(
+        and(
+          eq(professional.id, pid),
+          sql`not exists (select 1 from professional other where other.slug = ${slug} and other.id <> ${pid})`,
+        ),
+      )
+      .returning({ id: professional.id });
+  } catch (err) {
+    if (pgErrorInfo(err).code === "23505") return actionFail(SLUG_TAKEN);
+    throw err;
+  }
+  if (updated.length === 0) return actionFail(SLUG_TAKEN);
+  return { ok: true, effects: [], slug };
+}
+
+/** What the branding form sends; every field is checked here (the pro is the context's, never the input's). */
+export type BrandingInput = {
+  themePreset: string;
+  customColor: string | null;
+  bannerUrl: string | null;
+  headerLayout: string;
+  avatarKind: string | null;
+  avatarStyle: string | null;
+  avatarSeed: string | null;
+  avatarUrl: string | null;
+};
+
+const brandingInputSchema = z.strictObject({
+  themePreset: z.string().max(40),
+  customColor: z.string().max(40).nullable(),
+  bannerUrl: z.string().max(1000).nullable(),
+  headerLayout: z.string().max(40),
+  avatarKind: z.string().max(40).nullable(),
+  avatarStyle: z.string().max(40).nullable(),
+  avatarSeed: z.string().max(200).nullable(),
+  avatarUrl: z.string().max(1000).nullable(),
+});
+
+export const BRANDING_IMAGE_REFUSED = "Cette image n'a pas été envoyée depuis votre page de réglages. Ajoutez-la de nouveau.";
+export const AVATAR_REFUSED = "Cet avatar n'est pas proposé par Skedul. Choisissez-en un dans la galerie ou le pack 3D.";
+
+/**
+ * The branding of the public page in ONE statement (P6 A5). The images the public page renders can only be the pro's
+ * own uploads on the project's public Blob store (`images.blobHost`, null when none is configured: no upload is then
+ * accepted) or a bundled 3D avatar; a generated avatar keeps its style (one of the gallery's) and its seed, never a
+ * URL. The active brand color is the preset's, or with « custom » the pro's custom color (the one sent when it is a
+ * valid hex, else the stored one, else the current brand color); the custom color is kept while a preset is active.
+ * An unknown layout is « profil », an unknown avatar kind means initials.
+ */
+export async function updateBrandingCore(
+  db: Db,
+  ctx: ProCtx,
+  input: BrandingInput,
+  now: Date,
+  images: { blobHost: string | null },
+): Promise<CoreResult> {
+  const parsed = parseFr(brandingInputSchema, input);
+  if (!parsed.ok) return actionFail(parsed.error);
+  const b = parsed.data;
+  const pid = ctx.professionalId;
+  const own = (url: string | null, kind: "banner" | "avatar") =>
+    url !== null && isOwnBrandingUpload(url, { blobHost: images.blobHost, professionalId: pid, kind });
+
+  if (b.bannerUrl !== null && !own(b.bannerUrl, "banner")) return actionFail(BRANDING_IMAGE_REFUSED);
+  const kind = b.avatarKind === "generated" || b.avatarKind === "pack" || b.avatarKind === "upload" ? b.avatarKind : null;
+  if (kind === "upload" && !own(b.avatarUrl, "avatar")) return actionFail(BRANDING_IMAGE_REFUSED);
+  if (kind === "pack" && !isPackAvatarUrl(b.avatarUrl)) return actionFail(AVATAR_REFUSED);
+  if (kind === "generated" && !isGeneratedStyle(b.avatarStyle)) return actionFail(AVATAR_REFUSED);
+
+  const sentCustom = isHexColor(b.customColor) ? `#${b.customColor!.trim().replace(/^#/, "").toLowerCase()}` : null;
+  const custom = sentCustom === null ? sql`${professional.customColor}` : sql`${sentCustom}`;
+  const preset = presetColor(b.themePreset);
+  const themePreset = b.themePreset === "custom" || !preset ? "custom" : b.themePreset;
+
+  const updated = await db
+    .update(professional)
+    .set({
+      brandColor: preset !== null && themePreset !== "custom" ? preset : sql`coalesce(${custom}, ${professional.brandColor})`,
+      themePreset,
+      customColor: custom,
+      bannerUrl: b.bannerUrl,
+      headerLayout: b.headerLayout === "vitrine" ? "vitrine" : "profil",
+      avatarKind: kind,
+      avatarStyle: kind === "generated" ? b.avatarStyle : null,
+      avatarSeed: kind === "generated" ? (b.avatarSeed ?? null) : null,
+      avatarUrl: kind === "pack" || kind === "upload" ? b.avatarUrl : null,
+      updatedAt: now,
+    })
+    .where(eq(professional.id, pid))
+    .returning({ id: professional.id });
+  if (updated.length === 0) return fromEngine({ ok: false, code: "not_found" }, "profile");
   return { ok: true, effects: [] };
 }
 

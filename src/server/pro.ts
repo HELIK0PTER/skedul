@@ -1,98 +1,50 @@
 "use server";
 
-import { and, eq } from "drizzle-orm";
-import { revalidatePath } from "next/cache";
+import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 
 import { auth } from "@/lib/auth";
 import { clearGoogleLink } from "@/lib/calendar-sync-load";
 import { db } from "@/lib/db";
-import {
-  availabilityRule,
-  professional,
-  user as userTable,
-} from "@/lib/db/schema";
+import { professional } from "@/lib/db/schema";
 import { env } from "@/lib/env";
 import { createSkedulCalendar } from "@/lib/google-calendar";
 import { logSafeMessage } from "@/lib/log-safe";
 import { getCurrentProfessional, getCurrentUser } from "@/lib/session";
-import { isHexColor, presetColor } from "@/lib/color";
-import type { ActionResult } from "@/lib/back-office/result";
+import type { ActionFail, ActionResult } from "@/lib/back-office/result";
 import {
+  createProfessionalProfileCore,
   saveAvailabilityCore,
   updateBookingSettingsCore,
+  updateBrandingCore,
   updateProfileCore,
+  updateSlugCore,
+  type BrandingInput,
+  type OnboardingInput,
   type ProfileInput,
 } from "@/lib/back-office/settings-actions";
-import { isValidTimeZone } from "@/lib/timezones";
+import { publicBlobHost } from "@/lib/branding-upload";
 import { scheduleGoogleBackfill } from "@/server/google-backfill";
 import { runProAction } from "@/server/pro-context";
 import type { AvailabilityRuleInput, BookingSettings } from "@/lib/tickets";
-import { checkSlug, uniqueSlugWith } from "@/lib/slug";
-
-async function requirePro() {
-  const pro = await getCurrentProfessional();
-  if (!pro) redirect("/mon-espace");
-  return pro;
-}
-
-/** Global uniqueness of the professional slug; the rules (app routes, 60 characters at most) are uniqueSlugWith's. */
-function uniqueSlug(base: string): Promise<string> {
-  return uniqueSlugWith(base, async (candidate) => {
-    const existing = await db
-      .select({ id: professional.id })
-      .from(professional)
-      .where(eq(professional.slug, candidate))
-      .limit(1);
-    return existing.length > 0;
-  });
-}
 
 /* ─────────────────────── Onboarding / profile ──────────────────── */
 
-export async function createProfessionalProfile(input: {
-  businessName: string;
-  headline?: string;
-  bio?: string;
-  timezone?: string;
-}) {
+/**
+ * The pro page of the signed-in account (no session: /sign-in; a page already: /dashboard). The page, the pro role
+ * and the default hours are written in one batch by the core; a refusal (an invalid name, an address taken meanwhile)
+ * is answered for the form to show, a success goes to the dashboard.
+ */
+export async function createProfessionalProfile(input: OnboardingInput): Promise<ActionFail | undefined> {
   const user = await getCurrentUser();
   if (!user) redirect("/sign-in");
 
   const existing = await getCurrentProfessional();
   if (existing) redirect("/dashboard");
 
-  const slug = await uniqueSlug(input.businessName);
-
-  const [created] = await db
-    .insert(professional)
-    .values({
-      userId: user.id,
-      slug,
-      businessName: input.businessName,
-      headline: input.headline || null,
-      bio: input.bio || null,
-      timezone: input.timezone && isValidTimeZone(input.timezone) ? input.timezone : "Europe/Paris",
-    })
-    .returning({ id: professional.id });
-
-  // Promote plain clients to "pro", never demote an admin.
-  await db
-    .update(userTable)
-    .set({ role: "pro" })
-    .where(and(eq(userTable.id, user.id), eq(userTable.role, "client")));
-
-  // sensible default availability: Monday to Friday, 9:00 to 17:00 (global rules)
-  await db.insert(availabilityRule).values(
-    [1, 2, 3, 4, 5].map((dayOfWeek) => ({
-      professionalId: created.id,
-      dayOfWeek,
-      startMinute: 540,
-      endMinute: 1020,
-    })),
-  );
-
+  const res = await createProfessionalProfileCore(db, user.id, input);
+  if (!res.ok) return res;
   redirect("/dashboard");
 }
 
@@ -100,90 +52,18 @@ export async function updateProfile(input: ProfileInput): Promise<ActionResult> 
   return runProAction("updateProfile", (ctx, now) => updateProfileCore(db, ctx, input, now), { publicPage: true });
 }
 
-const SLUG_TAKEN = "Cette adresse est déjà prise.";
-
 /** Changes the public address. The old one stops working (no redirect). */
-export async function updateSlug(input: {
-  slug: string;
-}): Promise<{ ok: true; slug: string } | { ok: false; error: string }> {
-  const pro = await requirePro();
-  const check = checkSlug(input.slug);
-  if (!check.ok) return check;
-  const { slug } = check;
-  if (slug === pro.slug) return { ok: true, slug };
-
-  const [taken] = await db
-    .select({ id: professional.id })
-    .from(professional)
-    .where(eq(professional.slug, slug))
-    .limit(1);
-  if (taken) return { ok: false, error: SLUG_TAKEN };
-
-  try {
-    await db
-      .update(professional)
-      .set({ slug })
-      .where(eq(professional.id, pro.id));
-  } catch (err) {
-    // lost a race against another pro claiming it: the unique index decides
-    const e = err as { code?: string; cause?: { code?: string } };
-    if (e.code === "23505" || e.cause?.code === "23505") {
-      return { ok: false, error: SLUG_TAKEN };
-    }
-    throw err;
-  }
-  revalidatePath("/dashboard", "layout");
-  revalidatePath(`/${pro.slug}`);
-  revalidatePath(`/${slug}`);
-  return { ok: true, slug };
+export async function updateSlug(input: { slug: string }): Promise<ActionResult<{ slug: string }>> {
+  return runProAction("updateSlug", (ctx, now) => updateSlugCore(db, ctx, input, now), { publicPage: true });
 }
 
-export async function updateBranding(input: {
-  themePreset?: string;
-  customColor?: string | null;
-  bannerUrl?: string | null;
-  headerLayout?: string;
-  avatarKind?: string | null;
-  avatarStyle?: string | null;
-  avatarSeed?: string | null;
-  avatarUrl?: string | null;
-}) {
-  const pro = await requirePro();
-  const layout = input.headerLayout === "vitrine" ? "vitrine" : "profil";
-  const kind =
-    input.avatarKind === "generated" ||
-    input.avatarKind === "pack" ||
-    input.avatarKind === "upload"
-      ? input.avatarKind
-      : null;
-
-  // Resolve the active brand color from the chosen preset (or the pro's custom).
-  // The custom color persists even while a named preset is active.
-  const custom = isHexColor(input.customColor)
-    ? (input.customColor as string)
-    : pro.customColor;
-  const preset = presetColor(input.themePreset);
-  const themePreset = input.themePreset === "custom" || !preset ? "custom" : input.themePreset!;
-  const brandColor =
-    themePreset === "custom" ? (custom ?? pro.brandColor) : (preset as string);
-
-  await db
-    .update(professional)
-    .set({
-      brandColor,
-      themePreset,
-      customColor: custom ?? null,
-      bannerUrl: input.bannerUrl ?? null,
-      headerLayout: layout,
-      avatarKind: kind,
-      avatarStyle: kind === "generated" ? (input.avatarStyle ?? null) : null,
-      avatarSeed: kind === "generated" ? (input.avatarSeed ?? null) : null,
-      avatarUrl:
-        kind === "pack" || kind === "upload" ? (input.avatarUrl ?? null) : null,
-    })
-    .where(eq(professional.id, pro.id));
-  revalidatePath("/dashboard/settings");
-  revalidatePath(`/${pro.slug}`);
+/** The branding of the public page; its images can only be the pro's own uploads or a bundled avatar (P6 A5). */
+export async function updateBranding(input: BrandingInput): Promise<ActionResult> {
+  return runProAction(
+    "updateBranding",
+    (ctx, now) => updateBrandingCore(db, ctx, input, now, { blobHost: env.BLOB_ENABLED ? publicBlobHost(env.BLOB_READ_WRITE_TOKEN) : null }),
+    { publicPage: true },
+  );
 }
 
 /* ───────────── Réservations et disponibilités (RDV libre) ───────────── */

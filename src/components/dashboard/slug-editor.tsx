@@ -1,10 +1,10 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Loader2, Pencil } from "lucide-react";
 
 import { updateSlug } from "@/server/pro";
+import { callOrFail } from "@/lib/pro-messages";
 import { SLUG_MAX_LENGTH, typingSlug } from "@/lib/slug";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -13,9 +13,11 @@ import { cn } from "@/lib/utils";
 const HINT =
   "Lettres, chiffres et tirets. L’ancienne adresse ne fonctionnera plus : pensez à mettre à jour les liens déjà partagés.";
 
-/** "Adresse : https://…/slug" with an inline editor for the last segment. */
+/**
+ * "Adresse : https://…/slug" with an inline editor for the last segment. The action's revalidation refreshes the
+ * dashboard (no refresh of the router here), and a call that fails shows its message instead of throwing (P6 A5).
+ */
 export function SlugEditor({ appUrl, slug }: { appUrl: string; slug: string }) {
-  const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [current, setCurrent] = useState(slug);
   const [editing, setEditing] = useState(false);
@@ -47,7 +49,7 @@ export function SlugEditor({ appUrl, slug }: { appUrl: string; slug: string }) {
     e.preventDefault();
     setError(null);
     startTransition(async () => {
-      const res = await updateSlug({ slug: draft });
+      const res = await callOrFail(() => updateSlug({ slug: draft }));
       if (!res.ok) {
         setError(res.error);
         return;
@@ -55,7 +57,6 @@ export function SlugEditor({ appUrl, slug }: { appUrl: string; slug: string }) {
       setSaved(res.slug !== current);
       setCurrent(res.slug);
       setEditing(false);
-      router.refresh();
     });
   }
 

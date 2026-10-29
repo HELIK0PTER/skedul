@@ -38,3 +38,8 @@ export const AVATAR_PACK: PackAvatar[] = [
 export function packSrc(id: string): string {
   return `/avatars/3d/${id}.png`;
 }
+
+/** True for exactly the path of a bundled avatar (P6 A5: the only avatar URLs a pro can store besides an upload). */
+export function isPackAvatarUrl(url: string | null | undefined): boolean {
+  return AVATAR_PACK.some((a) => packSrc(a.id) === url);
+}
