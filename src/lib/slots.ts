@@ -20,7 +20,7 @@ import { noticeExceedsHorizon } from "@/lib/back-office/notice";
 import { loadRdvType, rdvRules, type RdvTypeFacts } from "@/lib/booking/claims";
 import { lapsedHold } from "@/lib/booking/holds";
 import { lastBookableDate, type BookingWindow } from "@/lib/booking-window";
-import { addDays, instantAt, maxKey, minKey, mondayOf, parseKey, todayKey, type DateKey } from "@/lib/civil-date";
+import { addDays, instantAt, isDateKey, maxKey, minKey, mondayOf, todayKey, type DateKey } from "@/lib/civil-date";
 import { ts, type Db } from "@/lib/db/atomic";
 import { occurrence, timeOff } from "@/lib/db/schema";
 import { occurrenceStartWindow } from "@/lib/planning";
@@ -95,16 +95,6 @@ export async function loadRdvBusy(
       .where(and(eq(timeOff.professionalId, professionalId), lt(timeOff.startAt, range.end), gt(timeOff.endAt, range.start))),
   ]);
   return [...seances, ...rdvs, ...offs];
-}
-
-/** True for a well-formed, real calendar date (`parseKey` throws on anything else). */
-function isDateKey(key: string): boolean {
-  try {
-    parseKey(key);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export type RdvWeekDay = { key: DateKey; slots: RdvSlot[] };

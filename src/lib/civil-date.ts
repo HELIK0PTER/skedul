@@ -43,6 +43,16 @@ export function parseKey(key: DateKey): { y: number; m: number; d: number } {
   return { y, m, d };
 }
 
+/** True for a key parseKey accepts (a well-formed, real calendar date); never throws. A date input holds "" while it is edited. */
+export function isDateKey(value: string): boolean {
+  try {
+    parseKey(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Days since 1970-01-01 (may be negative). */
 export function dayNumber(key: DateKey): number {
   const { y, m, d } = parseKey(key);

@@ -7,22 +7,18 @@
 import { z } from "zod";
 
 import { startPurchase } from "@/lib/booking/fulfillment";
-import { upsertCustomer } from "@/lib/booking/wallet";
 import type { Db } from "@/lib/db/atomic";
 import { checkoutUrls, type CheckoutRequest } from "@/lib/payments/checkout";
 import {
   createCheckoutAndAttach,
-  honeypotFilled,
   identityInputSchema,
-  identityOf,
-  throttleSubjectOf,
+  paidActionGate,
+  upsertTypedCustomer,
   type IdentityInput,
 } from "@/lib/public/booking-actions";
 import type { ActionVisitor, PublicDeps, PublicPro } from "@/lib/public/context";
-import { COPY } from "@/lib/public/messages";
-import { fromEngineClient, fromParse, publicFail, type PublicCoreResult } from "@/lib/public/result";
-import { checkActionThrottle } from "@/lib/throttle";
-import { ENGINE_ERROR_MESSAGES, idSchema } from "@/lib/tickets";
+import { fromEngineClient, fromParse, type PublicCoreResult } from "@/lib/public/result";
+import { idSchema } from "@/lib/tickets";
 import { parseFr } from "@/lib/zod-fr";
 
 export type ShopPurchaseInput = { offerId: string; identity: IdentityInput; website?: string };
@@ -46,44 +42,15 @@ export async function startShopPurchaseCore(
   if (!parsed.ok) return fromParse(parsed);
   const data = parsed.data;
 
-  // 2. The honeypot: refused before any throttle, read or write.
-  if (honeypotFilled(data.website)) return publicFail(COPY.HONEYPOT_REFUSED);
-
-  // 3. The identity to write (an Owner's session address wins) and who is rate limited.
+  // 2 to 5. The honeypot, the identity and who is rate limited, payment availability, the throttle (paidActionGate,
+  // shared with E1). No séance, so no per-séance or per-pro IP key.
   const vars = { businessName: pro.businessName };
-  const identity = identityOf(data.identity, visitor);
-  const subject = throttleSubjectOf(visitor.session, identity.email);
+  const gate = await paidActionGate(db, pro, visitor, data, deps, { action: "shop" }, now);
+  if (!gate.ok) return gate.refusal;
+  const { identity, subject } = gate;
 
-  // 4. A simulated payment outside its allowance (Stripe on, or production): nothing is written.
-  if (deps.checkout.mode === "mock" && !deps.mockAllowed) return publicFail(COPY.PAYMENT_UNAVAILABLE);
-
-  // 5. The throttle, before any write or gateway call. No séance, so no per-séance or per-pro IP key.
-  const allowed = await checkActionThrottle(
-    db,
-    {
-      action: "shop",
-      professionalId: pro.professionalId,
-      ipHash: visitor.ipHash,
-      wideIpHash: visitor.wideIpHash,
-      subject,
-    },
-    now,
-  );
-  if (!allowed) return publicFail(ENGINE_ERROR_MESSAGES.throttled, { code: "throttled" });
-
-  // 6. The customer row identifies who buys; it authorises nothing. The account is linked only for a verified
-  // session of this very address (upsertUserIdFor, enforced again in SQL).
-  const { customerId } = await upsertCustomer(
-    db,
-    {
-      professionalId: pro.professionalId,
-      email: identity.email,
-      name: identity.name,
-      phone: identity.phone,
-      userId: subject.kind === "user" ? subject.userId : null,
-    },
-    now,
-  );
+  // 6. The customer row identifies who buys (upsertTypedCustomer).
+  const customerId = await upsertTypedCustomer(db, pro.professionalId, identity, subject, now);
 
   // 7. The engine: a pending purchase for an offer of THIS pro (its not_found and stale say nothing about
   // another customer, so they reach the browser as they are).

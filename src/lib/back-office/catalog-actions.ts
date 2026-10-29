@@ -65,9 +65,6 @@ function catalogFail(res: EngineFail, onStale: string): ActionFail {
   return res.code === "stale" ? actionFail(onStale, "stale") : fromEngine(res, "catalog");
 }
 
-/** Hours of one type: at most 24 ranges a day. */
-const MAX_HOURS_RULES = 7 * 24;
-
 const typeIdSchema = z.object({ ticketTypeId: idSchema });
 const archiveSchema = z.object({ ticketTypeId: idSchema, archived: z.boolean() });
 const updateTypeSchema = z.object({ ticketTypeId: idSchema, patch: z.record(z.string(), z.unknown()) });
@@ -76,7 +73,7 @@ const updateOfferSchema = z.object({ offerId: idSchema, offer: z.record(z.string
 const offerActiveSchema = z.object({ offerId: idSchema, isActive: z.boolean() });
 const hoursSchema = z.object({
   ticketTypeId: idSchema,
-  rules: z.array(availabilityRuleInputSchema).max(MAX_HOURS_RULES),
+  rules: z.array(availabilityRuleInputSchema).max(BOUNDS.hoursRules),
 });
 const questionsSchema = z.object({
   ticketTypeId: idSchema,

@@ -32,6 +32,7 @@ import {
   publicFail,
   publicOk,
   type PublicCoreResult,
+  type PublicFail,
 } from "@/lib/public/result";
 import { checkActionThrottle, type ThrottleSubject } from "@/lib/throttle";
 import { ENGINE_ERROR_MESSAGES, answersInputSchema, idSchema, normalizeEmail, type AnswerInput } from "@/lib/tickets";
@@ -82,11 +83,14 @@ export function honeypotFilled(website: unknown): boolean {
   return website !== undefined && website !== "";
 }
 
+/** The identity a typed form writes on the customer row. */
+export type TypedIdentity = { name: string; email: string; phone: string | null };
+
 /** The identity to write: an Owner's session e-mail replaces the typed one (the field is read-only for them, L1353); name and phone as parsed (phone "" → null). */
 export function identityOf(
   parsed: { name: string; email: string; phone?: string },
   visitor: Pick<ActionVisitor, "owner">,
-): { name: string; email: string; phone: string | null } {
+): TypedIdentity {
   return {
     name: parsed.name,
     email: visitor.owner ? normalizeEmail(visitor.owner.email) : parsed.email,
@@ -98,6 +102,63 @@ export function identityOf(
 export function throttleSubjectOf(session: SessionFacts | null, email: string): ThrottleSubject {
   const userId = upsertUserIdFor(session, email);
   return userId === null ? { kind: "email", email } : { kind: "user", userId };
+}
+
+/**
+ * Steps 2 to 5 of the two paid cores (E1 buy + book, E9 Boutique), in their fixed order: the honeypot, refused before
+ * any throttle, read or write; the identity to write (an Owner's session address wins) and who is rate limited
+ * (SEC-I6); a simulated payment outside its allowance (Stripe on, or production), which writes nothing; the throttle,
+ * before any write or gateway call (SEC-I1, SEC-I2; buy + book names its séance for the per-séance IP key). Either
+ * the refusal, which the core returns as it is, or the identity and the subject it goes on with.
+ */
+export async function paidActionGate(
+  db: Db,
+  pro: PublicPro,
+  visitor: ActionVisitor,
+  data: { identity: { name: string; email: string; phone?: string }; website?: unknown },
+  deps: PublicDeps,
+  throttle: { action: "buybook"; occurrenceId: string } | { action: "shop" },
+  now: Date,
+): Promise<
+  | { ok: true; identity: TypedIdentity; subject: ThrottleSubject }
+  | { ok: false; refusal: PublicFail & { effects: Effect[] } }
+> {
+  if (honeypotFilled(data.website)) return { ok: false, refusal: publicFail(COPY.HONEYPOT_REFUSED) };
+  const identity = identityOf(data.identity, visitor);
+  const subject = throttleSubjectOf(visitor.session, identity.email);
+  if (deps.checkout.mode === "mock" && !deps.mockAllowed) return { ok: false, refusal: publicFail(COPY.PAYMENT_UNAVAILABLE) };
+  const allowed = await checkActionThrottle(
+    db,
+    { professionalId: pro.professionalId, ipHash: visitor.ipHash, wideIpHash: visitor.wideIpHash, subject, ...throttle },
+    now,
+  );
+  if (!allowed) return { ok: false, refusal: publicFail(ENGINE_ERROR_MESSAGES.throttled, { code: "throttled" }) };
+  return { ok: true, identity, subject };
+}
+
+/**
+ * The customer row of a typed identity: it identifies who claims or buys and authorises nothing. The account is
+ * linked only for a verified session of this very address (subject "user", upsertUserIdFor; enforced again in SQL).
+ */
+export async function upsertTypedCustomer(
+  db: Db,
+  professionalId: string,
+  identity: TypedIdentity,
+  subject: ThrottleSubject,
+  now: Date,
+): Promise<string> {
+  const { customerId } = await upsertCustomer(
+    db,
+    {
+      professionalId,
+      email: identity.email,
+      name: identity.name,
+      phone: identity.phone,
+      userId: subject.kind === "user" ? subject.userId : null,
+    },
+    now,
+  );
+  return customerId;
 }
 
 /** SEC-I1: live holds one séance may carry before buy + book refuses a typed address: Math.max(3, Math.ceil(capacity / 3)). */
@@ -240,31 +301,11 @@ export async function startBuyAndBookCore(
   if (!parsed.ok) return fromParse(parsed);
   const data = parsed.data;
 
-  // 2. The honeypot: refused before any throttle, read or write.
-  if (honeypotFilled(data.website)) return publicFail(COPY.HONEYPOT_REFUSED);
-
-  // 3. The identity to write (an Owner's session address wins) and who is rate limited.
+  // 2 to 5. The honeypot, the identity and who is rate limited, payment availability, the throttle (paidActionGate).
   const vars = { businessName: pro.businessName };
-  const identity = identityOf(data.identity, visitor);
-  const subject = throttleSubjectOf(visitor.session, identity.email);
-
-  // 4. A simulated payment outside its allowance (Stripe on, or production): nothing is written.
-  if (deps.checkout.mode === "mock" && !deps.mockAllowed) return publicFail(COPY.PAYMENT_UNAVAILABLE);
-
-  // 5. The throttle, before any write or gateway call (SEC-I1, SEC-I2).
-  const allowed = await checkActionThrottle(
-    db,
-    {
-      action: "buybook",
-      professionalId: pro.professionalId,
-      ipHash: visitor.ipHash,
-      wideIpHash: visitor.wideIpHash,
-      subject,
-      occurrenceId: data.occurrenceId,
-    },
-    now,
-  );
-  if (!allowed) return publicFail(ENGINE_ERROR_MESSAGES.throttled, { code: "throttled" });
+  const gate = await paidActionGate(db, pro, visitor, data, deps, { action: "buybook", occurrenceId: data.occurrenceId }, now);
+  if (!gate.ok) return gate.refusal;
+  const { identity, subject } = gate;
 
   // 6. Seat pressure: a typed address costs nothing to make up, so a séance at its hold ceiling refuses it (SEC-I1).
   if (subject.kind === "email") {
@@ -272,19 +313,8 @@ export async function startBuyAndBookCore(
     if (pressure && pressure.liveHolds >= holdCeiling(pressure.capacity)) return publicFail(COPY.TOO_MANY_PAYMENTS);
   }
 
-  // 7. The customer row identifies who the purchase is for; it authorises nothing. The account is linked only
-  // for a verified session of this very address (upsertUserIdFor, enforced again in SQL).
-  const { customerId } = await upsertCustomer(
-    db,
-    {
-      professionalId: pro.professionalId,
-      email: identity.email,
-      name: identity.name,
-      phone: identity.phone,
-      userId: subject.kind === "user" ? subject.userId : null,
-    },
-    now,
-  );
+  // 7. The customer row identifies who the purchase is for (upsertTypedCustomer).
+  const customerId = await upsertTypedCustomer(db, pro.professionalId, identity, subject, now);
 
   // 8. The engine: seat held, purchase pending. For a typed address the two refusals that depend on another
   // customer's state say the same neutral sentence, without a code (Decision 64).
@@ -417,18 +447,8 @@ export async function registerFreeCore(
   );
   if (!allowed) return publicFail(ENGINE_ERROR_MESSAGES.throttled, { code: "throttled" });
 
-  // 5. The customer row identifies who registers; it authorises nothing (same userId rule as E1).
-  const { customerId } = await upsertCustomer(
-    db,
-    {
-      professionalId: pro.professionalId,
-      email: identity.email,
-      name: identity.name,
-      phone: identity.phone,
-      userId: subject.kind === "user" ? subject.userId : null,
-    },
-    now,
-  );
+  // 5. The customer row identifies who registers (upsertTypedCustomer, the userId rule of E1).
+  const customerId = await upsertTypedCustomer(db, pro.professionalId, identity, subject, now);
 
   // 6. The engine. For a typed address an existing registration looks exactly like what a NEW address would get on
   // this séance (Decision 64); only the inbox owner gets the confirmation of the EXISTING booking again.

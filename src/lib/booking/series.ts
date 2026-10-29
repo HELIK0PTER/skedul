@@ -944,6 +944,8 @@ export async function deleteSeriesFrom(
       const { ev } = ctx;
       // d ≤ start_date: the whole segment ends (archived). Rows before d can then only be
       // leftovers kept by an earlier edit; a scheduled future one must be cancelled first.
+      // deleteRefusal (src/lib/back-office/event-actions.ts) repeats this refusal and the
+      // started one of loadSeriesContext for the delete preview: change the three together.
       const archive = input.fromDate <= ev.startDate;
       const liveBefore = sql`event_id = ${ev.id} and series_date < ${input.fromDate}::date
         and status = 'scheduled' and starts_at > ${ts(now)}`;

@@ -13,6 +13,7 @@ import {
   formatDayMonthYear,
   fromDayNumber,
   instantAt,
+  isDateKey,
   makeKey,
   maxKey,
   minKey,
@@ -30,6 +31,13 @@ test("parseKey reads a key and rejects malformed or impossible dates", () => {
   assert.deepEqual(parseKey("2028-02-29"), { y: 2028, m: 2, d: 29 });
   for (const bad of ["2026-13-01", "2026-00-10", "2026-02-29", "2026-04-31", "26-1-1", "2026-1-01", "", "2026-10-12T00:00"]) {
     assert.throws(() => parseKey(bad), /Invalid date key/, bad);
+  }
+});
+
+test("isDateKey is true exactly for the keys parseKey accepts, and never throws", () => {
+  for (const good of ["2026-10-12", "2028-02-29", "0001-01-01", "9999-12-31"]) assert.equal(isDateKey(good), true, good);
+  for (const bad of ["2026-13-01", "2026-00-10", "2026-02-29", "2026-04-31", "26-1-1", "2026-1-01", "", "2026-10-12T00:00", "12345-01-01"]) {
+    assert.equal(isDateKey(bad), false, bad);
   }
 });
 

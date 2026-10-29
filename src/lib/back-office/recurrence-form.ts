@@ -12,6 +12,7 @@ import {
   daysInMonth,
   formatDayMonth,
   instantAt,
+  isDateKey,
   parseKey,
   todayKey,
   type DateKey,
@@ -60,15 +61,6 @@ export function minuteToTime(minute: number): string {
 export function timeToMinute(time: string): number | null {
   const match = TIME_PATTERN.exec(time);
   return match ? Number(match[1]) * 60 + Number(match[2]) : null;
-}
-
-function isDateKey(value: string): boolean {
-  try {
-    parseKey(value);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /** ceil(day / 7) of a valid date: 1..5. */

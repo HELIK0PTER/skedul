@@ -354,7 +354,7 @@ export async function deleteOffer(
 
 /* ─────────────────────── RDV hours, questions, settings ─────────────────────── */
 
-const rulesSchema = z.array(availabilityRuleInputSchema).max(7 * 24);
+const rulesSchema = z.array(availabilityRuleInputSchema).max(BOUNDS.hoursRules);
 
 /**
  * Replaces, in one batch, the global weekly hours (ticketTypeId null) or the

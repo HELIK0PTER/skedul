@@ -94,18 +94,22 @@ function prefixOf(groups: number[], n: number): string {
   return groups.slice(0, n).map((g) => g.toString(16)).join(":");
 }
 
-/** The rate-limit bucket (OUT:109): IPv4 as is (also out of "::ffff:a.b.c.d"), IPv6 lower-cased, "[…]" and "%zone" stripped, "::" expanded, cut to its first 4 groups + "::/64"; "unknown" for null or anything unparsable. */
-export function ipBucket(ip: string | null): string {
-  const parsed = parseIp(ip);
+/** The narrow bucket of a parsed address: the IPv4 text, or the IPv6 /64; "unknown" for null. */
+function narrowOf(parsed: ParsedIp | null): string {
   if (parsed === null) return "unknown";
   return parsed.kind === "v4" ? parsed.text : `${prefixOf(parsed.groups, 4)}::/64`;
 }
 
-/** narrow = ipBucket(ip); wide = the IPv6 /48 (first 3 groups + "::/48"), null for IPv4, "unknown" or null input (SEC-I1). */
+/** The rate-limit bucket (OUT:109): IPv4 as is (also out of "::ffff:a.b.c.d"), IPv6 lower-cased, "[…]" and "%zone" stripped, "::" expanded, cut to its first 4 groups + "::/64"; "unknown" for null or anything unparsable. */
+export function ipBucket(ip: string | null): string {
+  return narrowOf(parseIp(ip));
+}
+
+/** narrow = ipBucket(ip); wide = the IPv6 /48 (first 3 groups + "::/48"), null for IPv4, "unknown" or null input (SEC-I1). The address is parsed once. */
 export function ipBuckets(ip: string | null): { narrow: string; wide: string | null } {
   const parsed = parseIp(ip);
   return {
-    narrow: ipBucket(ip),
+    narrow: narrowOf(parsed),
     wide: parsed !== null && parsed.kind === "v6" ? `${prefixOf(parsed.groups, 3)}::/48` : null,
   };
 }

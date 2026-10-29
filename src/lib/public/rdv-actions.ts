@@ -13,7 +13,6 @@ import { z } from "zod";
 import { bookRdv, type BookRdvInput } from "@/lib/booking/claims";
 import { lapsedHold } from "@/lib/booking/holds";
 import { fail } from "@/lib/booking/types";
-import { upsertCustomer } from "@/lib/booking/wallet";
 import { ts, type Db } from "@/lib/db/atomic";
 import { ticketOffer } from "@/lib/db/schema";
 import { buybookCheckoutExpiry, checkoutUrls, type CheckoutRequest } from "@/lib/payments/checkout";
@@ -24,7 +23,9 @@ import {
   identityInputSchema,
   identityOf,
   throttleSubjectOf,
+  upsertTypedCustomer,
   type IdentityInput,
+  type TypedIdentity,
 } from "@/lib/public/booking-actions";
 import type { ActionVisitor, PublicDeps, PublicPro } from "@/lib/public/context";
 import { linkCustomerUser, type WalletOwner } from "@/lib/public/identity";
@@ -114,7 +115,7 @@ async function ownRdvHoldAt(
 /** Who claims the slot: the Owner herself (held ticket), or a typed identity (free, buy; an Owner's session address wins). */
 type Claimant =
   | { kind: "owner"; owner: WalletOwner; subject: ThrottleSubject }
-  | { kind: "typed"; identity: { name: string; email: string; phone: string | null }; subject: ThrottleSubject };
+  | { kind: "typed"; identity: TypedIdentity; subject: ThrottleSubject };
 
 /**
  * E4 public (P5 dossier § 3.5): parse, honeypot, identity, payment availability, throttle "rdv", the slot grid, then the
@@ -197,17 +198,7 @@ export async function bookRdvCore(
     actorUserId = claimant.owner.userId;
   } else {
     actorUserId = subject.kind === "user" ? subject.userId : null;
-    ({ customerId } = await upsertCustomer(
-      db,
-      {
-        professionalId: pro.professionalId,
-        email: claimant.identity.email,
-        name: claimant.identity.name,
-        phone: claimant.identity.phone,
-        userId: actorUserId,
-      },
-      now,
-    ));
+    customerId = await upsertTypedCustomer(db, pro.professionalId, claimant.identity, subject, now);
   }
 
   // 9. The engine: the slot's occurrence and its booking (and for a buy the pending purchase holding it), or a refusal.

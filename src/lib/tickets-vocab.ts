@@ -154,6 +154,8 @@ export const BOUNDS = {
   answer: 2000,
   questions: 20,
   walletQuantity: 100,
+  /** weekly hours of one scope (global or one type): at most 24 ranges a day */
+  hoursRules: 7 * 24,
 } as const;
 
 /** Event occurrences are materialised this many days ahead of local today. */

@@ -20,6 +20,7 @@ import {
   addMonthsClamped,
   daysInMonth,
   diffDays,
+  isDateKey,
   makeKey,
   mondayOf,
   parseKey,
@@ -54,16 +55,6 @@ function parseTime(value: string): number | null {
   const minutes = Number(match[2]);
   if (hours > 23 || minutes > 59) return null;
   return hours * 60 + minutes;
-}
-
-/** True for a key parseKey accepts: a date input holds "" or an out-of-range year while it is being edited. */
-function isDateKey(value: string): boolean {
-  try {
-    parseKey(value);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /** First day of the month of `key`. */
