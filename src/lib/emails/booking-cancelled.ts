@@ -4,7 +4,7 @@
  */
 import { escapeHtml, layout } from "@/lib/email-layout";
 
-import { mailParagraph, mailPersonalLink, oneLine } from "./parts";
+import { MAIL_TICKET_RETURNED, mailParagraph, mailPersonalLink, oneLine } from "./parts";
 
 export type BookingCancelledArgs = {
   /** a séance of an event, or a rendez-vous (an occurrence with no event) */
@@ -28,7 +28,7 @@ export function bookingCancelledEmail(a: BookingCancelledArgs): { subject: strin
       ? `Bonjour ${a.customerName}, ${a.businessName} a annulé ${what} (${a.whenLabel}).`
       : `Bonjour ${a.customerName}, votre annulation pour « ${a.title} » (${a.whenLabel}) est bien enregistrée.`;
   const reason = a.reason ? mailParagraph(`Motif : ${a.reason}`) : "";
-  const returned = a.ticketReturned ? mailParagraph("Votre ticket a été rendu à votre portefeuille.") : "";
+  const returned = a.ticketReturned ? mailParagraph(MAIL_TICKET_RETURNED) : "";
   const html = layout(
     escapeHtml(heading),
     `

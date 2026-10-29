@@ -8,6 +8,7 @@
 import { and, asc, eq, exists, gt, inArray, isNotNull, isNull, lt, min, ne, or, sql, type SQL } from "drizzle-orm";
 
 import { listedClientSql } from "@/lib/back-office/client-reads";
+import { CUSTOMER_SEARCH_LIMIT } from "@/lib/back-office/register-form";
 import { activeBookingOf } from "@/lib/booking/claims";
 import { usableTickets } from "@/lib/booking/eligibility";
 import { seatsShown } from "@/lib/booking/holds";
@@ -430,11 +431,11 @@ const SEARCH_CANDIDATES = 200;
 /**
  * q trimmed, < 2 chars → []; name or email, case and accents ignored (foldedContains, `%`, `_` and `!` literal); the
  * listed clients only (listedClientSql: not a customer whose only trace is an unfinished checkout or a cancelled
- * booking); in French alphabetical order of the name; at most `limit` (default 8). The SQL order (the folded name)
+ * booking); in French alphabetical order of the name; at most `limit` (default CUSTOMER_SEARCH_LIMIT, 8). The SQL order (the folded name)
  * only decides which candidates are read, so that an accented name is not pushed past the cut by the database
  * collation; the final order is the collator's.
  */
-export async function searchCustomers(db: Db, professionalId: string, q: string, limit = 8): Promise<CustomerHit[]> {
+export async function searchCustomers(db: Db, professionalId: string, q: string, limit = CUSTOMER_SEARCH_LIMIT): Promise<CustomerHit[]> {
   const term = q.trim();
   if (term.length < 2) return [];
   const rows = await db

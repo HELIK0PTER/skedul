@@ -25,6 +25,7 @@ import { expand } from "../recurrence";
 import type { EventInfoInput, EventInput, RecurrenceRuleInput } from "../tickets";
 import {
   EVENT_START_PAST,
+  EVENT_START_TIME_PAST,
   EVENT_START_TOO_FAR,
   EVENT_TYPE_UNAVAILABLE,
   SERIES_DELETE_INCOMPLETE,
@@ -45,7 +46,7 @@ const NOT_FOUND = "Événement introuvable ou terminé.";
 const NO_OVERRIDES = { bookingHorizonDays: null, minNoticeMinutes: null, cancelDeadlineHours: null };
 /** The engine's own French texts for a delete from a date (src/lib/booking/series.ts). */
 const SEANCE_STARTED = "Une séance concernée a déjà commencé.";
-const LEFTOVER_BEFORE = "Une séance isolée avec inscrits reste avant cette date. Annulez-la d'abord.";
+const LEFTOVER_BEFORE = "Une séance isolée à venir reste avant cette date. Annulez-la d'abord.";
 /** A pinned clock, far from any midnight in Paris: 2026-10-14 12:00 and 15:00 local (UTC+2). */
 const MIDDAY_PARIS = new Date("2026-10-14T10:00:00.000Z");
 const AFTERNOON_PARIS = new Date("2026-10-14T13:00:00.000Z");
@@ -175,11 +176,14 @@ dbTest("createEventCore: a first séance that has already started is refused, on
   assert.equal(today, "2026-10-14");
 
   const earlier = await createEventCore(db, ctx, eventInput(pro, now, { rule: onceRule(today, 600) }), now);
-  assert.equal(outcome(earlier), EVENT_START_PAST, "10:00 is behind us");
+  assert.equal(outcome(earlier), EVENT_START_TIME_PAST, "10:00 is behind us: the day is today, its hour is past");
   const exactlyNow = await createEventCore(db, ctx, eventInput(pro, now, { rule: onceRule(today, 900) }), now);
-  assert.equal(outcome(exactlyNow), EVENT_START_PAST, "a séance starting right now has started");
+  assert.equal(outcome(exactlyNow), EVENT_START_TIME_PAST, "a séance starting right now has started");
   const weeklyToday = await createEventCore(db, ctx, eventInput(pro, now, { rule: weekly(today, [dayOfWeek(today)]) }), now);
-  assert.equal(outcome(weeklyToday), EVENT_START_PAST, "the first séance of the series is today at 10:00");
+  assert.equal(outcome(weeklyToday), EVENT_START_TIME_PAST, "the first séance of the series is today at 10:00");
+  // P6 B4: a start date of today is not a past date, only its hour is
+  assert.equal(EVENT_START_TIME_PAST, "L'heure de début est déjà passée aujourd'hui.");
+  assert.equal(EVENT_START_PAST, "La date de début ne peut pas être passée.");
   assert.equal((await db.select().from(event).where(eq(event.professionalId, pro.proId))).length, 0, "the refusals wrote nothing");
 
   const later = await createEventCore(db, ctx, eventInput(pro, now, { rule: onceRule(today, 1020) }), now);
@@ -829,8 +833,8 @@ dbTest("previewNewEventCore: refuses the start dates createEventCore refuses, wi
   const today = dayIn(pro, 0, now);
   const cases: [string, RecurrenceRuleInput, string][] = [
     ["a past day", onceRule(addDays(today, -1)), EVENT_START_PAST],
-    ["today at 10:00, already started", onceRule(today, 600), EVENT_START_PAST],
-    ["a series whose first séance is today at 10:00", weekly(today, [dayOfWeek(today)]), EVENT_START_PAST],
+    ["today at 10:00, already started", onceRule(today, 600), EVENT_START_TIME_PAST],
+    ["a series whose first séance is today at 10:00", weekly(today, [dayOfWeek(today)]), EVENT_START_TIME_PAST],
     ["today + 731", onceRule(addDays(today, 731)), EVENT_START_TOO_FAR],
   ];
   for (const [what, rule, message] of cases) {

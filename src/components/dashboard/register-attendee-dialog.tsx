@@ -13,11 +13,10 @@ import { Input } from "@/components/ui/input";
 import { INLINE_LINK_CLASS } from "@/components/ui/link-class";
 import { Select } from "@/components/ui/select";
 import { changedKeys, withoutErrorsUnder } from "@/lib/back-office/form-errors";
-import { plural } from "@/lib/back-office/format";
 import type { RegisterInput } from "@/lib/back-office/planning-actions";
 import type { CustomerHit } from "@/lib/back-office/planning-reads";
 import type { PlanningItemVM } from "@/lib/back-office/planning-view";
-import { newClientProblems, type NewClientValue } from "@/lib/back-office/register-form";
+import { newClientProblems, searchStatusLine, type NewClientValue } from "@/lib/back-office/register-form";
 import { PRO_ERROR_MESSAGES, REQUEST_FAILED } from "@/lib/pro-messages";
 import { BOOLEAN_ANSWERS, BOUNDS, type BookingMode } from "@/lib/tickets-vocab";
 import {
@@ -142,9 +141,7 @@ export function RegisterAttendeeDialog({
   const searchStatus: string | null = searching
     ? "Recherche…"
     : found !== null && found.ok
-      ? found.customers.length === 0
-        ? "Aucun client trouvé."
-        : plural(found.customers.length, "client trouvé", "clients trouvés")
+      ? searchStatusLine(found.customers.length)
       : null;
 
   const existing = client?.kind === "existing" ? client : null;

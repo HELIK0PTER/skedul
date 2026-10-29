@@ -6,7 +6,16 @@
  */
 import { escapeHtml, layout } from "@/lib/email-layout";
 
-import { mailCalendarButtons, mailDetails, mailParagraph, mailPersonalLink, oneLine, type MailCalendarLinks } from "./parts";
+import {
+  MAIL_CALENDAR_UPDATE,
+  MAIL_CANCEL_UNTIL_START,
+  mailCalendarButtons,
+  mailDetails,
+  mailParagraph,
+  mailPersonalLink,
+  oneLine,
+  type MailCalendarLinks,
+} from "./parts";
 
 export type OccurrenceChangedArgs = {
   customerName: string;
@@ -26,9 +35,9 @@ export function occurrenceChangedEmail(a: OccurrenceChangedArgs): { subject: str
     ...(a.location ? [{ label: "Lieu", value: a.location }] : []),
   ];
   const cancel = a.canCancelUntilStart
-    ? mailParagraph("Si ce changement ne vous convient pas, vous pouvez annuler en ligne jusqu'au début de la séance.")
+    ? mailParagraph(MAIL_CANCEL_UNTIL_START)
     : "";
-  const calendar = a.calendar ? `${mailParagraph("Pour mettre à jour votre agenda :")}${mailCalendarButtons(a.calendar)}` : "";
+  const calendar = a.calendar ? `${mailParagraph(MAIL_CALENDAR_UPDATE)}${mailCalendarButtons(a.calendar)}` : "";
   const html = layout(
     escapeHtml("Séance modifiée"),
     `

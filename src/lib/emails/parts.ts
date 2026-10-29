@@ -8,6 +8,14 @@ import { escapeHtml } from "@/lib/email-layout";
 const BUTTON_STYLE =
   "display:inline-block;background:#6366f1;color:#fff;text-decoration:none;font-weight:600;padding:12px 20px;border-radius:10px;margin:0 8px 8px 0";
 
+/** A cancellation that gives the ticket back (booking-cancelled, occurrence-cancelled): one wording in every mail. */
+export const MAIL_TICKET_RETURNED = "Votre ticket a été rendu à votre portefeuille.";
+/** A séance moved or changed by the pro (attendee-moved, occurrence-changed): the client may still cancel online. */
+export const MAIL_CANCEL_UNTIL_START =
+  "Si ce changement ne vous convient pas, vous pouvez annuler en ligne jusqu'au début de la séance.";
+/** The line above the calendar buttons of a moved or changed séance (attendee-moved, occurrence-changed). */
+export const MAIL_CALENDAR_UPDATE = "Pour mettre à jour votre agenda :";
+
 /** The three « Ajouter à mon agenda » links of a confirmed registration (its .ics file is that booking's). */
 export type MailCalendarLinks = { googleUrl: string; outlookUrl: string; icsUrl: string };
 

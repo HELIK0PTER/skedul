@@ -47,19 +47,49 @@ test("formatWhen crosses the day boundary per zone", () => {
 test("formatWhen on the DST days of Paris and Los Angeles", () => {
   assert.equal(
     formatWhen(at("2026-03-29T00:30:00Z"), at("2026-03-29T01:30:00Z"), PARIS),
-    "dim. 29 mars 2026 · 01:30 à 03:30",
+    "dim. 29 mars 2026 · 01:30 à 03:30 (changement d'heure)",
   );
   assert.equal(
     formatWhen(at("2026-10-25T00:30:00Z"), at("2026-10-25T01:30:00Z"), PARIS),
-    "dim. 25 octobre 2026 · 02:30 à 02:30",
+    "dim. 25 octobre 2026 · 02:30 à 02:30 (changement d'heure)",
   );
   assert.equal(
     formatWhen(at("2026-03-08T09:30:00Z"), at("2026-03-08T10:30:00Z"), LA),
-    "dim. 8 mars 2026 · 01:30 à 03:30",
+    "dim. 8 mars 2026 · 01:30 à 03:30 (changement d'heure)",
   );
   assert.equal(
     formatWhen(at("2026-11-01T08:30:00Z"), at("2026-11-01T09:30:00Z"), LA),
-    "dim. 1er novembre 2026 · 01:30 à 01:30",
+    "dim. 1er novembre 2026 · 01:30 à 01:30 (changement d'heure)",
+  );
+});
+
+test("formatTimeRange names the end's day when it is not the start's, judged in the zone (P6 B4)", () => {
+  // overnight: the end falls on the next local day
+  assert.equal(formatTimeRange(at("2026-10-12T20:00:00Z"), at("2026-10-12T23:00:00Z"), PARIS), "22:00 à 01:00 le lendemain");
+  assert.equal(
+    formatWhen(at("2026-10-12T20:00:00Z"), at("2026-10-12T23:00:00Z"), PARIS),
+    "lun. 12 octobre 2026 · 22:00 à 01:00 le lendemain",
+  );
+  // an end at midnight closes the same evening
+  assert.equal(formatTimeRange(at("2026-10-12T21:00:00Z"), at("2026-10-12T22:00:00Z"), PARIS), "23:00 à 00:00");
+  // a later day is named
+  assert.equal(formatTimeRange(at("2026-10-12T12:00:00Z"), at("2026-10-14T08:00:00Z"), PARIS), "14:00 au 14/10 à 10:00");
+  assert.equal(formatTimeRange(at("2026-10-12T12:00:00Z"), at("2026-10-13T22:00:00Z"), PARIS), "14:00 au 14/10 à 00:00");
+  // the same instants stay on one day in Los Angeles
+  assert.equal(formatTimeRange(at("2026-10-12T20:00:00Z"), at("2026-10-12T23:00:00Z"), LA), "13:00 à 16:00");
+});
+
+test("formatTimeRange flags a range across a change of time, and only such a range (P6 B4)", () => {
+  // Paris falls back on 25 October 2026: 02:30 summer time, then 02:30 winter time an hour later
+  assert.equal(formatTimeRange(at("2026-10-25T00:30:00Z"), at("2026-10-25T01:30:00Z"), PARIS), "02:30 à 02:30 (changement d'heure)");
+  // Paris springs forward on 29 March 2026
+  assert.equal(formatTimeRange(at("2026-03-29T00:30:00Z"), at("2026-03-29T01:30:00Z"), PARIS), "01:30 à 03:30 (changement d'heure)");
+  // the same day, later on: no change inside the range
+  assert.equal(formatTimeRange(at("2026-10-25T09:00:00Z"), at("2026-10-25T10:00:00Z"), PARIS), "10:00 à 11:00");
+  // overnight across the change: both notes
+  assert.equal(
+    formatTimeRange(at("2026-10-24T21:00:00Z"), at("2026-10-25T02:00:00Z"), PARIS),
+    "23:00 à 03:00 le lendemain (changement d'heure)",
   );
 });
 

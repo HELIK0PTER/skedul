@@ -4,7 +4,16 @@
  */
 import { escapeHtml, layout } from "@/lib/email-layout";
 
-import { mailCalendarButtons, mailDetails, mailParagraph, mailPersonalLink, oneLine, type MailCalendarLinks } from "./parts";
+import {
+  MAIL_CALENDAR_UPDATE,
+  MAIL_CANCEL_UNTIL_START,
+  mailCalendarButtons,
+  mailDetails,
+  mailParagraph,
+  mailPersonalLink,
+  oneLine,
+  type MailCalendarLinks,
+} from "./parts";
 
 export type AttendeeMovedArgs = {
   customerName: string;
@@ -29,8 +38,8 @@ export function attendeeMovedEmail(a: AttendeeMovedArgs): { subject: string; htm
     `
     ${mailParagraph(`Bonjour ${a.customerName}, ${a.businessName} a déplacé votre inscription.`)}
     ${mailDetails(rows)}
-    ${mailParagraph("Si ce changement ne vous convient pas, vous pouvez annuler en ligne jusqu'au début de la séance.")}
-    ${mailParagraph("Pour mettre à jour votre agenda :")}
+    ${mailParagraph(MAIL_CANCEL_UNTIL_START)}
+    ${mailParagraph(MAIL_CALENDAR_UPDATE)}
     ${mailCalendarButtons(a.calendar)}
     ${mailPersonalLink(a.personalLinkUrl)}
   `,

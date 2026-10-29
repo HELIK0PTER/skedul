@@ -3,7 +3,7 @@
  * function takes the time zone explicitly (never the host zone), and no output
  * contains an em or en dash (UI rule).
  */
-import { compareKeys, formatDayMonth, formatDayMonthYear, mondayOf, parseKey, todayKey, type DateKey } from "@/lib/civil-date";
+import { addDays, compareKeys, formatDayMonth, formatDayMonthYear, mondayOf, parseKey, todayKey, type DateKey } from "@/lib/civil-date";
 import { frenchFirst } from "@/lib/datetime";
 import { lastValidDay } from "@/lib/ticket-expiry";
 
@@ -26,10 +26,30 @@ function formatter(tz: string, shape: "time" | "weekday" | "dateLong"): Intl.Dat
   return f;
 }
 
-/** « 19:00 à 20:00 » in tz. */
+/** Minutes east of UTC of the zone at `instant` (its wall clock read as UTC, minus the instant, to the minute). */
+function offsetMinutes(instant: Date, tz: string, time: Intl.DateTimeFormat): number {
+  const { y, m, d } = parseKey(todayKey(instant, tz));
+  const [hh, mm] = time.format(instant).split(":").map(Number);
+  return Math.round((Date.UTC(y, m - 1, d, hh, mm) - Math.floor(instant.getTime() / 60_000) * 60_000) / 60_000);
+}
+
+/**
+ * « 19:00 à 20:00 » in tz. An end on another local day says so: « 22:00 à 01:00 le lendemain », « 14:00 au 14/10 à
+ * 10:00 » (an end at 00:00 the next day closes the same evening: « 23:00 à 00:00 »). A range across a change of time
+ * adds « (changement d'heure) », since its two clock times alone misread its length (« 02:30 à 02:30 »).
+ */
 export function formatTimeRange(start: Date, end: Date, tz: string): string {
   const time = formatter(tz, "time");
-  return `${time.format(start)} à ${time.format(end)}`;
+  const from = time.format(start);
+  const to = time.format(end);
+  const startDay = todayKey(start, tz);
+  const endDay = todayKey(end, tz);
+  const nextDay = addDays(startDay, 1);
+  let range: string;
+  if (endDay === startDay || (endDay === nextDay && to === "00:00")) range = `${from} à ${to}`;
+  else if (endDay === nextDay) range = `${from} à ${to} le lendemain`;
+  else range = `${from} au ${formatDayMonth(endDay)} à ${to}`;
+  return offsetMinutes(start, tz, time) === offsetMinutes(end, tz, time) ? range : `${range} (changement d'heure)`;
 }
 
 /** « lun. 12 octobre 2026 · 19:00 à 20:00 » in tz; « dim. 1er novembre 2026 » on a first. */

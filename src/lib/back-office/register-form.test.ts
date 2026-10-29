@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { BOUNDS } from "../tickets-vocab";
-import { EMAIL_REQUIRED, NAME_REQUIRED, newClientProblems, type NewClientValue } from "./register-form";
+import {
+  CUSTOMER_SEARCH_LIMIT,
+  EMAIL_REQUIRED,
+  NAME_REQUIRED,
+  newClientProblems,
+  searchStatusLine,
+  type NewClientValue,
+} from "./register-form";
 
 const client = (over: Partial<NewClientValue> = {}): NewClientValue => ({
   name: "Test P3",
@@ -54,4 +61,14 @@ test("newClientProblems: several wrong fields are all reported", () => {
     email: "Adresse email invalide.",
     phone: `${BOUNDS.phone} caractères au maximum.`,
   });
+});
+
+test("searchStatusLine: no client, a count, and a full read says it may hide others (P6 B4)", () => {
+  assert.equal(CUSTOMER_SEARCH_LIMIT, 8, "the rows searchCustomers reads by default");
+  assert.equal(searchStatusLine(0), "Aucun client trouvé.");
+  assert.equal(searchStatusLine(1), "1 client trouvé");
+  assert.equal(searchStatusLine(7), "7 clients trouvés");
+  const full = "Les 8 premiers clients sont affichés. Précisez la recherche si le vôtre n'y est pas.";
+  assert.equal(searchStatusLine(8), full);
+  assert.equal(searchStatusLine(9), full, "never more than the read cap is announced");
 });

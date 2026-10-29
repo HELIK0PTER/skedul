@@ -5,7 +5,7 @@
  */
 import { escapeHtml, layout } from "@/lib/email-layout";
 
-import { mailParagraph, mailPersonalLink, oneLine } from "./parts";
+import { MAIL_TICKET_RETURNED, mailParagraph, mailPersonalLink, oneLine } from "./parts";
 
 export type OccurrenceCancelledArgs = {
   /** a séance of an event, or a rendez-vous (an occurrence with no event) */
@@ -19,7 +19,7 @@ export type OccurrenceCancelledArgs = {
 };
 
 export function occurrenceCancelledEmail(a: OccurrenceCancelledArgs): { subject: string; html: string } {
-  const returned = a.ticketReturned ? mailParagraph("Votre ticket a été rendu à votre portefeuille.") : "";
+  const returned = a.ticketReturned ? mailParagraph(MAIL_TICKET_RETURNED) : "";
   const heading = a.kind === "rdv" ? "Rendez-vous annulé" : "Séance annulée";
   const sentence =
     a.kind === "rdv"

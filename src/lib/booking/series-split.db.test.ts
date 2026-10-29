@@ -597,7 +597,7 @@ dbTest("E7 supprimer à partir du: from start_date with a booked leftover before
   const res = await deleteSeriesFrom(db, { professionalId: pro.proId, actorUserId: pro.userId, eventId, seenVersion: 2, fromDate: s2 }, now);
   assert.deepEqual(res.ok ? "ok" : [res.code, res.message], [
     "invalid",
-    "Une séance isolée avec inscrits reste avant cette date. Annulez-la d'abord.",
+    "Une séance isolée à venir reste avant cette date. Annulez-la d'abord.",
   ]);
   const ev = await getEvent(db, eventId);
   assert.equal(ev.version, 2);

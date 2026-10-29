@@ -57,6 +57,8 @@ export type SchedulePreview = {
 };
 
 export const EVENT_START_PAST = "La date de début ne peut pas être passée.";
+/** A start date of today whose first séance has already begun: the date is fine, its hour is past (P6 B4). */
+export const EVENT_START_TIME_PAST = "L'heure de début est déjà passée aujourd'hui.";
 export const EVENT_START_TOO_FAR = "La date de début doit être dans les deux prochaines années.";
 export const EVENT_TYPE_UNAVAILABLE = "Un type de ticket choisi est archivé ou introuvable.";
 
@@ -73,7 +75,7 @@ export const SERIES_INFO_INCOMPLETE =
 const PAST_FROM_DATE = "La modification doit partir d'aujourd'hui ou d'une date future.";
 /** The two refusals of deleteSeriesFrom that the delete preview must reproduce (src/lib/booking/series.ts). */
 const SEANCE_STARTED = "Une séance concernée a déjà commencé.";
-const LEFTOVER_BEFORE = "Une séance isolée avec inscrits reste avant cette date. Annulez-la d'abord.";
+const LEFTOVER_BEFORE = "Une séance isolée à venir reste avant cette date. Annulez-la d'abord.";
 /** A new event may start at most this many days after local today (OUT L114). */
 const START_MAX_DAYS = 730;
 
@@ -150,7 +152,7 @@ function startProblem(rule: RecurrenceRuleInput, durationMin: number, tz: string
   // A first séance on a later local day starts after `now`: only a start date of today can already be behind us.
   if (rule.startDate === today) {
     const [first] = expand({ ...rule, durationMin }, tz, today, today);
-    if (first !== undefined && first.startsAt.getTime() <= now.getTime()) return EVENT_START_PAST;
+    if (first !== undefined && first.startsAt.getTime() <= now.getTime()) return EVENT_START_TIME_PAST;
   }
   return null;
 }

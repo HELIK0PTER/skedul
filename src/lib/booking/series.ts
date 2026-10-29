@@ -1008,7 +1008,7 @@ export async function deleteSeriesFrom(
         ];
       }
       if (archive && f?.live_before === true) {
-        throw new PlanError("invalid", "Une séance isolée avec inscrits reste avant cette date. Annulez-la d'abord.");
+        throw new PlanError("invalid", "Une séance isolée à venir reste avant cette date. Annulez-la d'abord.");
       }
 
       const del = ctx.rows.filter((r) => !r.hasHistory).map((r) => r.id);
