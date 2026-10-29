@@ -164,8 +164,6 @@ export const COPY = {
   RDV_BOOK: "Réserver",
   RDV_CARD_CTA: "Réserver un rendez-vous",
   RDV_FREE_BADGE: "Gratuit",
-  /** The hold ceiling of a typed buyer (O23, RDV_HOLD_CEILING): the RDV twin of TOO_MANY_PAYMENTS, which names a séance. */
-  RDV_TOO_MANY_PAYMENTS: "Plusieurs paiements de rendez-vous sont en cours. Réessayez dans quelques minutes.",
 } as const;
 
 /** « Heures de {zone} », the static time-zone line of the RDV page (O30); `zone` is `timeZoneLabel(tz)`, inserted as given. */

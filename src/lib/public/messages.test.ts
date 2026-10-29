@@ -252,7 +252,6 @@ test("COPY holds every fixed client sentence, word for word", () => {
     RDV_BOOK: "Réserver",
     RDV_CARD_CTA: "Réserver un rendez-vous",
     RDV_FREE_BADGE: "Gratuit",
-    RDV_TOO_MANY_PAYMENTS: "Plusieurs paiements de rendez-vous sont en cours. Réessayez dans quelques minutes.",
   });
 });
 

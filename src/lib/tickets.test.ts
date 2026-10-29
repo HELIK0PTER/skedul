@@ -33,7 +33,6 @@ import {
   QUESTION_TYPES,
   RECURRENCE_ENDS,
   RECURRENCE_FREQS,
-  RDV_HOLD_CEILING,
   THROTTLE_ACTIONS,
   THROTTLE_LIMITS,
   TICKET_CLOSE_REASONS,
@@ -124,9 +123,8 @@ test("horizon and hold constants keep their margins", () => {
   assert.ok(CHECKOUT_MINUTES >= 30);
   assert.ok(HOLD_MINUTES > CHECKOUT_MINUTES);
   assert.equal(MAX_PENDING_HOLDS, 2);
-  // P5 O23: live RDV holds per pro a typed address may join (a read, like holdCeiling for a séance)
-  assert.equal(RDV_HOLD_CEILING, 3);
-  assert.ok(RDV_HOLD_CEILING > MAX_PENDING_HOLDS, "one typed buyer's own two holds never reach the pro's ceiling alone");
+  // P5 O23 withdrawn at D3 (R1): no pro-wide ceiling on RDV holds (the EXCLUDE guards each slot)
+  assert.equal("RDV_HOLD_CEILING" in vocab, false);
   assert.deepEqual(OTP_EMAIL_LIMIT, { limit: 5, windowSec: 3600 });
   assert.deepEqual(Object.keys(THROTTLE_LIMITS).sort(), [...THROTTLE_ACTIONS].sort());
 });

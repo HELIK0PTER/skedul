@@ -17,13 +17,12 @@ import { stripeSessionParams } from "@/lib/payments/checkout";
 import type { ActionVisitor, PublicDeps, PublicPro } from "@/lib/public/context";
 import { CLIENT_CONTEXT_MESSAGES, COPY, heldTicketButtonLabel } from "@/lib/public/messages";
 import { purchaseByReference } from "@/lib/public/purchase-reads";
-import { bookRdvCore, bookRdvInputSchema, rdvHoldPressureOf } from "@/lib/public/rdv-actions";
+import { bookRdvCore, bookRdvInputSchema } from "@/lib/public/rdv-actions";
 import { rdvOwnerTickets } from "@/lib/public/rdv-reads";
 import { withoutPublicEffects } from "@/lib/public/result";
 import { referenceForPage } from "@/lib/public/visibility";
 import { checkActionThrottle } from "@/lib/throttle";
 import { ENGINE_ERROR_MESSAGES, normalizeEmail } from "@/lib/tickets";
-import { RDV_HOLD_CEILING } from "@/lib/tickets-vocab";
 import { parseFr } from "@/lib/zod-fr";
 import { addMinutes, createTestPro, dbTest, deleteTestUser, inParallel, testEmail, type Db, type DbHarness } from "@/test/db";
 import { dayIn, getBooking, getOccurrence, giveTickets, makeOffer, makeType, ticketsOf } from "@/test/fixtures";
@@ -576,37 +575,26 @@ dbTest("throttled: the per-pro IP key of RDV bookings stops the seventh call of 
   assert.equal(perPro?.hits, 7, "the key t:rdv:p:<pro>:ip:<hash> counted the seven calls");
 });
 
-dbTest("the hold ceiling: at RDV_HOLD_CEILING live RDV holds a typed buyer is refused before any write, a verified identity is not", async (h) => {
+dbTest("no pro-wide hold ceiling (O23 withdrawn, R1): three live RDV holds of other typed buyers leave a new typed buyer its hold and its Checkout on a free slot", async (h) => {
   const s = await setup(h);
   const now = new Date();
   for (const [i, minute] of [600, 660, 720].entries()) {
     const { res } = await run(h, buyInput(s, minute, testEmail(`ceil${i}`)), { now });
-    assert.ok(res.ok, JSON.stringify(res));
+    assert.ok(res.ok && res.kind === "checkout", JSON.stringify(res));
   }
-  // A free booking holds nothing, it is not counted.
-  assert.ok((await run(h, freeInput(s, 780, testEmail("ceilfree")), { now })).res.ok);
-  assert.equal(RDV_HOLD_CEILING, 3);
-  assert.equal(await rdvHoldPressureOf(h.db, h.pro.proId, now), 3);
-  // A hold whose hold_expires_at is now is still live (the engine's lapsedHold rule); one millisecond later it is not.
-  assert.equal(await rdvHoldPressureOf(h.db, h.pro.proId, addMinutes(now, 45)), 3);
-  assert.equal(await rdvHoldPressureOf(h.db, h.pro.proId, new Date(addMinutes(now, 45).getTime() + 1)), 0);
+  assert.equal((await scheduledRdvsOf(h)).length, 3, "three live RDV holds of this pro");
 
-  const email = testEmail("ceilrefused");
-  const refused = await run(h, buyInput(s, 840, email), { now });
-  assert.ok(!refused.res.ok);
-  assert.equal(refused.res.error, COPY.RDV_TOO_MANY_PAYMENTS);
-  assert.equal(refused.res.code, undefined);
-  assert.equal(await customerOf(h, email), undefined, "nothing written");
-  assert.equal((await scheduledRdvsOf(h)).length, 4);
-
-  const o = await ownerVisitor(h, testEmail("ceilowner"));
-  try {
-    const verified = await run(h, buyInput(s, 840, o.owner.email), { visitor: o.visitor, now });
-    assert.ok(verified.res.ok && verified.res.kind === "checkout", JSON.stringify(verified.res));
-    assert.equal(await rdvHoldPressureOf(h.db, h.pro.proId, now), 4);
-  } finally {
-    await deleteTestUser(h.db, o.userId);
-  }
+  const email = testEmail("ceilfourth");
+  const fourth = await run(h, buyInput(s, 840, email), { now });
+  assert.ok(fourth.res.ok && fourth.res.kind === "checkout", JSON.stringify(fourth.res));
+  assert.equal(fourth.fake.created.length, 1, "its Checkout session");
+  assert.equal(fourth.fake.created[0].purchaseId, fourth.res.purchaseId);
+  assert.ok(await customerOf(h, email), "its customer row");
+  const rdv = (await scheduledRdvsOf(h)).find((o) => o.startsAt.getTime() === s.at(840).getTime());
+  assert.ok(rdv, "its slot is held");
+  const [held] = await h.db.select().from(bookingTable).where(eq(bookingTable.occurrenceId, rdv.id));
+  assert.equal(held.status, "pending");
+  assert.equal(held.purchaseId, fourth.res.purchaseId);
 });
 
 dbTest("too_many_holds: a typed address reads the neutral sentence, a verified Owner the RDV sentence with its code", async (h) => {

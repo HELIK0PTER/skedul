@@ -181,11 +181,6 @@ export const SHOP_CHECKOUT_HOURS = 24;
 export const STALE_PURCHASE_GRACE_MINUTES = 60;
 /** Live holds (pending bookings) one customer may have at once. */
 export const MAX_PENDING_HOLDS = 2;
-/**
- * Live RDV holds (pending RDV bookings) a pro may carry before a typed address is refused a new one
- * (P5 O23, a read before the engine like `holdCeiling` for a séance); verified identities bypass it.
- */
-export const RDV_HOLD_CEILING = 3;
 
 export const THROTTLE_WINDOW_SEC = 3600;
 /** Public actions that consume throttle keys (src/lib/throttle.ts `actionThrottleKeys`). « mail », « horizon », « otp » and « reset » name other key families of the same table and are never actions. */

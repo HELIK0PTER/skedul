@@ -2,7 +2,7 @@
  * Public booking of an RDV libre slot (spec § 11 E4, P5 dossier § 3.5) as a testable core: a held ticket (an Owner of
  * this pro), a free booking (a « Gratuit » type) or a buy (a pending purchase holding the slot, then the Checkout
  * session). The step order of § 3.5 is binding: the WHOLE input is parsed first, then the refusals (honeypot, identity,
- * payment availability, throttle, the slot grid, the hold ceiling) come BEFORE the first write, then the engine runs with
+ * payment availability, throttle, the slot grid) come BEFORE the first write, then the engine runs with
  * the pro of the page slug, never with anything taken from the input. The engine's EXCLUDE settles two claims on one slot
  * (O1): the loser reads « Ce créneau vient d'être pris. ». No server-only, no next/*, no session read: the wrapper
  * (src/server/public.ts) builds the visitor.
@@ -34,7 +34,6 @@ import { fromEngineClient, fromParse, publicFail, publicOk, type PublicCoreResul
 import { checkRdvStart } from "@/lib/slots";
 import { checkActionThrottle, type ThrottleSubject } from "@/lib/throttle";
 import { ENGINE_ERROR_MESSAGES, answersInputSchema, idSchema, type AnswerInput } from "@/lib/tickets";
-import { RDV_HOLD_CEILING } from "@/lib/tickets-vocab";
 import { parseFr } from "@/lib/zod-fr";
 
 /** A nanoid: the shape of every id the server renders (1 to 64 characters of [A-Za-z0-9_-]). */
@@ -77,20 +76,6 @@ export type BookRdvOutcome =
   | { kind: "booked"; bookingId: string }
   | { kind: "checkout"; purchaseId: string; checkoutUrl: string };
 
-/**
- * Live RDV holds of this pro (a pending RDV booking whose hold has not lapsed: the engine's own rule, lapsedHold), for the
- * hold ceiling of a typed address (O23, the SEC-I1 analogue of seatPressureOf). A read, not a guard: a race lets one
- * extra hold through, never a stranger's slot.
- */
-export async function rdvHoldPressureOf(db: Db, professionalId: string, now: Date): Promise<number> {
-  const res = await db.execute<{ n: number }>(sql`
-    select count(*)::int as n from booking b
-    join occurrence o on o.id = b.occurrence_id and o.professional_id = b.professional_id
-    where b.professional_id = ${professionalId} and o.event_id is null
-      and b.status = 'pending' and not ${lapsedHold(now, sql`b`)}`);
-  return Number(res.rows[0]?.n ?? 0);
-}
-
 /** True when this pro has an offer with this id (any state: the engine answers the rest). */
 async function isOfferOfPro(db: Db, professionalId: string, offerId: string): Promise<boolean> {
   const [row] = await db
@@ -132,8 +117,8 @@ type Claimant =
   | { kind: "typed"; identity: { name: string; email: string; phone: string | null }; subject: ThrottleSubject };
 
 /**
- * E4 public (P5 dossier § 3.5): parse, honeypot, identity, payment availability, throttle "rdv", the slot grid, the hold
- * ceiling of a typed buyer, then the customer row, the engine, and for a buy the Checkout session and its attachment.
+ * E4 public (P5 dossier § 3.5): parse, honeypot, identity, payment availability, throttle "rdv", the slot grid, then the
+ * customer row, the engine, and for a buy the Checkout session and its attachment.
  * `opts.afterPlan` is test-only: it runs between the engine's plan and its batch.
  */
 export async function bookRdvCore(
@@ -197,13 +182,9 @@ export async function bookRdvCore(
     return fromEngineClient(fail("not_found"), "rdv", vars);
   }
 
-  // 7. The hold ceiling: a typed address costs nothing to make up, so a pro at RDV_HOLD_CEILING live RDV holds refuses a
-  // new one from it (O23); a verified identity is bounded by the engine's per-customer quota instead.
-  if (data.mode === "buy" && subject.kind === "email") {
-    if ((await rdvHoldPressureOf(db, pro.professionalId, now)) >= RDV_HOLD_CEILING) {
-      return publicFail(COPY.RDV_TOO_MANY_PAYMENTS);
-    }
-  }
+  // 7. No pro-wide hold ceiling (O23 withdrawn at D3, R1): an RDV slot is one seat that the EXCLUDE already guards, so a
+  // ceiling protected no pool and let one address block every typed buyer of the pro. The throttle above and the
+  // engine's per-customer quota bound what one address can hold.
 
   // 8. The writes before the engine. The Owner's account is linked to her own row (L1345) only now; a typed identity gets
   // its customer row, which identifies who books and authorises nothing (the account is linked only for a verified
