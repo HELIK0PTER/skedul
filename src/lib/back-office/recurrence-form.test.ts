@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { addDays } from "@/lib/civil-date";
+import { expand } from "@/lib/recurrence";
 import { recurrenceRuleSchema, type RecurrenceRuleInput } from "@/lib/tickets";
 
 import {
@@ -275,6 +277,41 @@ test("previewDates: a future start, a short count, an ended rule, a refused rule
     yearly.map((d) => d.seriesDate),
     ["2027-01-31", "2028-01-31"],
   );
+});
+
+test("previewDates across a spring-forward Sunday: the date stays, the start moves past the gap, the end follows (P6 D10)", () => {
+  // Paris 2026-03-29: 02:00 CET jumps to 03:00 CEST, so 02:30 starts at 03:30 CEST (01:30Z)
+  const paris = previewDates(rule({ startDate: "2026-03-22", startMinute: 150, weekdays: [0] }), 60, PARIS, new Date("2026-03-20T10:00:00Z"), 3);
+  assert.deepEqual(
+    paris.map((d) => [d.seriesDate, d.startsAt.toISOString(), d.endsAt.toISOString()]),
+    [
+      ["2026-03-22", "2026-03-22T01:30:00.000Z", "2026-03-22T02:30:00.000Z"],
+      ["2026-03-29", "2026-03-29T01:30:00.000Z", "2026-03-29T02:30:00.000Z"],
+      ["2026-04-05", "2026-04-05T00:30:00.000Z", "2026-04-05T01:30:00.000Z"],
+    ],
+  );
+  // Los Angeles 2026-03-08: 02:00 PST jumps to 03:00 PDT, so 02:30 starts at 03:30 PDT (10:30Z)
+  const la = previewDates(rule({ startDate: "2026-03-01", startMinute: 150, weekdays: [0] }), 45, LA, new Date("2026-02-27T20:00:00Z"), 3);
+  assert.deepEqual(
+    la.map((d) => [d.seriesDate, d.startsAt.toISOString(), d.endsAt.toISOString()]),
+    [
+      ["2026-03-01", "2026-03-01T10:30:00.000Z", "2026-03-01T11:15:00.000Z"],
+      ["2026-03-08", "2026-03-08T10:30:00.000Z", "2026-03-08T11:15:00.000Z"],
+      ["2026-03-15", "2026-03-15T09:30:00.000Z", "2026-03-15T10:15:00.000Z"],
+    ],
+  );
+});
+
+test("previewDates is the first `limit` dates of the full expansion over the preview horizon, for every kind of rule (P6 D10)", () => {
+  const now = new Date("2026-10-14T10:00:00.000Z");
+  const horizonEnd = addDays("2026-10-14", 1830); // local today + the preview horizon (BOUNDS.untilYears * 366)
+  const rules = [onceRule, dailyRule, weeklyUntilRule, monthlyDayRule, monthlyNthRule, rule({}), rule({ startDate: "2026-01-31", freq: "monthly", interval: 12, weekdays: null, monthlyBy: "day_of_month" })];
+  for (const r of rules) {
+    const full = expand({ ...r, durationMin: 75 }, PARIS, "2026-10-14", horizonEnd);
+    for (const limit of [1, 3, 12, 40]) {
+      assert.deepEqual(previewDates(r, 75, PARIS, now, limit), full.slice(0, limit), `${r.freq} ${r.endMode} limit ${limit}`);
+    }
+  }
 });
 
 test("dstNoteTexts (Q12): Paris spring and autumn, Los Angeles spring and autumn, ordinary days", () => {

@@ -19,8 +19,8 @@ import {
 } from "@/lib/civil-date";
 import { wallClockMinutes } from "@/lib/datetime";
 import { pluralWord } from "@/lib/back-office/format";
-import { describeRecurrence, dstNotes, expand, monthlyDayWarning, type RecurrenceRule } from "@/lib/recurrence";
-import { recurrenceRuleSchema, type RecurrenceRuleInput } from "@/lib/tickets";
+import { describeRecurrence, dstNotes, expand, expandDates, monthlyDayWarning, type RecurrenceRule } from "@/lib/recurrence";
+import { BOUNDS, recurrenceRuleSchema, type RecurrenceRuleInput } from "@/lib/tickets";
 import type { RecurrenceEnd, RecurrenceFreq } from "@/lib/tickets-vocab";
 
 import { WEEKDAY_NAMES } from "./labels";
@@ -43,11 +43,11 @@ export type RecurrenceFormValue = {
 };
 
 const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
-const DEFAULT_DURATION_MIN = 60;
+const DEFAULT_DURATION_MIN = BOUNDS.eventDurationMin.default;
 const DEFAULT_OCCURRENCE_COUNT = 10;
 const DEFAULT_UNTIL_MONTHS = 3;
-/** previewDates looks this far ahead of local today (a yearly rule still shows its next dates). */
-const PREVIEW_HORIZON_DAYS = 1830;
+/** previewDates looks this far ahead of local today, the farthest « jusqu'au » a rule may name (a yearly rule still shows its next dates). */
+const PREVIEW_HORIZON_DAYS = BOUNDS.untilYears * 366;
 
 const NTH_LABELS: Readonly<Record<number, string>> = { 1: "1er", 2: "2e", 3: "3e", 4: "4e" };
 
@@ -213,7 +213,10 @@ export function previewDates(
   if (limit <= 0 || !recurrenceRuleSchema.safeParse(rule).success) return [];
   const from = todayKey(now, tz);
   const full: RecurrenceRule = { ...rule, durationMin };
-  return expand(full, tz, from, addDays(from, PREVIEW_HORIZON_DAYS)).slice(0, limit);
+  // The walk over the whole horizon is cheap; the instants (Intl) are what costs, so only the dates shown get one (P6 D10).
+  const dates = expandDates(full, from, addDays(from, PREVIEW_HORIZON_DAYS));
+  if (dates.length === 0) return [];
+  return expand(full, tz, from, dates[Math.min(limit, dates.length) - 1]).slice(0, limit);
 }
 
 /** Q12 notes for the dates whose start is shifted (spring) or repeated (autumn) in tz. */
