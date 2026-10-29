@@ -16,7 +16,7 @@ export function AttachmentGrid({
           key={a.id}
           href={`/api/support/attachments/${a.id}`}
           target="_blank"
-          rel="noreferrer"
+          rel="noopener noreferrer"
           className="block size-24 overflow-hidden rounded-xl border border-border bg-muted transition-opacity hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         >
           {/* eslint-disable-next-line @next/next/no-img-element -- private, auth-checked route */}

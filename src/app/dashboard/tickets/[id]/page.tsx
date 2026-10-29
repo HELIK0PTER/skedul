@@ -128,7 +128,7 @@ export default async function TicketTypePage({ params }: { params: Promise<{ id:
                   <div className="flex flex-wrap gap-2">
                     <CopyLinkButton url={`${env.APP_URL}${publicPath}`} />
                     <Button asChild size="sm">
-                      <Link href={publicPath} target="_blank">
+                      <Link href={publicPath} target="_blank" rel="noopener noreferrer">
                         <ExternalLink />
                         Voir la page de réservation
                       </Link>

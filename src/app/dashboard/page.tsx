@@ -60,7 +60,7 @@ export default async function DashboardPage() {
           <div className="flex gap-2">
             <CopyLinkButton url={publicUrl} />
             <Button asChild size="sm">
-              <Link href={`/${pro.slug}`} target="_blank">
+              <Link href={`/${pro.slug}`} target="_blank" rel="noopener noreferrer">
                 Ouvrir
               </Link>
             </Button>

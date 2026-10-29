@@ -104,6 +104,7 @@ export default async function AdminUserPage({
                 <Link
                   href={`/${pro.slug}`}
                   target="_blank"
+                  rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
                 >
                   /{pro.slug}

@@ -21,7 +21,7 @@ export default async function AdminFaqPage() {
         description="La FAQ publique du centre d’aide."
         action={
           <Button asChild variant="secondary" size="sm">
-            <Link href="/aide" target="_blank">
+            <Link href="/aide" target="_blank" rel="noopener noreferrer">
               <ExternalLink />
               Voir le centre d’aide
             </Link>

@@ -129,6 +129,7 @@ export function NewRequestForm({
                       <Link
                         href={`/aide#a-${a.id}`}
                         target="_blank"
+                        rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 text-sm text-primary underline-offset-4 hover:underline"
                       >
                         {a.question}
