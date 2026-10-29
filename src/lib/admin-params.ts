@@ -22,6 +22,8 @@ export const USER_FILTER_LABELS: Record<UserFilter, string> = {
   suspended: "Suspendus",
 };
 export const USERS_PAGE_SIZE = 25;
+/** The longest term the admin user search accepts (its field and its action's schema). */
+export const USER_SEARCH_MAX = 100;
 
 export const ROLE_LABELS: Record<UserRole, string> = {
   client: "Client",

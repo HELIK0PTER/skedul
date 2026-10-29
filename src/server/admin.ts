@@ -15,13 +15,17 @@ import {
   BAN_DURATIONS,
   deletionConfirmed,
   parseBanDuration,
+  type UserFilter,
   type UserRole,
 } from "@/lib/admin-params";
+import { toAdminUserPage, userSearchSchema, type AdminUserPage } from "@/lib/admin-users";
 import { env } from "@/lib/env";
 import { logSafeMessage } from "@/lib/log-safe";
 import { getSession } from "@/lib/session";
 import { expireCheckoutSession } from "@/lib/stripe";
 import { isSuspended } from "@/lib/suspension";
+import { parseFr } from "@/lib/zod-fr";
+import { listUsers } from "@/server/admin-queries";
 import { deleteSupportFiles } from "@/server/support-core";
 
 export type AdminActionResult = { ok: true } | { ok: false; error: string };
@@ -82,6 +86,29 @@ function failure(err: unknown): AdminActionResult {
     ok: false,
     error: err instanceof Error ? err.message : "Action impossible.",
   };
+}
+
+/**
+ * The /admin/users search (P6 A4): a read sent as a Server Action, so the term an admin types (a name, an e-mail)
+ * never reaches a URL, the history or the request log. The admin is the session's, re-read from the database; the
+ * input only carries the term, the filter and the page, parsed by a strict schema.
+ */
+export async function searchUsersAction(input: {
+  q: string;
+  filter: UserFilter;
+  page: number;
+}): Promise<{ ok: true; page: AdminUserPage } | { ok: false; error: string }> {
+  try {
+    const admin = await getAdminUser();
+    if (!admin) return { ok: false, error: "Accès refusé." };
+    const parsed = parseFr(userSearchSchema, input);
+    if (!parsed.ok) return { ok: false, error: parsed.error };
+    const { q, filter, page } = parsed.data;
+    return { ok: true, page: toAdminUserPage(await listUsers({ q, filter, page }), page) };
+  } catch (err) {
+    console.error(`[admin] user search failed: ${logSafeMessage(err)}`);
+    return { ok: false, error: "La recherche n'a pas abouti. Réessayez." };
+  }
 }
 
 export async function suspendUser(input: {

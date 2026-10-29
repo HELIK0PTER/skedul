@@ -18,13 +18,10 @@ const posts = (tag: OpeningTag): boolean =>
 
 /**
  * The forms that keep the browser's GET on purpose, by file, with the reason. Each must stay a plain server-rendered
- * form (a string `action`, no client handler): the last test fails as soon as one gets an `onSubmit`.
+ * form (a string `action`, no client handler): the last test fails as soon as one gets an `onSubmit`. None is left: the
+ * admin user search, the last one, sends its term through a Server Action since P6 A4.
  */
-const GET_FORMS: Record<string, string> = {
-  "src/app/admin/users/page.tsx":
-    "the admin user search is a server-rendered GET form by design (the page reads `?q=` and `?filter=`); pre-P4 code, " +
-    "listed for the owner in the G4b report (the term can be an e-mail or a name)",
-};
+const GET_FORMS: Record<string, string> = {};
 
 const TSX = sourceFilesUnder("src").filter((file) => file.endsWith(".tsx"));
 const FORMS = TSX.flatMap((file) => {
