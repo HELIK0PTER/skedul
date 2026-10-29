@@ -41,7 +41,12 @@ test("ticketExpiry: days count from the LOCAL purchase day, across the autumn ch
 test("validityOf reads an offer or purchase snapshot", () => {
   assert.deepEqual(validityOf({ validityCount: 3, validityUnit: "month" }), { count: 3, unit: "month" });
   assert.equal(validityOf({ validityCount: null, validityUnit: null }), null);
-  assert.equal(validityOf({ validityCount: 3, validityUnit: null }), null);
+});
+
+// P6 A20: a half-set snapshot (no CHECK on ticket_purchase yet) would sell tickets that never expire: it fails closed.
+test("validityOf refuses a half-set snapshot instead of reading it as « no expiry »", () => {
+  assert.throws(() => validityOf({ validityCount: 3, validityUnit: null }), /half set/);
+  assert.throws(() => validityOf({ validityCount: null, validityUnit: "day" }), /half set/);
 });
 
 test("lastValidDay is the local day before expires_at", () => {

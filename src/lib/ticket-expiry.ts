@@ -19,9 +19,16 @@ export function ticketExpiry(paidAt: Date, validity: Validity, tz: string): Date
   return expiryFromLastDay(lastDay, tz);
 }
 
-/** From an offer/purchase snapshot. */
+/**
+ * From an offer/purchase snapshot: both null = no expiry. One set without the other fails closed (P6 A20): read as
+ * « no expiry » it would sell tickets that never expire. ticket_offer_validity_chk rules it out on offers; on a
+ * purchase snapshot the throw stops the fulfillment (the Stripe webhook retries) until the row is fixed.
+ */
 export function validityOf(row: { validityCount: number | null; validityUnit: ValidityUnit | null }): Validity {
-  if (row.validityCount === null || row.validityUnit === null) return null;
+  if (row.validityCount === null && row.validityUnit === null) return null;
+  if (row.validityCount === null || row.validityUnit === null) {
+    throw new Error("validityOf: the validity snapshot is half set (count and unit go together)");
+  }
   return { count: row.validityCount, unit: row.validityUnit };
 }
 
