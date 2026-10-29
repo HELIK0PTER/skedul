@@ -613,6 +613,51 @@ dbTest("searchCustomers: name or email, wildcards escaped, 2 characters minimum,
   }
 });
 
+// A31: unaccent on both sides (migration 0013), ILIKE for the case.
+dbTest("searchCustomers: accents ignored both ways, this pro only", async ({ db, pro }) => {
+  const accented = await makeCustomer(db, pro, { name: "Élodie Martin", email: "e.martin@skedul.test" });
+  const plain = await makeCustomer(db, pro, { name: "Elodie Durand", email: "elodie.durand@skedul.test" });
+  const noel = await makeCustomer(db, pro, { name: "Eloise Noël", email: "eloise@skedul.test" });
+  const other = await createTestPro(db);
+  try {
+    await makeCustomer(db, other, { name: "Élodie Ailleurs", email: "ailleurs@skedul.test" });
+    const ids = async (q: string) => (await searchCustomers(db, pro.proId, q)).map((c) => c.id).sort();
+    const both = [accented, plain].sort();
+    assert.deepEqual(await ids("Elodie"), both, "Elodie finds Élodie");
+    assert.deepEqual(await ids("élodie"), both, "élodie finds Elodie");
+    assert.deepEqual(await ids("ÉLODIE"), both, "case and accent together");
+    assert.deepEqual(await ids("noel"), [noel], "an accent inside the name");
+    assert.deepEqual(await ids("élodie.durand"), [plain], "the e-mail side is folded too");
+    assert.deepEqual(await ids("Ailleurs"), [], "another pro's client is never a hit");
+  } finally {
+    await deleteTestUser(db, other.userId);
+  }
+});
+
+// A31: the picker lists the clients of /dashboard/clients (isListedClient), not a customer whose only trace is an
+// unfinished checkout or a cancelled booking; typing that address as a new client reuses the row.
+dbTest("searchCustomers: a customer with only an unfinished checkout or a cancelled booking is not a hit", async ({ db, pro }) => {
+  const typeId = await makeType(db, pro, { name: "Cours collectif" });
+  const offerId = await rowOffer(db, pro, typeId);
+  const e = await makeEvent(db, pro, { title: "Altinha", ticketTypeIds: [typeId] });
+  const fresh = await makeCustomer(db, pro, { name: "Lisa Nouvelle" });
+  const holder = await makeCustomer(db, pro, { name: "Lisa Titulaire" });
+  const attendee = await makeCustomer(db, pro, { name: "Lisa Inscrite" });
+  const checkout = await makeCustomer(db, pro, { name: "Lisa Panier" });
+  const cancelled = await makeCustomer(db, pro, { name: "Lisa Annulée" });
+  await giveTickets(db, pro, holder, typeId, 1);
+  await rowPurchase(db, pro, { customerId: checkout, offerId, ticketTypeId: typeId });
+  const seat = e.occurrences[0].id;
+  const reg = await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: seat, customerId: attendee, asGuest: true });
+  assert.equal(reg.ok, true);
+  const gone = await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: seat, customerId: cancelled, asGuest: true });
+  assert.ok(gone.ok);
+  const undone = await cancelBookingsByPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: seat, bookingIds: [gone.bookingId] });
+  assert.equal(undone.ok, true);
+  const ids = (await searchCustomers(db, pro.proId, "lisa", 50)).map((c) => c.id).sort();
+  assert.deepEqual(ids, [fresh, holder, attendee].sort());
+});
+
 // R4: the database collation (C.UTF-8 on the test branch) sorts every accented initial after « Z »; the limit of 8 must
 // cut the French order, not that one.
 dbTest("searchCustomers: French alphabetical order before the limit, accented initials included", async ({ db, pro }) => {

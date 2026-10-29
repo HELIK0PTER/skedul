@@ -6,7 +6,7 @@
  * raw SQL; everything that returns an instant goes through the query builder
  * (the neon-http driver returns raw timestamps as strings).
  */
-import { and, asc, count, desc, eq, gt, lte, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, lte, sql, type SQL, type SQLWrapper } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 import { listActiveTypeOptions, type TypeOption } from "@/lib/back-office/catalog-reads";
@@ -22,6 +22,7 @@ import { historyLines, type HistoryLine, type LedgerMovementRow } from "@/lib/ba
 import { groupWallet, type WalletGroup, type WalletTypeRow } from "@/lib/back-office/wallet-view";
 import { loadTypeFacts } from "@/lib/booking/wallet";
 import { textArray, ts, type Db } from "@/lib/db/atomic";
+import { foldedContains } from "@/lib/db/search-sql";
 import { isLapsedHold } from "@/lib/hold-rule";
 import {
   booking,
@@ -46,9 +47,20 @@ export const PAST_BOOKINGS_MAX = 50;
 /** The record reads the newest ledger movements only (whole actions: see wholeActions). */
 export const HISTORY_MAX_MOVEMENTS = 3000;
 
-/** « %q% » for `ILIKE … ESCAPE '!'`: `!`, `%` and `_` typed by the pro are literal characters. */
-export function likePattern(q: string): string {
-  return `%${q.replace(/[!%_]/g, "!$&")}%`;
+/**
+ * The SQL twin of isListedClient for the customer `customerId` of `professionalId`: a confirmed booking or a ticket in
+ * any state (isClient), or no booking, no purchase and no ticket at all (a « Nouveau client »). The planning search
+ * uses it so that its picker offers the clients of the list, not a customer whose only trace is an unfinished checkout.
+ */
+export function listedClientSql(professionalId: string, customerId: SQLWrapper): SQL {
+  const p = professionalId;
+  return sql`(
+    exists (select 1 from booking lb where lb.professional_id = ${p} and lb.customer_id = ${customerId} and lb.status = 'confirmed')
+    or exists (select 1 from ticket lt where lt.professional_id = ${p} and lt.customer_id = ${customerId})
+    or (
+      not exists (select 1 from booking lb where lb.professional_id = ${p} and lb.customer_id = ${customerId})
+      and not exists (select 1 from ticket_purchase lp where lp.professional_id = ${p} and lp.customer_id = ${customerId})
+    ))`;
 }
 
 export type ClientListRow = {
@@ -101,10 +113,7 @@ const byListOrder = (a: Snapshot, b: Snapshot): number =>
 async function loadSnapshots(db: Db, professionalId: string, now: Date, q: string): Promise<Snapshot[]> {
   const p = professionalId;
   const mine = sql`(select id from customer where professional_id = ${p})`;
-  const matches =
-    q === ""
-      ? sql`true`
-      : sql`(c.name ilike ${likePattern(q)} escape '!' or c.email ilike ${likePattern(q)} escape '!')`;
+  const matches = q === "" ? sql`true` : sql`(${foldedContains(sql`c.name`, q)} or ${foldedContains(sql`c.email`, q)})`;
   const [factsRes, heldRes, types, typeFacts] = await Promise.all([
     db.execute<FactsRow>(sql`
       with tk as (
@@ -197,8 +206,8 @@ async function loadSnapshots(db: Db, professionalId: string, now: Date, q: strin
 }
 
 /**
- * Listed clients (isListedClient) matching the filter and `q` (ILIKE on name or
- * e-mail, escaped), in French name order then id, at most CLIENT_LIST_LIMIT; the
+ * Listed clients (isListedClient) matching the filter and `q` (name or e-mail,
+ * case and accents ignored: foldedContains), in French name order then id, at most CLIENT_LIST_LIMIT; the
  * counts are per filter over every listed client (the search is ignored).
  */
 export async function listClients(

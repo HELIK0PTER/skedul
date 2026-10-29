@@ -5,14 +5,16 @@
  * server-only, next/* nor the db index. Every query filters on professional_id
  * and every id that comes from the caller is checked against it.
  */
-import { and, asc, eq, exists, gt, ilike, inArray, isNotNull, isNull, lt, min, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, exists, gt, inArray, isNotNull, isNull, lt, min, ne, or, sql, type SQL } from "drizzle-orm";
 
+import { listedClientSql } from "@/lib/back-office/client-reads";
 import { activeBookingOf } from "@/lib/booking/claims";
 import { usableTickets } from "@/lib/booking/eligibility";
 import { seatsShown } from "@/lib/booking/holds";
 import type { DateKey } from "@/lib/civil-date";
 import type { Db } from "@/lib/db/atomic";
 import { holdsSeat, lapsedHold } from "@/lib/db/hold-sql";
+import { foldedContains, foldedSortKey } from "@/lib/db/search-sql";
 import {
   booking,
   bookingAnswer,
@@ -415,11 +417,6 @@ export async function getPlanningRange(
 
 export type CustomerHit = { id: string; name: string; email: string; phone: string | null };
 
-/** Escapes the LIKE metacharacters (the backslash first). */
-function likePattern(q: string): string {
-  return `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-}
-
 /**
  * French alphabetical order, accents and case ignored (« Élodie » sorts with the E's), then the id: the order of the
  * clients list. Done here, not by the database: its collation (C.UTF-8 on the test branch) puts every accented initial
@@ -431,23 +428,26 @@ const NAME_COLLATOR = new Intl.Collator("fr", { sensitivity: "base" });
 const SEARCH_CANDIDATES = 200;
 
 /**
- * SQL approximation of the French order: the lowercase name with its accented Latin letters turned into the base
- * letter. It only decides which candidates are read (ORDER BY … LIMIT SEARCH_CANDIDATES), so that an accented name is
- * not pushed past the cut by the database collation; the final order is the collator's.
+ * q trimmed, < 2 chars → []; name or email, case and accents ignored (foldedContains, `%`, `_` and `!` literal); the
+ * listed clients only (listedClientSql: not a customer whose only trace is an unfinished checkout or a cancelled
+ * booking); in French alphabetical order of the name; at most `limit` (default 8). The SQL order (the folded name)
+ * only decides which candidates are read, so that an accented name is not pushed past the cut by the database
+ * collation; the final order is the collator's.
  */
-const ACCENTED = "àáâãäåçèéêëìíîïñòóôõöùúûüýÿÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜÝ";
-const BASE_LETTERS = "aaaaaaceeeeiiiinooooouuuuyyaaaaaaceeeeiiiinooooouuuuy";
-
-/** q trimmed, < 2 chars → []; ILIKE on name or email with %, _ and \ escaped; in French alphabetical order of the name; at most `limit` (default 8). */
 export async function searchCustomers(db: Db, professionalId: string, q: string, limit = 8): Promise<CustomerHit[]> {
   const term = q.trim();
   if (term.length < 2) return [];
-  const pattern = likePattern(term);
   const rows = await db
     .select({ id: customer.id, name: customer.name, email: customer.email, phone: customer.phone })
     .from(customer)
-    .where(and(eq(customer.professionalId, professionalId), or(ilike(customer.name, pattern), ilike(customer.email, pattern))))
-    .orderBy(asc(sql`translate(lower(${customer.name}), ${ACCENTED}, ${BASE_LETTERS})`), asc(customer.id))
+    .where(
+      and(
+        eq(customer.professionalId, professionalId),
+        or(foldedContains(customer.name, term), foldedContains(customer.email, term)),
+        listedClientSql(professionalId, customer.id),
+      ),
+    )
+    .orderBy(asc(foldedSortKey(customer.name)), asc(customer.id))
     .limit(SEARCH_CANDIDATES);
   rows.sort((a, b) => NAME_COLLATOR.compare(a.name, b.name) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return rows.slice(0, Math.min(50, Math.max(1, Math.trunc(limit))));

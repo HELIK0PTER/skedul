@@ -393,6 +393,29 @@ dbTest("listClients: the search treats %, _ and ! literally and is trimmed", asy
   assert.deepEqual(await search("  bio  "), ["100% Bio", "100x Bio"]);
 });
 
+// A31: unaccent on both sides (migration 0013), ILIKE for the case.
+dbTest("listClients: the search ignores accents both ways and stays on this pro", async (h) => {
+  const accented = await makeCustomer(h.db, h.pro, { name: "Élodie Martin", email: "e.martin@skedul.test" });
+  const plain = await makeCustomer(h.db, h.pro, { name: "Elodie Durand", email: "elodie.durand@skedul.test" });
+  const noel = await makeCustomer(h.db, h.pro, { name: "Eloise Noël", email: "eloise@skedul.test" });
+  const other = await createTestPro(h.db);
+  try {
+    await makeCustomer(h.db, other, { name: "Élodie Ailleurs", email: "ailleurs@skedul.test" });
+    const now = new Date();
+    const ids = async (q: string) =>
+      (await listClients(h.db, h.pro.proId, now, { q, filter: "tous" })).rows.map((r) => r.id).sort();
+    const both = [accented, plain].sort();
+    assert.deepEqual(await ids("Elodie"), both, "Elodie finds Élodie");
+    assert.deepEqual(await ids("élodie"), both, "élodie finds Elodie");
+    assert.deepEqual(await ids("ÉLODIE"), both, "case and accent together");
+    assert.deepEqual(await ids("noel"), [noel], "an accent inside the name");
+    assert.deepEqual(await ids("élodie.durand"), [plain], "the e-mail side is folded too");
+    assert.deepEqual(await ids("Ailleurs"), [], "another pro's client is never a hit");
+  } finally {
+    await deleteTestUser(h.db, other.userId);
+  }
+});
+
 dbTest("listClients: the list stops at CLIENT_LIST_LIMIT rows, the search and the counts see every client", async (h) => {
   const { db, pro } = h;
   const tag = nanoid(8);

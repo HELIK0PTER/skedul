@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { likePattern } from "./client-reads";
+import { likePattern } from "./search-sql";
 
 test("likePattern wraps the text in % and leaves plain text alone", () => {
   assert.equal(likePattern("alice"), "%alice%");
