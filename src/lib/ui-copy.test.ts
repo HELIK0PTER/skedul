@@ -1,15 +1,16 @@
 /**
- * Copy guard: no em dash (U+2014) and no en dash (U+2013) in any .ts or .tsx file
- * under src/, tests, fixtures and comments included, except the short ALLOWLIST
+ * Copy guard: no em dash (U+2014) and no en dash (U+2013) in any .ts, .tsx or .css
+ * file under src/, tests, fixtures and comments included, except the short ALLOWLIST
  * below, where every entry says why it is left out.
  *
  * History: decision 38 started it on the back-office copy, P4 Task 1 widened it to
  * the public, payment and identity code, P5 Task 1 to the whole of src/ (P3OUT:115,
  * LED:457: components/{ui,auth,support}, lib/* and layout.tsx were not covered).
  *
- * Out of the scan on purpose:
- * - `.css` files hold no copy (comments and `content: ""` only);
- * - `.sql` migrations are applied history, never edited, and hold no copy either.
+ * P6 C9 added the `.css` files: they hold no copy, but their comments held the last
+ * dashes of the landing (landing.module.css, B8), so they are pinned too.
+ *
+ * Out of the scan on purpose: `.sql` migrations are applied history, never edited.
  *
  * Run from the repository root: the paths are relative to process.cwd().
  */
@@ -78,7 +79,7 @@ function allowedBy(file: string): string | undefined {
   return ALLOWLIST.find((entry) => within(file, entry.path))?.path;
 }
 
-/** Every .ts / .tsx file under `path` (a file or a directory), tests included. */
+/** Every .ts / .tsx / .css file under `path` (a file or a directory), tests included. */
 function collect(path: string, out: string[]): void {
   const full = join(process.cwd(), path);
   if (!existsSync(full)) return;
@@ -86,10 +87,10 @@ function collect(path: string, out: string[]): void {
     for (const name of readdirSync(full).sort()) collect(`${path}/${name}`, out);
     return;
   }
-  if (/\.tsx?$/.test(path)) out.push(path);
+  if (/\.(tsx?|css)$/.test(path)) out.push(path);
 }
 
-/** Every .ts / .tsx file under src/ (the allowlist left out), then the root files. */
+/** Every .ts / .tsx / .css file under src/ (the allowlist left out), then the root files. */
 function scannedFiles(): string[] {
   const files: string[] = [];
   collect(ROOT, files);
@@ -141,6 +142,13 @@ test("the scan walks the whole of src/, tests and the folders earlier phases lef
     "src/components/demo/demo-script.ts",
     "src/components/demo/demo-data.ts",
     "src/components/demo/screens/client-page.tsx",
+    // the landing and its chrome, rewritten in P6 C5 to C8 (B8: the CSS comments lost their dashes)
+    "src/app/page.tsx",
+    "src/components/landing/hero-deck.tsx",
+    "src/components/landing/landing.module.css",
+    "src/components/site-header.tsx",
+    "src/components/site-footer.tsx",
+    "src/app/globals.css",
     // tests and helpers are scanned too
     "src/lib/ui-copy.test.ts",
     "src/lib/booking/rdv.db.test.ts",
@@ -180,7 +188,7 @@ test("no P5 path is allowlisted, and the P5 paths that exist are scanned", () =>
   }
 });
 
-test("no em dash or en dash in any scanned .ts or .tsx file under src/ (comments included)", () => {
+test("no em dash or en dash in any scanned .ts, .tsx or .css file under src/ (comments included)", () => {
   const hits: string[] = [];
   for (const file of scannedFiles()) {
     for (const line of dashLines(readFileSync(join(process.cwd(), file), "utf8"))) hits.push(`${file}:${line}`);
