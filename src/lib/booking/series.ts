@@ -3,7 +3,7 @@
  * séance et les suivantes » and « supprimer à partir du ». One tryAtomic
  * batch per action; series edits are version-guarded and re-plan once on stale.
  */
-import { and, asc, eq, gt, gte, inArray, lt, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt, sql, type SQL } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 
@@ -308,6 +308,10 @@ const inPlaceSchema = z.object({
  * séances without capacity_override: GREATEST(cap, seats_taken)) in the same batch.
  * The capacity is propagated, and the Google events re-synced for it, only when it
  * differs from the stored one: « Informations » sends it on every save.
+ * P6 A17: the plan reads the version first (an outdated editor is `stale`, never
+ * « Question inconnue »); an empty patch writes nothing and keeps the version;
+ * the « séance modifiée » recipients and the Google syncs come from a select of
+ * the batch itself (after its writes), so no read follows the commit.
  */
 export async function editEventInPlace(
   db: Db,
@@ -318,12 +322,15 @@ export async function editEventInPlace(
   if (!parsed.success) return fail("invalid", parsed.error.issues[0]?.message);
   const p = parsed.data;
   const typeIds = p.ticketTypeIds === undefined ? undefined : [...new Set(p.ticketTypeIds)];
+  const empty = Object.values(p).every((v) => v === undefined);
 
   const outcome = { locationChanged: false, describedChanged: false, capacityChanged: false };
+  let futureAt = -1;
   const res = await tryAtomic(db, async () => {
     const [ev] = await db
       .select({
         id: event.id,
+        version: event.version,
         location: event.location,
         title: event.title,
         description: event.description,
@@ -333,6 +340,8 @@ export async function editEventInPlace(
       .from(event)
       .where(and(eq(event.id, input.eventId), eq(event.professionalId, input.professionalId)));
     if (!ev || ev.archivedAt) throw new PlanError("not_found");
+    if (ev.version !== input.seenVersion) throw new PlanError("stale");
+    if (empty) return () => [];
     outcome.locationChanged = p.location !== undefined && p.location !== ev.location;
     // « Informations » always sends the capacity: only a value that differs from the stored one is a capacity edit.
     outcome.capacityChanged = p.capacity !== undefined && p.capacity !== ev.capacity;
@@ -445,41 +454,49 @@ export async function editEventInPlace(
             where ${propagated}`),
         );
       }
+      // The Google event of a séance shows its title, its place and its capacity: a capacity edit re-syncs too.
+      // Last, after every write: the future séances and their registrants (holdsSeat) as this action leaves them.
+      if (outcome.describedChanged || outcome.capacityChanged) {
+        futureAt =
+          queries.push(
+            db.execute(sql`
+              select o.id as occurrence_id, o.location_override is null as follows_event, o.capacity_override,
+                b.id as booking_id
+              from occurrence o
+              left join booking b on b.occurrence_id = o.id and ${holdsSeat(now, sql`b`)}
+              where o.event_id = ${ev.id} and o.status = 'scheduled' and o.starts_at > ${ts(now)}
+              order by o.id, b.id`),
+          ) - 1;
+      }
       return queries;
     };
   });
   if (!res.ok) return failOf(res);
+  if (empty) return { ok: true, effects: [], version: input.seenVersion };
 
   const effects: Effect[] = [];
-  // The Google event of a séance shows its title, its place and its capacity: a capacity edit re-syncs too.
-  if (outcome.describedChanged || outcome.capacityChanged) {
-    const future = await db
-      .select({
-        id: occurrence.id,
-        locationOverride: occurrence.locationOverride,
-        capacityOverride: occurrence.capacityOverride,
-      })
-      .from(occurrence)
-      .where(and(eq(occurrence.eventId, input.eventId), eq(occurrence.status, "scheduled"), gt(occurrence.startsAt, now)));
-    const byOcc = await activeBookingsByOccurrence(
-      db,
-      future.map((o) => o.id),
-      now,
-    );
+  if (futureAt >= 0) {
+    const rows = (res.results[futureAt] as { rows: FutureSeanceRow[] }).rows;
+    const booked = new Map<string, { followsEvent: boolean; ownCapacity: boolean; bookingIds: string[] }>();
+    for (const r of rows) {
+      if (r.booking_id === null) continue;
+      const o = booked.get(r.occurrence_id) ?? { followsEvent: r.follows_event, ownCapacity: r.capacity_override, bookingIds: [] };
+      o.bookingIds.push(r.booking_id);
+      booked.set(r.occurrence_id, o);
+    }
     if (outcome.locationChanged) {
-      for (const o of future) {
-        const bookingIds = byOcc.get(o.id) ?? [];
-        if (o.locationOverride === null && bookingIds.length > 0) {
-          effects.push({ type: "email.occurrence_changed", occurrenceId: o.id, bookingIds });
-        }
+      for (const [occurrenceId, o] of booked) {
+        if (o.followsEvent) effects.push({ type: "email.occurrence_changed", occurrenceId, bookingIds: o.bookingIds });
       }
     }
     // A séance with its own capacity keeps it, so a capacity edit alone leaves its Google event as it is.
-    const ownCapacity = new Set(future.filter((o) => o.capacityOverride).map((o) => o.id));
-    effects.push(...syncEffects([...byOcc.keys()].filter((id) => outcome.describedChanged || !ownCapacity.has(id))));
+    effects.push(...syncEffects([...booked].filter(([, o]) => outcome.describedChanged || !o.ownCapacity).map(([id]) => id)));
   }
   return { ok: true, effects, version: input.seenVersion + 1 };
 }
+
+/** One row of editEventInPlace's final select: a future séance, and one of its registrants (null when it has none). */
+type FutureSeanceRow = { occurrence_id: string; follows_event: boolean; capacity_override: boolean; booking_id: string | null };
 
 /* ───────────────────── « Cette séance et les suivantes » ───────────────────── */
 

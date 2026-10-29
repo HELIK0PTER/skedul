@@ -625,3 +625,45 @@ dbTest("A13 éditeur: a capacity cut releases the lapsed holds of the séances i
   assert.equal(o.seatsTaken, 1);
   assert.equal((await getBooking(db, s.holdId)).status, "expired");
 });
+
+/* P6 A17: the editor reads the version first, writes nothing for an empty patch, and takes its recipients from its batch. */
+
+dbTest("A17 éditeur: an outdated version is stale before any question id is read, even one the newer version removed", async ({ db, pro }) => {
+  const typeId = await makeType(db, pro);
+  const { eventId } = await makeEvent(db, pro, { ticketTypeIds: [typeId] });
+  const base = { professionalId: pro.proId, actorUserId: pro.userId, eventId };
+  must(
+    await editEventInPlace(db, { ...base, seenVersion: 1, patch: { questions: [{ label: "Niveau ?", type: "text", required: false }] } }),
+    "add a question",
+  );
+  const [{ id: questionId }] = (await db.execute<{ id: string }>(sql`select id from question where event_id = ${eventId}`)).rows;
+  must(await editEventInPlace(db, { ...base, seenVersion: 2, patch: { questions: [] } }), "remove it");
+  const late = await editEventInPlace(db, {
+    ...base,
+    seenVersion: 2,
+    patch: { questions: [{ id: questionId, label: "Niveau ?", type: "text", required: false }] },
+  });
+  assert.deepEqual(late, { ok: false, code: "stale" }, "« modifié entre-temps », not « Question inconnue »");
+  const unknown = await editEventInPlace(db, {
+    ...base,
+    seenVersion: 3,
+    patch: { questions: [{ id: questionId, label: "Niveau ?", type: "text", required: false }] },
+  });
+  assert.deepEqual(unknown, { ok: false, code: "invalid", message: "Question inconnue." }, "at the current version it is unknown");
+});
+
+dbTest("A17 éditeur: an empty patch writes nothing and keeps the version; an outdated empty patch is still stale", async ({ db, pro }) => {
+  const typeId = await makeType(db, pro);
+  const { eventId } = await makeEvent(db, pro, { ticketTypeIds: [typeId] });
+  const base = { professionalId: pro.proId, actorUserId: pro.userId, eventId };
+  const [before] = await db.select().from(event).where(eq(event.id, eventId));
+  const res = await editEventInPlace(db, { ...base, seenVersion: 1, patch: {} });
+  must(res, "empty patch");
+  assert.equal(res.version, 1);
+  assert.deepEqual(res.effects, []);
+  const [after] = await db.select().from(event).where(eq(event.id, eventId));
+  assert.equal(after.version, 1);
+  assert.equal(after.lastActionId, before.lastActionId);
+  assert.equal(after.updatedAt.getTime(), before.updatedAt.getTime());
+  assert.deepEqual(await editEventInPlace(db, { ...base, seenVersion: 0, patch: {} }), { ok: false, code: "stale" });
+});
