@@ -604,6 +604,24 @@ test("Better Auth's own log lines print no address, no query parameter and no to
   for (const secret of ["tok_123", "params", "alice", "fetch failed", "bob@"]) assert.ok(!all.includes(secret), secret);
 });
 
+test("an Error handed over as the message itself is printed by its scrubbed message, never as « unknown error » (P6 A27)", async () => {
+  const { options } = build(stubDb([]).db);
+  const log = options.logger.log as (level: "error" | "warn", message: unknown, ...args: unknown[]) => void;
+  const logged = await captureConsole(async () => {
+    log("error", new Error("Failed query: select 1 where email = $1\nparams: alice@example.com"));
+    log("error", new Error("refused for bob@example.com"), new Error("cause at /api/c/abc.1.def"));
+    log("warn", { message: "plain object for carol@example.com" });
+    log("warn", 42);
+  });
+  assert.deepEqual(logged.error, [
+    ["[auth] Failed query: select 1 where email = $1"],
+    ["[auth] refused for [email] cause at /api/c/[token]"],
+  ]);
+  assert.deepEqual(logged.warn, [["[auth] plain object for [email]"], ["[auth] unknown error"]]);
+  const all = JSON.stringify(logged);
+  for (const secret of ["alice", "bob@", "carol@", "params", "abc.1.def"]) assert.ok(!all.includes(secret), secret);
+});
+
 test("buildAuthOptions declares its logger and keeps Better Auth's default level (warn and error only reach it)", () => {
   const { options } = build(stubDb([]).db);
   assert.equal(typeof options.logger.log, "function");
