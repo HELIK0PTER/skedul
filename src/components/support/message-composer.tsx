@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Loader2, Send } from "lucide-react";
 
@@ -30,7 +29,6 @@ export function MessageComposer({
   placeholder?: string;
   className?: string;
 }) {
-  const router = useRouter();
   const [body, setBody] = useState("");
   const [images, setImages] = useState<PickedImage[]>([]);
   const [notice, setNotice] = useState<{ tone: "error" | "warning"; text: string } | null>(null);
@@ -70,7 +68,6 @@ export function MessageComposer({
         setBody("");
         setImages([]);
         if (res.warning) setNotice({ tone: "warning", text: res.warning });
-        router.refresh();
       } catch {
         setNotice({ tone: "error", text: "Connexion perdue. Réessayez." });
       }
@@ -79,6 +76,7 @@ export function MessageComposer({
 
   return (
     <form
+      method="post"
       onSubmit={submit}
       className={cn(
         "rounded-2xl border border-border bg-card p-3 shadow-(--shadow-card) transition-[border-color,box-shadow] focus-within:border-primary/50 focus-within:ring-4 focus-within:ring-primary/10",

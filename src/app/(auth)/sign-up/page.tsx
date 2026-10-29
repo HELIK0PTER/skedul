@@ -3,10 +3,12 @@ import { redirect } from "next/navigation";
 
 import { AuthForm } from "@/components/auth/auth-form";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { signedInSignUpTarget } from "@/lib/entry";
 import { env } from "@/lib/env";
 import { oauthErrorMessage } from "@/lib/oauth-errors";
+import { linkGoogleHref } from "@/lib/public/sign-in-flow";
 import { safeNextPath } from "@/lib/safe-next";
-import { getCurrentUser } from "@/lib/session";
+import { getCurrentProfessional, getCurrentUser } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Créer un compte" };
 
@@ -17,9 +19,12 @@ export default async function SignUpPage({
 }) {
   const { error, next: rawNext } = await searchParams;
   const next = safeNextPath(rawNext);
-  if (await getCurrentUser()) redirect(next ?? "/dashboard");
-  // Google found an existing email/password account: offer to link it.
-  if (error === "account_not_linked") redirect("/link-google");
+  // A signed-in visitor of the pro funnel: their pro page, else the onboarding (a client has no page yet).
+  if (await getCurrentUser()) {
+    redirect(signedInSignUpTarget({ next, hasProfessional: (await getCurrentProfessional()) !== null }));
+  }
+  // Google found an existing email/password account: offer to link it, keeping the page to come back to (AUTH-2).
+  if (error === "account_not_linked") redirect(linkGoogleHref(rawNext));
 
   return (
     <Card>

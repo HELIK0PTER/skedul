@@ -5,8 +5,8 @@ import { ArrowRight } from "lucide-react";
 
 import { DEMO_BRAND } from "@/components/demo/demo-data";
 import { INITIAL_STATE, type DemoState } from "@/components/demo/demo-script";
-import { ClientProfile } from "@/components/demo/screens/client-profile";
-import { ProPacks } from "@/components/demo/screens/pro-packs";
+import { ClientPage } from "@/components/demo/screens/client-page";
+import { ProTickets } from "@/components/demo/screens/pro-tickets";
 import { HeroDeck } from "@/components/landing/hero-deck";
 import { ctaPrimary, ctaSecondary } from "@/components/landing/cta";
 import { DemoLink } from "@/components/landing/demo-link";
@@ -17,13 +17,18 @@ import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { Button } from "@/components/ui/button";
 import { toDayKey } from "@/lib/calendar-grid";
+import { HOLD_MINUTES } from "@/lib/tickets-vocab";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
-  title: { absolute: "Skedul · Réservations et carnets prépayés" },
+  title: { absolute: "Skedul · Séances, carnets de tickets et rendez-vous" },
 };
 
-/* French typography:   before « : »,   before « ; ? ». */
+/*
+ * French typography: a no-break space ( ) before « : » and between a number and its unit, a narrow no-break
+ * space ( ) before « ; ? ». The copy speaks the redesign's words only (tickets, offres, carnets, séances,
+ * événements, rendez-vous): src/lib/marketing-copy.test.ts scans this file for the old ones.
+ */
 
 const CONTAINER = "mx-auto w-full max-w-[75rem] px-5 sm:px-8";
 /* Display text may break inside a long word rather than overflow. */
@@ -48,79 +53,83 @@ const CLIENT_POINTS: Point[] = [
     body: (
       <>
         <span className="font-mono text-[0.875rem] text-(--lp-ink)">
-          skedul.app/votre-nom
+          myskedul.com/votre-nom
         </span>
-        {" : vos prestations, vos carnets et la réservation en quelques clics."}
+        {" : votre planning, votre boutique et vos rendez-vous, à vos couleurs."}
       </>
     ),
   },
   {
-    title: "Un solde toujours visible",
-    body: "Chaque réservation décompte un crédit, sous les yeux de vos clients.",
+    title: "Acheter et réserver en une fois",
+    body: `Le client choisit sa séance et son ticket, puis paie par carte. Sa place lui est gardée ${HOLD_MINUTES} minutes.`,
   },
   {
-    title: "Réserver sans repayer",
-    body: "Une fois le carnet payé, ils posent leurs heures jusqu’à la dernière.",
+    title: "Ses tickets, avec un code par e-mail",
+    body: "Pour utiliser un ticket déjà acheté, il reçoit un code par e-mail. Aucun compte à créer.",
   },
 ];
 
 const PRO_POINTS: Point[] = [
   {
-    title: "Des créneaux qui se calculent seuls",
-    body: "Vos disponibilités et vos prestations suffisent : chaque créneau libre s’en déduit.",
+    title: "Des séances qui se répètent seules",
+    body: "Un événement récurrent crée ses séances, avec leur lieu, leurs places et les tickets acceptés.",
   },
   {
-    title: "Individuel ou en groupe",
-    body: "Fixez un nombre de places par séance, du coaching privé au cours collectif.",
+    title: "Des rendez-vous dans vos horaires",
+    body: "Vos disponibilités suffisent : chaque créneau libre se réserve en rendez-vous, payant ou gratuit.",
   },
   {
-    title: "Une page à vos couleurs",
-    body: "Bannière, avatar, couleur et mise en page, réglés avec un aperçu en direct.",
+    title: "Vos clients et leurs tickets",
+    body: "Chaque fiche montre les réservations et les tickets restants. Vous déplacez un inscrit ou pointez un ticket à tout moment.",
   },
 ];
 
-const PACK_POINTS: Point[] = [
+const OFFER_POINTS: Point[] = [
   {
-    title: "Toutes vos prestations, ou une seule",
-    body: "Le carnet couvre tout votre catalogue, ou seulement la prestation que vous choisissez.",
+    title: "Un ticket pour plusieurs cours",
+    body: "Vous choisissez les événements qui acceptent chaque type de ticket : un même carnet sert à plusieurs cours.",
   },
   {
-    title: "Un solde qui ne passe jamais sous zéro",
-    body: "Le crédit est retiré au moment de la réservation, une seule fois.",
+    title: "Une validité si vous le voulez",
+    body: "Chaque offre peut avoir sa durée de validité, comptée depuis l’achat. Sans durée, le ticket n’expire pas.",
   },
   {
     title: "Réglé en ligne par Stripe",
-    body: "Vos clients paient le carnet par carte avant de réserver leur première séance.",
+    body: "Vos clients paient par carte, depuis votre boutique ou en réservant leur première séance.",
   },
 ];
 
 const STEPS = [
   {
     verb: "Vous configurez",
-    body: "Prestations, disponibilités et carnets, depuis votre back-office.",
+    body: "Vos tickets et leurs offres, vos événements et vos horaires de rendez-vous.",
   },
   {
     verb: "Ils achètent",
-    body: "Un créneau à l’unité, ou un carnet d’heures payé une fois en ligne.",
+    body: "Un ticket à l’unité ou un carnet, payé par carte en ligne.",
   },
   {
     verb: "Ils réservent",
-    body: "Chaque séance posée décompte un crédit. Rien à repayer, rien à relancer.",
+    body: "Chaque séance réservée utilise un ticket. S’ils annulent avant votre délai, leur ticket leur revient.",
   },
 ];
 
 const FAQ: { q: string; a: ReactNode }[] = [
   {
     q: "Mes clients doivent-ils créer un compte ?",
-    a: "Non. Un nom et une adresse e-mail suffisent pour réserver une séance ou acheter un carnet.",
+    a: "Non. Un nom et une adresse e-mail suffisent pour réserver une séance ou acheter un carnet. Pour utiliser un ticket déjà acheté, ils reçoivent un code par e-mail.",
+  },
+  {
+    q: "Un client peut-il annuler ?",
+    a: "Oui, depuis son espace, jusqu’au délai que vous fixez (24 heures avant la séance, par exemple). Son ticket lui est rendu.",
   },
   {
     q: "Puis-je bloquer mes vacances ?",
-    a: "Oui. Ajoutez une indisponibilité et les créneaux concernés disparaissent de votre page.",
+    a: "Oui. Ajoutez une indisponibilité : vos rendez-vous ne sont plus proposés sur ces dates, et Skedul vous montre les séances qui ont déjà des inscrits avant d’enregistrer.",
   },
   {
     q: "Un client m’appelle pour réserver, je fais comment ?",
-    a: "Vous ajoutez la réservation vous-même, depuis votre planning.",
+    a: "Vous l’inscrivez vous-même depuis votre planning, avec un de ses tickets ou en invité.",
   },
   {
     q: "Combien ça coûte ?",
@@ -145,10 +154,10 @@ const PLANNING_STATE: DemoState = {
   screen: "pro-planning",
   planningHasLea: true,
 };
-const PACKS_STATE: DemoState = {
+const TICKETS_STATE: DemoState = {
   ...INITIAL_STATE,
-  screen: "pro-packs",
-  packFormOpen: true,
+  screen: "pro-tickets",
+  ticketTypeOpen: true,
 };
 
 function Points({ items, className }: { items: Point[]; className?: string }) {
@@ -195,8 +204,8 @@ export default function Home() {
               )}
               style={{ "--i": 1 } as CSSProperties}
             >
-              Vos clients réservent un créneau à l’unité, ou achètent un carnet
-              d’heures et posent leurs séances quand ils veulent.
+              Vos clients achètent un ticket ou un carnet, réservent leurs
+              séances en ligne et retrouvent leurs tickets dans leur espace.
             </p>
             <div
               className={cn(styles.rise, "mt-9 flex flex-wrap items-center gap-3")}
@@ -233,7 +242,7 @@ export default function Home() {
             <div className="mt-16 grid grid-cols-1 gap-x-10 gap-y-20 lg:grid-cols-12">
               <article className="lg:col-span-7">
                 <ProductShot
-                  label="Aperçu du planning de la semaine, dans le back-office du pro."
+                  label={"Aperçu du planning de la semaine dans le back-office : les séances de chaque événement et les rendez-vous."}
                   crop={660}
                   cropLeft={208}
                   className={styles.reveal}
@@ -251,18 +260,18 @@ export default function Home() {
 
               <article className="lg:col-span-5 lg:mt-36">
                 <ProductShot
-                  label={`Aperçu de la page publique d’${DEMO_BRAND.businessName} : ses prestations et son carnet de séances.`}
+                  label={`Aperçu de la page publique d’${DEMO_BRAND.businessName} : le planning de la semaine et les places restantes de chaque séance.`}
                   width={800}
                   crop={660}
                   className={styles.reveal}
                 >
-                  <ClientProfile state={INITIAL_STATE} />
+                  <ClientPage />
                 </ProductShot>
                 <h3 className={cn(H3, "mt-10")}>
-                  Une boutique où réserver est simple
+                  Une page où réserver est simple
                 </h3>
                 <Points items={CLIENT_POINTS} className="mt-6" />
-                <DemoLink step="profile" className="mt-7">
+                <DemoLink step="page-publique" className="mt-7">
                   Voir la réservation en démo
                 </DemoLink>
               </article>
@@ -270,9 +279,9 @@ export default function Home() {
           </div>
         </section>
 
-        {/* Packs prépayés: the screen where a pro builds a carnet, annotated. */}
+        {/* Tickets et carnets: the screen where a pro sets a ticket type's offers, annotated. */}
         <section
-          id="packs"
+          id="carnets"
           className="scroll-mt-24 border-y border-(--lp-rule) bg-(--lp-paper-2) py-24 lg:py-32"
         >
           <div className={CONTAINER}>
@@ -280,26 +289,26 @@ export default function Home() {
               Payé une fois, décompté à chaque séance.
             </h2>
             <p className="mt-5 max-w-[38rem] text-lg leading-relaxed text-(--lp-ink-2)">
-              {"Vous fixez le contenu et le prix de chaque carnet : 4 séances, 10 cours, 5 heures de coaching. Chaque réservation retire un crédit."}
+              {"Un type de ticket, puis ses offres : à l’unité, en carnet de 4 ou de 10, avec ou sans validité. Chaque séance réservée utilise un ticket."}
             </p>
           </div>
 
-          <div className={cn(styles.packsGrid, "mt-14 lg:mt-16")}>
-            <div className={styles.packsFigure}>
+          <div className={cn(styles.offersGrid, "mt-14 lg:mt-16")}>
+            <div className={styles.offersFigure}>
               <ProductShot
-                label="Aperçu de la création d’un carnet dans le back-office : nom, nombre de crédits, prix et prestation associée."
+                label={"Aperçu d’un type de ticket dans le back-office : ses offres à l’unité et en carnets, leur prix, leur validité et les événements qui l’acceptent."}
                 crop={590}
                 overscan={1.08}
                 bleed
                 className={styles.reveal}
               >
-                <ProPacks state={PACKS_STATE} />
+                <ProTickets state={TICKETS_STATE} />
               </ProductShot>
             </div>
-            <div className={styles.packsText}>
-              <Points items={PACK_POINTS} className="space-y-7" />
-              {/* The client buys a carnet, then books with a credit: 10 → 9. */}
-              <DemoLink step="buy-pack" className="mt-8">
+            <div className={styles.offersText}>
+              <Points items={OFFER_POINTS} className="space-y-7" />
+              {/* The tour's step where the client buys a carnet on her first séance. */}
+              <DemoLink step="carnet" className="mt-8">
                 Voir un carnet en démo
               </DemoLink>
             </div>
@@ -370,8 +379,8 @@ export default function Home() {
                   Votre page de réservation, prête ce soir.
                 </h2>
                 <p className="mt-4 max-w-[45ch] leading-relaxed text-(--lp-ticket-ink-2)">
-                  Créez votre page, ajoutez un carnet, partagez le lien. Vos
-                  règles, vos prix.
+                  Créez votre page, ajoutez vos tickets et vos séances, partagez
+                  le lien. Vos règles, vos prix.
                 </p>
               </div>
               <div

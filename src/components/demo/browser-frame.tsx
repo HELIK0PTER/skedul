@@ -7,7 +7,7 @@ export const FRAME_H = 840;
 
 interface BrowserFrameProps {
   url: string;
-  /** Réf du conteneur 960×840 mis à l'échelle — repère de coordonnées du curseur. */
+  /** Réf du conteneur 960×840 mis à l'échelle : le repère de coordonnées du curseur. */
   contentRef: RefObject<HTMLDivElement | null>;
   children: ReactNode;
 }

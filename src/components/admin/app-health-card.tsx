@@ -3,7 +3,9 @@ import { AlertTriangle } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { healthAlerts, nightlyCheck } from "@/lib/admin-health";
 import type { IntegrationMode } from "@/lib/admin-metrics";
+import { ADMIN_TZ } from "@/lib/analytics";
 import type { AppHealth } from "@/server/admin-queries";
 
 const MODE: Record<
@@ -19,11 +21,10 @@ function onOff(on: boolean, yes: string, no: string) {
   return <Badge variant={on ? "success" : "neutral"}>{on ? yes : no}</Badge>;
 }
 
-// A JS string on purpose: in JSX text, `&apos;` + a line break makes Next's SWC
-// drop the whitespace in front of the text ("réservationen attente").
-const PENDING_NOTE = "en attente de paiement depuis plus d'1 h (7 derniers jours)";
+const ALERT_CLASS = "flex items-start gap-2 rounded-xl bg-amber-50 p-3 text-sm text-warning";
 
 export function AppHealthCard({ health }: { health: AppHealth }) {
+  const check = nightlyCheck(health.invariantViolations, ADMIN_TZ);
   const rows: { label: string; value: React.ReactNode }[] = [
     { label: "Environnement", value: <Badge variant="outline">{health.appEnv}</Badge> },
     {
@@ -49,20 +50,10 @@ export function AppHealthCard({ health }: { health: AppHealth }) {
       label: "Base de données",
       value: <span className="text-sm tabular-nums">{health.dbLatencyMs} ms</span>,
     },
+    { label: "Contrôle nocturne", value: <Badge variant={check.tone}>{check.label}</Badge> },
   ];
 
-  const alerts = [
-    {
-      count: health.pendingBookings,
-      noun: { one: "réservation", other: "réservations" },
-      tab: "bookings",
-    },
-    {
-      count: health.pendingPurchases,
-      noun: { one: "achat de pack", other: "achats de pack" },
-      tab: "purchases",
-    },
-  ].filter((a) => a.count > 0);
+  const alerts = healthAlerts(health, ADMIN_TZ);
 
   return (
     <Card>
@@ -82,18 +73,23 @@ export function AppHealthCard({ health }: { health: AppHealth }) {
             </div>
           ))}
         </dl>
-        {alerts.map((a) => (
-          <Link
-            key={a.tab}
-            href={`/admin/activity?tab=${a.tab}&status=pending`}
-            className="flex items-start gap-2 rounded-xl bg-amber-50 p-3 text-sm text-warning hover:bg-amber-100"
-          >
-            <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-            <span>
-              {a.count} {a.count > 1 ? a.noun.other : a.noun.one} {PENDING_NOTE}
-            </span>
-          </Link>
-        ))}
+        {alerts.map((a) => {
+          const content = (
+            <>
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+              <span>{a.text}</span>
+            </>
+          );
+          return a.href ? (
+            <Link key={a.key} href={a.href} className={`${ALERT_CLASS} hover:bg-amber-100`}>
+              {content}
+            </Link>
+          ) : (
+            <div key={a.key} className={ALERT_CLASS}>
+              {content}
+            </div>
+          );
+        })}
       </CardContent>
     </Card>
   );

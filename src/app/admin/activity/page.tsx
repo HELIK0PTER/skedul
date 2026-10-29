@@ -8,7 +8,7 @@ import { Card } from "@/components/ui/card";
 import { requireAdmin } from "@/lib/admin";
 import {
   BOOKING_STATUS_LABELS,
-  PAYMENT_TYPE_LABELS,
+  COVERAGE_LABELS,
   PURCHASE_STATUS_LABELS,
   parseActivityTab,
   parseBookingStatus,
@@ -18,7 +18,8 @@ import {
   type PurchaseStatus,
 } from "@/lib/admin-params";
 import { ADMIN_TZ } from "@/lib/analytics";
-import { formatDateTimeShort, formatSlot } from "@/lib/datetime";
+import { formatWhen, plural } from "@/lib/back-office/format";
+import { formatDateTimeShort } from "@/lib/datetime";
 import { formatMoney } from "@/lib/utils";
 import {
   ACTIVITY_LIMIT,
@@ -31,13 +32,13 @@ export const metadata: Metadata = { title: "Activité" };
 const BOOKING_VARIANT: Record<BookingStatus, "success" | "warning" | "neutral"> = {
   pending: "warning",
   confirmed: "success",
-  completed: "success",
   cancelled: "neutral",
+  expired: "neutral",
 };
 const PURCHASE_VARIANT: Record<PurchaseStatus, "success" | "warning" | "neutral"> = {
   pending: "warning",
   paid: "success",
-  refunded: "neutral",
+  expired: "neutral",
 };
 
 const th = "px-4 py-2.5 font-medium";
@@ -68,12 +69,11 @@ async function BookingsTable({ status }: { status: BookingStatus | null }) {
         <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
           <tr>
             <th className={th}>Créée le</th>
+            <th className={th}>Séance</th>
             <th className={th}>Pro</th>
             <th className={th}>Client</th>
-            <th className={th}>Prestation</th>
-            <th className={th}>Créneau</th>
-            <th className={th}>Paiement</th>
-            <th className={`${th} text-right`}>Montant</th>
+            <th className={th}>Titre</th>
+            <th className={th}>Couverture</th>
             <th className={th}>Statut</th>
           </tr>
         </thead>
@@ -83,6 +83,9 @@ async function BookingsTable({ status }: { status: BookingStatus | null }) {
               <td className={`${td} whitespace-nowrap text-muted-foreground`}>
                 {formatDateTimeShort(r.createdAt, ADMIN_TZ)}
               </td>
+              <td className={`${td} whitespace-nowrap text-muted-foreground`}>
+                {formatWhen(r.startsAt, r.endsAt, r.timezone)}
+              </td>
               <td className={td}>
                 <ProLink userId={r.proUserId} name={r.businessName} />
               </td>
@@ -90,14 +93,8 @@ async function BookingsTable({ status }: { status: BookingStatus | null }) {
                 {r.customerName}
                 <p className="text-xs text-muted-foreground">{r.customerEmail}</p>
               </td>
-              <td className={td}>{r.eventTitle}</td>
-              <td className={`${td} whitespace-nowrap text-muted-foreground`}>
-                {formatSlot(r.startAt, r.endAt, r.timezone)}
-              </td>
-              <td className={td}>{PAYMENT_TYPE_LABELS[r.paymentType]}</td>
-              <td className={`${td} whitespace-nowrap text-right tabular-nums`}>
-                {r.amountCents ? formatMoney(r.amountCents, r.currency) : "—"}
-              </td>
+              <td className={td}>{r.title}</td>
+              <td className={td}>{COVERAGE_LABELS[r.coverage]}</td>
               <td className={td}>
                 <Badge variant={BOOKING_VARIANT[r.status]}>
                   {BOOKING_STATUS_LABELS[r.status]}
@@ -119,11 +116,10 @@ async function PurchasesTable({ status }: { status: PurchaseStatus | null }) {
       <table className="w-full text-sm">
         <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
           <tr>
-            <th className={th}>Créé le</th>
+            <th className={th}>Date</th>
             <th className={th}>Pro</th>
             <th className={th}>Client</th>
-            <th className={th}>Pack</th>
-            <th className={th}>Crédits restants</th>
+            <th className={th}>Libellé</th>
             <th className={`${th} text-right`}>Montant</th>
             <th className={th}>Statut</th>
           </tr>
@@ -141,17 +137,22 @@ async function PurchasesTable({ status }: { status: PurchaseStatus | null }) {
                 {r.customerName}
                 <p className="text-xs text-muted-foreground">{r.customerEmail}</p>
               </td>
-              <td className={td}>{r.packName}</td>
-              <td className={`${td} tabular-nums`}>
-                {r.creditsRemaining} / {r.creditsTotal}
+              <td className={td}>
+                {r.label}
+                <p className="text-xs text-muted-foreground">
+                  {plural(r.quantity, "ticket", "tickets")}
+                </p>
               </td>
               <td className={`${td} whitespace-nowrap text-right tabular-nums`}>
                 {formatMoney(r.amountCents, r.currency)}
               </td>
               <td className={td}>
-                <Badge variant={PURCHASE_VARIANT[r.status]}>
-                  {PURCHASE_STATUS_LABELS[r.status]}
-                </Badge>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Badge variant={PURCHASE_VARIANT[r.status]}>
+                    {PURCHASE_STATUS_LABELS[r.status]}
+                  </Badge>
+                  {!r.livemode && <Badge variant="outline">Test</Badge>}
+                </div>
               </td>
             </tr>
           ))}
@@ -198,7 +199,7 @@ export default async function AdminActivityPage({
           active={tab}
           options={[
             { value: "bookings", label: "Réservations", href: href({ tab: "bookings", status: null }) },
-            { value: "purchases", label: "Achats de packs", href: href({ tab: "purchases", status: null }) },
+            { value: "purchases", label: "Achats", href: href({ tab: "purchases", status: null }) },
           ]}
         />
         <FilterChips

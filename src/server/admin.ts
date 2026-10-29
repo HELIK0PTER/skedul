@@ -10,15 +10,23 @@ import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { professional, session, user } from "@/lib/db/schema";
 import { getAdminUser, type AdminUser } from "@/lib/admin";
+import { DELETION_STRIPE_OPTIONS, expireOpenCheckoutsCore } from "@/lib/admin-deletion";
+import { adminFailure } from "@/lib/admin-failures";
 import {
   BAN_DURATIONS,
   deletionConfirmed,
   parseBanDuration,
+  type UserFilter,
   type UserRole,
 } from "@/lib/admin-params";
+import { toAdminUserPage, userSearchSchema, type AdminUserPage } from "@/lib/admin-users";
 import { env } from "@/lib/env";
+import { logSafeMessage } from "@/lib/log-safe";
 import { getSession } from "@/lib/session";
+import { expireCheckoutSession } from "@/lib/stripe";
 import { isSuspended } from "@/lib/suspension";
+import { parseFr } from "@/lib/zod-fr";
+import { listUsers } from "@/server/admin-queries";
 import { deleteSupportFiles } from "@/server/support-core";
 
 export type AdminActionResult = { ok: true } | { ok: false; error: string };
@@ -73,12 +81,27 @@ function refresh(userId: string) {
   revalidatePath(`/admin/users/${userId}`);
 }
 
-function failure(err: unknown): AdminActionResult {
-  console.error("[admin] action failed", err);
-  return {
-    ok: false,
-    error: err instanceof Error ? err.message : "Action impossible.",
-  };
+/**
+ * The /admin/users search (P6 A4): a read sent as a Server Action, so the term an admin types (a name, an e-mail)
+ * never reaches a URL, the history or the request log. The admin is the session's, re-read from the database; the
+ * input only carries the term, the filter and the page, parsed by a strict schema.
+ */
+export async function searchUsersAction(input: {
+  q: string;
+  filter: UserFilter;
+  page: number;
+}): Promise<{ ok: true; page: AdminUserPage } | { ok: false; error: string }> {
+  try {
+    const admin = await getAdminUser();
+    if (!admin) return { ok: false, error: "Accès refusé." };
+    const parsed = parseFr(userSearchSchema, input);
+    if (!parsed.ok) return { ok: false, error: parsed.error };
+    const { q, filter, page } = parsed.data;
+    return { ok: true, page: toAdminUserPage(await listUsers({ q, filter, page }), page) };
+  } catch (err) {
+    console.error(`[admin] user search failed: ${logSafeMessage(err)}`);
+    return { ok: false, error: "La recherche n'a pas abouti. Réessayez." };
+  }
 }
 
 export async function suspendUser(input: {
@@ -112,7 +135,7 @@ export async function suspendUser(input: {
       },
     });
   } catch (err) {
-    return failure(err);
+    return adminFailure("suspend", err);
   }
   refresh(target.id);
   return { ok: true };
@@ -130,7 +153,7 @@ export async function reactivateUser(userId: string): Promise<AdminActionResult>
   try {
     await auth.api.unbanUser({ headers: await headers(), body: { userId } });
   } catch (err) {
-    return failure(err);
+    return adminFailure("reactivate", err);
   }
   refresh(userId);
   return { ok: true };
@@ -145,7 +168,7 @@ export async function signOutEverywhere(userId: string): Promise<AdminActionResu
   try {
     await auth.api.revokeUserSessions({ headers: await headers(), body: { userId } });
   } catch (err) {
-    return failure(err);
+    return adminFailure("signOut", err);
   }
   refresh(userId);
   return { ok: true };
@@ -166,7 +189,7 @@ export async function startImpersonation(userId: string): Promise<AdminActionRes
   try {
     await auth.api.impersonateUser({ headers: await headers(), body: { userId } });
   } catch (err) {
-    return failure(err);
+    return adminFailure("impersonate", err);
   }
   redirect("/dashboard");
 }
@@ -187,22 +210,30 @@ export async function setAdminRole(input: {
   // role is our user_role enum: write it directly (the plugin's setRole would
   // only re-check the admin permission verified above).
   const role: UserRole = input.admin ? "admin" : target.isPro ? "pro" : "client";
-  await db.update(user).set({ role }).where(eq(user.id, target.id));
-  if (!input.admin) {
-    // A demoted admin must not keep impersonating pros until the sessions expire.
-    await db.delete(session).where(eq(session.impersonatedBy, target.id));
+  try {
+    const setRole = db.update(user).set({ role }).where(eq(user.id, target.id));
+    // A demoted admin must not keep impersonating pros until the sessions expire: one batch (one transaction), so a
+    // failure leaves both the role and the sessions as they were (P6 X2).
+    if (input.admin) await setRole;
+    else await db.batch([setRole, db.delete(session).where(eq(session.impersonatedBy, target.id))]);
+  } catch (err) {
+    return adminFailure("role", err);
   }
   refresh(target.id);
   return { ok: true };
 }
 
 /**
- * Permanently deletes an account. One DELETE on "user" cascades to its
- * sessions, accounts and pro page with all its data (services, sessions,
- * availability, packs, clients, bookings, purchases); its client records with
- * other pros are kept but detached (customer.user_id → NULL). Support requests
- * cascade too; their images (Blob support/<userId>/) are removed best effort.
- * Admins must be demoted first, and the account's email must be retyped.
+ * Permanently deletes an account. First the open Stripe Checkout sessions of
+ * its pro page are expired (best effort and time-boxed, E13): a client can no
+ * longer pay a purchase that is about to disappear; a payment that still lands
+ * is an orphan, counted on the admin health card. Then one DELETE on "user" cascades
+ * to its sessions, accounts and pro page with all its data (ticket types,
+ * offers, events, séances, availability, clients, bookings, purchases, tickets
+ * and their ledger, time off); its client records with other pros are kept but
+ * detached (customer.user_id → NULL). Support requests cascade too; their
+ * images (Blob support/<userId>/) are removed best effort. Admins must be
+ * demoted first, and the account's email must be retyped.
  */
 export async function deleteUser(input: {
   userId: string;
@@ -217,10 +248,12 @@ export async function deleteUser(input: {
   if (!deletionConfirmed(input.confirmEmail, target.email)) {
     return { ok: false, error: "L'email saisi ne correspond pas à ce compte." };
   }
+  // E13: before the delete, so no client can pay a session whose purchase is about to disappear
+  if (target.proId) await expireOpenCheckouts(target.proId);
   try {
     await db.delete(user).where(eq(user.id, target.id));
   } catch (err) {
-    return failure(err);
+    return adminFailure("delete", err);
   }
   console.info(`[admin] user ${target.id} deleted by admin ${admin.id}`);
   if (target.proId) await deleteBrandingImages(target.proId);
@@ -228,6 +261,25 @@ export async function deleteUser(input: {
   revalidatePath("/admin");
   revalidatePath("/admin/users");
   redirect("/admin/users?deleted=1");
+}
+
+/**
+ * Expires the pro's open Stripe Checkout sessions (E13), through the tested core
+ * (src/lib/admin-deletion.ts): all sessions at once, each call capped at 8 s
+ * with no retry, the whole step at 15 s. It never throws and never outlives its
+ * deadline, so a hung Stripe cannot block a deletion the admin confirmed (a
+ * payment that still lands is an orphan, counted by healthCounts). The core logs
+ * scrubbed lines; this adds one summary with counts and the pro id only.
+ */
+async function expireOpenCheckouts(professionalId: string) {
+  const report = await expireOpenCheckoutsCore(db, professionalId, (sessionId) =>
+    expireCheckoutSession(sessionId, DELETION_STRIPE_OPTIONS),
+  );
+  if (report.failed > 0 || report.unfinished > 0 || report.timedOut || report.listFailed) {
+    console.error(
+      `[admin] checkout expiry before the deletion of pro ${professionalId}: ${report.closed} closed, ${report.failed} failed, ${report.unfinished} unfinished of ${report.total} listed${report.timedOut ? ", deadline reached" : ""}${report.listFailed ? ", sessions not listed" : ""}`,
+    );
+  }
 }
 
 /** Best effort: the account is already gone, so a Blob failure is only logged. */
@@ -242,7 +294,7 @@ async function deleteBrandingImages(professionalId: string) {
       cursor = page.hasMore ? page.cursor : undefined;
     } while (cursor);
   } catch (err) {
-    console.error(`[admin] could not delete branding images of ${professionalId}`, err);
+    console.error(`[admin] could not delete branding images of ${professionalId}: ${logSafeMessage(err)}`);
   }
 }
 
@@ -258,7 +310,7 @@ export async function stopImpersonation(): Promise<void> {
     await auth.api.stopImpersonating({ headers: await headers() });
   } catch (err) {
     // Admin session gone (expired or signed out elsewhere): sign out cleanly.
-    console.error("[admin] could not stop impersonation", err);
+    console.error(`[admin] could not stop impersonation: ${logSafeMessage(err)}`);
     await auth.api.signOut({ headers: await headers() });
     redirect("/sign-in");
   }

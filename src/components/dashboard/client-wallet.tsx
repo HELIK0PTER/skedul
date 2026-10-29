@@ -1,0 +1,164 @@
+import { Ticket } from "lucide-react";
+
+import { EmptyState } from "@/components/dashboard/empty-state";
+import { StatusMark } from "@/components/dashboard/status-mark";
+import { TypeChip } from "@/components/dashboard/type-chip";
+import {
+  OfferNotice,
+  OfferTicketsButton,
+  OfferTicketsProvider,
+  WalletGroupActions,
+} from "@/components/dashboard/wallet-actions";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import type { TypeOption } from "@/lib/back-office/catalog-reads";
+import { formatCount, plural } from "@/lib/back-office/format";
+import { ALERT_GROUP_NOTES } from "@/lib/back-office/labels";
+import type { WalletGroup, WalletTicketView } from "@/lib/back-office/wallet-view";
+import type { DateKey } from "@/lib/civil-date";
+import { cn } from "@/lib/utils";
+
+type ClientWalletProps = {
+  customerId: string;
+  groups: WalletGroup[];
+  typeOptions: TypeOption[];
+  todayKey: DateKey;
+};
+
+/** One ticket: origin and state (« Acheté · Disponible · valable jusqu'au 12/01 inclus »). A closed one is struck through and stays readable (zinc-600 on white). */
+function TicketLine({ view }: { view: WalletTicketView }) {
+  return (
+    <li
+      className={cn(
+        "text-sm wrap-anywhere",
+        view.tone === "red" && "text-rose-700",
+        view.tone === "muted" && "text-zinc-600",
+        view.struck && "line-through",
+      )}
+    >
+      {view.origin} · {view.line}
+    </li>
+  );
+}
+
+/**
+ * The alert (Q28) belongs to the group: it is written once under the type, with its mark. The mark is decorative
+ * because the text next to it says the same thing.
+ */
+function GroupAlert({ alert }: { alert: NonNullable<WalletGroup["alert"]> }) {
+  return alert === "red" ? (
+    <p className="flex items-start gap-2 text-sm text-rose-700">
+      <StatusMark tone="red" decorative className="mt-1.5" />
+      <span>{ALERT_GROUP_NOTES.red}</span>
+    </p>
+  ) : (
+    <p className="flex items-start gap-2 text-sm text-warning">
+      <StatusMark tone="orange" decorative className="mt-1.5" />
+      <span>{ALERT_GROUP_NOTES.orange}</span>
+    </p>
+  );
+}
+
+function WalletGroupSection({
+  customerId,
+  group,
+  typeOptions,
+}: {
+  customerId: string;
+  group: WalletGroup;
+  typeOptions: TypeOption[];
+}) {
+  const live = [...group.usable, ...group.booked, ...group.expired];
+  const headingId = `wallet-group-${group.ticketTypeId}`;
+  return (
+    <section aria-labelledby={headingId} className="space-y-3 py-5 first:pt-0 last:pb-0">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 id={headingId} className="min-w-0 text-sm font-semibold wrap-anywhere">
+          <TypeChip name={group.name} color={group.color} archived={group.archived} />
+        </h4>
+      </div>
+
+      {group.alert && <GroupAlert alert={group.alert} />}
+
+      <div>
+        <p className="text-sm font-medium">{plural(group.usableCount, "ticket utilisable", "tickets utilisables")}</p>
+        {group.expirySummary.length > 0 && (
+          <ul className="mt-1 space-y-0.5 text-xs text-zinc-600">
+            {group.expirySummary.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {live.length > 0 && (
+        <ul className="space-y-1">
+          {live.map((view) => (
+            <TicketLine key={view.id} view={view} />
+          ))}
+        </ul>
+      )}
+
+      {group.done.length > 0 && (
+        <details>
+          <summary className="cursor-pointer rounded text-sm text-zinc-600 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            {`Utilisés et clos (${formatCount(group.done.length)})`}
+          </summary>
+          <ul className="mt-2 space-y-1">
+            {group.done.map((view) => (
+              <TicketLine key={view.id} view={view} />
+            ))}
+          </ul>
+        </details>
+      )}
+
+      <WalletGroupActions
+        customerId={customerId}
+        group={{ ticketTypeId: group.ticketTypeId, name: group.name, ids: group.ids }}
+        typeOptions={typeOptions}
+      />
+    </section>
+  );
+}
+
+/**
+ * « Portefeuille »: one section per ticket type the client holds tickets of, with the pro's wallet actions. The offer
+ * is owned once by OfferTicketsProvider: its trigger sits in the header while the wallet holds tickets and in the empty
+ * state while it does not (never both), and its success line, an always-mounted status region, stays in the header.
+ */
+export function ClientWallet({ customerId, groups, typeOptions, todayKey }: ClientWalletProps) {
+  return (
+    <OfferTicketsProvider customerId={customerId} typeOptions={typeOptions} todayKey={todayKey}>
+      <Card>
+        <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
+          <CardTitle>Portefeuille</CardTitle>
+          <div className="flex flex-col items-start sm:items-end">
+            {groups.length > 0 && <OfferTicketsButton />}
+            <OfferNotice />
+          </div>
+        </CardHeader>
+        <CardContent>
+          {groups.length === 0 ? (
+            <EmptyState
+              bare
+              icon={Ticket}
+              title="Aucun ticket"
+              description="Les tickets achetés ou offerts à ce client apparaîtront ici."
+              action={<OfferTicketsButton />}
+            />
+          ) : (
+            <div className="divide-y divide-border">
+              {groups.map((group) => (
+                <WalletGroupSection
+                  key={group.ticketTypeId}
+                  customerId={customerId}
+                  group={group}
+                  typeOptions={typeOptions}
+                />
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </OfferTicketsProvider>
+  );
+}

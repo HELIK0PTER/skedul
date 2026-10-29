@@ -1,33 +1,44 @@
 import { useMemo } from "react";
+import { Info } from "lucide-react";
 
-import {
-  WeeklyHoursEditor,
-  emptyByDay,
-  type ByDay,
-} from "@/components/dashboard/weekly-hours-editor";
-import { ProShell } from "./pro-shell";
-import type { ScreenProps } from "./index";
+import { WeeklyHoursEditor, emptyByDay, type ByDay } from "@/components/dashboard/weekly-hours-editor";
+import { timeZoneLabel } from "@/lib/timezones";
+import { DECOUVERTE_HOURS, DEMO_TZ, ticketType } from "../demo-data";
+import type { DemoState } from "../demo-script";
+import { ProPageHeader, ProShell } from "./pro-shell";
 
-export function ProAvailability({ state }: ScreenProps) {
+/** The scale of the reused WeeklyHoursEditor, so that its seven day cards (two ranges on weekdays) fit the frame. */
+const EDITOR_SCALE = 0.62;
+
+export function ProAvailability({ state }: { state: DemoState }) {
   const byDay = useMemo<ByDay>(() => {
     const value = emptyByDay();
-    for (const d of [1, 2, 3, 4, 5]) value[d] = [{ start: "09:00", end: "17:00" }];
-    if (state.saturdayEnabled) value[6] = [{ start: "09:00", end: "12:00" }];
+    for (const d of [1, 2, 3, 4, 5]) {
+      value[d] = [
+        { start: "10:00", end: "13:00" },
+        { start: "17:30", end: "20:30" },
+      ];
+    }
+    if (state.saturdayEnabled) value[6] = [{ start: "10:00", end: "13:00" }];
     return value;
   }, [state.saturdayEnabled]);
 
   return (
     <ProShell active="availability">
-      <h1 className="text-xl font-bold tracking-tight">Disponibilités</h1>
-      <p className="text-sm text-muted-foreground">Vos horaires récurrents (fuseau Europe/Paris).</p>
-      {/* Scaled to 0.74 so all 7 day cards fit the demo frame's 840px height
-          (the reused WeeklyHoursEditor is ~1034px tall at full size). The tour's
-          cursor targets the Samedi toggle via getBoundingClientRect, which honors
-          this transform, so scaling doesn't break targeting. */}
+      <ProPageHeader
+        title="Disponibilités (RDV libre)"
+        description={`Vos horaires pour les rendez-vous libres (fuseau : ${timeZoneLabel(DEMO_TZ)}). Un type de ticket peut avoir ses propres horaires.`}
+      />
+      <p className="mt-3 flex items-start gap-2 rounded-xl bg-muted px-3 py-2 text-sm text-zinc-600">
+        <Info className="mt-0.5 size-4 shrink-0" aria-hidden />
+        {`${ticketType("decouverte").name} : ses propres horaires. ${DECOUVERTE_HOURS}.`}
+      </p>
+      {/* Scaled down so that the seven day cards fit the frame's 840 px. The tour's cursor finds the Samedi switch through
+          getBoundingClientRect, which honours the transform. */}
       <div
         data-demo="availability"
-        className="mt-2 origin-top-left"
-        style={{ transform: "scale(0.74)", width: "135%" }}
+        className="mt-3 origin-top-left"
+        style={{ transform: `scale(${EDITOR_SCALE})`, width: `${100 / EDITOR_SCALE}%` }}
       >
         <WeeklyHoursEditor value={byDay} onChange={() => {}} />
       </div>

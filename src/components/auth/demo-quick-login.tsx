@@ -31,7 +31,7 @@ const DEMO_ACCOUNTS = [
   },
   {
     key: "client",
-    label: "Cliente · packs & réservations",
+    label: "Cliente · tickets et réservations",
     email: "beatriz@example.com",
     password: "password123",
     redirectTo: "/altinha-paris",

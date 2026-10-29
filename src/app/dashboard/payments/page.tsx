@@ -1,130 +1,109 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { Euro } from "lucide-react";
 
 import { FilterChips } from "@/components/admin/filter-chips";
+import { EmptyState } from "@/components/dashboard/empty-state";
 import { PageHeader } from "@/components/dashboard/page-header";
-import { Card } from "@/components/ui/card";
-import { formatDateShort, formatDateTimeShort } from "@/lib/datetime";
-import { getCurrentProfessional } from "@/lib/session";
-import { formatMoney } from "@/lib/utils";
-import { getProPayments } from "@/server/queries";
+import { PaymentsTable } from "@/components/dashboard/payments-table";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { revenueDisplay } from "@/lib/back-office/dashboard-view";
+import { formatCount } from "@/lib/back-office/format";
+import {
+  PAYMENTS_LIMIT,
+  PAYMENTS_PERIODS,
+  parsePaymentsPeriod,
+  type PaymentsPeriod,
+} from "@/lib/back-office/payments-reads";
+import { requireProfessional } from "@/server/pro-context";
+import { getPaymentsPage } from "@/server/queries";
+import { revenueLive } from "@/server/revenue";
 
 export const metadata: Metadata = { title: "Paiements" };
 
-type PaymentFilter = "all" | "booking" | "pack";
+const PAYMENTS_HREF = "/dashboard/payments";
 
-const FILTERS: readonly PaymentFilter[] = ["all", "booking", "pack"];
+const PERIOD_LABELS: Record<PaymentsPeriod, string> = { tout: "Tout", "30j": "30 derniers jours" };
 
-const EMPTY: Record<PaymentFilter, string> = {
-  all: "Pas encore de paiement. Ils apparaîtront ici dès qu'un client paiera une réservation ou un pack.",
-  booking: "Aucune réservation payée pour le moment.",
-  pack: "Aucun pack vendu pour le moment.",
-};
+const PERIOD_OPTIONS = PAYMENTS_PERIODS.map((value) => ({
+  value,
+  label: PERIOD_LABELS[value],
+  href: value === "tout" ? PAYMENTS_HREF : `${PAYMENTS_HREF}?periode=${value}`,
+}));
+
+const REFUND_NOTE = "Les tickets clos « Remboursé hors Skedul » ne diminuent pas l'encaissé.";
 
 export default async function PaymentsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ filter?: string }>;
+  searchParams: Promise<{ periode?: string | string[] }>;
 }) {
-  const pro = (await getCurrentProfessional())!;
-  const params = await searchParams;
-  const filter: PaymentFilter = FILTERS.find((f) => f === params.filter) ?? "all";
-
-  const payments = await getProPayments(pro.id);
-  const ofKind = (f: PaymentFilter) =>
-    f === "all" ? payments : payments.filter((p) => p.kind === f);
-  const rows = ofKind(filter);
-  const total = rows.reduce((n, p) => n + p.amountCents, 0);
-  const hrefFor = (f: PaymentFilter) =>
-    f === "all" ? "/dashboard/payments" : `/dashboard/payments?filter=${f}`;
+  const pro = await requireProfessional();
+  const { periode } = await searchParams;
+  const period = parsePaymentsPeriod(periode);
+  const { rows, totals } = await getPaymentsPage(pro, period);
+  const { main, others } = revenueDisplay(totals, pro.currency);
+  const live = revenueLive();
+  const hasRefundNote = rows.some((row) => row.closedNotes.some((c) => c.reason === "rembourse"));
+  // The list stops at PAYMENTS_LIMIT rows while « Encaissé » counts every payment of the period.
+  const capped = rows.length >= PAYMENTS_LIMIT;
 
   return (
     <>
-      <PageHeader
-        title="Paiements"
-        description="Les réservations payées et les packs achetés sur votre page."
-      />
-
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <FilterChips
-          label="Filtrer les paiements"
-          active={filter}
-          options={[
-            { value: "all", label: `Tous (${payments.length})`, href: hrefFor("all") },
-            {
-              value: "booking",
-              label: `Réservations (${ofKind("booking").length})`,
-              href: hrefFor("booking"),
-            },
-            {
-              value: "pack",
-              label: `Packs (${ofKind("pack").length})`,
-              href: hrefFor("pack"),
-            },
-          ]}
-        />
-        <p className="text-sm text-muted-foreground">
-          Total{" "}
-          <span className="font-semibold tabular-nums text-foreground">
-            {formatMoney(total, pro.currency)}
-          </span>
-        </p>
+      <PageHeader title="Paiements" description="Les achats de tickets payés par vos clients." />
+      <div className="mb-6">
+        <FilterChips label="Période" active={period} options={PERIOD_OPTIONS} />
       </div>
 
-      <Card className="overflow-hidden">
-        {rows.length === 0 ? (
-          <p className="p-10 text-center text-sm text-muted-foreground">
-            {EMPTY[filter]}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>Encaissé</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-3xl font-bold tracking-tight wrap-anywhere">{main}</p>
+          {others.length > 0 && <p className="mt-1 text-sm text-zinc-600 wrap-anywhere">{others.join(" · ")}</p>}
+          <p className="mt-3 text-xs text-zinc-600">
+            {live ? "Seuls les paiements réels comptent." : "Paiements de test : ces montants ne sont pas réels."}
           </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-2.5 font-medium">Date</th>
-                  <th className="px-4 py-2.5 font-medium">Client</th>
-                  <th className="px-4 py-2.5 font-medium">Objet</th>
-                  <th className="px-4 py-2.5 text-right font-medium">Montant</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {rows.map((p) => (
-                  <tr key={`${p.kind}-${p.id}`} className="align-top hover:bg-muted/40">
-                    <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">
-                      {formatDateShort(p.at, pro.timezone)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {p.customerName ? (
-                        <p className="font-medium">{p.customerName}</p>
-                      ) : (
-                        <p className="text-muted-foreground">Sans nom</p>
-                      )}
-                      {p.customerEmail && (
-                        <a
-                          href={`mailto:${p.customerEmail}`}
-                          className="text-xs text-muted-foreground hover:text-foreground hover:underline"
-                        >
-                          {p.customerEmail}
-                        </a>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <p>{p.label}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {p.kind === "pack"
-                          ? `Pack de ${p.credits} crédit${p.credits > 1 ? "s" : ""}`
-                          : `Réservation, RDV le ${formatDateTimeShort(p.startAt, pro.timezone)}`}
-                      </p>
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-right font-medium tabular-nums">
-                      {formatMoney(p.amountCents, pro.currency)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+          {hasRefundNote && <p className="mt-1 text-xs text-zinc-600">{REFUND_NOTE}</p>}
+        </CardContent>
       </Card>
+
+      {rows.length === 0 ? (
+        period === "tout" ? (
+          <EmptyState
+            icon={Euro}
+            title="Aucun paiement pour le moment"
+            description="Les achats de tickets de vos clients apparaîtront ici."
+            action={
+              <Button asChild variant="secondary" size="sm">
+                <Link href="/dashboard/tickets">Voir mes tickets</Link>
+              </Button>
+            }
+          />
+        ) : (
+          <EmptyState
+            icon={Euro}
+            title="Aucun paiement sur cette période"
+            description="Choisissez « Tout » pour voir l'ensemble de vos paiements."
+            action={
+              <Button asChild variant="secondary" size="sm">
+                <Link href={PAYMENTS_HREF}>Voir tous les paiements</Link>
+              </Button>
+            }
+          />
+        )
+      ) : (
+        <>
+          <PaymentsTable rows={rows} tz={pro.timezone} now={new Date()} />
+          {capped && (
+            <p className="mt-3 text-sm text-zinc-600">
+              {`Les ${formatCount(PAYMENTS_LIMIT)} paiements les plus récents sont affichés. L'encaissé compte tous les paiements de la période.`}
+            </p>
+          )}
+        </>
+      )}
     </>
   );
 }

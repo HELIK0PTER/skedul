@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { ArrowLeft, ArrowRight, CalendarClock } from "lucide-react";
 
@@ -28,7 +27,6 @@ export function DevBoardCard({
   prev: SupportStage | null;
   next: SupportStage | null;
 }) {
-  const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -41,7 +39,6 @@ export function DevBoardCard({
           setError(res.error);
           return;
         }
-        router.refresh();
       } catch {
         setError("Connexion perdue. Réessayez.");
       }

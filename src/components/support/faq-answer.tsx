@@ -15,7 +15,7 @@ function Segments({ segments }: { segments: AnswerSegment[] }) {
         {s.text}
       </Link>
     ) : (
-      <a key={i} href={s.href} target="_blank" rel="noreferrer" className={LINK}>
+      <a key={i} href={s.href} target="_blank" rel="noopener noreferrer" className={LINK}>
         {s.text}
       </a>
     ),

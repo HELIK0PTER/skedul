@@ -11,14 +11,16 @@ import {
   resolveEntry,
   type EntryChoice,
 } from "@/lib/entry";
+import { getCurrentProfessional } from "@/lib/session";
 
 export type PostSignIn = { kind: "redirect"; to: string } | { kind: "choose" };
 
-/** Where a signed-in user goes next; admins without a remembered choice must choose. */
+/** Where a signed-in user goes next: admins without a remembered choice must choose, a user without a pro page lands on their client space. */
 export async function resolvePostSignIn(): Promise<PostSignIn> {
-  const [admin, store] = await Promise.all([getAdminUser(), cookies()]);
+  const [admin, pro, store] = await Promise.all([getAdminUser(), getCurrentProfessional(), cookies()]);
   const target = resolveEntry({
     isAdmin: admin !== null,
+    hasProfessional: pro !== null,
     remembered: parseEntryChoice(store.get(ENTRY_COOKIE)?.value),
   });
   return target === "choose"
@@ -32,7 +34,11 @@ export async function chooseEntry(
   remember: boolean,
 ): Promise<string> {
   const valid = parseEntryChoice(choice);
-  if (!valid || !(await getAdminUser())) return "/dashboard";
+  if (!valid || !(await getAdminUser())) {
+    // Nothing to choose: the caller is not an admin, or an admin sent a choice that is neither "admin" nor "client".
+    // Either way they go where resolveEntry sends everyone else: the pro back-office when they own a page, else their client space.
+    return (await getCurrentProfessional()) ? "/dashboard" : "/mon-espace";
+  }
   if (remember) {
     (await cookies()).set(ENTRY_COOKIE, valid, {
       httpOnly: true,

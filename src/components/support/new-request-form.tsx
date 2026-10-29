@@ -76,7 +76,7 @@ export function NewRequestForm({
   }
 
   return (
-    <form onSubmit={submit} className="mt-8 space-y-8">
+    <form method="post" onSubmit={submit} className="mt-8 space-y-8">
       <fieldset>
         <legend className="font-display text-lg font-bold tracking-tight">De quoi s’agit-il ?</legend>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -129,6 +129,7 @@ export function NewRequestForm({
                       <Link
                         href={`/aide#a-${a.id}`}
                         target="_blank"
+                        rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 text-sm text-primary underline-offset-4 hover:underline"
                       >
                         {a.question}

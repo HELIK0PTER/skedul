@@ -5,14 +5,15 @@ import { eq, lt, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { analyticsSalt, pageView } from "@/lib/db/schema";
+import { logSafeMessage } from "@/lib/log-safe";
 
 /** Per server instance, holding only the current day (see getDailySalt). */
 const cache = new Map<string, string>();
 
 /**
  * Housekeeping, run on a cache miss (~once a day per instance): salts are
- * deleted after 2 days — from then on that day's visitor hashes can no longer
- * be linked to an IP — and page views are kept 25 months. It never throws: a
+ * deleted after 2 days (from then on that day's visitor hashes can no longer
+ * be linked to an IP), and page views are kept 25 months. It never throws: a
  * failed purge must not break tracking, it simply runs again on the next miss.
  */
 async function purgeExpired() {
@@ -26,7 +27,7 @@ async function purgeExpired() {
         .where(lt(pageView.createdAt, sql`now() - interval '25 months'`)),
     ]);
   } catch (err) {
-    console.error("[analytics] could not purge expired data", err);
+    console.error(`[analytics] could not purge expired data: ${logSafeMessage(err)}`);
   }
 }
 

@@ -23,3 +23,24 @@ export function userIsSuspended(): SQL {
 export function userNotSuspended(): SQL {
   return sql`not ${userIsSuspended()}`;
 }
+
+/**
+ * The session that may act on behalf of its user: the session itself, or null
+ * when there is none or its user is suspended (so the caller answers it like no
+ * session at all). Reads the ban fields as they come back from a session read;
+ * a ban end that arrived as an ISO string (a serialized cookie cache) is read
+ * as a date. Final review SEC-2: a pro write must not outlive the ban by the
+ * 5 minutes of the session cookie cache.
+ */
+export function actingSession<S extends { user: { id: string; banned?: boolean | null; banExpires?: Date | string | null } }>(
+  session: S | null,
+  now: Date = new Date(),
+): S | null {
+  if (!session) return null;
+  const { banned, banExpires } = session.user;
+  const suspended = isSuspended(
+    { banned: banned ?? null, banExpires: banExpires == null ? null : new Date(banExpires) },
+    now,
+  );
+  return suspended ? null : session;
+}

@@ -1,0 +1,696 @@
+import assert from "node:assert/strict";
+import { eq, sql } from "drizzle-orm";
+
+import { addMinutes, dbTest, type DbHarness } from "../../test/db";
+import {
+  dayIn,
+  getBooking,
+  getOccurrence,
+  giveTickets,
+  makeCustomer,
+  makeEvent,
+  makeOffer,
+  makeType,
+  occurrencesOf,
+  ticketsOf,
+} from "../../test/fixtures";
+import { instantAt } from "../civil-date";
+import { event, eventTicketType } from "../db/schema";
+import { cancelByClient } from "./cancel";
+import { attachCheckoutSession, bookWithHeldTicket, registerPro, startBuyAndBook } from "./claims";
+import { bookingsExpiringBefore, editEventInPlace, updateOccurrence } from "./series";
+import type { Effect } from "./types";
+
+function must<T extends { ok: boolean }>(res: T, what: string): asserts res is Extract<T, { ok: true }> {
+  assert.ok(res.ok, `${what}: ${JSON.stringify(res)}`);
+}
+
+/** A séance 3 days ahead at 10:00 with `n` clients booked with a ticket each. */
+async function seanceWithBookings({ db, pro }: DbHarness, n: number, ticketExpiresAt: Date | null = null) {
+  const typeId = await makeType(db, pro);
+  const { eventId, occurrences } = await makeEvent(db, pro, { ticketTypeIds: [typeId] });
+  const occ = occurrences[0];
+  const bookingIds: string[] = [];
+  const customerIds: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const customerId = await makeCustomer(db, pro);
+    await giveTickets(db, pro, customerId, typeId, 1, { expiresAt: ticketExpiresAt });
+    const b = await bookWithHeldTicket(db, { professionalId: pro.proId, occurrenceId: occ.id, customerId, seenStartsAt: occ.startsAt, actorUserId: pro.userId });
+    must(b, "book");
+    bookingIds.push(b.bookingId);
+    customerIds.push(customerId);
+  }
+  return { typeId, eventId, occ, bookingIds, customerIds };
+}
+
+dbTest("E7 cette séance: moving it detaches the time, stamps changed_at and notifies the attendees", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithBookings(h, 1);
+  const now = new Date();
+  const newStart = instantAt(dayIn(pro, 4), 660, pro.tz);
+  const res = await updateOccurrence(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: s.occ.id, seenStartsAt: s.occ.startsAt, patch: { startsAt: newStart, durationMin: 90 } },
+    now,
+  );
+  must(res, "move");
+  assert.equal(res.timeChanged, true);
+  assert.deepEqual(res.effects, [
+    { type: "email.occurrence_changed", occurrenceId: s.occ.id, bookingIds: s.bookingIds },
+    { type: "google.sync_occurrence", occurrenceId: s.occ.id },
+  ]);
+  const o = await getOccurrence(db, s.occ.id);
+  assert.equal(o.startsAt.getTime(), newStart.getTime());
+  assert.equal(o.endsAt.getTime(), newStart.getTime() + 90 * 60_000);
+  assert.equal(o.blockStart.getTime(), o.startsAt.getTime());
+  assert.equal(o.blockEnd.getTime(), o.endsAt.getTime());
+  assert.equal(o.timeDetached, true);
+  assert.equal(o.changedAt?.getTime(), now.getTime());
+  assert.equal(o.seriesDate, s.occ.seriesDate);
+
+  const stale = await updateOccurrence(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    occurrenceId: s.occ.id,
+    seenStartsAt: s.occ.startsAt,
+    patch: { capacity: 3 },
+  });
+  assert.equal(stale.ok ? "ok" : stale.code, "changed");
+});
+
+dbTest("E7 cette séance: a capacity below the seats taken is clamped by GREATEST", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithBookings(h, 3);
+  const res = await updateOccurrence(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    occurrenceId: s.occ.id,
+    seenStartsAt: s.occ.startsAt,
+    patch: { capacity: 1 },
+  });
+  must(res, "capacity");
+  assert.equal(res.timeChanged, false);
+  assert.ok(!res.effects.some((e) => e.type === "email.occurrence_changed"));
+  const o = await getOccurrence(db, s.occ.id);
+  assert.equal(o.capacity, 3);
+  assert.equal(o.capacityOverride, true);
+  assert.equal(o.timeDetached, false);
+  assert.equal(o.seatsTaken, 3);
+});
+
+dbTest("E7 cette séance: a location override e-mails the attendees, without detaching the time", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithBookings(h, 1);
+  const res = await updateOccurrence(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    occurrenceId: s.occ.id,
+    seenStartsAt: s.occ.startsAt,
+    patch: { locationOverride: "  Salle B  " },
+  });
+  must(res, "location");
+  assert.ok(res.effects.some((e) => e.type === "email.occurrence_changed" && e.occurrenceId === s.occ.id));
+  const o = await getOccurrence(db, s.occ.id);
+  assert.equal(o.locationOverride, "Salle B");
+  assert.equal(o.timeDetached, false);
+  assert.equal(o.changedAt, null);
+});
+
+dbTest("E7 cette séance: moving past a ticket's validity lists it, and « Désinscrire » returns the ticket", async (h) => {
+  const { db, pro } = h;
+  const expiresAt = instantAt(dayIn(pro, 4), 0, pro.tz);
+  const s = await seanceWithBookings(h, 1, expiresAt);
+  const newStart = instantAt(dayIn(pro, 5), 600, pro.tz);
+  const expiring = await bookingsExpiringBefore(db, { professionalId: pro.proId, occurrenceId: s.occ.id, newStartsAt: newStart });
+  assert.deepEqual(
+    expiring.map((e) => [e.bookingId, e.expiresAt.getTime()]),
+    [[s.bookingIds[0], expiresAt.getTime()]],
+  );
+  assert.ok(expiring[0].customerName.length > 0);
+
+  const res = await updateOccurrence(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    occurrenceId: s.occ.id,
+    seenStartsAt: s.occ.startsAt,
+    patch: { startsAt: newStart },
+    unenrollBookingIds: s.bookingIds,
+  });
+  must(res, "move + unenroll");
+  assert.ok(res.effects.some((e) => e.type === "email.booking_cancelled" && e.bookingId === s.bookingIds[0] && e.by === "pro"));
+  assert.ok(!res.effects.some((e) => e.type === "email.occurrence_changed"));
+  const o = await getOccurrence(db, s.occ.id);
+  assert.equal(o.seatsTaken, 0);
+  assert.equal((await getBooking(db, s.bookingIds[0])).status, "cancelled");
+  const [t] = await ticketsOf(db, s.customerIds[0]);
+  assert.equal(t.status, "available");
+});
+
+dbTest("E7 cette séance: an empty patch is invalid, an unknown séance is not_found", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithBookings(h, 0);
+  const empty = await updateOccurrence(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    occurrenceId: s.occ.id,
+    seenStartsAt: s.occ.startsAt,
+    patch: {},
+  });
+  assert.equal(empty.ok ? "ok" : empty.code, "invalid");
+  const missing = await updateOccurrence(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    occurrenceId: "nope",
+    seenStartsAt: s.occ.startsAt,
+    patch: { capacity: 4 },
+  });
+  assert.equal(missing.ok ? "ok" : missing.code, "not_found");
+});
+
+dbTest("E7 éditeur: capacity propagates to future séances without capacity_override; version guards", async ({ db, pro }) => {
+  const typeId = await makeType(db, pro);
+  const { eventId, occurrences } = await makeEvent(db, pro, {
+    ticketTypeIds: [typeId],
+    capacity: 12,
+    rule: {
+      startDate: dayIn(pro, 2),
+      startMinute: 600,
+      freq: "daily",
+      interval: 1,
+      weekdays: null,
+      monthlyBy: null,
+      monthWeek: null,
+      endMode: "count",
+      untilDate: null,
+      occurrenceCount: 3,
+    },
+  });
+  assert.equal(occurrences.length, 3);
+  const [first, second, third] = occurrences;
+  must(
+    await updateOccurrence(db, {
+      professionalId: pro.proId,
+      actorUserId: pro.userId,
+      occurrenceId: second.id,
+      seenStartsAt: second.startsAt,
+      patch: { capacity: 5 },
+    }),
+    "override one séance",
+  );
+
+  const res = await editEventInPlace(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    eventId,
+    seenVersion: 1,
+    patch: { capacity: 20, title: "Cours du soir" },
+  });
+  must(res, "edit in place");
+  assert.equal(res.version, 2);
+  assert.equal((await getOccurrence(db, first.id)).capacity, 20);
+  assert.equal((await getOccurrence(db, second.id)).capacity, 5);
+  assert.equal((await getOccurrence(db, third.id)).capacity, 20);
+  const [ev] = await db.select().from(event).where(eq(event.id, eventId));
+  assert.equal(ev.capacity, 20);
+  assert.equal(ev.title, "Cours du soir");
+  assert.equal(ev.version, 2);
+
+  const stale = await editEventInPlace(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    eventId,
+    seenVersion: 1,
+    patch: { capacity: 8 },
+  });
+  assert.equal(stale.ok ? "ok" : stale.code, "stale");
+  assert.equal((await occurrencesOf(db, eventId)).length, 3);
+});
+
+dbTest("E7 éditeur: a capacity edit re-syncs the Google events of the booked séances it reaches, and only those (final review COV-3)", async ({ db, pro }) => {
+  const typeId = await makeType(db, pro);
+  const { eventId, occurrences } = await makeEvent(db, pro, {
+    ticketTypeIds: [typeId],
+    capacity: 12,
+    rule: {
+      startDate: dayIn(pro, 2),
+      startMinute: 600,
+      freq: "daily",
+      interval: 1,
+      weekdays: null,
+      monthlyBy: null,
+      monthWeek: null,
+      endMode: "count",
+      untilDate: null,
+      occurrenceCount: 3,
+    },
+  });
+  const [first, second, third] = occurrences;
+  const book = async (occurrenceId: string) => {
+    const customerId = await makeCustomer(db, pro);
+    must(
+      await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId, customerId, asGuest: true }),
+      "register",
+    );
+  };
+  await book(first.id);
+  await book(second.id);
+  // the second séance has its own capacity (an override); the third has nobody
+  must(
+    await updateOccurrence(db, {
+      professionalId: pro.proId,
+      actorUserId: pro.userId,
+      occurrenceId: second.id,
+      seenStartsAt: second.startsAt,
+      patch: { capacity: 5 },
+    }),
+    "override one séance",
+  );
+  const sync = (occurrenceId: string): Effect => ({ type: "google.sync_occurrence", occurrenceId });
+  const byOccurrence = (effects: readonly Effect[]) =>
+    [...effects].sort((a, b) =>
+      "occurrenceId" in a && "occurrenceId" in b ? (a.occurrenceId < b.occurrenceId ? -1 : 1) : 0,
+    );
+
+  // the whole event: the Google event of a booked séance shows its capacity, so the one that changed is synced
+  // (not the overridden one, whose capacity did not change; not the empty one, which has no Google event)
+  const capacityOnly = await editEventInPlace(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    eventId,
+    seenVersion: 1,
+    patch: { capacity: 20 },
+  });
+  must(capacityOnly, "event capacity");
+  assert.equal((await getOccurrence(db, first.id)).capacity, 20);
+  assert.equal((await getOccurrence(db, second.id)).capacity, 5);
+  assert.equal((await getOccurrence(db, third.id)).capacity, 20);
+  assert.deepEqual(capacityOnly.effects, [sync(first.id)]);
+
+  // capacity and title together: the title shows on every booked séance, the overridden one included
+  const both = await editEventInPlace(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    eventId,
+    seenVersion: 2,
+    patch: { capacity: 30, title: "Cours du soir" },
+  });
+  must(both, "capacity and title");
+  assert.deepEqual(byOccurrence(both.effects), byOccurrence([sync(first.id), sync(second.id)]));
+
+  // a title alone is unchanged by this fix: still every booked séance
+  const titleOnly = await editEventInPlace(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    eventId,
+    seenVersion: 3,
+    patch: { title: "Cours du matin" },
+  });
+  must(titleOnly, "title");
+  assert.deepEqual(byOccurrence(titleOnly.effects), byOccurrence([sync(first.id), sync(second.id)]));
+
+  // « cette séance »: its own capacity is synced too
+  const own = await updateOccurrence(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    occurrenceId: first.id,
+    seenStartsAt: first.startsAt,
+    patch: { capacity: 9 },
+  });
+  must(own, "this séance");
+  assert.deepEqual(own.effects, [sync(first.id)]);
+
+  // nobody booked anywhere: nothing to sync
+  const empty = await makeEvent(db, pro, { ticketTypeIds: [typeId], capacity: 12 });
+  const quiet = await editEventInPlace(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    eventId: empty.eventId,
+    seenVersion: 1,
+    patch: { capacity: 15 },
+  });
+  must(quiet, "empty event");
+  assert.deepEqual(quiet.effects, []);
+});
+
+dbTest("E7 éditeur: an info save that keeps the capacity re-syncs nothing for it, a changed capacity re-syncs the booked séances", async ({ db, pro }) => {
+  const typeId = await makeType(db, pro);
+  const { eventId, occurrences } = await makeEvent(db, pro, {
+    ticketTypeIds: [typeId],
+    capacity: 12,
+    rule: {
+      startDate: dayIn(pro, 2),
+      startMinute: 600,
+      freq: "daily",
+      interval: 1,
+      weekdays: null,
+      monthlyBy: null,
+      monthWeek: null,
+      endMode: "count",
+      untilDate: null,
+      occurrenceCount: 2,
+    },
+  });
+  const [first, second] = occurrences;
+  const customerId = await makeCustomer(db, pro);
+  must(
+    await registerPro(db, { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: first.id, customerId, asGuest: true }),
+    "register",
+  );
+  const [{ title }] = await db.select({ title: event.title }).from(event).where(eq(event.id, eventId));
+  const sync = (occurrenceId: string): Effect => ({ type: "google.sync_occurrence", occurrenceId });
+  const save = async (seenVersion: number, patch: Parameters<typeof editEventInPlace>[1]["patch"]) =>
+    editEventInPlace(db, { professionalId: pro.proId, actorUserId: pro.userId, eventId, seenVersion, patch });
+
+  // « Informations » always sends the capacity: the same value as stored is not a capacity edit
+  const same = await save(1, { capacity: 12, title });
+  must(same, "same capacity");
+  assert.deepEqual(same.effects, [], "nothing changed that the Google event shows");
+  assert.equal((await getOccurrence(db, first.id)).capacity, 12);
+  assert.equal((await getOccurrence(db, second.id)).capacity, 12);
+
+  // a title edit still re-syncs the booked séance, capacity or not
+  const retitled = await save(2, { capacity: 12, title: "Cours du soir" });
+  must(retitled, "title and same capacity");
+  assert.deepEqual(retitled.effects, [sync(first.id)]);
+
+  // a changed capacity re-syncs the booked séance only (the empty one has no Google event)
+  const changed = await save(3, { capacity: 15, title: "Cours du soir" });
+  must(changed, "changed capacity");
+  assert.deepEqual(changed.effects, [sync(first.id)]);
+  assert.equal((await getOccurrence(db, first.id)).capacity, 15);
+  assert.equal((await getOccurrence(db, second.id)).capacity, 15);
+
+  // and back to the same value again: quiet
+  const quiet = await save(4, { capacity: 15, title: "Cours du soir" });
+  must(quiet, "same capacity again");
+  assert.deepEqual(quiet.effects, []);
+});
+
+dbTest("E7 éditeur: links, questions and location are replaced in place; the location change is e-mailed", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithBookings(h, 1);
+  const otherType = await makeType(db, pro);
+  const res = await editEventInPlace(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    eventId: s.eventId,
+    seenVersion: 1,
+    patch: {
+      ticketTypeIds: [otherType],
+      location: "Parc de Bercy",
+      questions: [{ label: "Niveau ?", type: "choice", options: ["Débutant", "Confirmé"], required: true }],
+    },
+  });
+  must(res, "edit in place");
+  assert.deepEqual(res.effects, [
+    { type: "email.occurrence_changed", occurrenceId: s.occ.id, bookingIds: s.bookingIds },
+    { type: "google.sync_occurrence", occurrenceId: s.occ.id },
+  ]);
+  const links = await db.select().from(eventTicketType).where(eq(eventTicketType.eventId, s.eventId));
+  assert.deepEqual(
+    links.map((l) => l.ticketTypeId),
+    [otherType],
+  );
+  const q = await db.execute<{ label: string; options: string[] }>(
+    sql`select label, options from question where event_id = ${s.eventId} order by position`,
+  );
+  assert.deepEqual(
+    q.rows.map((r) => r.label),
+    ["Niveau ?"],
+  );
+
+  const foreign = await editEventInPlace(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    eventId: s.eventId,
+    seenVersion: 2,
+    patch: { ticketTypeIds: ["not-a-type-of-this-pro"] },
+  });
+  assert.equal(foreign.ok ? "ok" : foreign.code, "invalid");
+});
+
+dbTest("E5 after « cette séance »: once the pro moved the séance, the client may cancel until its start", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithBookings(h, 1);
+  const newStart = instantAt(dayIn(pro, 4), 600, pro.tz);
+  must(
+    await updateOccurrence(db, {
+      professionalId: pro.proId,
+      actorUserId: pro.userId,
+      occurrenceId: s.occ.id,
+      seenStartsAt: s.occ.startsAt,
+      patch: { startsAt: newStart },
+    }),
+    "move",
+  );
+  const res = await cancelByClient(
+    db,
+    { professionalId: pro.proId, customerId: s.customerIds[0], bookingId: s.bookingIds[0], actorUserId: null },
+    addMinutes(newStart, -23 * 60),
+  );
+  must(res, "late cancel after the pro's change");
+  assert.equal(res.ticketReturned, true);
+});
+
+dbTest("E7 cette séance: moving a séance into the past is invalid and changes nothing", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithBookings(h, 1);
+  const res = await updateOccurrence(db, {
+    professionalId: pro.proId,
+    actorUserId: pro.userId,
+    occurrenceId: s.occ.id,
+    seenStartsAt: s.occ.startsAt,
+    patch: { startsAt: addMinutes(new Date(), -60) },
+  });
+  assert.equal(res.ok ? "ok" : res.code, "invalid");
+  assert.equal(res.ok ? null : res.message, "La nouvelle date serait déjà passée.");
+  const o = await getOccurrence(db, s.occ.id);
+  assert.equal(o.startsAt.getTime(), s.occ.startsAt.getTime());
+  assert.equal(o.endsAt.getTime(), s.occ.endsAt.getTime());
+  assert.equal(o.timeDetached, false);
+  assert.equal(o.changedAt, null);
+});
+
+dbTest("E7 cette séance: a séance that already started cannot be re-timed, but its capacity can change", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithBookings(h, 1);
+  const afterStart = addMinutes(s.occ.startsAt, 5);
+  const base = { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: s.occ.id, seenStartsAt: s.occ.startsAt };
+
+  const moved = await updateOccurrence(db, { ...base, patch: { startsAt: addMinutes(s.occ.startsAt, 24 * 60) } }, afterStart);
+  assert.equal(moved.ok ? "ok" : moved.code, "invalid");
+  assert.equal(moved.ok ? null : moved.message, "Une séance concernée a déjà commencé.");
+  const longer = await updateOccurrence(db, { ...base, patch: { durationMin: 120 } }, afterStart);
+  assert.equal(longer.ok ? "ok" : longer.code, "invalid");
+  const untouched = await getOccurrence(db, s.occ.id);
+  assert.equal(untouched.startsAt.getTime(), s.occ.startsAt.getTime());
+  assert.equal(untouched.endsAt.getTime(), s.occ.endsAt.getTime());
+  assert.equal(untouched.timeDetached, false);
+  assert.equal(untouched.changedAt, null);
+
+  must(await updateOccurrence(db, { ...base, patch: { capacity: 7 } }, afterStart), "capacity on a started séance");
+  assert.equal((await getOccurrence(db, s.occ.id)).capacity, 7);
+});
+
+dbTest("E7 cette séance: a duration edit committed between the read and the batch makes a start-only move 'changed'", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithBookings(h, 0);
+  const newStart = instantAt(dayIn(pro, 4), 660, pro.tz);
+  const res = await updateOccurrence(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: s.occ.id, seenStartsAt: s.occ.startsAt, patch: { startsAt: newStart } },
+    new Date(),
+    {
+      afterPlan: async () => {
+        await db.execute(
+          sql`update occurrence set ends_at = ends_at + interval '30 minutes', block_end = block_end + interval '30 minutes'
+            where id = ${s.occ.id}`,
+        );
+      },
+    },
+  );
+  assert.equal(res.ok ? "ok" : res.code, "changed");
+  const o = await getOccurrence(db, s.occ.id);
+  assert.equal(o.startsAt.getTime(), s.occ.startsAt.getTime());
+  assert.equal(o.endsAt.getTime(), s.occ.endsAt.getTime() + 30 * 60_000);
+  assert.equal(o.timeDetached, false);
+});
+
+dbTest("E7 éditeur: a repeated question id is kept once and the repeat becomes a new question", async ({ db, pro }) => {
+  const typeId = await makeType(db, pro);
+  const { eventId } = await makeEvent(db, pro, { ticketTypeIds: [typeId] });
+  const base = { professionalId: pro.proId, actorUserId: pro.userId, eventId };
+  must(
+    await editEventInPlace(db, { ...base, seenVersion: 1, patch: { questions: [{ label: "Niveau ?", type: "text", required: false }] } }),
+    "first question",
+  );
+  const rows = (await db.execute<{ id: string }>(sql`select id from question where event_id = ${eventId}`)).rows;
+  assert.equal(rows.length, 1);
+  const keptId = rows[0].id;
+
+  const res = await editEventInPlace(db, {
+    ...base,
+    seenVersion: 2,
+    patch: {
+      questions: [
+        { id: keptId, label: "A", type: "text", required: false },
+        { id: keptId, label: "B", type: "text", required: true },
+      ],
+    },
+  });
+  must(res, "repeated id");
+  assert.equal(res.version, 3);
+  const after = (
+    await db.execute<{ id: string; label: string; position: number }>(
+      sql`select id, label, position from question where event_id = ${eventId} order by position`,
+    )
+  ).rows;
+  assert.deepEqual(
+    after.map((r) => [r.label, r.position]),
+    [
+      ["A", 0],
+      ["B", 1],
+    ],
+  );
+  assert.equal(after[0].id, keptId);
+  assert.notEqual(after[1].id, keptId);
+});
+
+/* P6 A13: a hold that already lapsed is released before a capacity cut and is not told about a change. */
+
+/** A séance of capacity 2 (3 days ahead) with one confirmed ticket booking and one buy + book hold, both made at `now`. */
+async function seanceWithHold({ db, pro }: DbHarness, now: Date) {
+  const typeId = await makeType(db, pro);
+  const offerId = await makeOffer(db, pro, typeId);
+  const { eventId, occurrences } = await makeEvent(db, pro, { ticketTypeIds: [typeId], capacity: 2 }, now);
+  const occ = occurrences[0];
+  const kept = await makeCustomer(db, pro);
+  await giveTickets(db, pro, kept, typeId, 1);
+  const confirmed = await bookWithHeldTicket(
+    db,
+    { professionalId: pro.proId, occurrenceId: occ.id, customerId: kept, seenStartsAt: occ.startsAt, actorUserId: pro.userId },
+    now,
+  );
+  must(confirmed, "held ticket");
+  const buyer = await makeCustomer(db, pro);
+  const hold = await startBuyAndBook(
+    db,
+    { professionalId: pro.proId, occurrenceId: occ.id, customerId: buyer, seenStartsAt: occ.startsAt, offerId },
+    now,
+  );
+  must(hold, "buy + book");
+  const holdEnd = (await getBooking(db, hold.bookingId)).holdExpiresAt;
+  assert.ok(holdEnd);
+  return { eventId, occ, confirmedId: confirmed.bookingId, holdId: hold.bookingId, purchaseId: hold.purchaseId, holdEnd };
+}
+
+dbTest("A13 cette séance: a capacity cut releases a lapsed hold first, and the move tells the live registrants only", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithHold(h, new Date());
+  const res = await updateOccurrence(
+    db,
+    {
+      professionalId: pro.proId,
+      actorUserId: pro.userId,
+      occurrenceId: s.occ.id,
+      seenStartsAt: s.occ.startsAt,
+      patch: { capacity: 1, startsAt: addMinutes(s.occ.startsAt, 60) },
+    },
+    s.holdEnd,
+  );
+  must(res, "capacity + move");
+  const o = await getOccurrence(db, s.occ.id);
+  assert.equal(o.capacity, 1, "the lapsed hold no longer keeps the capacity up");
+  assert.equal(o.seatsTaken, 1);
+  const lapsed = await getBooking(db, s.holdId);
+  assert.equal(lapsed.status, "expired");
+  assert.equal(lapsed.endedBy, "system");
+  const changed = res.effects.find((e) => e.type === "email.occurrence_changed");
+  assert.ok(changed && changed.type === "email.occurrence_changed");
+  assert.deepEqual(changed.bookingIds, [s.confirmedId]);
+  assert.ok(!res.effects.some((e) => e.type === "email.booking_cancelled"), "an expired hold is not « désinscrit »");
+});
+
+dbTest("A13 éditeur: a capacity cut releases the lapsed holds of the séances it reaches", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithHold(h, new Date());
+  const res = await editEventInPlace(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, eventId: s.eventId, seenVersion: 1, patch: { capacity: 1 } },
+    s.holdEnd,
+  );
+  must(res, "edit in place");
+  const o = await getOccurrence(db, s.occ.id);
+  assert.equal(o.capacity, 1);
+  assert.equal(o.seatsTaken, 1);
+  assert.equal((await getBooking(db, s.holdId)).status, "expired");
+});
+
+dbTest("X3 éditeur: a lapsed hold the capacity cut releases has its open Checkout session expired after the release; a live hold keeps its session", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithHold(h, new Date());
+  const sessionId = "cs_test_x3_lapsed";
+  must(await attachCheckoutSession(db, { purchaseId: s.purchaseId, checkoutSessionId: sessionId, checkoutUrl: "https://checkout.example.test/x3" }), "attach");
+  const base = { professionalId: pro.proId, actorUserId: pro.userId, eventId: s.eventId };
+  const expiries = (effects: Effect[]) => effects.filter((e) => e.type === "stripe.expire_session");
+
+  // While the hold is live, a capacity change releases nothing and closes no session.
+  const live = await editEventInPlace(db, { ...base, seenVersion: 1, patch: { capacity: 3 } }, addMinutes(s.holdEnd, -1));
+  must(live, "edit while the hold is live");
+  assert.deepEqual(expiries(live.effects), []);
+  assert.equal((await getBooking(db, s.holdId)).status, "pending");
+
+  // Once it lapsed: the batch releases it (expired, by the system) and the effects close its session, nothing else.
+  const lapsed = await editEventInPlace(db, { ...base, seenVersion: 2, patch: { capacity: 1 } }, s.holdEnd);
+  must(lapsed, "edit once the hold lapsed");
+  const hold = await getBooking(db, s.holdId);
+  assert.equal(hold.status, "expired");
+  assert.equal(hold.endedBy, "system");
+  assert.deepEqual(expiries(lapsed.effects), [{ type: "stripe.expire_session", purchaseId: s.purchaseId, checkoutSessionId: sessionId }]);
+  assert.ok(
+    !lapsed.effects.some((e) => (e.type === "email.booking_cancelled" || e.type === "email.occurrence_changed") && JSON.stringify(e).includes(s.holdId)),
+    "the released hold hears nothing (A13)",
+  );
+});
+
+/* P6 A17: the editor reads the version first, writes nothing for an empty patch, and takes its recipients from its batch. */
+
+dbTest("A17 éditeur: an outdated version is stale before any question id is read, even one the newer version removed", async ({ db, pro }) => {
+  const typeId = await makeType(db, pro);
+  const { eventId } = await makeEvent(db, pro, { ticketTypeIds: [typeId] });
+  const base = { professionalId: pro.proId, actorUserId: pro.userId, eventId };
+  must(
+    await editEventInPlace(db, { ...base, seenVersion: 1, patch: { questions: [{ label: "Niveau ?", type: "text", required: false }] } }),
+    "add a question",
+  );
+  const [{ id: questionId }] = (await db.execute<{ id: string }>(sql`select id from question where event_id = ${eventId}`)).rows;
+  must(await editEventInPlace(db, { ...base, seenVersion: 2, patch: { questions: [] } }), "remove it");
+  const late = await editEventInPlace(db, {
+    ...base,
+    seenVersion: 2,
+    patch: { questions: [{ id: questionId, label: "Niveau ?", type: "text", required: false }] },
+  });
+  assert.deepEqual(late, { ok: false, code: "stale" }, "« modifié entre-temps », not « Question inconnue »");
+  const unknown = await editEventInPlace(db, {
+    ...base,
+    seenVersion: 3,
+    patch: { questions: [{ id: questionId, label: "Niveau ?", type: "text", required: false }] },
+  });
+  assert.deepEqual(unknown, { ok: false, code: "invalid", message: "Question inconnue." }, "at the current version it is unknown");
+});
+
+dbTest("A17 éditeur: an empty patch writes nothing and keeps the version; an outdated empty patch is still stale", async ({ db, pro }) => {
+  const typeId = await makeType(db, pro);
+  const { eventId } = await makeEvent(db, pro, { ticketTypeIds: [typeId] });
+  const base = { professionalId: pro.proId, actorUserId: pro.userId, eventId };
+  const [before] = await db.select().from(event).where(eq(event.id, eventId));
+  const res = await editEventInPlace(db, { ...base, seenVersion: 1, patch: {} });
+  must(res, "empty patch");
+  assert.equal(res.version, 1);
+  assert.deepEqual(res.effects, []);
+  const [after] = await db.select().from(event).where(eq(event.id, eventId));
+  assert.equal(after.version, 1);
+  assert.equal(after.lastActionId, before.lastActionId);
+  assert.equal(after.updatedAt.getTime(), before.updatedAt.getTime());
+  assert.deepEqual(await editEventInPlace(db, { ...base, seenVersion: 0, patch: {} }), { ok: false, code: "stale" });
+});

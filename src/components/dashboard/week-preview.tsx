@@ -1,125 +1,144 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { TZDate } from "@date-fns/tz";
 
+import { OccurrenceDialog } from "@/components/dashboard/occurrence-dialog";
+import { OFF_PATTERN, PlanningNotice, dayLongLabel, dayShortLabel, hhmm, tintOf } from "@/components/dashboard/planning-calendar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { PlanningSessionVM } from "@/components/dashboard/planning-calendar";
-import { SessionDetailDialog } from "@/components/dashboard/session-detail-dialog";
+import { blockLabel, previewTitle, seatsRatio, type PlanningItemVM, type TimeOffSegmentVM } from "@/lib/back-office/planning-view";
+import type { DateKey } from "@/lib/civil-date";
 import { cn } from "@/lib/utils";
-import { DAYS_FR, dayKeyInTz, formatTime, wallClockMinutes } from "@/lib/datetime";
-
-export type WeekPreviewTimeOffVM = {
-  id: string;
-  startAt: string;
-  endAt: string;
-  reason: string | null;
-};
 
 const HOUR_PX = 36;
+const MINUTE_PX = HOUR_PX / 60;
+const WIDE_QUERY = "(min-width: 640px)";
+
+function subscribeWide(onChange: () => void): () => void {
+  const mq = window.matchMedia(WIDE_QUERY);
+  mq.addEventListener("change", onChange);
+  return () => mq.removeEventListener("change", onChange);
+}
+
+function readWide(): boolean {
+  return window.matchMedia(WIDE_QUERY).matches;
+}
 
 /**
- * Compact week/day-at-a-glance grid for the dashboard overview. Mirrors the
- * geometry of {@link PlanningCalendar}; clicking a session opens the same
- * detail dialog as the planning. A Jour/Semaine toggle switches between a
- * single day (navigable within the current week) and the full week. The
- * header links to the full planning page.
+ * Compact day / week grid of the dashboard overview, on the same view model as
+ * the planning page. A click opens the same occurrence dialog (held by id, so
+ * it follows the refreshed data after an action). The Jour / Semaine toggle
+ * switches between one day of the current week and the whole week; the header
+ * links to the full planning on that week.
  */
-export function WeekPreview(props: {
+export function WeekPreview({
+  tz,
+  days,
+  todayKey,
+  items,
+  timeOff,
+  startHour,
+  endHour,
+  weekParam,
+  nowIso,
+}: {
   tz: string;
-  days: string[];
+  days: DateKey[];
+  todayKey: DateKey;
+  items: PlanningItemVM[];
+  timeOff: TimeOffSegmentVM[];
   startHour: number;
   endHour: number;
-  sessions: PlanningSessionVM[];
-  timeOff: WeekPreviewTimeOffVM[];
-  weekParam: string;
-  todayKey: string;
+  weekParam: DateKey;
+  nowIso: string;
 }) {
-  const { tz, startHour, endHour } = props;
-  const days = props.days.map((d) => new Date(d));
   const hours = Array.from({ length: endHour - startHour }, (_, i) => startHour + i);
   const colHeight = hours.length * HOUR_PX;
 
-  const [view, setView] = useState<"day" | "week">("week");
-  const todayIndex = days.findIndex((d) => dayKeyInTz(d, tz) === props.todayKey);
+  // Below 640 px the preview opens on one day; once the pro clicks the toggle, their choice wins.
+  const wide = useSyncExternalStore(subscribeWide, readWide, () => true);
+  const [picked, setPicked] = useState<"day" | "week" | null>(null);
+  const view = picked ?? (wide ? "week" : "day");
+  const todayIndex = days.indexOf(todayKey);
   const [dayIndex, setDayIndex] = useState(todayIndex >= 0 ? todayIndex : 0);
-  // By id, so the dialog follows the refreshed data after an action.
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selected = props.sessions.find((s) => s.id === selectedId) ?? null;
+  // An id that left the data (an RDV that an action ended) is dropped, so that it can never come back by itself.
+  const currentId = selectedId !== null && items.some((i) => i.id === selectedId) ? selectedId : null;
+  if (currentId !== selectedId) setSelectedId(currentId);
+  const selected = items.find((i) => i.id === currentId) ?? null;
+  // The status line the dialog hands over when its occurrence leaves the data after an action (a cancelled RDV).
+  const [notice, setNotice] = useState<string | null>(null);
+  const openItem = (id: string) => {
+    setNotice(null);
+    setSelectedId(id);
+  };
+  // Only a string is a notice: whatever else a caller hands over is dropped.
+  const closeDialog = (text?: string) => {
+    setSelectedId(null);
+    if (typeof text === "string" && text !== "") setNotice(text);
+  };
 
-  // Wall-clock minutes, not time elapsed since midnight: on a DST Sunday a
-  // 19:00 session must sit on the 19:00 line.
-  const topPx = (iso: string) =>
-    (wallClockMinutes(new Date(iso), tz) - startHour * 60) * (HOUR_PX / 60);
-  const heightPx = (a: string, b: string) =>
-    Math.max(
-      16,
-      ((new Date(b).getTime() - new Date(a).getTime()) / 60_000) * (HOUR_PX / 60),
-    );
-
-  const dayColumn = (day: Date) => {
-    const key = dayKeyInTz(day, tz);
-    const daySessions = props.sessions.filter(
-      (s) => dayKeyInTz(new Date(s.startAt), tz) === key,
-    );
-    const dayOff = props.timeOff.filter(
-      (t) => dayKeyInTz(new Date(t.startAt), tz) === key,
-    );
-    const dow = new TZDate(day.getTime(), tz).getDay();
-    const isToday = key === props.todayKey;
+  const dayColumn = (day: DateKey) => {
+    const isToday = day === todayKey;
     return (
-      <div key={key} className="flex-1 border-l border-border">
+      <div key={day} className="min-w-0 flex-1 border-l border-border">
         <div
           className={cn(
-            "flex h-7 items-center justify-center border-b border-border text-center text-[11px] font-medium",
-            isToday && "text-primary",
+            "flex h-7 items-center justify-center border-b border-border text-[11px] font-medium",
+            isToday && "font-semibold text-accent-foreground",
           )}
         >
-          {DAYS_FR[dow].slice(0, 3)}{" "}
-          {new Intl.DateTimeFormat("fr-FR", {
-            day: "numeric",
-            timeZone: tz,
-          }).format(day)}
+          {dayShortLabel(day)}
         </div>
         <div className="relative" style={{ height: colHeight }}>
-          {dayOff.map((t) => (
-            <div
-              key={t.id}
-              className="absolute inset-x-0.5 rounded bg-muted/60 [background-image:repeating-linear-gradient(45deg,transparent,transparent_6px,rgba(0,0,0,0.05)_6px,rgba(0,0,0,0.05)_12px)]"
-              style={{
-                top: topPx(t.startAt),
-                height: heightPx(t.startAt, t.endAt),
-              }}
-              title={t.reason ?? "Indisponible"}
-            />
-          ))}
-          {daySessions.map((s) => {
-            const booked = s.capacity - s.seatsRemaining;
-            const group = s.capacity > 1;
-            return (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => setSelectedId(s.id)}
-                className="absolute inset-x-0.5 overflow-hidden rounded-md border border-black/10 px-1 py-0.5 text-left text-[10px] leading-tight text-white shadow-sm transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
-                style={{
-                  top: topPx(s.startAt),
-                  height: heightPx(s.startAt, s.endAt),
-                  backgroundColor: s.eventColor,
-                }}
-                title={`${formatTime(new Date(s.startAt), tz)} · ${s.eventTitle}${
-                  group ? ` (${booked}/${s.capacity})` : ""
-                }`}
-              >
-                <span className="block truncate font-medium">
-                  {formatTime(new Date(s.startAt), tz)} {s.eventTitle}
-                </span>
-              </button>
-            );
-          })}
+          {timeOff
+            .filter((s) => s.dayKey === day)
+            .map((s) => {
+              const top = Math.max(0, (s.startMinute - startHour * 60) * MINUTE_PX);
+              const bottom = Math.min(colHeight, (s.endMinute - startHour * 60) * MINUTE_PX);
+              if (bottom - top <= 0) return null;
+              return (
+                <div
+                  key={`${s.id}-${s.dayKey}`}
+                  className={cn("absolute inset-x-0.5 rounded", OFF_PATTERN)}
+                  style={{ top, height: bottom - top }}
+                  title={s.reason ?? "Indisponible"}
+                >
+                  <span className="sr-only">{s.reason ?? "Indisponible"}</span>
+                </div>
+              );
+            })}
+          {items
+            .filter((i) => i.dayKey === day)
+            .map((i) => {
+              const cancelled = i.status === "cancelled";
+              return (
+                <button
+                  key={i.id}
+                  type="button"
+                  onClick={() => openItem(i.id)}
+                  aria-label={blockLabel(i, tz)}
+                  className={cn(
+                    "absolute overflow-hidden rounded-md border border-l-[3px] px-1 py-0.5 text-left text-[10px] leading-tight text-foreground shadow-sm transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    cancelled && "opacity-75 line-through",
+                  )}
+                  style={{
+                    top: (i.startMinute - startHour * 60) * MINUTE_PX,
+                    height: Math.max(16, (i.endMinute - i.startMinute) * MINUTE_PX),
+                    left: `calc(${(i.lane / i.lanes) * 100}% + 2px)`,
+                    width: `calc(${100 / i.lanes}% - 4px)`,
+                    backgroundColor: tintOf(i.color),
+                    borderColor: `color-mix(in srgb, ${i.color} 35%, transparent)`,
+                    borderLeftColor: i.color,
+                  }}
+                  title={`${hhmm(i.startMinute)} ${i.title}${i.kind === "seance" ? ` (${seatsRatio(i)})` : ""}`}
+                >
+                  <span className="block truncate font-medium">{`${hhmm(i.startMinute)} ${i.title}`}</span>
+                </button>
+              );
+            })}
         </div>
       </div>
     );
@@ -128,14 +147,8 @@ export function WeekPreview(props: {
   const timeGutter = (
     <div className="w-9 shrink-0 pt-7">
       {hours.map((h) => (
-        <div
-          key={h}
-          className="relative text-right text-[10px] text-muted-foreground"
-          style={{ height: HOUR_PX }}
-        >
-          <span className="absolute -top-1.5 right-1">
-            {String(h).padStart(2, "0")}h
-          </span>
+        <div key={h} className="relative text-right text-[10px] text-muted-foreground" style={{ height: HOUR_PX }}>
+          <span className="absolute -top-1.5 right-1 tabular-nums">{String(h).padStart(2, "0")}h</span>
         </div>
       ))}
     </div>
@@ -143,21 +156,19 @@ export function WeekPreview(props: {
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
-        <CardTitle>{view === "day" ? "Aujourd'hui" : "Cette semaine"}</CardTitle>
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
+        <CardTitle className="first-letter:uppercase">{previewTitle(view, days[dayIndex], todayKey)}</CardTitle>
         <div className="flex items-center gap-2">
-          {/* Jour / Semaine toggle */}
           <div className="inline-flex rounded-lg border border-border p-0.5">
             {(["day", "week"] as const).map((v) => (
               <button
                 key={v}
                 type="button"
-                onClick={() => setView(v)}
+                onClick={() => setPicked(v)}
+                aria-pressed={view === v}
                 className={cn(
-                  "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                  view === v
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground",
+                  "rounded-md px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  view === v ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
                 )}
               >
                 {v === "day" ? "Jour" : "Semaine"}
@@ -165,8 +176,8 @@ export function WeekPreview(props: {
             ))}
           </div>
           <Link
-            href={`/dashboard/planning?week=${props.weekParam}`}
-            className="inline-flex items-center text-sm font-medium text-primary hover:underline"
+            href={`/dashboard/planning?semaine=${weekParam}`}
+            className="inline-flex items-center rounded text-sm font-medium text-accent-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             Voir le planning
             <ChevronRight className="size-4" />
@@ -174,6 +185,7 @@ export function WeekPreview(props: {
         </div>
       </CardHeader>
       <CardContent>
+        <PlanningNotice notice={notice} />
         {view === "day" && (
           <div className="mb-3 flex items-center justify-center gap-1">
             <Button
@@ -183,16 +195,9 @@ export function WeekPreview(props: {
               disabled={dayIndex === 0}
               aria-label="Jour précédent"
             >
-              <ChevronLeft className="size-4" />
+              <ChevronLeft />
             </Button>
-            <span className="min-w-[10rem] text-center text-sm font-medium">
-              {new Intl.DateTimeFormat("fr-FR", {
-                weekday: "long",
-                day: "numeric",
-                month: "long",
-                timeZone: tz,
-              }).format(days[dayIndex])}
-            </span>
+            <span className="block min-w-[10rem] text-center text-sm font-medium first-letter:uppercase">{dayLongLabel(days[dayIndex])}</span>
             <Button
               variant="ghost"
               size="sm"
@@ -200,28 +205,19 @@ export function WeekPreview(props: {
               disabled={dayIndex === days.length - 1}
               aria-label="Jour suivant"
             >
-              <ChevronRight className="size-4" />
+              <ChevronRight />
             </Button>
           </div>
         )}
         <div className="overflow-x-auto">
           <div className={cn("flex", view === "week" && "min-w-[640px]")}>
             {timeGutter}
-            {view === "week"
-              ? days.map((day) => dayColumn(day))
-              : dayColumn(days[dayIndex])}
+            {view === "week" ? days.map((day) => dayColumn(day)) : dayColumn(days[dayIndex])}
           </div>
         </div>
       </CardContent>
 
-      {selected && (
-        <SessionDetailDialog
-          session={selected}
-          tz={tz}
-          allSessions={props.sessions}
-          onClose={() => setSelectedId(null)}
-        />
-      )}
+      {selected && <OccurrenceDialog item={selected} tz={tz} nowIso={nowIso} onClose={closeDialog} />}
     </Card>
   );
 }

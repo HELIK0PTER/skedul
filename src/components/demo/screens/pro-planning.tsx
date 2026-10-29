@@ -1,35 +1,95 @@
-import { format } from "date-fns";
-import { fr } from "date-fns/locale";
+import { Lock, MapPin, X } from "lucide-react";
 
-import { toHHMM } from "@/components/dashboard/weekly-hours-editor";
+import { Badge } from "@/components/ui/badge";
+import { dayLongLabel, weekTitle } from "@/lib/back-office/planning-view";
+import { COVERAGE_LABELS } from "@/lib/tickets-vocab";
 import { cn } from "@/lib/utils";
-import { DEMO_WEEK_SESSIONS, leaSession, planningWeekDays } from "../demo-data";
-import { ProShell } from "./pro-shell";
-import type { ScreenProps } from "./index";
+import {
+  DEMO_CLIENT,
+  LEA_RDV,
+  LEA_SEANCE_IDS,
+  MONDAY_ATTENDEES,
+  PLANNING_HOURS,
+  WEEK_RDVS,
+  demoWeek,
+  rangeLabel,
+  seanceById,
+  ticketType,
+  timeLabel,
+  weekDayLabel,
+  weekSeances,
+} from "../demo-data";
+import { seatsLeft, type DemoState } from "../demo-script";
+import { ProPageHeader, ProShell } from "./pro-shell";
 
-const START_HOUR = 9;
-const END_HOUR = 20;
-const HOUR_PX = 52;
+const HOUR_PX = 56;
+const HOURS = PLANNING_HOURS.end - PLANNING_HOURS.start;
+const top = (minute: number) => (minute - PLANNING_HOURS.start * 60) * (HOUR_PX / 60);
+const height = (durationMin: number) => Math.max(durationMin * (HOUR_PX / 60), 22);
 
-export function ProPlanning({ state }: ScreenProps) {
-  const week = planningWeekDays();
-  const sessions = state.planningHasLea
-    ? [...DEMO_WEEK_SESSIONS, leaSession()]
-    : DEMO_WEEK_SESSIONS;
-  const hours = Array.from({ length: END_HOUR - START_HOUR + 1 }, (_, i) => START_HOUR + i);
-  const weekLabel = `${format(week[0], "d", { locale: fr })} – ${format(week[6], "d MMMM yyyy", { locale: fr })}`;
-
+/** The registrants of Monday's débutants séance, Léa last once she booked. */
+function SeancePanel({ state }: { state: DemoState }) {
+  const week = demoWeek();
+  const seance = seanceById(LEA_SEANCE_IDS.monday, week);
+  const attendees = [
+    ...MONDAY_ATTENDEES,
+    ...(state.mondayBooked ? [{ name: DEMO_CLIENT.name, coverage: "ticket" as const, ticket: ticketType("collectif").name }] : []),
+  ];
   return (
-    <ProShell active="planning">
-      <div className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight">Planning</h1>
-          <p className="text-sm text-muted-foreground">
-            Vos séances et rendez-vous de la semaine.
+    <div className="absolute inset-y-0 right-0 z-10 flex w-[340px] flex-col border-l border-border bg-card shadow-xl demo-pop">
+      <div className="flex items-start justify-between gap-3 border-b border-border p-5">
+        <div className="min-w-0">
+          <h2 className="text-lg font-semibold">{seance.title}</h2>
+          <p className="text-sm font-medium first-letter:uppercase">
+            {`${dayLongLabel(week[seance.dayIndex])} · ${rangeLabel(seance.startMinute, seance.durationMin)}`}
+          </p>
+          <p className="mt-1 flex items-center gap-1.5 text-sm text-zinc-600">
+            <MapPin className="size-3.5" aria-hidden /> {seance.location}
           </p>
         </div>
-        <p className="text-sm font-medium">{weekLabel}</p>
+        <X className="size-5 shrink-0 text-muted-foreground" aria-hidden />
       </div>
+      <div data-demo="seance-attendees" className="space-y-3 p-5">
+        <p className="text-sm font-semibold">{`${attendees.length} inscrits sur ${seance.capacity}`}</p>
+        <ul className="divide-y divide-border rounded-xl border border-border">
+          {attendees.map((a) => (
+            <li
+              key={a.name}
+              className={cn(
+                "flex items-center justify-between gap-2 px-3 py-2 text-sm",
+                a.name === DEMO_CLIENT.name && "bg-primary-muted",
+              )}
+            >
+              <span className="min-w-0 truncate font-medium">{a.name}</span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                {a.ticket && <span className="text-xs text-zinc-600">{a.ticket}</span>}
+                <Badge variant={a.coverage === "guest" ? "outline" : "neutral"}>{COVERAGE_LABELS[a.coverage]}</Badge>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+/** The pro's week: séances in their event's colour, rendez-vous in a light tint of their ticket type's. */
+export function ProPlanning({ state }: { state: DemoState }) {
+  const week = demoWeek();
+  const seances = weekSeances(week);
+  const rdvs = [
+    ...WEEK_RDVS,
+    ...(state.planningHasLea ? [{ ...LEA_RDV, who: DEMO_CLIENT.name }] : []),
+  ];
+  const hours = Array.from({ length: HOURS + 1 }, (_, i) => PLANNING_HOURS.start + i);
+
+  return (
+    <ProShell active="planning" overlay={state.planningSeanceOpen ? <SeancePanel state={state} /> : null}>
+      <ProPageHeader
+        title="Planning"
+        description="Vos séances, rendez-vous et indisponibilités de la semaine."
+        action={<p className="shrink-0 pt-1 text-sm font-semibold">{weekTitle(week)}</p>}
+      />
 
       <div className="mt-3 flex">
         <div className="relative w-10 shrink-0 pt-7">
@@ -42,40 +102,59 @@ export function ProPlanning({ state }: ScreenProps) {
           ))}
         </div>
         {week.map((day, di) => (
-          <div key={di} className="flex-1 border-l border-border">
-            <p className="flex h-7 items-center justify-center text-xs font-medium capitalize">
-              {format(day, "EEE d", { locale: fr })}
+          <div key={day} className="min-w-0 flex-1 border-l border-border">
+            <p className="flex h-7 items-center justify-center text-xs font-medium first-letter:uppercase">
+              {weekDayLabel(di, week)}
             </p>
-            <div className="relative" style={{ height: (END_HOUR - START_HOUR) * HOUR_PX }}>
+            <div className="relative" style={{ height: HOURS * HOUR_PX }}>
               {hours.slice(1).map((h) => (
                 <div
                   key={h}
                   className="absolute inset-x-0 border-t border-border/60"
-                  style={{ top: (h - START_HOUR) * HOUR_PX }}
+                  style={{ top: (h - PLANNING_HOURS.start) * HOUR_PX }}
                 />
               ))}
-              {sessions
+              {seances
                 .filter((s) => s.dayIndex === di)
                 .map((s) => (
                   <span
                     key={s.id}
-                    data-demo={s.id === "lea" ? "session-lea" : undefined}
-                    className={cn(
-                      "absolute inset-x-0.5 block rounded-lg border border-black/10 p-1 text-left text-[11px] leading-tight text-white shadow-sm",
-                      s.id === "lea" && "demo-pop",
-                    )}
-                    style={{
-                      top: (s.startMinute - START_HOUR * 60) * (HOUR_PX / 60),
-                      height: Math.max(s.durationMinutes * (HOUR_PX / 60), 22),
-                      backgroundColor: s.color,
-                    }}
+                    data-demo={`pro-seance-${s.id}`}
+                    className="absolute inset-x-0.5 block overflow-hidden rounded-lg border border-black/10 p-1 text-left text-[11px] leading-tight text-white shadow-sm"
+                    style={{ top: top(s.startMinute), height: height(s.durationMin), backgroundColor: s.color }}
                   >
-                    <span className="font-medium">
-                      {toHHMM(s.startMinute)} {s.title}
+                    <span className="flex items-center gap-1 font-medium">
+                      {s.isPrivate && <Lock className="size-3 shrink-0" aria-hidden />}
+                      {timeLabel(s.startMinute)} {s.title}
                     </span>
-                    <span className="block opacity-90">{s.subtitle}</span>
+                    <span className="block opacity-90">{`${s.capacity - seatsLeft(s, state)}/${s.capacity}`}</span>
                   </span>
                 ))}
+              {rdvs
+                .filter((r) => r.dayIndex === di)
+                .map((r) => {
+                  const type = ticketType(r.type);
+                  const lea = r.id === LEA_RDV.id;
+                  return (
+                    <span
+                      key={r.id}
+                      data-demo={lea ? "rdv-lea" : undefined}
+                      className={cn(
+                        "absolute inset-x-0.5 block overflow-hidden rounded-md px-1 py-0.5 text-left text-[10px] leading-tight text-foreground",
+                        lea && "demo-pop",
+                      )}
+                      style={{
+                        top: top(r.startMinute),
+                        height: height(r.durationMin),
+                        backgroundColor: `${type.color}26`,
+                        borderLeft: `3px solid ${type.color}`,
+                      }}
+                    >
+                      <span className="block truncate font-medium">{`${timeLabel(r.startMinute)} ${r.who}`}</span>
+                      {r.durationMin >= 45 && <span className="block truncate text-zinc-600">{type.name}</span>}
+                    </span>
+                  );
+                })}
             </div>
           </div>
         ))}

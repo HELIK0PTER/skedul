@@ -3,9 +3,13 @@
 import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
 
-import { isTrackedPath } from "@/lib/analytics";
+import { externalReferrer, isTrackedPath } from "@/lib/analytics";
 
-/** One beacon per public page view — no cookie, no storage (see /api/track). */
+/**
+ * One beacon per public page view: no cookie, no storage (see /api/track). The
+ * referrer is another site's origin or nothing (externalReferrer): a payment
+ * return lands with a purchase id in a same-origin URL, which never leaves the page.
+ */
 export function PageViewTracker() {
   const pathname = usePathname();
   const isFirstView = useRef(true);
@@ -25,7 +29,7 @@ export function PageViewTracker() {
       first,
       ...(first
         ? {
-            referrer: document.referrer || undefined,
+            referrer: externalReferrer(document.referrer, window.location.origin),
             source:
               new URLSearchParams(window.location.search).get("utm_source") ??
               undefined,

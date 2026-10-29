@@ -44,6 +44,14 @@ test("status parsers return null for unknown values", () => {
   assert.equal(parsePurchaseStatus(undefined), null);
 });
 
+test("status parsers follow the tickets vocabulary", () => {
+  assert.equal(parseBookingStatus("expired"), "expired");
+  assert.equal(parseBookingStatus("completed"), null);
+  assert.equal(parsePurchaseStatus("expired"), "expired");
+  assert.equal(parsePurchaseStatus("refunded"), null);
+  assert.equal(parseBookingStatus("toString"), null);
+});
+
 test("parseBanDuration ignores inherited object keys", () => {
   assert.equal(parseBanDuration("7d"), "7d");
   assert.equal(parseBanDuration("forever"), "forever");

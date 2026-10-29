@@ -7,11 +7,16 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  clientRecordsNote,
+  pageContentNote,
+  pendingPaymentsNote,
+  ticketsNote,
+  upcomingNote,
+} from "@/lib/admin-deletion-copy";
 import { deletionConfirmed, type UserRole } from "@/lib/admin-params";
+import type { ProStats } from "@/lib/admin-reads";
 import { deleteUser } from "@/server/admin";
-
-const plural = (n: number, one: string, many: string) =>
-  `${n.toLocaleString("fr-FR")} ${n > 1 ? many : one}`;
 
 export function DeleteUserCard({
   userId,
@@ -25,14 +30,12 @@ export function DeleteUserCard({
   email: string;
   role: UserRole;
   pro: { slug: string } | null;
-  stats: {
-    eventTypes: number;
-    bookings: number;
-    upcoming: number;
-    customers: number;
-    packsSold: number;
-  } | null;
-  deletion: { creditsOutstanding: number; clientRecordsElsewhere: number };
+  stats: ProStats | null;
+  deletion: {
+    ticketsInCirculation: number;
+    pendingPayments: number;
+    clientRecordsElsewhere: number;
+  };
 }) {
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState("");
@@ -64,7 +67,7 @@ export function DeleteUserCard({
             type="button"
             size="sm"
             variant="outline"
-            className="w-full justify-start border-destructive/40 text-destructive hover:bg-destructive/10"
+            className="w-full justify-start border-destructive/40 text-rose-700 hover:bg-destructive/10"
             onClick={() => setOpen(true)}
           >
             <Trash2 />
@@ -77,24 +80,29 @@ export function DeleteUserCard({
               <li>Le compte, ses connexions et ses sessions.</li>
               {pro && stats && (
                 <li>
-                  {`La page /${pro.slug} et tout son contenu : ${plural(stats.eventTypes, "prestation", "prestations")}, ${plural(stats.bookings, "réservation confirmée", "réservations confirmées")}, ${plural(stats.customers, "client", "clients")}, ${plural(stats.packsSold, "pack vendu", "packs vendus")}.`}
+                  {pageContentNote(pro.slug, stats)}
                 </li>
               )}
             </ul>
 
             {stats && stats.upcoming > 0 && (
               <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-warning">
-                {`${plural(stats.upcoming, "réservation à venir disparaîtra", "réservations à venir disparaîtront")} sans que les clients soient prévenus.`}
+                {upcomingNote(stats.upcoming)}
               </p>
             )}
-            {deletion.creditsOutstanding > 0 && (
+            {deletion.ticketsInCirculation > 0 && (
               <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-warning">
-                {`${plural(deletion.creditsOutstanding, "crédit prépayé non utilisé sera perdu", "crédits prépayés non utilisés seront perdus")} pour ses clients, sans remboursement automatique.`}
+                {ticketsNote(deletion.ticketsInCirculation)}
+              </p>
+            )}
+            {deletion.pendingPayments > 0 && (
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-warning">
+                {pendingPaymentsNote(deletion.pendingPayments)}
               </p>
             )}
             {deletion.clientRecordsElsewhere > 0 && (
               <p className="text-sm text-muted-foreground">
-                {`Ses ${plural(deletion.clientRecordsElsewhere, "fiche client chez un autre pro est conservée", "fiches client chez d'autres pros sont conservées")}, mais détachées du compte.`}
+                {clientRecordsNote(deletion.clientRecordsElsewhere)}
               </p>
             )}
 
@@ -108,12 +116,13 @@ export function DeleteUserCard({
                 onChange={(e) => setTyped(e.target.value)}
               />
             </div>
-            <div className="flex gap-2">
+            {/* wraps: in the narrow side column the two buttons do not fit on one line at lg */}
+            <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
                 size="sm"
                 variant="destructive"
-                className="flex-1"
+                className="grow"
                 disabled={!confirmed || pending}
                 onClick={onDelete}
               >
@@ -136,7 +145,7 @@ export function DeleteUserCard({
           </>
         )}
         {error && (
-          <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-rose-700">
             {error}
           </p>
         )}

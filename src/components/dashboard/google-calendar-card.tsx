@@ -12,10 +12,15 @@ import {
   disconnectGoogleCalendar,
 } from "@/server/pro";
 
+/**
+ * The Google Calendar connection of the pro. While an admin impersonates the pro, the connection is not offered (P6
+ * A6): /link-social and finalizeGoogleConnection refuse it on the server as well.
+ */
 export function GoogleCalendarCard(props: {
   configured: boolean;
   connected: boolean;
   accountEmail: string | null;
+  impersonating: boolean;
 }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -33,6 +38,7 @@ export function GoogleCalendarCard(props: {
   }, [params, router]);
 
   const connect = async () => {
+    if (props.impersonating) return;
     setBusy(true);
     try {
       await authClient.linkSocial({
@@ -51,7 +57,6 @@ export function GoogleCalendarCard(props: {
       await disconnectGoogleCalendar();
     } finally {
       setBusy(false);
-      router.refresh();
     }
   };
 
@@ -92,9 +97,16 @@ export function GoogleCalendarCard(props: {
             </Button>
           </div>
         ) : (
-          <Button onClick={connect} disabled={busy}>
-            Connecter Google Agenda
-          </Button>
+          <div className="space-y-2">
+            <Button onClick={connect} disabled={busy || props.impersonating}>
+              Connecter Google Agenda
+            </Button>
+            {props.impersonating && (
+              <p className="text-xs text-muted-foreground">
+                La connexion à Google Agenda n&apos;est pas possible pendant que vous agissez au nom de ce pro.
+              </p>
+            )}
+          </div>
         )}
       </CardContent>
     </Card>

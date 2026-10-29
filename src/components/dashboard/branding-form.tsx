@@ -1,15 +1,17 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Loader2, Upload } from "lucide-react";
 
 import { updateBranding } from "@/server/pro";
 import { AVATAR_PACK, packSrc } from "@/lib/avatar-pack";
 import { uploadErrorMessage, type BrandingKind } from "@/lib/branding-upload";
+import { callOrFail } from "@/lib/pro-messages";
 import { shrinkImage } from "@/lib/shrink-image";
 import { MAX_SOURCE_IMAGE_BYTES } from "@/lib/support";
 import { THEME_PRESETS, brandThemeVars, presetColor } from "@/lib/color";
+import { FormError } from "@/components/dashboard/form-error";
+import { SavedStatus } from "@/components/dashboard/saved-status";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { cn, initials } from "@/lib/utils";
@@ -49,7 +51,6 @@ export function BrandingForm({
   headline?: string | null;
   blobEnabled: boolean;
 }) {
-  const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [saved, setSaved] = useState(false);
 
@@ -185,25 +186,39 @@ export function BrandingForm({
       setError(uploadErrorMessage(res.status, await res.json().catch(() => null)));
       return null;
     }
-    const body = (await res.json()) as { url: string };
+    const body: unknown = await res.json().catch(() => null);
+    if (!body || typeof body !== "object" || !("url" in body) || typeof body.url !== "string") {
+      setError(uploadErrorMessage(500, null));
+      return null;
+    }
     return body.url;
   }
 
+  /**
+   * Saves through the action, whose revalidation refreshes the page and so the saved values (no refresh of the router). A
+   * refused or failed call shows its message and keeps the edits (P6 A5).
+   */
   function save() {
     setSaved(false);
+    setError(null);
     startTransition(async () => {
-      await updateBranding({
-        themePreset,
-        customColor,
-        bannerUrl: banner,
-        headerLayout: layout,
-        avatarKind: avatar.kind,
-        avatarStyle: avatar.style,
-        avatarSeed: avatar.seed,
-        avatarUrl: avatar.url,
-      });
+      const res = await callOrFail(() =>
+        updateBranding({
+          themePreset,
+          customColor,
+          bannerUrl: banner,
+          headerLayout: layout,
+          avatarKind: avatar.kind,
+          avatarStyle: avatar.style,
+          avatarSeed: avatar.seed,
+          avatarUrl: avatar.url,
+        }),
+      );
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
       setSaved(true);
-      router.refresh();
     });
   }
 
@@ -284,9 +299,9 @@ export function BrandingForm({
                   Réserver
                 </span>
                 <span className="inline-flex h-8 items-center rounded-lg bg-accent px-3 text-xs font-medium text-accent-foreground">
-                  Pack 5 séances
+                  Acheter des tickets
                 </span>
-                <span className="text-xs font-semibold text-primary">En savoir plus</span>
+                <span className="text-xs font-semibold text-accent-foreground">En savoir plus</span>
               </div>
             </div>
           </div>
@@ -341,7 +356,7 @@ export function BrandingForm({
             </div>
             {!blobEnabled && (
               <p className="text-xs text-muted-foreground">
-                Upload indisponible (stockage non configuré). La galerie et le pack 3D
+                Upload indisponible (stockage non configuré). La galerie et les avatars 3D
                 restent disponibles.
               </p>
             )}
@@ -522,7 +537,7 @@ export function BrandingForm({
                   className="h-10 w-16 cursor-pointer rounded-xl border border-input bg-card p-1"
                 />
                 <span className="text-xs text-muted-foreground">
-                  Votre preset personnalisé — modifiable à volonté.
+                  Votre preset personnalisé : modifiable à volonté.
                 </span>
               </div>
             )}
@@ -540,7 +555,7 @@ export function BrandingForm({
                   className={cn(
                     "flex-1 rounded-xl border px-3 py-2 text-sm capitalize transition-colors",
                     layout === l
-                      ? "border-primary bg-primary-muted text-primary"
+                      ? "border-primary bg-primary-muted font-medium text-foreground"
                       : "border-input hover:bg-muted",
                   )}
                 >
@@ -552,7 +567,7 @@ export function BrandingForm({
         </div>
       </div>
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      <FormError alwaysMounted message={error} />
       <div className="flex items-center gap-3 pt-1">
         <Button type="button" onClick={save} disabled={pending || !dirty}>
           {pending && <Loader2 className="size-4 animate-spin" />} Enregistrer
@@ -565,7 +580,7 @@ export function BrandingForm({
         >
           Annuler
         </Button>
-        {saved && !dirty && <span className="text-sm text-success">Enregistré ✓</span>}
+        <SavedStatus saved={saved && !dirty} />
       </div>
     </div>
   );

@@ -2,7 +2,7 @@ import { admin } from "better-auth/plugins";
 
 /**
  * Roles, suspension, impersonation. defaultRole must be a user_role enum
- * value — the plugin's own default ("user") would violate the enum.
+ * value: the plugin's own default ("user") would violate the enum.
  * Kept in its own module (no env, no db) so a test can inspect the plugin.
  */
 export const adminPlugin = admin({

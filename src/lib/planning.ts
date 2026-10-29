@@ -1,5 +1,4 @@
-import { TZDate } from "@date-fns/tz";
-
+import { BOUNDS } from "@/lib/tickets-vocab";
 import {
   addDaysToKey,
   dayKeyInTz,
@@ -25,43 +24,21 @@ export function weekStartFromParam(
   return startOfDayKey(mondayKeyOf(key), tz);
 }
 
-/** [Monday 00:00, next Monday 00:00) in local time — 167 h or 169 h on DST weeks. */
+/** [Monday 00:00, next Monday 00:00) in local time (167 h or 169 h on DST weeks). */
 export function weekBounds(weekStart: Date, tz: string): { start: Date; end: Date } {
   const monday = dayKeyInTz(weekStart, tz);
   return { start: weekStart, end: startOfDayKey(addDaysToKey(monday, 7), tz) };
 }
 
-/** The 7 local midnights Monday → Sunday. */
-export function weekDays(weekStart: Date, tz: string): Date[] {
-  const monday = dayKeyInTz(weekStart, tz);
-  return Array.from({ length: 7 }, (_, i) =>
-    startOfDayKey(addDaysToKey(monday, i), tz),
-  );
-}
-
-/** The `?week=` param of the week `deltaWeeks` away from `weekStart`. */
-export function adjacentWeekParam(
-  weekStart: Date,
-  tz: string,
-  deltaWeeks: number,
-): string {
-  return addDaysToKey(dayKeyInTz(weekStart, tz), 7 * deltaWeeks);
-}
-
-export function gridRange(
-  events: { startAt: Date; endAt: Date }[],
-  tz: string,
-): { startHour: number; endHour: number } {
-  let startHour = 8;
-  let endHour = 21;
-  for (const e of events) {
-    const s = new TZDate(e.startAt.getTime(), tz);
-    const en = new TZDate(e.endAt.getTime(), tz);
-    startHour = Math.min(startHour, s.getHours());
-    const endMin = en.getHours() * 60 + en.getMinutes();
-    endHour = Math.max(endHour, Math.ceil(endMin / 60));
-  }
-  return { startHour: Math.max(0, startHour), endHour: Math.min(24, endHour) };
+/**
+ * The starts_at window of the occurrences that overlap [start, end): `starts_at > after AND starts_at < before`.
+ * An occurrence overlaps when it starts before `end` and ends after `start`; none lasts more than the longest séance
+ * (event_duration_chk, 720 minutes; an RDV is shorter), so one that overlaps cannot have started before `start`
+ * minus that. The lower bound lets occurrence_pro_starts_idx (professional_id, starts_at) skip the pro's history,
+ * `ends_at > start` stays the exact test (starts_at/ends_at do not include the RDV buffers).
+ */
+export function occurrenceStartWindow(range: { start: Date; end: Date }): { after: Date; before: Date } {
+  return { after: new Date(range.start.getTime() - BOUNDS.eventDurationMin.max * 60_000), before: range.end };
 }
 
 export function paramForWeek(weekStart: Date, tz: string): string {

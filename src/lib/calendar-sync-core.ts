@@ -1,12 +1,22 @@
-import { buildSessionEvent } from "@/lib/google-event";
+/**
+ * Google Calendar sync of ONE occurrence (spec § 13.7), with injected deps so it
+ * is testable without network or DB. The Google event id is derived from the
+ * occurrence (googleEventId), `occurrence.google_event_id` is only a marker that
+ * says « an event may exist ». A Google event is wanted for a scheduled
+ * occurrence with at least one confirmed attendee, a séance or an RDV.
+ */
+import { buildOccurrenceEvent, type GoogleEventBody } from "@/lib/google-event";
+import type { OccurrenceStatus } from "@/lib/tickets-vocab";
 
-export interface LoadedSession {
-  sessionId: string;
-  professionalId: string;
+export interface LoadedOccurrence {
+  occurrenceId: string;
   userId: string;
   googleCalendarId: string | null;
   googleEventId: string | null;
-  eventTitle: string;
+  status: OccurrenceStatus;
+  isRdv: boolean;
+  title: string;
+  location: string | null;
   startAt: Date;
   endAt: Date;
   capacity: number;
@@ -16,47 +26,69 @@ export interface LoadedSession {
 
 export interface SyncDeps {
   enabled: boolean;
-  loadSession: (sessionId: string) => Promise<LoadedSession | null>;
+  loadOccurrence: (occurrenceId: string) => Promise<LoadedOccurrence | null>;
   getAccessToken: (userId: string) => Promise<string>;
-  insertEvent: (token: string, calId: string, body: ReturnType<typeof buildSessionEvent>) => Promise<string>;
-  patchEvent: (token: string, calId: string, eventId: string, body: ReturnType<typeof buildSessionEvent>) => Promise<void>;
-  deleteEvent: (token: string, calId: string, eventId: string) => Promise<void>;
-  saveEventId: (sessionId: string, eventId: string | null) => Promise<void>;
+  insertEvent: (token: string, calendarId: string, body: GoogleEventBody) => Promise<"created" | "exists">;
+  patchEvent: (token: string, calendarId: string, eventId: string, body: GoogleEventBody) => Promise<"patched" | "missing">;
+  deleteEvent: (token: string, calendarId: string, eventId: string) => Promise<void>;
+  saveEventId: (occurrenceId: string, eventId: string | null) => Promise<void>;
 }
 
-/** Testable core: reconcile one session against Google with injected deps. */
-export async function syncSessionWith(
-  sessionId: string,
-  deps: SyncDeps,
-): Promise<void> {
-  if (!deps.enabled) return;
-  const s = await deps.loadSession(sessionId);
-  if (!s || !s.googleCalendarId) return;
+export type SyncOutcome = "disabled" | "skipped" | "noop" | "deleted" | "created" | "updated";
 
-  const token = await deps.getAccessToken(s.userId);
+/** A Google event is wanted for a scheduled occurrence with ≥ 1 confirmed attendee (séance or RDV, spec § 13.7). */
+export function wantsGoogleEvent(o: Pick<LoadedOccurrence, "status" | "attendees">): boolean {
+  return o.status === "scheduled" && o.attendees.length >= 1;
+}
 
-  // No active attendees → remove the event if one exists.
-  if (s.attendees.length === 0) {
-    if (s.googleEventId) {
-      await deps.deleteEvent(token, s.googleCalendarId, s.googleEventId);
-      await deps.saveEventId(sessionId, null);
-    }
-    return;
+/**
+ * Reconcile one occurrence with Google. Nothing wanted and no marker: no token
+ * and no API call. Nothing wanted and a marker: delete (404 / 410 count as
+ * success) then clear the marker. Wanted: PATCH when there is a marker (a 404
+ * falls back to the insert); insert with the deterministic id, and when Google
+ * answers « exists » (an event it keeps as cancelled) PATCH the full body, which
+ * revives it (a PATCH that answers « missing » throws and stores nothing); then
+ * store the marker.
+ */
+export async function syncOccurrenceWith(occurrenceId: string, deps: SyncDeps): Promise<SyncOutcome> {
+  if (!deps.enabled) return "disabled";
+  const o = await deps.loadOccurrence(occurrenceId);
+  if (!o || !o.googleCalendarId) return "skipped";
+  const calendarId = o.googleCalendarId;
+
+  if (!wantsGoogleEvent(o)) {
+    if (!o.googleEventId) return "noop";
+    const token = await deps.getAccessToken(o.userId);
+    await deps.deleteEvent(token, calendarId, o.googleEventId);
+    await deps.saveEventId(o.occurrenceId, null);
+    return "deleted";
   }
 
-  const body = buildSessionEvent({
-    eventTitle: s.eventTitle,
-    startAt: s.startAt,
-    endAt: s.endAt,
-    capacity: s.capacity,
-    timezone: s.timezone,
-    attendees: s.attendees,
+  const token = await deps.getAccessToken(o.userId);
+  const body = buildOccurrenceEvent({
+    occurrenceId: o.occurrenceId,
+    title: o.title,
+    isRdv: o.isRdv,
+    location: o.location,
+    startAt: o.startAt,
+    endAt: o.endAt,
+    capacity: o.capacity,
+    timezone: o.timezone,
+    attendees: o.attendees,
   });
 
-  if (s.googleEventId) {
-    await deps.patchEvent(token, s.googleCalendarId, s.googleEventId, body);
-  } else {
-    const eventId = await deps.insertEvent(token, s.googleCalendarId, body);
-    await deps.saveEventId(sessionId, eventId);
+  if (o.googleEventId) {
+    const patched = await deps.patchEvent(token, calendarId, o.googleEventId, body);
+    if (patched === "patched") return "updated";
   }
+
+  const inserted = await deps.insertEvent(token, calendarId, body);
+  if (inserted === "exists") {
+    const revived = await deps.patchEvent(token, calendarId, body.id, body);
+    // Fail closed: the id is taken but the event cannot be patched (purged), so
+    // saving the marker would hide a séance that never reaches the calendar.
+    if (revived === "missing") throw new Error("Google Calendar revive failed: the id exists but the event cannot be patched");
+  }
+  await deps.saveEventId(o.occurrenceId, body.id);
+  return "created";
 }

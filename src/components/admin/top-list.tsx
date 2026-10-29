@@ -17,7 +17,7 @@ export function TopList({
   title: string;
   /**
    * Read by screen readers after each value, singular / plural
-   * (e.g. { one: "vue", other: "vues" }) — same shape as BarChart's `unit`.
+   * (e.g. { one: "vue", other: "vues" }), same shape as BarChart's `unit`.
    */
   unit: { one: string; other: string };
   rows: TopRow[];

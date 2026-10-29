@@ -2,20 +2,26 @@ import type { Metadata } from "next";
 
 import { PageHeader } from "@/components/dashboard/page-header";
 import { ProfileForm } from "@/components/dashboard/profile-form";
+import { BookingSettingsForm } from "@/components/dashboard/booking-settings-form";
 import { BrandingForm } from "@/components/dashboard/branding-form";
 import { GoogleCalendarCard } from "@/components/dashboard/google-calendar-card";
 import { SlugEditor } from "@/components/dashboard/slug-editor";
 import { SignOutButton } from "@/components/sign-out-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { env } from "@/lib/env";
-import { getCurrentProfessional } from "@/lib/session";
-import { getGoogleConnection } from "@/server/queries";
+import { getSession } from "@/lib/session";
+import { requireProfessional } from "@/server/pro-context";
+import { getGoogleConnection, getSettingsExtras } from "@/server/queries";
 
 export const metadata: Metadata = { title: "Réglages" };
 
 export default async function SettingsPage() {
-  const pro = (await getCurrentProfessional())!;
-  const google = await getGoogleConnection({ id: pro.id, userId: pro.userId });
+  const pro = await requireProfessional();
+  const [google, extras, session] = await Promise.all([
+    getGoogleConnection({ id: pro.id, userId: pro.userId }),
+    getSettingsExtras(pro.id),
+    getSession(),
+  ]);
 
   return (
     <>
@@ -37,7 +43,20 @@ export default async function SettingsPage() {
               bio: pro.bio,
               timezone: pro.timezone,
             }}
+            timezoneLocked={extras.timezoneLocked}
           />
+        </CardContent>
+      </Card>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>Réservations</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Quand vos clients peuvent réserver et annuler.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <BookingSettingsForm initial={extras.bookingSettings} />
         </CardContent>
       </Card>
 
@@ -71,6 +90,7 @@ export default async function SettingsPage() {
         configured={google.configured}
         connected={google.connected}
         accountEmail={google.accountEmail}
+        impersonating={Boolean(session?.session.impersonatedBy)}
       />
 
       <Card>

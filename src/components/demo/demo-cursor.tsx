@@ -8,7 +8,7 @@ export interface CursorState {
   x: number;
   y: number;
   visible: boolean;
-  /** Incrémenté à chaque clic — sert de `key` pour rejouer l'anneau de pulsation. */
+  /** Incrémenté à chaque clic : sert de `key` pour rejouer l'anneau de pulsation. */
   clickCount: number;
 }
 

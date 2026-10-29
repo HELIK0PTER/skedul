@@ -6,7 +6,7 @@ import {
   startOfWeek,
 } from "date-fns";
 
-/** Formats a local Date as "yyyy-MM-dd" (no timezone conversion — reads local Y/M/D fields). */
+/** Formats a local Date as "yyyy-MM-dd" (no timezone conversion: reads local Y/M/D fields). */
 export function toDayKey(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");

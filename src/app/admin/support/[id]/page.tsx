@@ -14,6 +14,7 @@ import { requireAdmin } from "@/lib/admin";
 import { ADMIN_TZ } from "@/lib/analytics";
 import { formatDateTimeShort } from "@/lib/datetime";
 import { env } from "@/lib/env";
+import { logSafeMessage } from "@/lib/log-safe";
 import { stageReachedAt } from "@/lib/support";
 import { adminReply } from "@/server/support-admin";
 import { markReadByAdmin } from "@/server/support-core";
@@ -32,7 +33,7 @@ export default async function AdminSupportRequestPage({
   if (!data) notFound();
   const { request, author, thread } = data;
   if (request.unreadByAdmin) {
-    await markReadByAdmin(id).catch((err) => console.error("[admin] support mark read failed", err));
+    await markReadByAdmin(id).catch((err) => console.error(`[admin] support mark read failed: ${logSafeMessage(err)}`));
   }
 
   return (
@@ -77,7 +78,7 @@ export default async function AdminSupportRequestPage({
                 <a
                   href={`/${author.proSlug}`}
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                   className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
                 >
                   <ExternalLink className="size-4 shrink-0" aria-hidden />

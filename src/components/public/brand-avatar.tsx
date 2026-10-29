@@ -3,7 +3,7 @@ import { resolveAvatar, type AvatarInput } from "@/lib/avatar";
 
 /**
  * Polymorphic avatar for public pages: renders a server-generated SVG
- * (DiceBear), an uploaded/pack image, or initials — driven by the pro's
+ * (DiceBear), an uploaded/pack image, or initials, driven by the pro's
  * stored avatar fields.
  */
 export function BrandAvatar({

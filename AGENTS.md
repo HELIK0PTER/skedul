@@ -75,7 +75,10 @@ services/availability/packs in a back-office; their clients book slots
   matching `isClient` in `queries.ts` (a confirmed/completed booking or a paid pack).
 - **Public address**: a pro edits their slug in `/dashboard/settings` (`updateSlug` in
   `pro.ts`, rules in `src/lib/slug.ts`: 3–60 chars, not a `RESERVED_SEGMENTS` route,
-  globally unique). The old address 404s right away: there is no redirect.
+  globally unique). The old address 404s right away: there is no redirect. Every
+  address, onboarding's numbered ones included (`uniqueSlugWith`: « name-2 » shortens the
+  name to fit), stays within 60 chars: the public actions refuse anything else
+  (`SLUG_PARAM_RE`, `src/lib/public/context.ts`).
 - **UI**: bespoke primitives in `src/components/ui/` (Tailwind v4, violet theme in
   `globals.css`). Use `Button asChild` (custom `Slot`) for links. The window scrolls in
   the dashboard, not `<main>`: never give it `overflow-auto`/`hidden` (it breaks `sticky`).

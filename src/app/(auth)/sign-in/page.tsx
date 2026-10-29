@@ -1,11 +1,15 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AuthForm } from "@/components/auth/auth-form";
 import { DemoQuickLogin } from "@/components/auth/demo-quick-login";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { INLINE_LINK_CLASS } from "@/components/ui/link-class";
 import { env } from "@/lib/env";
 import { oauthErrorMessage } from "@/lib/oauth-errors";
+import { COPY } from "@/lib/public/messages";
+import { linkGoogleHref } from "@/lib/public/sign-in-flow";
 import { safeNextPath } from "@/lib/safe-next";
 import { getCurrentUser } from "@/lib/session";
 import { resolvePostSignIn } from "@/server/entry";
@@ -18,12 +22,12 @@ export default async function SignInPage({
   searchParams: Promise<{ error?: string | string[]; next?: string | string[] }>;
 }) {
   const { error, next: rawNext } = await searchParams;
-  // Google found an existing email/password account: offer to link it.
-  if (error === "account_not_linked") redirect("/link-google");
+  // Google found an existing email/password account: offer to link it, keeping the page to come back to (AUTH-2).
+  if (error === "account_not_linked") redirect(linkGoogleHref(rawNext));
   const next = safeNextPath(rawNext);
 
   // Already signed in: go back where the user was headed, else the usual
-  // routing (admins may choose).
+  // routing (admins may choose, a user without a pro page lands on /mon-espace).
   let showChooser = false;
   if (await getCurrentUser()) {
     if (next) redirect(next);
@@ -35,7 +39,7 @@ export default async function SignInPage({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-xl">Bon retour 👋</CardTitle>
+        <CardTitle className="text-xl">Bon retour</CardTitle>
         <p className="text-sm text-muted-foreground">
           Connectez-vous pour accéder à votre espace.
         </p>
@@ -48,6 +52,12 @@ export default async function SignInPage({
           googleEnabled={env.GOOGLE_CALENDAR_ENABLED}
           initialError={oauthErrorMessage(typeof error === "string" ? error : null)}
         />
+        <p className="mt-5 text-center text-sm text-muted-foreground">
+          Vous êtes client ?{" "}
+          <Link href="/mon-espace" className={INLINE_LINK_CLASS}>
+            {COPY.CLIENT_SPACE_LINK}
+          </Link>
+        </p>
         {env.APP_ENV !== "production" && <DemoQuickLogin />}
       </CardContent>
     </Card>

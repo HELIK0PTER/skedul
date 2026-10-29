@@ -13,10 +13,13 @@ export type ReferrerKind =
   | { kind: "internal" }
   | { kind: "external"; host: string };
 
-const UNTRACKED_PREFIXES = ["/dashboard", "/onboarding", "/admin", "/api", "/_next", "/aide/demandes"];
+const UNTRACKED_PREFIXES = ["/dashboard", "/onboarding", "/admin", "/api", "/_next", "/aide/demandes", "/mon-espace"];
 
-/** Top-level segments that are app routes, never a pro's public slug. */
-const RESERVED_SEGMENTS = new Set([
+/**
+ * Top-level segments that are app routes, never a pro's public slug. Read-only for its readers: the address rules
+ * (src/lib/slug.ts) and the redirects of next.config.ts, which never take one of them for a slug (G4b).
+ */
+export const RESERVED_SEGMENTS: ReadonlySet<string> = new Set([
   "aide",
   "admin",
   "api",
@@ -24,6 +27,7 @@ const RESERVED_SEGMENTS = new Set([
   "demo",
   "forgot-password",
   "link-google",
+  "mon-espace",
   "onboarding",
   "reset-password",
   "sign-in",
@@ -36,11 +40,18 @@ export function isReservedSegment(segment: string): boolean {
   return RESERVED_SEGMENTS.has(segment);
 }
 
-/** Public pages only: never the back-office, onboarding, admin or API. */
+/**
+ * Public pages only: never the back-office, onboarding, admin or API, nor a
+ * client's own space (/<slug>/espace and everything under it, /mon-espace):
+ * those pages show personal data and a personal link must not reach a log.
+ */
 export function isTrackedPath(path: string): boolean {
   if (!path.startsWith("/")) return false;
+  // A query or a fragment never changes which page it is.
+  const pathname = path.split(/[?#]/, 1)[0];
+  if (pathname.split("/")[2] === "espace") return false;
   return !UNTRACKED_PREFIXES.some(
-    (prefix) => path === prefix || path.startsWith(`${prefix}/`),
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
   );
 }
 
@@ -109,6 +120,27 @@ export function classifyReferrer(
   return host === own || INTERNAL_REFERRER_HOSTS.has(host)
     ? { kind: "internal" }
     : { kind: "external", host };
+}
+
+/**
+ * What the page-view beacon may say about where the visitor came from: the
+ * referrer's ORIGIN when it is another site, else nothing. A same-origin
+ * referrer is a page of ours, and some of them carry a capability in their
+ * query (the payment return `?p=<purchase id>`, the mock checkout `?purchase=`):
+ * it never leaves the page, and another site's path or query is never sent
+ * either. `/api/track` keeps only an external host (classifyReferrer), so the
+ * origin is all it needs. Empty, malformed and opaque (`about:`, `data:`)
+ * referrers give nothing.
+ */
+export function externalReferrer(referrer: string, pageOrigin: string): string | undefined {
+  if (!referrer) return undefined;
+  let origin: string;
+  try {
+    origin = new URL(referrer).origin;
+  } catch {
+    return undefined;
+  }
+  return origin === "null" || origin === pageOrigin ? undefined : origin;
 }
 
 export function normalizeSource(utmSource: string | null | undefined): string | null {

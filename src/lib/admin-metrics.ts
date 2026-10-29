@@ -1,9 +1,11 @@
 import { ADMIN_TZ } from "@/lib/analytics";
-import { dayKeyInTz, formatDateShort, instantFromWallClock } from "@/lib/datetime";
+import { plural } from "@/lib/back-office/format";
+import { dayKeyInTz, formatDateShort, frenchFirst, instantFromWallClock } from "@/lib/datetime";
+import { paymentModeOf, type PaymentMode } from "@/lib/payment-mode";
 
 export type DailyPoint = { day: string; value: number };
 export type MoneyTotal = { currency: string; cents: number };
-export type IntegrationMode = "live" | "test" | "mock";
+export type IntegrationMode = PaymentMode;
 
 /**
  * The last `days` calendar days in `tz` as YYYY-MM-DD keys, oldest first.
@@ -32,18 +34,20 @@ export function fillDailySeries(
   return keys.map((day) => ({ day, value: byDay.get(day) ?? 0 }));
 }
 
-/** "mar. 6 oct." for a YYYY-MM-DD key. */
+/** "mar. 6 oct." for a YYYY-MM-DD key; the first of a month is "dim. 1er nov.". */
 export function dayLabel(key: string): string {
   const [y, m, d] = key.split("-").map(Number);
-  return new Intl.DateTimeFormat("fr-FR", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    timeZone: "UTC",
-  }).format(new Date(Date.UTC(y, m - 1, d)));
+  return frenchFirst(
+    new Intl.DateTimeFormat("fr-FR", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      timeZone: "UTC",
+    }).format(new Date(Date.UTC(y, m - 1, d))),
+  );
 }
 
-/** Rounds up to 1, 2 or 5 × 10ⁿ — a clean top for a chart's y-axis. */
+/** Rounds up to 1, 2 or 5 × 10ⁿ: a clean top for a chart's y-axis. */
 export function niceCeil(n: number): number {
   if (n <= 1) return 1;
   const magnitude = 10 ** Math.floor(Math.log10(n));
@@ -66,13 +70,18 @@ export function mergeMoney(
     .sort((a, b) => b.cents - a.cents);
 }
 
-export function stripeMode(
-  secretKey: string | undefined,
-  enabled: boolean,
-): IntegrationMode {
-  if (!enabled || !secretKey) return "mock";
-  return /^(sk|rk)_live_/.test(secretKey) ? "live" : "test";
+/** Hint of the « Pros » tile: « 1 actif sur 30 jours », « 12 actifs sur 30 jours » (0 and 1 are singular). */
+export function activeProsHint(n: number): string {
+  return `${plural(n, "actif", "actifs")} sur 30 jours`;
 }
+
+/** Detail line of a day of the visitors chart: « 1 page vue », « 12 pages vues ». */
+export function pageViewsDetail(n: number): string {
+  return plural(n, "page vue", "pages vues");
+}
+
+/** The Stripe mode the admin sees: the one rule of src/lib/payment-mode.ts (no import: this file reaches a client bundle through the bar chart), so « Encaissé » and the test banner can never disagree (COV-M8). */
+export const stripeMode = paymentModeOf;
 
 /** "à l'instant", "il y a 5 minutes", "hier"… then a short date after 30 days. */
 export function timeAgo(date: Date, now: Date = new Date()): string {

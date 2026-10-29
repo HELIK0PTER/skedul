@@ -2,12 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  activeProsHint,
   countryName,
   dayLabel,
   fillDailySeries,
   lastDayKeys,
   mergeMoney,
   niceCeil,
+  pageViewsDetail,
   startOfDayKey,
   stripeMode,
   timeAgo,
@@ -55,6 +57,9 @@ test("fillDailySeries fills missing days with 0 and coerces strings", () => {
 
 test("dayLabel formats a day key in French", () => {
   assert.equal(plain(dayLabel("2026-10-06")), "mar. 6 oct.");
+  // the first of a month is « 1er », as everywhere else (final review R5)
+  assert.equal(plain(dayLabel("2026-11-01")), "dim. 1er nov.");
+  assert.equal(plain(dayLabel("2026-10-11")), "dim. 11 oct.");
 });
 
 test("niceCeil rounds up to 1, 2 or 5 × 10^n", () => {
@@ -106,4 +111,17 @@ test("timeAgo speaks French relative time", () => {
 test("countryName gives the French country name", () => {
   assert.equal(countryName("FR"), "France");
   assert.equal(countryName(null), "Inconnu");
+});
+
+test("activeProsHint agrees the adjective with the count (0 and 1 are singular)", () => {
+  assert.equal(plain(activeProsHint(0)), "0 actif sur 30 jours");
+  assert.equal(plain(activeProsHint(1)), "1 actif sur 30 jours");
+  assert.equal(plain(activeProsHint(2)), "2 actifs sur 30 jours");
+  assert.equal(plain(activeProsHint(1234)), "1 234 actifs sur 30 jours");
+});
+
+test("pageViewsDetail agrees the noun and the participle with the count", () => {
+  assert.equal(plain(pageViewsDetail(0)), "0 page vue");
+  assert.equal(plain(pageViewsDetail(1)), "1 page vue");
+  assert.equal(plain(pageViewsDetail(2)), "2 pages vues");
 });

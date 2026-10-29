@@ -18,7 +18,7 @@ export function SiteFooter({ note = "Les exemples de cette page utilisent des do
           <div>
             <Logo />
             <p className="mt-4 max-w-[45ch] text-pretty leading-relaxed text-(--lp-ink-2)">
-              Réservations en ligne et carnets prépayés pour les indépendants.
+              Vos séances, vos carnets de tickets et vos rendez-vous, réservés en ligne.
             </p>
           </div>
           <nav aria-label="Pied de page">

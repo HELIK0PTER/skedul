@@ -9,15 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-
-const TIMEZONES = [
-  "Europe/Paris",
-  "Europe/Brussels",
-  "Europe/Geneva",
-  "Europe/London",
-  "America/Montreal",
-  "America/New_York",
-];
+import { PRO_TIMEZONES } from "@/lib/timezones";
 
 export function OnboardingForm() {
   const [pending, startTransition] = useTransition();
@@ -30,12 +22,14 @@ export function OnboardingForm() {
         setError(null);
         startTransition(async () => {
           try {
-            await createProfessionalProfile({
+            // A success redirects to the dashboard; a refusal (an invalid name, an address taken meanwhile) comes back.
+            const res = await createProfessionalProfile({
               businessName: String(formData.get("businessName")),
               headline: String(formData.get("headline") ?? ""),
               bio: String(formData.get("bio") ?? ""),
               timezone: String(formData.get("timezone") ?? "Europe/Paris"),
             });
+            if (res && !res.ok) setError(res.error);
           } catch (e) {
             // redirect() throws a special error we must ignore
             if (
@@ -74,15 +68,15 @@ export function OnboardingForm() {
           id="bio"
           name="bio"
           rows={3}
-          placeholder="Quelques lignes sur vous et vos prestations…"
+          placeholder="Quelques lignes sur vous et vos cours…"
         />
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="timezone">Fuseau horaire</Label>
         <Select id="timezone" name="timezone" defaultValue="Europe/Paris">
-          {TIMEZONES.map((tz) => (
-            <option key={tz} value={tz}>
-              {tz}
+          {PRO_TIMEZONES.map((zone) => (
+            <option key={zone.id} value={zone.id}>
+              {zone.label}
             </option>
           ))}
         </Select>

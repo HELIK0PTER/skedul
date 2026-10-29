@@ -1,335 +1,78 @@
 "use server";
 
-import { and, desc, eq, gt, or, sql } from "drizzle-orm";
-
 import { db } from "@/lib/db";
 import {
-  booking,
-  customer,
-  eventType,
-  pack,
-  packPurchase,
-  professional,
-  user,
-} from "@/lib/db/schema";
-import { createCheckoutUrl } from "@/lib/stripe";
-import { fulfillBooking } from "@/lib/payments";
-import { syncSession } from "@/lib/calendar-sync";
-import { claimSeat, releaseSeat } from "@/lib/sessions";
-import { isSlotAvailable } from "@/lib/slots";
-import { userNotSuspended } from "@/lib/suspension";
-import {
-  buildAnswers,
-  getOrCreateCustomer,
-  insertAnswers,
-  type CustomerInput,
-} from "@/server/booking-core";
-import { env } from "@/lib/env";
+  bookWithHeldTicketCore,
+  registerFreeCore,
+  startBuyAndBookCore,
+  type BuyAndBookInput,
+  type FreeRegistrationInput,
+  type HeldTicketInput,
+} from "@/lib/public/booking-actions";
+import { splitActionInput } from "@/lib/public/context";
+import { bookRdvCore, type BookRdvActionInput, type BookRdvOutcome } from "@/lib/public/rdv-actions";
+import { abandonCheckoutCore, type AbandonOutcome } from "@/lib/public/release-actions";
+import type { PublicResult } from "@/lib/public/result";
+import { startShopPurchaseCore, type ShopPurchaseInput } from "@/lib/public/shop-actions";
+import { publicDeps, runPublicAction } from "@/server/public-context";
 
-type ActionResult =
-  | { ok: true; redirectUrl?: string; bookingId?: string; message?: string }
-  | { ok: false; error: string };
+// Public writes (spec § 11). Every export splits the slug off its input, lets runPublicAction resolve the pro
+// and the visitor on the server (never from input), and hands the REST of the input, as `unknown`, to a core
+// that parses it whole. The wrapper owns the effects (run with the "none" budget) and the revalidation.
 
-/* ──────────────────────────── Buy a pack ───────────────────────── */
-
-export async function purchasePack(input: {
-  packId: string;
-  customer: CustomerInput;
-}): Promise<ActionResult> {
-  const rows = await db
-    .select({ pack, professional })
-    .from(pack)
-    .innerJoin(professional, eq(professional.id, pack.professionalId))
-    .innerJoin(user, eq(user.id, professional.userId))
-    .where(
-      and(
-        eq(pack.id, input.packId),
-        eq(pack.isActive, true),
-        userNotSuspended(),
-      ),
-    )
-    .limit(1);
-  const row = rows[0];
-  if (!row) return { ok: false, error: "Pack introuvable." };
-
-  const cust = await getOrCreateCustomer(row.professional.id, input.customer);
-
-  const [purchase] = await db
-    .insert(packPurchase)
-    .values({
-      packId: row.pack.id,
-      professionalId: row.professional.id,
-      customerId: cust.id,
-      creditsTotal: row.pack.credits,
-      creditsRemaining: 0,
-      amountPaidCents: row.pack.priceCents,
-      currency: row.professional.currency,
-      status: "pending",
-    })
-    .returning();
-
-  const successUrl = `${env.APP_URL}/${row.professional.slug}/merci?type=pack&ref=${purchase.id}`;
-  const cancelUrl = `${env.APP_URL}/${row.professional.slug}?canceled=1`;
-
-  const url = await createCheckoutUrl({
-    kind: "pack",
-    referenceId: purchase.id,
-    productName: `${row.pack.name} — ${row.professional.businessName}`,
-    description: `${row.pack.credits} séance(s) prépayée(s)`,
-    amountCents: row.pack.priceCents,
-    currency: row.professional.currency,
-    customerEmail: cust.email,
-    successUrl,
-    cancelUrl,
-  });
-
-  return { ok: true, redirectUrl: url };
-}
-
-/* ─────────────────── Look up a customer's credits ──────────────── */
-
-export async function lookupCredits(input: {
-  professionalId: string;
-  email: string;
-}) {
-  const email = input.email.trim().toLowerCase();
-  const cust = await db
-    .select()
-    .from(customer)
-    .where(
-      and(
-        eq(customer.professionalId, input.professionalId),
-        eq(customer.email, email),
-      ),
-    )
-    .limit(1);
-  if (!cust[0]) return { found: false as const, purchases: [] };
-
-  const purchases = await db
-    .select({
-      id: packPurchase.id,
-      creditsRemaining: packPurchase.creditsRemaining,
-      packName: pack.name,
-      eventTypeId: pack.eventTypeId,
-    })
-    .from(packPurchase)
-    .innerJoin(pack, eq(pack.id, packPurchase.packId))
-    .where(
-      and(
-        eq(packPurchase.customerId, cust[0].id),
-        eq(packPurchase.status, "paid"),
-        gt(packPurchase.creditsRemaining, 0),
-      ),
-    )
-    .orderBy(desc(packPurchase.createdAt));
-
-  return { found: true as const, customer: cust[0], purchases };
-}
-
-/* ─────────────────────────── Book a slot ───────────────────────── */
-
-async function loadEventType(eventTypeId: string) {
-  const rows = await db
-    .select({ eventType, professional })
-    .from(eventType)
-    .innerJoin(professional, eq(professional.id, eventType.professionalId))
-    .innerJoin(user, eq(user.id, professional.userId))
-    .where(
-      and(
-        eq(eventType.id, eventTypeId),
-        eq(eventType.isActive, true),
-        userNotSuspended(),
-      ),
-    )
-    .limit(1);
-  return rows[0] ?? null;
-}
-
-/** Book by paying now (Stripe / mock) — or instantly if the event is free. */
-export async function bookWithPayment(input: {
-  eventTypeId: string;
-  startISO: string;
-  customer: CustomerInput;
-  notes?: string;
-  answers?: { questionId: string; value: string }[];
-}): Promise<ActionResult> {
-  const row = await loadEventType(input.eventTypeId);
-  if (!row) return { ok: false, error: "Prestation introuvable." };
-
-  const available = await isSlotAvailable(
-    row.professional.id,
-    row.professional.timezone,
-    row.eventType,
-    input.startISO,
+/** E1 from the séance page: hold a seat, then the Checkout URL to send the browser to (startBuyAndBookCore). */
+export async function startBuyAndBookAction(
+  input: { slug: string } & BuyAndBookInput,
+): Promise<PublicResult<{ purchaseId: string; checkoutUrl: string }>> {
+  const { slug, rest } = splitActionInput(input);
+  return runPublicAction("startBuyAndBook", slug, (pro, visitor, now) =>
+    startBuyAndBookCore(db, pro, visitor, rest, publicDeps(), now),
   );
-  if (!available)
-    return { ok: false, error: "Ce créneau n'est plus disponible." };
-
-  const answers = await buildAnswers(row.eventType.id, input.answers);
-  if (!answers.ok) return { ok: false, error: answers.error };
-
-  const cust = await getOrCreateCustomer(row.professional.id, input.customer);
-  const start = new Date(input.startISO);
-  const end = new Date(start.getTime() + row.eventType.durationMinutes * 60_000);
-  const free = row.eventType.priceCents <= 0;
-
-  const seat = await claimSeat({
-    professionalId: row.professional.id,
-    eventTypeId: row.eventType.id,
-    startAt: start,
-    endAt: end,
-    capacity: row.eventType.capacity,
-  });
-  if (!seat.ok) return { ok: false, error: "Cette séance est complète." };
-
-  const [created] = await db
-    .insert(booking)
-    .values({
-      professionalId: row.professional.id,
-      eventTypeId: row.eventType.id,
-      customerId: cust.id,
-      sessionId: seat.sessionId,
-      startAt: start,
-      endAt: end,
-      status: free ? "confirmed" : "pending",
-      paymentType: free ? "free" : "direct",
-      amountPaidCents: free ? 0 : row.eventType.priceCents,
-      customerNotes: input.notes ?? null,
-    })
-    .returning();
-
-  await insertAnswers(created.id, answers.rows);
-
-  if (free) {
-    await fulfillBooking(created.id);
-    await syncSession(seat.sessionId);
-    return {
-      ok: true,
-      bookingId: created.id,
-      redirectUrl: `${env.APP_URL}/${row.professional.slug}/merci?type=booking&ref=${created.id}`,
-    };
-  }
-
-  const successUrl = `${env.APP_URL}/${row.professional.slug}/merci?type=booking&ref=${created.id}`;
-  const cancelUrl = `${env.APP_URL}/${row.professional.slug}/book/${row.eventType.id}?canceled=1`;
-
-  const url = await createCheckoutUrl({
-    kind: "booking",
-    referenceId: created.id,
-    productName: `${row.eventType.title} — ${row.professional.businessName}`,
-    amountCents: row.eventType.priceCents,
-    currency: row.professional.currency,
-    customerEmail: cust.email,
-    successUrl,
-    cancelUrl,
-  });
-
-  return { ok: true, redirectUrl: url };
 }
 
-/** Book using a prepaid pack credit (no payment). */
-export async function bookWithCredit(input: {
-  eventTypeId: string;
-  startISO: string;
-  customer: CustomerInput;
-  notes?: string;
-  answers?: { questionId: string; value: string }[];
-}): Promise<ActionResult> {
-  const row = await loadEventType(input.eventTypeId);
-  if (!row) return { ok: false, error: "Prestation introuvable." };
+/** E3 from the séance page: a free registration with a typed identity (registerFreeCore). */
+export async function registerFreeAction(input: { slug: string } & FreeRegistrationInput): Promise<PublicResult> {
+  const { slug, rest } = splitActionInput(input);
+  return runPublicAction("registerFree", slug, (pro, visitor, now) => registerFreeCore(db, pro, visitor, rest, now));
+}
 
-  const cust = await getOrCreateCustomer(row.professional.id, input.customer);
-
-  // find a paid purchase with credits, valid for this event type (or any)
-  const candidates = await db
-    .select({
-      id: packPurchase.id,
-      creditsRemaining: packPurchase.creditsRemaining,
-      eventTypeId: pack.eventTypeId,
-    })
-    .from(packPurchase)
-    .innerJoin(pack, eq(pack.id, packPurchase.packId))
-    .where(
-      and(
-        eq(packPurchase.customerId, cust.id),
-        eq(packPurchase.status, "paid"),
-        gt(packPurchase.creditsRemaining, 0),
-        or(
-          sql`${pack.eventTypeId} is null`,
-          eq(pack.eventTypeId, row.eventType.id),
-        ),
-      ),
-    )
-    .orderBy(desc(packPurchase.createdAt));
-
-  const purchaseId = candidates[0]?.id;
-  if (!purchaseId)
-    return { ok: false, error: "Aucun crédit disponible pour cette prestation." };
-
-  const available = await isSlotAvailable(
-    row.professional.id,
-    row.professional.timezone,
-    row.eventType,
-    input.startISO,
+/** E2 client from the séance page: spend one held ticket, for an Owner of this pro only (bookWithHeldTicketCore). */
+export async function bookWithHeldTicketAction(
+  input: { slug: string } & HeldTicketInput,
+): Promise<PublicResult<{ bookingId: string }>> {
+  const { slug, rest } = splitActionInput(input);
+  // The one action that spends tickets. The wrapper writes nothing: the core links the Owner's customer row to her
+  // account (L1345) after its parseFr and its throttle, and still refuses anyone who is not an Owner of this pro.
+  return runPublicAction("bookWithHeldTicket", slug, (pro, visitor, now) =>
+    bookWithHeldTicketCore(db, pro, visitor, rest, now),
   );
-  if (!available)
-    return { ok: false, error: "Ce créneau n'est plus disponible." };
+}
 
-  const answers = await buildAnswers(row.eventType.id, input.answers);
-  if (!answers.ok) return { ok: false, error: answers.error };
+/** E9 from the offer page: a pending purchase, then the Checkout URL to send the browser to (startShopPurchaseCore). */
+export async function startShopPurchaseAction(
+  input: { slug: string } & ShopPurchaseInput,
+): Promise<PublicResult<{ purchaseId: string; checkoutUrl: string }>> {
+  const { slug, rest } = splitActionInput(input);
+  return runPublicAction("startShopPurchase", slug, (pro, visitor, now) =>
+    startShopPurchaseCore(db, pro, visitor, rest, publicDeps(), now),
+  );
+}
 
-  const start = new Date(input.startISO);
-  const end = new Date(start.getTime() + row.eventType.durationMinutes * 60_000);
+/** E4 from the RDV page: book a slot with a held ticket or for free, or hold it and answer the Checkout URL (bookRdvCore). */
+export async function bookRdvAction(input: { slug: string } & BookRdvActionInput): Promise<PublicResult<BookRdvOutcome>> {
+  const { slug, rest } = splitActionInput(input);
+  return runPublicAction("bookRdv", slug, (pro, visitor, now) =>
+    bookRdvCore(db, pro, visitor, rest, publicDeps(), now),
+  );
+}
 
-  // 1) claim a seat atomically (authority against oversell)
-  const seat = await claimSeat({
-    professionalId: row.professional.id,
-    eventTypeId: row.eventType.id,
-    startAt: start,
-    endAt: end,
-    capacity: row.eventType.capacity,
-  });
-  if (!seat.ok) return { ok: false, error: "Cette séance est complète." };
-
-  // 2) atomic credit decrement; if it fails, give the seat back
-  const decremented = await db
-    .update(packPurchase)
-    .set({ creditsRemaining: sql`${packPurchase.creditsRemaining} - 1` })
-    .where(
-      and(eq(packPurchase.id, purchaseId), gt(packPurchase.creditsRemaining, 0)),
-    )
-    .returning({ id: packPurchase.id });
-
-  if (decremented.length === 0) {
-    await releaseSeat(seat.sessionId);
-    return { ok: false, error: "Crédit indisponible, réessayez." };
-  }
-
-  // 3) create the booking
-  const [created] = await db
-    .insert(booking)
-    .values({
-      professionalId: row.professional.id,
-      eventTypeId: row.eventType.id,
-      customerId: cust.id,
-      sessionId: seat.sessionId,
-      startAt: start,
-      endAt: end,
-      status: "confirmed",
-      paymentType: "credit",
-      amountPaidCents: 0,
-      packPurchaseId: purchaseId,
-      customerNotes: input.notes ?? null,
-    })
-    .returning();
-
-  await insertAnswers(created.id, answers.rows);
-  await fulfillBooking(created.id);
-  await syncSession(seat.sessionId);
-
-  return {
-    ok: true,
-    bookingId: created.id,
-    redirectUrl: `${env.APP_URL}/${row.professional.slug}/merci?type=booking&ref=${created.id}`,
-  };
+/** E11 from the payment return page: give a held seat back (abandonCheckoutCore); the purchase id is scoped to the page's pro. */
+export async function abandonCheckoutAction(input: {
+  slug: string;
+  purchaseId: string;
+}): Promise<PublicResult<{ outcome: AbandonOutcome }>> {
+  const { slug, rest } = splitActionInput(input);
+  return runPublicAction("abandonCheckout", slug, (pro, visitor, now) =>
+    abandonCheckoutCore(db, pro, visitor, rest, publicDeps(), now),
+  );
 }

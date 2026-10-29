@@ -207,12 +207,12 @@ test("normalizeSearch drops accents, case and extra spaces", () => {
 
 test("matchArticles needs every word and ranks question hits first", () => {
   const articles = [
-    { id: "a", question: "Comment créer un pack ?", answer: "Depuis la page des packs prépayés." },
+    { id: "a", question: "Comment créer une offre ?", answer: "Depuis la page Tickets, ouvrez un type de ticket." },
     { id: "b", question: "Mot de passe oublié", answer: "Le lien sert à créer un nouveau mot de passe." },
     { id: "c", question: "Synchroniser Google Agenda", answer: "Dans Réglages." },
   ];
   assert.deepEqual(matchArticles(articles, "creer").map((a) => a.id), ["a", "b"]);
-  assert.deepEqual(matchArticles(articles, "créer pack").map((a) => a.id), ["a"]);
+  assert.deepEqual(matchArticles(articles, "créer offre").map((a) => a.id), ["a"]);
   assert.deepEqual(matchArticles(articles, "mot passe").map((a) => a.id), ["b"]);
   assert.deepEqual(matchArticles(articles, "agenda zzz"), []);
   assert.deepEqual(matchArticles(articles, "  "), []);

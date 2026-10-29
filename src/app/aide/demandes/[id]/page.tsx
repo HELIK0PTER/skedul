@@ -9,6 +9,7 @@ import { SupportTypeChip } from "@/components/support/support-type";
 import { ADMIN_TZ } from "@/lib/analytics";
 import { formatDateShort } from "@/lib/datetime";
 import { env } from "@/lib/env";
+import { logSafeMessage } from "@/lib/log-safe";
 import { getSession } from "@/lib/session";
 import { canUserReply, stageReachedAt } from "@/lib/support";
 import { replyToSupportRequest } from "@/server/support";
@@ -34,7 +35,7 @@ export default async function RequestPage({
   // an admin looking through the account must not clear the user's "new reply" flag
   if (request.unreadByUser && !impersonating) {
     await markReadByUser(session.user.id, id).catch((err) =>
-      console.error("[support] mark read by user failed", err),
+      console.error(`[support] mark read by user failed: ${logSafeMessage(err)}`),
     );
   }
 

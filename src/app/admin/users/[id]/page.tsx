@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireAdmin } from "@/lib/admin";
 import { ADMIN_TZ, browserName, classifyDevice } from "@/lib/analytics";
+import { formatCount } from "@/lib/back-office/format";
 import { formatDateShort, formatDateTimeShort } from "@/lib/datetime";
 import { isSuspended } from "@/lib/suspension";
 import { formatMoney } from "@/lib/utils";
@@ -58,11 +59,11 @@ export default async function AdminUserPage({
 
       <div className="mb-6 flex flex-wrap items-center gap-4">
         <Avatar name={u.name} src={u.image} className="size-12 text-base" />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-56">
           <h1 className="truncate text-2xl font-bold tracking-tight">{u.name}</h1>
           <p className="truncate text-sm text-muted-foreground">{u.email}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <RoleBadge role={u.role} />
           <SuspensionBadge banned={u.banned} banExpires={u.banExpires} />
         </div>
@@ -84,13 +85,13 @@ export default async function AdminUserPage({
               <dl className="divide-y divide-border">
                 <Field label="Inscription">{formatDateShort(u.createdAt, ADMIN_TZ)}</Field>
                 <Field label="Dernière connexion">
-                  {u.lastLoginAt ? formatDateTimeShort(u.lastLoginAt, ADMIN_TZ) : "—"}
+                  {u.lastLoginAt ? formatDateTimeShort(u.lastLoginAt, ADMIN_TZ) : "Jamais"}
                 </Field>
                 <Field label="E-mail vérifié">{u.emailVerified ? "Oui" : "Non"}</Field>
                 <Field label="Connexions">
                   {providers.length
                     ? providers.map((p) => PROVIDER_LABELS[p] ?? p).join(", ")
-                    : "—"}
+                    : "Aucune"}
                 </Field>
               </dl>
             </CardContent>
@@ -103,6 +104,7 @@ export default async function AdminUserPage({
                 <Link
                   href={`/${pro.slug}`}
                   target="_blank"
+                  rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
                 >
                   /{pro.slug}
@@ -122,15 +124,16 @@ export default async function AdminUserPage({
                 </dl>
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                   {[
-                    { label: "Prestations", value: stats.eventTypes },
-                    { label: "Réservations confirmées", value: stats.bookings },
+                    { label: "Événements", value: stats.events },
+                    { label: "Types de ticket", value: stats.ticketTypes },
+                    { label: "Réservations confirmées", value: stats.confirmedBookings },
                     { label: "À venir", value: stats.upcoming },
-                    { label: "Clients", value: stats.customers },
-                    { label: "Packs vendus", value: stats.packsSold },
+                    { label: "Clients", value: stats.clients },
+                    { label: "Achats payés", value: stats.paidPurchases },
                   ].map((s) => (
                     <div key={s.label} className="rounded-xl bg-muted/60 p-3">
                       <p className="text-lg font-semibold">
-                        {s.value.toLocaleString("fr-FR")}
+                        {formatCount(s.value)}
                       </p>
                       <p className="text-xs text-muted-foreground">{s.label}</p>
                     </div>

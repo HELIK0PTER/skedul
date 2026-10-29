@@ -24,7 +24,7 @@ export function ProBranding({ state }: ScreenProps) {
             </p>
           </div>
 
-          {/* Aperçu en direct — se rethème instantanément via brandThemeVars */}
+          {/* The live preview: brandThemeVars re-themes it at once. */}
           <div
             className="overflow-hidden rounded-xl border border-border"
             style={brandThemeVars(state.brandColor)}
@@ -50,10 +50,10 @@ export function ProBranding({ state }: ScreenProps) {
               </div>
               <span className={cn("flex gap-2", vitrine ? "mt-2" : "ml-auto pb-0.5")}>
                 <span className="rounded-full bg-primary px-3 py-1 text-xs font-medium text-primary-foreground">
-                  Réserver
+                  Planning
                 </span>
                 <span className="rounded-full bg-accent px-3 py-1 text-xs font-medium text-accent-foreground">
-                  Pack 10 heures
+                  Boutique
                 </span>
               </span>
             </div>

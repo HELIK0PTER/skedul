@@ -1,25 +1,9 @@
-import { ShieldCheck } from "lucide-react";
+import { StatusBadge } from "@/components/admin/badges";
+import { suspensionLabel } from "@/lib/admin-users";
 
-import { Badge } from "@/components/ui/badge";
-import { ROLE_LABELS, type UserRole } from "@/lib/admin-params";
-import { ADMIN_TZ } from "@/lib/analytics";
-import { formatDateShort } from "@/lib/datetime";
-import { isSuspended } from "@/lib/suspension";
+export { RoleBadge } from "@/components/admin/badges";
 
-export function RoleBadge({ role }: { role: UserRole }) {
-  if (role === "admin") {
-    return (
-      <Badge>
-        <ShieldCheck className="size-3" aria-hidden />
-        {ROLE_LABELS.admin}
-      </Badge>
-    );
-  }
-  return (
-    <Badge variant={role === "pro" ? "outline" : "neutral"}>{ROLE_LABELS[role]}</Badge>
-  );
-}
-
+/** The suspension of an account read from its ban fields (server components only: it reads `@/lib/suspension`). */
 export function SuspensionBadge({
   banned,
   banExpires,
@@ -27,14 +11,5 @@ export function SuspensionBadge({
   banned: boolean;
   banExpires: Date | null;
 }) {
-  if (!isSuspended({ banned, banExpires })) {
-    return <span className="text-sm text-muted-foreground">Actif</span>;
-  }
-  return (
-    <Badge variant="warning">
-      {banExpires
-        ? `Suspendu jusqu'au ${formatDateShort(banExpires, ADMIN_TZ)}`
-        : "Suspendu"}
-    </Badge>
-  );
+  return <StatusBadge label={suspensionLabel({ banned, banExpires })} />;
 }

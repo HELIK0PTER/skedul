@@ -11,6 +11,15 @@ export const getSession = cache(async () => {
   return auth.api.getSession({ headers: await headers() });
 });
 
+/**
+ * The session read WITHOUT the 5-minute cookie cache (spec § 12): every read
+ * that shows client data (the espace) must see a ban or a revoked session at
+ * once.
+ */
+export async function getFreshSession() {
+  return auth.api.getSession({ headers: await headers(), query: { disableCookieCache: true } });
+}
+
 export async function getCurrentUser() {
   const session = await getSession();
   return session?.user ?? null;

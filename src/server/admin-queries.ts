@@ -8,46 +8,51 @@ import {
   gt,
   gte,
   ilike,
-  inArray,
   isNotNull,
-  lt,
-  ne,
   or,
   sql,
-  sum,
   type SQL,
 } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
 import { db } from "@/lib/db";
-import {
-  account,
-  booking,
-  customer,
-  eventType,
-  pack,
-  packPurchase,
-  pageView,
-  professional,
-  session,
-  user,
-} from "@/lib/db/schema";
+import { account, pageView, professional, session, user } from "@/lib/db/schema";
 import { env } from "@/lib/env";
 import { ADMIN_TZ } from "@/lib/analytics";
-import { mergeMoney, stripeMode, type MoneyTotal } from "@/lib/admin-metrics";
+import { stripeMode, type MoneyTotal } from "@/lib/admin-metrics";
 import {
-  BOOKING_STATUS_LABELS,
+  ACTIVITY_LIMIT,
+  activityCounts30d,
+  deletionImpactFor,
+  healthCounts,
+  listRecentBookings as readRecentBookings,
+  listRecentPurchases as readRecentPurchases,
+  platformRevenue,
+  proStats,
+  recentBookingEvents,
+  recentPurchaseEvents,
+  type ActivityEvent,
+} from "@/lib/admin-reads";
+import {
   USERS_PAGE_SIZE,
   type BookingStatus,
   type PurchaseStatus,
   type UserFilter,
 } from "@/lib/admin-params";
 import { userIsSuspended } from "@/lib/suspension";
-import { formatMoney } from "@/lib/utils";
+import { revenueLive } from "@/server/revenue";
+
+/*
+ * Server-only wrappers of src/lib/admin-reads.ts: they bind the process db and
+ * the Stripe mode, the queries themselves live there so the DB tests can run
+ * them. Nothing here checks the caller: every export must only be called from
+ * an admin page or action, behind requireAdmin() (src/lib/admin.ts).
+ */
+
+export { ACTIVITY_LIMIT };
+export type { ActivityEvent };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-/** Bookings that actually happened or will (counted as activity / revenue). */
-const CONFIRMED = ["confirmed", "completed"] as const;
 
 /**
  * YYYY-MM-DD of a timestamp in ADMIN_TZ. The zone is inlined as a literal
@@ -62,75 +67,34 @@ function dayOf(column: AnyPgColumn) {
 export async function getOverviewStats(now: Date = new Date()) {
   const since7 = new Date(now.getTime() - 7 * DAY_MS);
   const since30 = new Date(now.getTime() - 30 * DAY_MS);
-  const confirmedRecently = and(
-    gte(booking.createdAt, since30),
-    inArray(booking.status, [...CONFIRMED]),
-  );
 
-  const [users, newUsers, pros, activePros, bookings, revenue30d] =
-    await Promise.all([
-      db.select({ value: count() }).from(user),
-      db.select({ value: count() }).from(user).where(gte(user.createdAt, since7)),
-      db.select({ value: count() }).from(professional),
-      db
-        .select({ value: sql<string>`count(distinct ${booking.professionalId})` })
-        .from(booking)
-        .where(confirmedRecently),
-      db.select({ value: count() }).from(booking).where(confirmedRecently),
-      getRevenue({ since: since30 }),
-    ]);
+  const [users, newUsers, pros, activity, revenue30d] = await Promise.all([
+    db.select({ value: count() }).from(user),
+    db.select({ value: count() }).from(user).where(gte(user.createdAt, since7)),
+    db.select({ value: count() }).from(professional),
+    activityCounts30d(db, now),
+    getRevenue({ since: since30 }),
+  ]);
 
   return {
     users: users[0]?.value ?? 0,
     newUsers7d: newUsers[0]?.value ?? 0,
     pros: pros[0]?.value ?? 0,
-    activePros30d: Number(activePros[0]?.value ?? 0),
-    bookings30d: bookings[0]?.value ?? 0,
+    activePros30d: activity.activePros30d,
+    bookings30d: activity.bookings30d,
     revenue30d,
   };
 }
 
-/** Paid bookings + paid packs, summed per currency (optionally since a date / for one pro). */
+/**
+ * « Encaissé » per currency: the paid purchases of the mode in use (only
+ * livemode ones with a live Stripe key, spec § 9), optionally one pro and a
+ * period.
+ */
 export async function getRevenue(
   opts: { since?: Date; professionalId?: string } = {},
 ): Promise<MoneyTotal[]> {
-  const [bookingRows, purchaseRows] = await Promise.all([
-    db
-      .select({
-        currency: professional.currency,
-        cents: sql<string>`coalesce(sum(${booking.amountPaidCents}), 0)`,
-      })
-      .from(booking)
-      .innerJoin(professional, eq(professional.id, booking.professionalId))
-      .where(
-        and(
-          eq(booking.paymentType, "direct"),
-          inArray(booking.status, [...CONFIRMED]),
-          opts.since ? gte(booking.createdAt, opts.since) : undefined,
-          opts.professionalId
-            ? eq(booking.professionalId, opts.professionalId)
-            : undefined,
-        ),
-      )
-      .groupBy(professional.currency),
-    db
-      .select({
-        currency: packPurchase.currency,
-        cents: sql<string>`coalesce(sum(${packPurchase.amountPaidCents}), 0)`,
-      })
-      .from(packPurchase)
-      .where(
-        and(
-          eq(packPurchase.status, "paid"),
-          opts.since ? gte(packPurchase.createdAt, opts.since) : undefined,
-          opts.professionalId
-            ? eq(packPurchase.professionalId, opts.professionalId)
-            : undefined,
-        ),
-      )
-      .groupBy(packPurchase.currency),
-  ]);
-  return mergeMoney([...bookingRows, ...purchaseRows]);
+  return platformRevenue(db, { live: revenueLive(), ...opts });
 }
 
 export function getDailySignups(since: Date) {
@@ -155,17 +119,7 @@ export function getDailyTraffic(since: Date) {
     .groupBy(day);
 }
 
-export type ActivityEvent = {
-  id: string;
-  kind: "signup" | "pro" | "booking" | "purchase";
-  at: Date;
-  /** The account the event belongs to (links to /admin/users/[id]). */
-  userId: string;
-  title: string;
-  detail: string;
-};
-
-/** The latest sign-ups, pro pages, bookings and paid packs, merged by date. */
+/** The latest sign-ups, pro pages, confirmed bookings and paid purchases, merged by date. */
 export async function getRecentActivity(limit = 10): Promise<ActivityEvent[]> {
   const [signups, pros, bookings, purchases] = await Promise.all([
     db
@@ -184,40 +138,8 @@ export async function getRecentActivity(limit = 10): Promise<ActivityEvent[]> {
       .from(professional)
       .orderBy(desc(professional.createdAt))
       .limit(limit),
-    db
-      .select({
-        id: booking.id,
-        at: booking.createdAt,
-        userId: professional.userId,
-        businessName: professional.businessName,
-        customerName: customer.name,
-        eventTitle: eventType.title,
-        status: booking.status,
-      })
-      .from(booking)
-      .innerJoin(professional, eq(professional.id, booking.professionalId))
-      .innerJoin(customer, eq(customer.id, booking.customerId))
-      .innerJoin(eventType, eq(eventType.id, booking.eventTypeId))
-      .orderBy(desc(booking.createdAt))
-      .limit(limit),
-    db
-      .select({
-        id: packPurchase.id,
-        at: packPurchase.createdAt,
-        userId: professional.userId,
-        businessName: professional.businessName,
-        customerName: customer.name,
-        packName: pack.name,
-        cents: packPurchase.amountPaidCents,
-        currency: packPurchase.currency,
-      })
-      .from(packPurchase)
-      .innerJoin(professional, eq(professional.id, packPurchase.professionalId))
-      .innerJoin(customer, eq(customer.id, packPurchase.customerId))
-      .innerJoin(pack, eq(pack.id, packPurchase.packId))
-      .where(eq(packPurchase.status, "paid"))
-      .orderBy(desc(packPurchase.createdAt))
-      .limit(limit),
+    recentBookingEvents(db, limit),
+    recentPurchaseEvents(db, limit),
   ]);
 
   const events: ActivityEvent[] = [
@@ -237,58 +159,19 @@ export async function getRecentActivity(limit = 10): Promise<ActivityEvent[]> {
       title: `Page pro créée · ${r.businessName}`,
       detail: `/${r.slug}`,
     })),
-    ...bookings.map((r) => ({
-      id: `booking-${r.id}`,
-      kind: "booking" as const,
-      at: r.at,
-      userId: r.userId,
-      title: `Réservation · ${r.businessName}`,
-      detail: `${r.customerName} · ${r.eventTitle} · ${BOOKING_STATUS_LABELS[r.status]}`,
-    })),
-    ...purchases.map((r) => ({
-      id: `purchase-${r.id}`,
-      kind: "purchase" as const,
-      at: r.at,
-      userId: r.userId,
-      title: `Pack vendu · ${r.businessName}`,
-      detail: `${r.customerName} · ${r.packName} · ${formatMoney(r.cents, r.currency)}`,
-    })),
+    ...bookings,
+    ...purchases,
   ];
   return events.sort((a, b) => b.at.getTime() - a.at.getTime()).slice(0, limit);
 }
 
 export type AppHealth = Awaited<ReturnType<typeof getAppHealth>>;
 
-/** Integration modes, DB latency and recent payments still pending after 1 h. */
+/** Integration modes, DB latency and the platform's pending-work counters (Q24). */
 export async function getAppHealth(now: Date = new Date()) {
   const started = performance.now();
   await db.execute(sql`select 1`);
   const dbLatencyMs = Math.round(performance.now() - started);
-
-  const hourAgo = new Date(now.getTime() - 60 * 60 * 1000);
-  const weekAgo = new Date(now.getTime() - 7 * DAY_MS);
-  const [pendingBookings, pendingPurchases] = await Promise.all([
-    db
-      .select({ value: count() })
-      .from(booking)
-      .where(
-        and(
-          eq(booking.status, "pending"),
-          lt(booking.createdAt, hourAgo),
-          gte(booking.createdAt, weekAgo),
-        ),
-      ),
-    db
-      .select({ value: count() })
-      .from(packPurchase)
-      .where(
-        and(
-          eq(packPurchase.status, "pending"),
-          lt(packPurchase.createdAt, hourAgo),
-          gte(packPurchase.createdAt, weekAgo),
-        ),
-      ),
-  ]);
 
   return {
     appEnv: env.APP_ENV,
@@ -299,8 +182,8 @@ export async function getAppHealth(now: Date = new Date()) {
     blob: env.BLOB_ENABLED,
     google: env.GOOGLE_CALENDAR_ENABLED,
     dbLatencyMs,
-    pendingBookings: pendingBookings[0]?.value ?? 0,
-    pendingPurchases: pendingPurchases[0]?.value ?? 0,
+    // measured after the latency probe: these queries must not inflate it
+    ...(await healthCounts(db, now)),
   };
 }
 
@@ -357,55 +240,6 @@ export async function listUsers(opts: {
   return { rows, total: totals[0]?.value ?? 0 };
 }
 
-async function getProStats(professionalId: string, now: Date) {
-  const [eventTypes, confirmed, upcoming, customers, packsSold] =
-    await Promise.all([
-      db
-        .select({ value: count() })
-        .from(eventType)
-        .where(eq(eventType.professionalId, professionalId)),
-      db
-        .select({ value: count() })
-        .from(booking)
-        .where(
-          and(
-            eq(booking.professionalId, professionalId),
-            inArray(booking.status, [...CONFIRMED]),
-          ),
-        ),
-      db
-        .select({ value: count() })
-        .from(booking)
-        .where(
-          and(
-            eq(booking.professionalId, professionalId),
-            inArray(booking.status, ["pending", "confirmed"]),
-            gte(booking.startAt, now),
-          ),
-        ),
-      db
-        .select({ value: count() })
-        .from(customer)
-        .where(eq(customer.professionalId, professionalId)),
-      db
-        .select({ value: count() })
-        .from(packPurchase)
-        .where(
-          and(
-            eq(packPurchase.professionalId, professionalId),
-            eq(packPurchase.status, "paid"),
-          ),
-        ),
-    ]);
-  return {
-    eventTypes: eventTypes[0]?.value ?? 0,
-    bookings: confirmed[0]?.value ?? 0,
-    upcoming: upcoming[0]?.value ?? 0,
-    customers: customers[0]?.value ?? 0,
-    packsSold: packsSold[0]?.value ?? 0,
-  };
-}
-
 export async function getUserDetail(userId: string, now: Date = new Date()) {
   const [found] = await db
     .select({
@@ -447,9 +281,9 @@ export async function getUserDetail(userId: string, now: Date = new Date()) {
   ]);
   const pro = proRows[0] ?? null;
   const [stats, revenue, deletion] = await Promise.all([
-    pro ? getProStats(pro.id, now) : null,
+    pro ? proStats(db, pro.id, now) : null,
     pro ? getRevenue({ professionalId: pro.id }) : [],
-    getDeletionImpact(userId, pro?.id ?? null),
+    deletionImpactFor(db, userId, pro?.id ?? null, now),
   ]);
 
   return {
@@ -463,95 +297,16 @@ export async function getUserDetail(userId: string, now: Date = new Date()) {
   };
 }
 
-/**
- * What deleting this account changes beyond its own pro page (which the
- * user → professional cascade removes entirely): prepaid credits its clients
- * would lose, and client records it has with other pros, which are kept but
- * detached from the account (customer.user_id is ON DELETE SET NULL).
- */
-async function getDeletionImpact(userId: string, professionalId: string | null) {
-  const [credits, elsewhere] = await Promise.all([
-    professionalId
-      ? db
-          .select({ value: sum(packPurchase.creditsRemaining) })
-          .from(packPurchase)
-          .where(
-            and(
-              eq(packPurchase.professionalId, professionalId),
-              eq(packPurchase.status, "paid"),
-            ),
-          )
-      : [{ value: null }],
-    db
-      .select({ value: count() })
-      .from(customer)
-      .where(
-        and(
-          eq(customer.userId, userId),
-          professionalId ? ne(customer.professionalId, professionalId) : undefined,
-        ),
-      ),
-  ]);
-  return {
-    creditsOutstanding: Number(credits[0]?.value ?? 0),
-    clientRecordsElsewhere: elsewhere[0]?.value ?? 0,
-  };
-}
+/* ───────────────────────────── Activity lists ───────────────────────────── */
 
-/* ───────────────────────────── Activity ───────────────────────────── */
-
-export const ACTIVITY_LIMIT = 50;
-
+/** /admin/activity « Réservations »: the latest bookings, optionally one status. */
 export function listRecentBookings(status: BookingStatus | null) {
-  return db
-    .select({
-      id: booking.id,
-      createdAt: booking.createdAt,
-      startAt: booking.startAt,
-      endAt: booking.endAt,
-      status: booking.status,
-      paymentType: booking.paymentType,
-      amountCents: booking.amountPaidCents,
-      proUserId: professional.userId,
-      businessName: professional.businessName,
-      timezone: professional.timezone,
-      currency: professional.currency,
-      customerName: customer.name,
-      customerEmail: customer.email,
-      eventTitle: eventType.title,
-    })
-    .from(booking)
-    .innerJoin(professional, eq(professional.id, booking.professionalId))
-    .innerJoin(customer, eq(customer.id, booking.customerId))
-    .innerJoin(eventType, eq(eventType.id, booking.eventTypeId))
-    .where(status ? eq(booking.status, status) : undefined)
-    .orderBy(desc(booking.createdAt))
-    .limit(ACTIVITY_LIMIT);
+  return readRecentBookings(db, status);
 }
 
+/** /admin/activity « Achats »: the latest purchases, optionally one status. */
 export function listRecentPurchases(status: PurchaseStatus | null) {
-  return db
-    .select({
-      id: packPurchase.id,
-      createdAt: packPurchase.createdAt,
-      status: packPurchase.status,
-      amountCents: packPurchase.amountPaidCents,
-      currency: packPurchase.currency,
-      creditsTotal: packPurchase.creditsTotal,
-      creditsRemaining: packPurchase.creditsRemaining,
-      proUserId: professional.userId,
-      businessName: professional.businessName,
-      customerName: customer.name,
-      customerEmail: customer.email,
-      packName: pack.name,
-    })
-    .from(packPurchase)
-    .innerJoin(professional, eq(professional.id, packPurchase.professionalId))
-    .innerJoin(customer, eq(customer.id, packPurchase.customerId))
-    .innerJoin(pack, eq(pack.id, packPurchase.packId))
-    .where(status ? eq(packPurchase.status, status) : undefined)
-    .orderBy(desc(packPurchase.createdAt))
-    .limit(ACTIVITY_LIMIT);
+  return readRecentPurchases(db, status);
 }
 
 /* ───────────────────────────── Traffic ───────────────────────────── */

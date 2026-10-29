@@ -2,14 +2,22 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { signIn, signUp } from "@/lib/auth-client";
+import { authFormErrorMessage } from "@/lib/auth-messages";
+import { COPY } from "@/lib/public/messages";
+import { plainNameSchema } from "@/lib/public/plain-name";
+import { authFormGoogleCallbacks } from "@/lib/public/sign-in-flow";
+import { BOUNDS } from "@/lib/tickets-vocab";
 import { resolvePostSignIn, type PostSignIn } from "@/server/entry";
 import { EntryChooser } from "@/components/auth/entry-chooser";
 import { GoogleLogo } from "@/components/auth/google-logo";
+import { useGoogleRedirect } from "@/components/auth/use-google-redirect";
+import { FormError } from "@/components/dashboard/form-error";
 import { Button } from "@/components/ui/button";
+import { INLINE_LINK_CLASS } from "@/components/ui/link-class";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -33,43 +41,25 @@ export function AuthForm({
   const router = useRouter();
   const isSignUp = mode === "sign-up";
   const [loading, setLoading] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(initialError);
+  const { loading: googleLoading, redirect } = useGoogleRedirect(setError);
   const [choosing, setChoosing] = useState(initialChooser);
   const busy = loading || googleLoading;
   const nextQuery = next ? `?next=${encodeURIComponent(next)}` : "";
 
-  // Coming back from Google with the browser's Back button restores this page
-  // from the back/forward cache with the spinner still on; reset it.
-  useEffect(() => {
-    const onPageShow = (e: PageTransitionEvent) => {
-      if (e.persisted) setGoogleLoading(false);
-    };
-    window.addEventListener("pageshow", onPageShow);
-    return () => window.removeEventListener("pageshow", onPageShow);
-  }, []);
-
   async function onGoogle() {
     setError(null);
-    setGoogleLoading(true);
-    try {
-      // Better Auth redirects the browser to Google. On return, /sign-in sends
-      // the user to `next` or routes them (admins get the entry chooser);
-      // brand-new users go to `next` or onboarding.
-      const result = await signIn.social({
+    // Better Auth redirects the browser to Google. On return, /sign-in sends
+    // the user to `next` or routes them (admins get the entry chooser, a client
+    // lands on /mon-espace). A brand-new user goes to `next` or the pro
+    // onboarding when signing up, and back through /sign-in when signing in:
+    // a sign-in never creates a pro page (COV-I3).
+    await redirect(() =>
+      signIn.social({
         provider: "google",
-        callbackURL: `/sign-in${nextQuery}`,
-        newUserCallbackURL: next ?? "/onboarding",
-        errorCallbackURL: isSignUp ? `/sign-up${nextQuery}` : `/sign-in${nextQuery}`,
-      });
-      if (result.error) {
-        setError("La connexion avec Google a échoué. Réessayez.");
-        setGoogleLoading(false);
-      }
-    } catch {
-      setError("La connexion avec Google a échoué. Réessayez.");
-      setGoogleLoading(false);
-    }
+        ...authFormGoogleCallbacks(isSignUp ? "sign-up" : "sign-in", next),
+      }),
+    );
   }
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -80,14 +70,26 @@ export function AuthForm({
     const form = new FormData(e.currentTarget);
     const email = String(form.get("email"));
     const password = String(form.get("password"));
-    const name = String(form.get("name") ?? "");
+    let name = "";
+    if (isSignUp) {
+      // P6 X1: the server's rule for the account's name (it reaches the pros' records, the admin pages and the mails),
+      // checked here first; the trimmed name is the one sent.
+      const checked = plainNameSchema.safeParse(String(form.get("name") ?? ""));
+      if (!checked.success) {
+        setError(COPY.PLAIN_NAME);
+        setLoading(false);
+        return;
+      }
+      name = checked.data;
+    }
 
     const result = isSignUp
       ? await signUp.email({ email, password, name })
       : await signIn.email({ email, password });
 
     if (result.error) {
-      setError(result.error.message ?? "Une erreur est survenue.");
+      // By status and code only: the `message` of Better Auth is English.
+      setError(authFormErrorMessage(result.error));
       setLoading(false);
       return;
     }
@@ -104,7 +106,7 @@ export function AuthForm({
       return;
     }
 
-    // Admins pick Admin vs Client (unless remembered); everyone else → /dashboard.
+    // Admins pick Admin vs Client (unless remembered); a pro → /dashboard, anyone else → /mon-espace.
     let target: PostSignIn;
     try {
       target = await resolvePostSignIn();
@@ -136,7 +138,7 @@ export function AuthForm({
             disabled={busy}
           >
             {googleLoading ? (
-              <Loader2 className="size-4 animate-spin" />
+              <Loader2 className="size-4 animate-spin" aria-hidden />
             ) : (
               <GoogleLogo className="size-4" />
             )}
@@ -149,11 +151,11 @@ export function AuthForm({
           </div>
         </div>
       )}
-      <form onSubmit={onSubmit} className="space-y-4">
+      <form method="post" onSubmit={onSubmit} className="space-y-4">
         {isSignUp && (
           <div className="space-y-1.5">
             <Label htmlFor="name">Nom complet</Label>
-            <Input id="name" name="name" placeholder="Camille Laurent" required />
+            <Input id="name" name="name" placeholder="Camille Laurent" autoComplete="name" maxLength={BOUNDS.name} required />
           </div>
         )}
         <div className="space-y-1.5">
@@ -173,7 +175,7 @@ export function AuthForm({
             {!isSignUp && (
               <Link
                 href="/forgot-password"
-                className="text-xs font-medium text-primary hover:underline"
+                className="text-xs font-medium text-accent-foreground hover:underline"
               >
                 Mot de passe oublié ?
               </Link>
@@ -190,29 +192,26 @@ export function AuthForm({
           />
         </div>
 
-        {error && (
-          <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {error}
-          </p>
-        )}
+        {/* Mounted from the first render (empty, it is screen-reader only): a failure is announced when its text arrives. */}
+        <FormError alwaysMounted message={error} />
 
         <Button type="submit" className="w-full" disabled={busy}>
-          {loading && <Loader2 className="size-4 animate-spin" />}
-          {isSignUp ? "Créer mon compte" : "Se connecter"}
+          {loading && <Loader2 className="size-4 animate-spin" aria-hidden />}
+          {loading ? (isSignUp ? COPY.PENDING_SIGN_UP : COPY.PENDING_SIGN_IN) : isSignUp ? "Créer mon compte" : "Se connecter"}
         </Button>
 
         <p className="text-center text-sm text-muted-foreground">
           {isSignUp ? (
             <>
               Déjà un compte ?{" "}
-              <Link href={`/sign-in${nextQuery}`} className="font-medium text-primary hover:underline">
+              <Link href={`/sign-in${nextQuery}`} className={INLINE_LINK_CLASS}>
                 Se connecter
               </Link>
             </>
           ) : (
             <>
               Pas encore de compte ?{" "}
-              <Link href={`/sign-up${nextQuery}`} className="font-medium text-primary hover:underline">
+              <Link href={`/sign-up${nextQuery}`} className={INLINE_LINK_CLASS}>
                 Créer un compte
               </Link>
             </>

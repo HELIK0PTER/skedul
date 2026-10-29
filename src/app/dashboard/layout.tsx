@@ -2,7 +2,9 @@ import { redirect } from "next/navigation";
 
 import { ImpersonationBanner } from "@/components/dashboard/impersonation-banner";
 import { DashboardSidebar } from "@/components/dashboard/sidebar";
+import { VerifyEmailBanner } from "@/components/dashboard/verify-email-banner";
 import { brandThemeVars } from "@/lib/color";
+import { logSafeMessage } from "@/lib/log-safe";
 import { getCurrentProfessional, getSession } from "@/lib/session";
 import { hasUnreadSupport } from "@/server/support-queries";
 
@@ -15,10 +17,10 @@ export default async function DashboardLayout({
   if (!session) redirect("/sign-in");
 
   const pro = await getCurrentProfessional();
-  if (!pro) redirect("/onboarding");
+  if (!pro) redirect("/mon-espace");
 
   const supportUnread = await hasUnreadSupport(session.user.id).catch((err) => {
-    console.error("[dashboard] support badge lookup failed", err);
+    console.error(`[dashboard] support badge lookup failed: ${logSafeMessage(err)}`);
     return false;
   });
 
@@ -34,14 +36,20 @@ export default async function DashboardLayout({
         <DashboardSidebar
           businessName={pro.businessName}
           slug={pro.slug}
-          // UI hint only — /admin re-checks the role in the database.
+          // UI hint only: /admin re-checks the role in the database.
           isAdmin={session.user.role === "admin"}
           supportUnread={supportUnread}
         />
         {/* The window scrolls, not <main>: overflow-x-clip (unlike auto) keeps
             sticky children (settings preview) working. */}
         <main className="min-w-0 flex-1 overflow-x-clip bg-background">
-          <div className="mx-auto max-w-5xl px-5 py-8">{children}</div>
+          <div className="mx-auto max-w-5xl px-5 py-8">
+            {/* Hidden while an admin impersonates: an admin must not verify the pro's address. Rendered for a verified account too: it stays mounted when the code is accepted, to announce « Adresse confirmée. ». */}
+            {!session.session.impersonatedBy && (
+              <VerifyEmailBanner email={session.user.email} verified={session.user.emailVerified} />
+            )}
+            {children}
+          </div>
         </main>
       </div>
     </>

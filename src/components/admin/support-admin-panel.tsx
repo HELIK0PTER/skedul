@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Ban, Check, Hammer, Lock, RotateCcw } from "lucide-react";
 
@@ -41,7 +40,6 @@ type PanelRequest = {
 
 /** Right column of /admin/support/[id]: step, development switch, ETA, decline / close / reopen. */
 export function SupportAdminPanel({ request }: { request: PanelRequest }) {
-  const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<"accept" | SupportResolution | null>(null);
@@ -60,7 +58,6 @@ export function SupportAdminPanel({ request }: { request: PanelRequest }) {
         }
         setDialog(null);
         setReason("");
-        router.refresh();
       } catch {
         setError("Connexion perdue. Réessayez.");
       }
@@ -134,6 +131,7 @@ export function SupportAdminPanel({ request }: { request: PanelRequest }) {
           </CardHeader>
           <CardContent>
             <form
+              method="post"
               onSubmit={(e) => {
                 e.preventDefault();
                 run(() => setSupportEta({ id: request.id, eta: eta || null }));
@@ -203,6 +201,7 @@ export function SupportAdminPanel({ request }: { request: PanelRequest }) {
 
       <Dialog open={dialog === "accept"} onClose={closeDialog} title="Accepter en développement">
         <form
+          method="post"
           onSubmit={(e) => {
             e.preventDefault();
             run(() => acceptForDevelopment({ id: request.id, eta: eta || null }));
@@ -234,6 +233,7 @@ export function SupportAdminPanel({ request }: { request: PanelRequest }) {
         title={dialog === "declined" ? "Ne pas retenir la demande" : "Fermer la demande"}
       >
         <form
+          method="post"
           onSubmit={(e) => {
             e.preventDefault();
             if (dialog !== "declined" && dialog !== "closed") return;

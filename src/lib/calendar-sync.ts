@@ -1,84 +1,36 @@
 import "server-only";
 
-import { eq } from "drizzle-orm";
-import { db } from "@/lib/db";
-import { booking, classSession, customer, eventType, professional } from "@/lib/db/schema";
 import { auth } from "@/lib/auth";
+import { syncOccurrenceWith, type SyncOutcome } from "@/lib/calendar-sync-core";
+import { loadOccurrenceForSync, saveGoogleEventId } from "@/lib/calendar-sync-load";
+import { db } from "@/lib/db";
 import { env } from "@/lib/env";
-import {
-  deleteEvent as gDeleteEvent,
-  insertEvent as gInsertEvent,
-  patchEvent as gPatchEvent,
-} from "@/lib/google-calendar";
-import { syncSessionWith, type SyncDeps, type LoadedSession } from "@/lib/calendar-sync-core";
+import { deleteEvent, insertEvent, patchEvent } from "@/lib/google-calendar";
+import { logSafeMessage } from "@/lib/log-safe";
 
-/** Loads a session with its active attendees + the pro's Google connection. */
-async function loadSession(sid: string): Promise<LoadedSession | null> {
-  const rows = await db
-    .select({
-      sessionId: classSession.id,
-      professionalId: classSession.professionalId,
-      userId: professional.userId,
-      googleCalendarId: professional.googleCalendarId,
-      googleEventId: classSession.googleEventId,
-      eventTitle: eventType.title,
-      startAt: classSession.startAt,
-      endAt: classSession.endAt,
-      capacity: classSession.capacity,
-      timezone: professional.timezone,
-    })
-    .from(classSession)
-    .innerJoin(professional, eq(professional.id, classSession.professionalId))
-    .innerJoin(eventType, eq(eventType.id, classSession.eventTypeId))
-    .where(eq(classSession.id, sid))
-    .limit(1);
-
-  const row = rows[0];
-  if (!row) return null;
-
-  const attendees = await db
-    .select({ name: customer.name, email: customer.email, status: booking.status })
-    .from(booking)
-    .innerJoin(customer, eq(customer.id, booking.customerId))
-    .where(eq(booking.sessionId, sid));
-
-  return {
-    ...row,
-    attendees: attendees
-      .filter((a) => a.status === "confirmed")
-      .map((a) => ({ name: a.name, email: a.email })),
-  };
-}
-
-async function getAccessToken(userId: string): Promise<string> {
-  const result = await auth.api.getAccessToken({
-    body: { providerId: "google", userId },
-  });
-  return result.accessToken;
-}
-
-async function saveEventId(sid: string, eventId: string | null): Promise<void> {
-  await db
-    .update(classSession)
-    .set({ googleEventId: eventId })
-    .where(eq(classSession.id, sid));
-}
-
-const defaultDeps: SyncDeps = {
-  enabled: env.GOOGLE_CALENDAR_ENABLED,
-  loadSession,
-  getAccessToken,
-  insertEvent: gInsertEvent,
-  patchEvent: gPatchEvent,
-  deleteEvent: gDeleteEvent,
-  saveEventId,
-};
-
-/** Best-effort public entry point — never throws into a booking flow. */
-export async function syncSession(sessionId: string): Promise<void> {
+/**
+ * Best-effort Google sync of one occurrence, with the real dependencies. It
+ * never throws: the pro's action is already committed, so a Google failure is
+ * only logged (the next change of the occurrence reconciles it) and answered
+ * « failed » (the connection backfill counts them).
+ */
+export async function syncOccurrence(occurrenceId: string): Promise<SyncOutcome | "failed"> {
   try {
-    await syncSessionWith(sessionId, defaultDeps);
+    return await syncOccurrenceWith(occurrenceId, {
+      enabled: env.GOOGLE_CALENDAR_ENABLED,
+      loadOccurrence: (id) => loadOccurrenceForSync(db, id),
+      getAccessToken: async (userId) => {
+        const { accessToken } = await auth.api.getAccessToken({ body: { providerId: "google", userId } });
+        return accessToken;
+      },
+      insertEvent,
+      patchEvent,
+      deleteEvent,
+      saveEventId: (id, eventId) => saveGoogleEventId(db, id, eventId),
+    });
   } catch (err) {
-    console.error(`[calendar-sync] session ${sessionId} failed:`, err);
+    // Google's error body can echo an attendee address: only the formatted message is logged.
+    console.error(`[calendar-sync] occurrence ${occurrenceId} failed: ${logSafeMessage(err)}`);
+    return "failed";
   }
 }

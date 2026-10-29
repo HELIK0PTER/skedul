@@ -13,6 +13,7 @@ import {
   LifeBuoy,
   Settings,
   ShieldCheck,
+  Ticket,
   Users,
 } from "lucide-react";
 
@@ -23,9 +24,10 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { href: "/dashboard", label: "Vue d'ensemble", icon: LayoutDashboard, exact: true },
   { href: "/dashboard/planning", label: "Planning", icon: CalendarRange },
+  { href: "/dashboard/events", label: "Événements", icon: CalendarDays },
   { href: "/dashboard/clients", label: "Clients", icon: Users },
   { href: "/dashboard/payments", label: "Paiements", icon: Euro },
-  { href: "/dashboard/event-types", label: "Prestations", icon: CalendarDays },
+  { href: "/dashboard/tickets", label: "Tickets", icon: Ticket },
   { href: "/dashboard/availability", label: "Disponibilités", icon: Clock },
   { href: "/dashboard/unavailability", label: "Indisponibilités", icon: CalendarOff },
   { href: "/dashboard/settings", label: "Réglages", icon: Settings },
@@ -91,7 +93,7 @@ export function DashboardSidebar({
         {isAdmin && (
           <Link
             href="/admin"
-            className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-primary hover:bg-accent"
+            className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-accent-foreground hover:bg-accent"
           >
             <ShieldCheck className="size-4" />
             Dashboard Admin
@@ -100,7 +102,8 @@ export function DashboardSidebar({
         <Link
           href={`/${slug}`}
           target="_blank"
-          className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-primary hover:bg-accent"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-accent-foreground hover:bg-accent"
         >
           <ExternalLink className="size-4" />
           Voir ma page publique
