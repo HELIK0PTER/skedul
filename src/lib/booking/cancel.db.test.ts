@@ -488,7 +488,7 @@ async function seanceWithHold(h: DbHarness, now: Date) {
   must(hold, "buy + book");
   const holdEnd = (await getBooking(db, hold.bookingId)).holdExpiresAt;
   assert.ok(holdEnd);
-  return { occ, confirmedId: confirmed.bookingId, holdId: hold.bookingId, holdEnd };
+  return { occ, confirmedId: confirmed.bookingId, holdId: hold.bookingId, purchaseId: hold.purchaseId, holdEnd };
 }
 
 dbTest("A13 E6b: a hold that lapsed (at hold_expires_at) expires as system, is not mailed and is not counted", async (h) => {
@@ -522,6 +522,73 @@ dbTest("A13 E6b: a hold still live 1 ms before its end is a registrant (cancelle
   assert.ok(mail && mail.type === "email.occurrence_cancelled");
   assert.deepEqual([...mail.bookingIds].sort(), [s.confirmedId, s.holdId].sort());
   assert.equal((await getBooking(db, s.holdId)).endedBy, "pro");
+});
+
+/* ───────────── P6 X5: « Désinscrire » a hold that already lapsed ───────────── */
+
+dbTest("X5 E6a: a lapsed hold the pro picks is released (system), not cancelled, not mailed, not counted; its open session is expired", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithHold(h, new Date());
+  const sessionId = "cs_test_x5_lapsed";
+  must(await attachCheckoutSession(db, { purchaseId: s.purchaseId, checkoutSessionId: sessionId, checkoutUrl: "https://checkout.example.test/x5" }), "attach");
+  const res = await cancelBookingsByPro(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: s.occ.id, bookingIds: [s.holdId], reason: "Erreur" },
+    s.holdEnd,
+  );
+  must(res, "cancelBookingsByPro");
+  assert.equal(res.cancelled, 0, "a lapsed hold is not a registrant the pro unenrolled");
+  assert.equal(res.ticketsReturned, 0);
+  assert.deepEqual(res.effects, [
+    { type: "stripe.expire_session", purchaseId: s.purchaseId, checkoutSessionId: sessionId },
+    { type: "google.sync_occurrence", occurrenceId: s.occ.id },
+  ]);
+  const lapsed = await getBooking(db, s.holdId);
+  assert.equal(lapsed.status, "expired");
+  assert.equal(lapsed.endedBy, "system");
+  assert.equal(lapsed.cancelReason, null, "the pro's reason is for registrants");
+  assert.equal((await getBooking(db, s.confirmedId)).status, "confirmed", "the other booking is untouched");
+  assert.equal((await getOccurrence(db, s.occ.id)).seatsTaken, 1, "only the confirmed booking still holds a seat");
+});
+
+dbTest("X5 E6a: with a confirmed booking in the same pick, only that one is cancelled, counted and mailed", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithHold(h, new Date());
+  const res = await cancelBookingsByPro(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: s.occ.id, bookingIds: [s.confirmedId, s.holdId] },
+    s.holdEnd,
+  );
+  must(res, "cancelBookingsByPro");
+  assert.equal(res.cancelled, 1);
+  assert.equal(res.ticketsReturned, 1);
+  assert.deepEqual(
+    res.effects.filter((e) => e.type === "email.booking_cancelled"),
+    [{ type: "email.booking_cancelled", bookingId: s.confirmedId, by: "pro" }],
+  );
+  assert.equal((await getBooking(db, s.holdId)).endedBy, "system");
+  assert.equal((await getBooking(db, s.confirmedId)).endedBy, "pro");
+  assert.equal((await getOccurrence(db, s.occ.id)).seatsTaken, 0);
+});
+
+dbTest("X5 E6a: a hold still live 1 ms before its end is unenrolled by the pro (cancelled, counted, mailed)", async (h) => {
+  const { db, pro } = h;
+  const s = await seanceWithHold(h, new Date());
+  const res = await cancelBookingsByPro(
+    db,
+    { professionalId: pro.proId, actorUserId: pro.userId, occurrenceId: s.occ.id, bookingIds: [s.holdId] },
+    new Date(s.holdEnd.getTime() - 1),
+  );
+  must(res, "cancelBookingsByPro");
+  assert.equal(res.cancelled, 1);
+  assert.deepEqual(
+    res.effects.filter((e) => e.type === "email.booking_cancelled"),
+    [{ type: "email.booking_cancelled", bookingId: s.holdId, by: "pro" }],
+  );
+  const live = await getBooking(db, s.holdId);
+  assert.equal(live.status, "cancelled");
+  assert.equal(live.endedBy, "pro");
+  assert.equal((await getOccurrence(db, s.occ.id)).seatsTaken, 1);
 });
 
 /* ───────────── P6 A14: the repeat cancel and the « ticket rendu » flag ───────────── */

@@ -9,6 +9,7 @@ import { nanoid } from "nanoid";
 import {
   G,
   PlanError,
+  R,
   RET,
   SEAT,
   lockRows,
@@ -232,8 +233,11 @@ export async function cancelByClient(
 
 /**
  * E6a: one or several bookings of ONE occurrence, any time (past too, to fix
- * a mistake). Batch: lock occurrence; end them; G(all marked, 'stale');
- * SEAT(o, 0); RET(pro).
+ * a mistake). Batch: lock occurrence; R(o) (its lapsed holds, P6 X5: one the
+ * pro picked is released as system, not cancelled); end the rest; G(all
+ * marked, 'stale'); SEAT(o, 0); RET(pro). `cancelled` counts the registrants
+ * only, the bookings this action cancelled; a released hold is neither mailed
+ * nor counted, only its open Checkout session is expired.
  */
 export async function cancelBookingsByPro(
   db: Db,
@@ -261,6 +265,7 @@ export async function cancelBookingsByPro(
       const c: BatchCtx = { db, aid, now };
       return [
         lockRows(db, "occurrence", [o.id]),
+        R(c, o.id),
         endBookings(c, {
           professionalId: input.professionalId,
           scope: { occurrenceId: o.id, bookingIds: ids },
@@ -269,6 +274,7 @@ export async function cancelBookingsByPro(
         }),
         G(
           db,
+          // a lapsed hold picked here was already ended by R above: it is out either way
           sql`(select count(*)::int from booking where ended_action_id = ${aid} and id = any(${textArray(ids)})) = ${ids.length}::int`,
           "stale",
         ),
@@ -279,12 +285,13 @@ export async function cancelBookingsByPro(
   });
   if (!res.ok) return failOf(res);
   const ended = await readEndedByAction(db, res.aid);
+  const registrants = cancelledOf(ended);
   const effects: Effect[] = [
-    ...cancelledOf(ended).map((b): Effect => ({ type: "email.booking_cancelled", bookingId: b.bookingId, by: "pro" })),
+    ...registrants.map((b): Effect => ({ type: "email.booking_cancelled", bookingId: b.bookingId, by: "pro" })),
     ...expireSessionEffects(ended),
     ...syncEffects([input.occurrenceId]),
   ];
-  return { ok: true, effects, cancelled: ended.length, ticketsReturned: await countReturned(db, res.aid) };
+  return { ok: true, effects, cancelled: registrants.length, ticketsReturned: await countReturned(db, res.aid) };
 }
 
 /* ───────────────────────── E6b: pro cancels a séance ───────────────────────── */
