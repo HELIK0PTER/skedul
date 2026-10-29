@@ -31,6 +31,10 @@ test("an RDV attendee is cancelled with « Annuler le rendez-vous » and the RDV
   assert.match(SOURCE, /selectable=\{isSeance\}/);
 });
 
+test("a seat paid in test mode carries the « Test » badge, the one of the booking dialog and the payments table (P6 A35)", () => {
+  assert.match(SOURCE, /\{attendee\.moved && <Badge variant="neutral">Déplacé<\/Badge>\}\s*\{attendee\.testPaid && <Badge variant="outline">Test<\/Badge>\}/);
+});
+
 test("the unenrol « Motif » field says the reason is sent to the client (final review F11)", () => {
   const start = SOURCE.indexOf('confirm.kind === "unenroll" && (');
   assert.notEqual(start, -1, "the unenrol reason field is in the confirmation");

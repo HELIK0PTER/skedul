@@ -34,6 +34,8 @@ export type PlanningAttendeeVM = {
   answers: { label: string; value: string }[];
   notes: string | null;
   moved: boolean;
+  /** P6 A35: paid in test mode, shown « Test » like the booking dialog and the payments table do */
+  testPaid: boolean;
 };
 
 export type PlanningItemVM = {
@@ -128,6 +130,7 @@ function attendeeVM(a: PlanningAttendee, tz: string, now: Date): PlanningAttende
     answers: a.answers,
     notes: a.customerNotes,
     moved: a.movedAt !== null,
+    testPaid: a.testPaid,
   };
 }
 

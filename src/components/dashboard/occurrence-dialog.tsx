@@ -85,6 +85,7 @@ function AttendeeRow({
               <CoverageBadge coverage={attendee.coverage} />
               <BookingStatusBadge status={attendee.status} />
               {attendee.moved && <Badge variant="neutral">Déplacé</Badge>}
+              {attendee.testPaid && <Badge variant="outline">Test</Badge>}
             </div>
             {attendee.ticketLabel && (
               <p className="mt-2 text-xs text-muted-foreground wrap-anywhere">{attendee.ticketLabel}</p>

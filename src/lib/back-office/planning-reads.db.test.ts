@@ -268,6 +268,58 @@ dbTest("attendee ticket: purchased is true when the ticket comes from a purchase
   assert.deepEqual(found?.attendees[0].ticket, { id: ticketId, typeName: "Cours collectif", expiresAt: null, purchased: true });
 });
 
+// P6 A35: a seat paid in test mode reads as one in the planning (« Test »), as it does in the booking dialog and the
+// payments table; a live payment, a hold not paid yet, a gift and a guest never do.
+dbTest("attendee testPaid: the seat's ticket or purchase was paid in test mode (P6 A35)", async ({ db, pro }) => {
+  const now = new Date();
+  const typeId = await rowType(db, pro, { name: "Cours collectif" });
+  const eventId = await rowEvent(db, pro, { capacity: 8 });
+  await rowLink(db, pro, eventId, typeId);
+  const occId = await rowSeance(db, pro, eventId, { seatsTaken: 6 });
+  const offerId = await rowOffer(db, pro, typeId);
+  const paid = (customerId: string, livemode: boolean) =>
+    rowPurchase(db, pro, {
+      customerId,
+      offerId,
+      ticketTypeId: typeId,
+      status: "paid",
+      livemode,
+      paymentIntentId: livemode ? `pi_live_${nanoid()}` : null,
+    });
+  const ticketSeat = async (name: string, purchaseOf: ((customerId: string) => Promise<string | null>) | null, ownPurchase: boolean) => {
+    const customerId = await rowCustomer(db, pro, { name });
+    const purchaseId = purchaseOf ? await purchaseOf(customerId) : null;
+    const bookingId = await rowBooking(db, pro, {
+      occurrenceId: occId,
+      customerId,
+      coverage: "ticket",
+      purchaseId: ownPurchase ? purchaseId : null,
+    });
+    await rowTicket(db, pro, { customerId, ticketTypeId: typeId, status: "booked", bookingId, purchaseId });
+  };
+  // A ticket bought in test mode, spent later on this séance (the booking has no purchase of its own).
+  await ticketSeat("Ticket test", (c) => paid(c, false), false);
+  // « Acheter et réserver » paid in test mode: the booking's purchase and its ticket's.
+  await ticketSeat("Achat test", (c) => paid(c, false), true);
+  await ticketSeat("Achat réel", (c) => paid(c, true), true);
+  await ticketSeat("Offert", null, false);
+  const guestId = await rowCustomer(db, pro, { name: "Invité" });
+  await rowBooking(db, pro, { occurrenceId: occId, customerId: guestId, coverage: "guest" });
+  const holderId = await rowCustomer(db, pro, { name: "Paiement en cours" });
+  await pendingHold(db, pro, { occurrenceId: occId, typeId, offerId, holdExpiresAt: addMinutes(now, 30), customerId: holderId });
+
+  const found = await planningItem(db, pro.proId, occId, now);
+  assert.ok(found);
+  assert.deepEqual(Object.fromEntries(found.attendees.map((a) => [a.name, a.testPaid])), {
+    "Ticket test": true,
+    "Achat test": true,
+    "Achat réel": false,
+    Offert: false,
+    Invité: false,
+    "Paiement en cours": false,
+  });
+});
+
 dbTest("seatsShown counts an elapsed hold as a free seat; the pending attendee is listed", async ({ db, pro }) => {
   const now = new Date();
   const typeId = await rowType(db, pro);

@@ -22,6 +22,7 @@ import {
   occurrence,
   question,
   ticket,
+  ticketPurchase,
   ticketType,
   timeOff,
 } from "@/lib/db/schema";
@@ -50,6 +51,8 @@ export type PlanningAttendee = {
   customerNotes: string | null;
   movedAt: Date | null;
   createdAt: Date;
+  /** P6 A35: the seat was paid in test mode: its ticket's purchase (else the booking's own) is paid with livemode false. */
+  testPaid: boolean;
 };
 
 export type PlanningQuestion = {
@@ -178,11 +181,21 @@ async function loadAttendees(db: Db, professionalId: string, occurrenceIds: read
       ticketExpiresAt: ticket.expiresAt,
       ticketPurchaseId: ticket.purchaseId,
       ticketTypeName: ticketType.name,
+      purchaseStatus: ticketPurchase.status,
+      purchaseLive: ticketPurchase.livemode,
     })
     .from(booking)
     .innerJoin(customer, and(eq(customer.id, booking.customerId), eq(customer.professionalId, professionalId)))
     .leftJoin(ticket, and(eq(ticket.bookingId, booking.id), eq(ticket.professionalId, professionalId)))
     .leftJoin(ticketType, and(eq(ticketType.id, ticket.ticketTypeId), eq(ticketType.professionalId, professionalId)))
+    // The purchase that paid the seat: the ticket's (a spent ticket), else the booking's own (« acheter et réserver »).
+    .leftJoin(
+      ticketPurchase,
+      and(
+        eq(ticketPurchase.id, sql`coalesce(${ticket.purchaseId}, ${booking.purchaseId})`),
+        eq(ticketPurchase.professionalId, professionalId),
+      ),
+    )
     .where(
       and(
         eq(booking.professionalId, professionalId),
@@ -231,6 +244,7 @@ async function loadAttendees(db: Db, professionalId: string, occurrenceIds: read
       customerNotes: r.customerNotes,
       movedAt: r.movedAt,
       createdAt: r.createdAt,
+      testPaid: r.purchaseStatus === "paid" && r.purchaseLive === false,
     });
     byOccurrence.set(r.occurrenceId, list);
   }

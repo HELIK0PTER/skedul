@@ -87,6 +87,7 @@ function attendee(over: Partial<PlanningAttendee> = {}): PlanningAttendee {
     customerNotes: null,
     movedAt: null,
     createdAt: NOW,
+    testPaid: false,
     ...over,
   };
 }
@@ -275,6 +276,16 @@ test("toPlanningVM: attendee labels and hold time are read in the given time zon
   for (const a of [...paris.attendees, ...la.attendees]) {
     assert.doesNotMatch(`${a.ticketLabel ?? ""}${a.holdUntil ?? ""}`, NO_DASH);
   }
+});
+
+// P6 A35: the « Test » badge of the planning dialog reads the attendee's testPaid as is.
+test("toPlanningVM carries testPaid, so the planning shows « Test » on a seat paid in test mode", () => {
+  const slot = item("s", at(MONDAY, 1140), 60, {
+    seatsTaken: 2,
+    attendees: [attendee({ bookingId: "t", testPaid: true }), attendee({ bookingId: "l", testPaid: false })],
+  });
+  const [vm] = toPlanningVM([slot], [], PARIS, NOW);
+  assert.deepEqual(vm.attendees.map((a) => [a.bookingId, a.testPaid]), [["t", true], ["l", false]]);
 });
 
 test("timeOffSegments cuts a 3-day all-day time off into 3 full-day segments", () => {
