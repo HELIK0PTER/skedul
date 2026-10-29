@@ -112,7 +112,12 @@ test("the scan reads every export of the four modules, React cache() ones includ
     "getSpendableSeances",
     "getMySpacePage",
   ]);
-  assert.deepEqual(names("src/server/visitor.ts"), ["visitorIpHashes", "currentSessionFacts", "currentPublicVisitor"]);
+  assert.deepEqual(names("src/server/visitor.ts"), [
+    "visitorIpHashes",
+    "currentSessionFacts",
+    "currentSessionAndVisitor",
+    "currentPublicVisitor",
+  ]);
   assert.ok(names("src/server/public-context.ts").includes("resolvePublicPro"));
 });
 

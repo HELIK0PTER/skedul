@@ -22,7 +22,7 @@ import { runEffects } from "@/server/notify";
 import { getPublicPage } from "@/server/public-queries";
 import { getPublicProfile } from "@/server/queries";
 import { safeRead } from "@/server/safe-read";
-import { currentPublicVisitor, currentSessionFacts, visitorIpHashes } from "@/server/visitor";
+import { currentSessionAndVisitor, currentSessionFacts, visitorIpHashes } from "@/server/visitor";
 
 /**
  * { pro, branding } of the projection the /[slug] page holds, from the request-cached `getPublicPage(slug)` the
@@ -56,14 +56,14 @@ export function publicDeps(): PublicDeps {
 }
 
 /**
- * The fresh session facts, the visitor of this pro (owner, guest cookie), both IP hashes (visitorIpHashes). It only
- * reads: the Owner it returns carries what linkCustomerUser needs, and the one core that links the account
- * (bookWithHeldTicketCore) does it after its parseFr and its throttle, never before (contract § 1 Validation).
+ * The fresh session facts and the visitor of this pro (owner, guest cookie) from ONE session read
+ * (currentSessionAndVisitor, P6 D9), both IP hashes (visitorIpHashes). It only reads: the Owner it returns carries what
+ * linkCustomerUser needs, and the one core that links the account (bookWithHeldTicketCore) does it after its parseFr
+ * and its throttle, never before (contract § 1 Validation).
  */
 export async function actionVisitor(pro: PublicPro, now: Date): Promise<ActionVisitor> {
-  const [session, visitor, hashes] = await Promise.all([
-    currentSessionFacts(),
-    currentPublicVisitor(pro.professionalId, pro.ownerUserId),
+  const [{ session, visitor }, hashes] = await Promise.all([
+    currentSessionAndVisitor(pro.professionalId, pro.ownerUserId),
     visitorIpHashes(now),
   ]);
   return {

@@ -62,10 +62,11 @@ test("revalidation covers every PUBLIC_REVALIDATE target and nothing else", () =
   assert.match(body, /for \(const target of PUBLIC_REVALIDATE\) revalidatePath\(target\.path, target\.type\)/);
 });
 
-test("actionVisitor builds the visitor on the server: fresh facts, cached visitor, IP hashes; the Owner is read, never linked", () => {
+test("actionVisitor builds the visitor on the server: one fresh session read for the facts and the visitor, IP hashes; the Owner is read, never linked", () => {
   const body = sectionOf("export async function actionVisitor");
-  assert.match(body, /currentSessionFacts\(\)/);
-  assert.match(body, /currentPublicVisitor\(pro\.professionalId, pro\.ownerUserId\)/);
+  assert.match(body, /currentSessionAndVisitor\(pro\.professionalId, pro\.ownerUserId\)/);
+  // P6 D9: the facts and the visitor come from the same read, so the session is read once per action and both agree
+  assert.doesNotMatch(body, /currentSessionFacts\(|currentPublicVisitor\(/, "no second session read");
   assert.match(body, /visitorIpHashes\(now\)/);
   assert.match(body, /owner: visitor\.owner,/);
   assert.doesNotMatch(CODE, /\bgetSession\b/, "only the fresh reads of visitor.ts may read a session");

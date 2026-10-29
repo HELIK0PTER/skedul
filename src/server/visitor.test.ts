@@ -45,13 +45,22 @@ test("visitorIpHashes hashes the bucket of the client address, never the raw add
   assert.doesNotMatch(SOURCE, /x-forwarded-for|x-real-ip/i, "the header names live in client-ip.ts only");
 });
 
-test("currentPublicVisitor is cached per request and builds the visitor from the fresh facts, the guest cookie and the guest key", () => {
-  const body = sectionOf("export const currentPublicVisitor");
-  assert.match(body, /=\s*cache\(/);
-  assert.match(body, /currentSessionFacts\(\)/);
+test("currentSessionAndVisitor builds the visitor from ONE read of the fresh facts, the guest cookie and the guest key, and returns both (P6 D9)", () => {
+  const body = sectionOf("export async function currentSessionAndVisitor");
+  assert.equal(body.match(/currentSessionFacts\(\)/g)?.length, 1, "the session is read once");
   assert.match(body, /\(await cookies\(\)\)\.get\(GUEST_COOKIE\)\?\.value/);
   assert.match(body, /guestKey\(\)/);
   assert.match(body, /resolveVisitor\(/);
+  assert.match(body, /return \{ session, visitor \}/);
+  const code = SOURCE.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  assert.equal(code.match(/getFreshSession\(\)/g)?.length, 1, "getFreshSession is called in currentSessionFacts only");
+});
+
+test("currentPublicVisitor is cached per request and is the visitor of currentSessionAndVisitor", () => {
+  const body = sectionOf("export const currentPublicVisitor");
+  assert.match(body, /=\s*cache\(/);
+  assert.match(body, /\(await currentSessionAndVisitor\(professionalId, ownerUserId\)\)\.visitor/);
+  assert.doesNotMatch(body, /currentSessionFacts\(\)|resolveVisitor\(/, "one builder of the visitor");
 });
 
 test("the file declares no writer of the wallet Owner: the Owner is linked by its core, after parseFr and the throttle (Revision 3.2)", () => {

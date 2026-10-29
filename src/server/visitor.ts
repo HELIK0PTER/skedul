@@ -41,21 +41,28 @@ export async function currentSessionFacts(): Promise<SessionFacts | null> {
 }
 
 /**
- * cache()d per request on (professionalId, ownerUserId): resolveVisitor with the fresh session, the skedul_guest cookie
- * and the guest key. It only reads. The wallet Owner is its `owner` field; the one write that depends on it (the
- * account link) is made by bookWithHeldTicketCore, after its parseFr and its throttle (contract Revision 3.2).
+ * The fresh session facts and the visitor of this pro built from that same read (P6 D9: one getFreshSession, so the
+ * two always agree): resolveVisitor with the session, the skedul_guest cookie and the guest key. It only reads. The
+ * wallet Owner is the visitor's `owner` field; the one write that depends on it (the account link) is made by
+ * bookWithHeldTicketCore, after its parseFr and its throttle (contract Revision 3.2). actionVisitor uses it directly.
  */
+export async function currentSessionAndVisitor(
+  professionalId: string,
+  ownerUserId: string,
+): Promise<{ session: SessionFacts | null; visitor: PublicVisitor }> {
+  return safeRead(async () => {
+    const session = await currentSessionFacts();
+    const visitor = await resolveVisitor(
+      db,
+      { session, guestToken: (await cookies()).get(GUEST_COOKIE)?.value, key: guestKey() },
+      { professionalId, ownerUserId },
+    );
+    return { session, visitor };
+  });
+}
+
+/** cache()d per request on (professionalId, ownerUserId) for the renders: the visitor of currentSessionAndVisitor. */
 export const currentPublicVisitor: (professionalId: string, ownerUserId: string) => Promise<PublicVisitor> = cache(
   async (professionalId: string, ownerUserId: string): Promise<PublicVisitor> =>
-    safeRead(async () =>
-      resolveVisitor(
-        db,
-        {
-          session: await currentSessionFacts(),
-          guestToken: (await cookies()).get(GUEST_COOKIE)?.value,
-          key: guestKey(),
-        },
-        { professionalId, ownerUserId },
-      ),
-    ),
+    safeRead(async () => (await currentSessionAndVisitor(professionalId, ownerUserId)).visitor),
 );
