@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 
 import { eq } from "drizzle-orm";
 
-import { ownedCustomerId } from "@/lib/back-office/guest-access";
+import { ownedCustomerId, type SpaceIdentity } from "@/lib/back-office/guest-access";
 import { revokeLinks } from "@/lib/booking/wallet";
 import * as schema from "@/lib/db/schema";
 import { guestLinkKey, signGuestLink } from "@/lib/guest-link";
@@ -10,7 +10,14 @@ import { createTestPro, dbTest, deleteTestUser, testEmail, type Db, type TestPro
 import { makeCustomer } from "@/test/fixtures";
 import { createTestClientUser, sessionOf } from "@/test/public";
 
-import { customerEmailOf, linkCustomerUser, resolveVisitor, type WalletOwner } from "./identity";
+import {
+  customerEmailOf,
+  linkCustomerUser,
+  resolveVisitor,
+  spaceIdentityOf,
+  type SessionFacts,
+  type WalletOwner,
+} from "./identity";
 
 const KEY = guestLinkKey("test-secret");
 const noCookie = { guestToken: undefined, key: KEY } as const;
@@ -266,6 +273,109 @@ dbTest("customerEmailOf: the e-mail of THIS pro's customer; another pro's custom
     assert.equal(await customerEmailOf(db, pro.proId, theirs), null);
     assert.equal(await customerEmailOf(db, other.proId, customerId), null);
     assert.equal(await customerEmailOf(db, pro.proId, "unknown-customer"), null);
+  } finally {
+    await deleteTestUser(db, other.userId);
+  }
+});
+
+/*
+ * The espace identity (spec § 12, Decision 36): what resolveSpaceCustomer (src/server/client-queries.ts) computes,
+ * spaceIdentityOf over resolveVisitor, against the database. Moved from guest-access.db.test.ts with the deleted
+ * resolveSpaceIdentity (P6 D6), so the rule is tested through the composition the page runs.
+ */
+
+async function espaceOf(db: Db, pro: TestPro, session: SessionFacts | null, guestToken?: string): Promise<SpaceIdentity> {
+  return spaceIdentityOf(await resolveVisitor(db, { session, guestToken, key: KEY }, target(pro)));
+}
+
+dbTest("espace identity: a verified session gives the customer of this pro by e-mail, or no_record", async ({ db, pro }) => {
+  const email = testEmail("session");
+  const customerId = await makeCustomer(db, pro, { email });
+
+  assert.deepEqual(await espaceOf(db, pro, sessionOf({ userId: "u-session", email: ` ${email.toUpperCase()}` })), {
+    kind: "customer",
+    customerId,
+    via: "session",
+  });
+  const stranger = testEmail("stranger");
+  assert.deepEqual(await espaceOf(db, pro, sessionOf({ userId: "u-stranger", email: stranger })), { kind: "no_record", email: stranger });
+});
+
+dbTest("espace identity: a row linked to another account is not the session's: no_record, cookie or not (Decision 5)", async ({ db, pro }) => {
+  const email = testEmail("linked");
+  const customerId = await makeCustomer(db, pro, { email });
+  await withClientUsers(db, [{ email, verified: true }, { email: testEmail("rival"), verified: true }], async ([mine, rival]) => {
+    const session = sessionOf(mine);
+    // unlinked row: the verified owner of the address
+    assert.deepEqual(await espaceOf(db, pro, session), { kind: "customer", customerId, via: "session" });
+
+    // linked to another user: not hers, and the valid cookie of that customer does not open it for a verified session (L1370)
+    await db.update(schema.customer).set({ userId: rival.userId }).where(eq(schema.customer.id, customerId));
+    assert.deepEqual(await espaceOf(db, pro, session), { kind: "no_record", email });
+    assert.deepEqual(await espaceOf(db, pro, session, tokenOf(customerId)), { kind: "no_record", email });
+
+    // linked to the session user: hers
+    await db.update(schema.customer).set({ userId: mine.userId }).where(eq(schema.customer.id, customerId));
+    assert.deepEqual(await espaceOf(db, pro, session), { kind: "customer", customerId, via: "session" });
+  });
+});
+
+dbTest("espace identity: an UNVERIFIED session is the banner kind, never anonymous, and never reads a wallet (COV-C1, risk 7)", async ({ db, pro }) => {
+  const email = testEmail("unverified");
+  const customerId = await makeCustomer(db, pro, { email });
+  const session = sessionOf({ userId: "u-unverified", email }, { verified: false });
+
+  assert.deepEqual(await espaceOf(db, pro, session), { kind: "unverified", email, guestCustomerId: null });
+  // The personal link of that customer still opens its space next to the banner, to read and cancel, never spend.
+  assert.deepEqual(await espaceOf(db, pro, session, tokenOf(customerId)), { kind: "unverified", email, guestCustomerId: customerId });
+  // A garbage cookie is no cookie.
+  assert.deepEqual(await espaceOf(db, pro, session, "not-a-token"), { kind: "unverified", email, guestCustomerId: null });
+});
+
+dbTest("espace identity: an impersonated session never reads client data, with or without the cookie (SEC-M6)", async ({ db, pro }) => {
+  const email = testEmail("impersonated");
+  const customerId = await makeCustomer(db, pro, { email });
+  // impersonation is checked before verification: an unverified impersonated session is impersonating too
+  for (const verified of [true, false]) {
+    const session = sessionOf({ userId: "u-impersonated", email }, { verified, impersonated: true });
+    assert.deepEqual(await espaceOf(db, pro, session), { kind: "impersonating" });
+    assert.deepEqual(await espaceOf(db, pro, session, tokenOf(customerId)), { kind: "impersonating" });
+  }
+});
+
+dbTest("espace identity: the verified session wins over the cookie; without a session the cookie works", async ({ db, pro }) => {
+  const mine = await makeCustomer(db, pro, { email: testEmail("a") });
+  const sessionEmail = testEmail("b");
+  const sessionCustomer = await makeCustomer(db, pro, { email: sessionEmail });
+  const token = tokenOf(mine);
+
+  assert.deepEqual(await espaceOf(db, pro, sessionOf({ userId: "u-b", email: sessionEmail }), token), {
+    kind: "customer",
+    customerId: sessionCustomer,
+    via: "session",
+  });
+  assert.deepEqual(await espaceOf(db, pro, null, token), { kind: "customer", customerId: mine, via: "guest" });
+  assert.deepEqual(await espaceOf(db, pro, null), { kind: "anonymous" });
+});
+
+dbTest("espace identity: a revoked, tampered or other pro's cookie is anonymous", async ({ db, pro }) => {
+  const customerId = await makeCustomer(db, pro);
+  const token = tokenOf(customerId);
+  const other = await createTestPro(db);
+  try {
+    const theirToken = tokenOf(await makeCustomer(db, other));
+    const anonymous = { kind: "anonymous" };
+
+    assert.equal((await espaceOf(db, pro, null, token)).kind, "customer");
+    // The cookie of the other pro's customer is worthless on this pro's page, and the reverse.
+    assert.deepEqual(await espaceOf(db, pro, null, theirToken), anonymous);
+    assert.deepEqual(await espaceOf(db, other, null, token), anonymous);
+    // Tampered.
+    const last = token.slice(-1) === "A" ? "B" : "A";
+    assert.deepEqual(await espaceOf(db, pro, null, token.slice(0, -1) + last), anonymous);
+    // Revoked: the cookie dies at once, with no request to /api/c.
+    await revokeLinks(db, { professionalId: pro.proId, customerId });
+    assert.deepEqual(await espaceOf(db, pro, null, token), anonymous);
   } finally {
     await deleteTestUser(db, other.userId);
   }

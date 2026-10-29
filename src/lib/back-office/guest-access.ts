@@ -1,9 +1,9 @@
 /**
  * Personal link and client space access (spec § 12). The pure decision of
  * /api/c/<token>, the customer lookups (ownedCustomerId is the owner predicate
- * src/lib/public/identity.ts shares) and two cores: resolveGuestLink (the
- * route) and resolveSpaceIdentity (the espace identity rule; the page maps the
- * request's visitor with its pure twin spaceIdentityOf, same order). No
+ * src/lib/public/identity.ts shares), the core of the route (resolveGuestLink)
+ * and the SpaceIdentity type (the espace identity; spaceIdentityOf in
+ * identity.ts maps the request's visitor to it). No
  * `server-only`, no env and no process db: the callers pass `db`, the guest key
  * and whatever they read from the request.
  *
@@ -148,6 +148,10 @@ export async function ownedCustomerId(
   return row?.id ?? null;
 }
 
+/**
+ * Who is looking at a pro's espace (spec § 12, Decision 36). spaceIdentityOf (src/lib/public/identity.ts) maps the
+ * request's visitor to it, for resolveSpaceCustomer (src/server/client-queries.ts).
+ */
 export type SpaceIdentity =
   | { kind: "customer"; customerId: string; via: "session" | "guest" }
   | { kind: "no_record"; email: string }
@@ -155,30 +159,3 @@ export type SpaceIdentity =
   | { kind: "unverified"; email: string; guestCustomerId: string | null }
   | { kind: "impersonating" }
   | { kind: "anonymous" };
-
-/** What the espace needs from a session: its user and e-mail, whether it was verified, and whether an admin is impersonating. */
-export type SpaceSession = { userId: string; email: string; emailVerified: boolean; impersonated: boolean };
-
-/**
- * Who is looking at this pro's espace (spec § 12, Decision 36). An impersonating admin is `impersonating` (checked
- * first; the cookie is ignored). A VERIFIED session wins: its owned customer at this pro (ownedCustomerId) or
- * no_record, and the cookie is ignored (L1370). An unverified session counts for nothing (anyone can sign up with
- * someone else's address) but is never anonymous: `unverified` carries the cookie's customer, shown next to the
- * confirmation banner to read and cancel, never spend (contract § 3.23). With no session at all: the guest cookie,
- * checked against this pro and the customer's current link version, else anonymous.
- */
-export async function resolveSpaceIdentity(
-  db: Db,
-  professionalId: string,
-  input: { session: SpaceSession | null; guestToken: string | undefined; key: Buffer },
-): Promise<SpaceIdentity> {
-  const { session } = input;
-  if (session?.impersonated) return { kind: "impersonating" };
-  if (session?.emailVerified) {
-    const customerId = await ownedCustomerId(db, professionalId, session);
-    return customerId ? { kind: "customer", customerId, via: "session" } : { kind: "no_record", email: session.email };
-  }
-  const guestCustomerId = await customerFromGuestCookie(db, professionalId, input.guestToken, input.key);
-  if (session) return { kind: "unverified", email: session.email, guestCustomerId };
-  return guestCustomerId ? { kind: "customer", customerId: guestCustomerId, via: "guest" } : { kind: "anonymous" };
-}
