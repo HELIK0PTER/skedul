@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 
 const SECTIONS = [
   { href: "/#features", label: "Fonctionnalités" },
-  { href: "/#packs", label: "Packs prépayés" },
+  { href: "/#carnets", label: "Tickets et carnets" },
   { href: "/#how", label: "Comment ça marche" },
   { href: "/demo", label: "Démo" },
 ];

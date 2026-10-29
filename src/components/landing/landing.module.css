@@ -8,9 +8,9 @@
  * axes: light / grotesk-sans / cool
  * taste dials: DESIGN_VARIANCE 7 · MOTION_INTENSITY 5 · VISUAL_DENSITY 4
  * pre-emit critique: P5 H4 E4 S5 R4 V5
- * contrast: pass (40–41) · nav: N5 · footer: Ft1 · slop: pass (42–45)
+ * contrast: pass (40 to 41) · nav: N5 · footer: Ft1 · slop: pass (42 to 45)
  * honest: pass (46) · chrome: pass (47) · tokens: pass (48) · responsive: pass (49) · icons: pass (30)
- * mobile: pass (34, 49, 50–57), checked at 320 / 375 / 768 / 1280 / 1440
+ * mobile: pass (34, 49, 50 to 57), checked at 320 / 375 / 768 / 1280 / 1440
  *
  * Shape rule: interactive CTAs are full pills, objects (carnet, ticket,
  * product shots) use --lp-radius, small inner chips use 12px.
@@ -53,7 +53,7 @@
   background-color: var(--lp-paper);
 }
 
-/* The packs shot bleeds to the viewport edge: never let that become a
+/* The offers shot bleeds to the viewport edge: never let that become a
    horizontal scroll. `clip` (unlike `hidden`) keeps the sticky nav alive. */
 :global(html):has(.root),
 :global(body):has(.root) {
@@ -378,48 +378,48 @@
   }
 }
 
-/* ---------------------------------------------------- packs breakout */
+/* ---------------------------------------------------- offers breakout */
 
 /* Margin labels on the left, the shot running off the right edge. The
    content tracks add up to the page container (71rem of content), so the
    labels line up with every other section; the side tracks are the
    gutters, and the shot takes the right one too. */
-.packsGrid {
+.offersGrid {
   display: grid;
   grid-template-columns: minmax(1.25rem, 1fr) minmax(0, 71rem) minmax(1.25rem, 1fr);
   row-gap: 3rem;
 }
 
-.packsFigure {
+.offersFigure {
   grid-column: 2 / 4;
   grid-row: 1;
 }
 
-.packsText {
+.offersText {
   grid-column: 2;
   grid-row: 2;
 }
 
 @media (min-width: 40rem) {
-  .packsGrid {
+  .offersGrid {
     grid-template-columns: minmax(2rem, 1fr) minmax(0, 71rem) minmax(2rem, 1fr);
   }
 }
 
 @media (min-width: 64rem) {
-  .packsGrid {
+  .offersGrid {
     grid-template-columns:
       minmax(2rem, 1fr) minmax(0, 17rem) 3.5rem minmax(0, 50.5rem)
       minmax(0, 1fr);
     align-items: center;
   }
 
-  .packsText {
+  .offersText {
     grid-column: 2;
     grid-row: 1;
   }
 
-  .packsFigure {
+  .offersFigure {
     grid-column: 4 / 6;
     grid-row: 1;
   }
