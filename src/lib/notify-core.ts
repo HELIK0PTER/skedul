@@ -41,6 +41,7 @@ import { proNewBookingEmail } from "@/lib/emails/pro-new-booking";
 import { purchaseReceiptEmail } from "@/lib/emails/purchase-receipt";
 import { ticketsOfferedEmail } from "@/lib/emails/tickets-offered";
 import { personalLinkUrl } from "@/lib/guest-link";
+import { holdEndedBy, holdsSeatAt } from "@/lib/hold-rule";
 import { coverageLabelOf } from "@/lib/tickets-vocab";
 import { formatMoney } from "@/lib/utils";
 
@@ -223,9 +224,9 @@ const emails = (professionalId: string | undefined, list: OutgoingEmail[]): Effe
   list.length === 0 || professionalId === undefined ? noEmail() : { kind: "emails", professionalId, emails: list };
 const noEmail = (): EffectPlan => ({ kind: "emails", professionalId: null, emails: [] });
 
-/** A hold the client never paid: confirmed_at is null and the hold ended before the booking did. */
+/** A hold the client never paid: confirmed_at is null and the hold had ended when the booking did (holdEndedBy, hold-rule.ts). */
 function isLapsedHold(b: Pick<BookingFacts, "confirmedAt" | "holdExpiresAt" | "endedAt">): boolean {
-  return b.confirmedAt === null && b.holdExpiresAt !== null && b.endedAt !== null && b.holdExpiresAt.getTime() < b.endedAt.getTime();
+  return b.confirmedAt === null && b.holdExpiresAt !== null && b.endedAt !== null && holdEndedBy(b.holdExpiresAt, b.endedAt);
 }
 
 function linkOf(b: Pick<BookingFacts, "customerId" | "linkVersion">, deps: NotifyDeps): string {
@@ -346,11 +347,7 @@ async function planOccurrenceChanged(
 ): Promise<EffectPlan> {
   if (bookingIds.length === 0) return noEmail();
   const rows = await readBookings(db, and(eq(booking.occurrenceId, occurrenceId), inArray(booking.id, [...bookingIds])));
-  const nowMs = deps.now.getTime();
-  const active = rows.filter(
-    (b) =>
-      b.status === "confirmed" || (b.status === "pending" && b.holdExpiresAt !== null && b.holdExpiresAt.getTime() > nowMs),
-  );
+  const active = rows.filter((b) => holdsSeatAt(b, deps.now));
   return emails(
     active[0]?.professionalId,
     active.map((b) => {

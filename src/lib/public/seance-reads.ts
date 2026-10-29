@@ -5,7 +5,7 @@
  * customer of a typed e-mail nor of a `?p=` reference (Decision 71): activeBookingOf and usableTickets take no
  * professional, so this module checks the customer and the occurrence against the pro before it calls them.
  */
-import { and, asc, desc, eq, inArray, isNull, lte, gt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 
 import { elapsedHoldsOf } from "@/lib/back-office/planning-reads";
 import type { BookingWindow } from "@/lib/booking-window";
@@ -14,6 +14,7 @@ import { activeBookingOf } from "@/lib/booking/claims";
 import { usableTickets } from "@/lib/booking/eligibility";
 import { walletBalance } from "@/lib/booking/wallet";
 import type { Db } from "@/lib/db/atomic";
+import { lapsedHold, liveHold } from "@/lib/db/hold-sql";
 import { booking, customer, event, eventTicketType, occurrence, ticketOffer, ticketPurchase, ticketType } from "@/lib/db/schema";
 import { offerCovers, validityOf } from "@/lib/ticket-expiry";
 import { idSchema, offerLabel, validityLabel, type BookingCoverage } from "@/lib/tickets";
@@ -248,7 +249,7 @@ async function endedStatusOf(
         eq(booking.customerId, customerId),
         or(
           inArray(booking.status, ["cancelled", "expired"]),
-          and(eq(booking.status, "pending"), lte(booking.holdExpiresAt, now)),
+          lapsedHold(now, sql`${booking}`),
         ),
       ),
     )
@@ -321,8 +322,7 @@ export async function livePendingHoldsOf(
       and(
         eq(booking.professionalId, professionalId),
         eq(booking.customerId, customerId),
-        eq(booking.status, "pending"),
-        gt(booking.holdExpiresAt, now),
+        liveHold(now, sql`${booking}`),
         eq(ticketPurchase.status, "pending"),
         eq(ticketPurchase.professionalId, professionalId),
         eq(occurrence.professionalId, professionalId),

@@ -3,6 +3,7 @@ import { alias } from "drizzle-orm/pg-core";
 
 import { revenueByCurrency } from "@/lib/booking/revenue";
 import type { Db } from "@/lib/db/atomic";
+import { holdsSeat } from "@/lib/db/hold-sql";
 import {
   booking,
   bookingAnswer,
@@ -140,7 +141,7 @@ async function weekCounts(
     .where(
       and(
         eq(booking.professionalId, professionalId),
-        or(eq(booking.status, "confirmed"), and(eq(booking.status, "pending"), gte(booking.holdExpiresAt, now))),
+        holdsSeat(now, sql`${booking}`),
         inArray(booking.occurrenceId, counted),
       ),
     );

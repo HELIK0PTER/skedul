@@ -7,6 +7,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import { G, ts, type BatchCtx, type Query } from "@/lib/db/atomic";
+import { holdsSeat, lapsedHold, liveHold } from "@/lib/db/hold-sql";
 import { CHECKOUT_MINUTES, HOLD_MINUTES, MAX_PENDING_HOLDS, SHOP_CHECKOUT_HOURS } from "@/lib/tickets";
 
 const MINUTE = 60_000;
@@ -25,7 +26,7 @@ export function checkoutExpiry(now: Date, kind: "buybook" | "shop"): Date {
 /**
  * G(live holds of the customer < MAX_PENDING_HOLDS, 'too_many_holds'), séances
  * and RDV together (a customer row belongs to one pro). Only LIVE holds count
- * (hold_expires_at > now): an elapsed one not yet swept does not block. Put it
+ * (liveHold, hold-sql.ts): an elapsed one not yet swept does not block. Put it
  * BEFORE the new pending booking's INSERT. The caller must already hold the
  * customer row lock in the same batch (lockRows(db, "customer", …): E1 and
  * E4 « buy »). Under READ COMMITTED, two concurrent holds of one customer
@@ -35,24 +36,18 @@ export function assertHoldQuota(c: BatchCtx, customerId: string): Query {
   return G(
     c.db,
     sql`(select count(*)::int from booking
-      where customer_id = ${customerId} and status = 'pending' and hold_expires_at > ${ts(c.now)})
+      where customer_id = ${customerId} and ${liveHold(c.now)})
       < ${MAX_PENDING_HOLDS}::int`,
     "too_many_holds",
   );
 }
 
 /**
- * The lapsed-hold rule, in ONE place (P3OUT:151): a pending booking whose
- * hold ended strictly before `now`. A hold whose hold_expires_at equals `now`
- * is still live. `b` is the booking table alias (sql`b`); without it the
- * columns are unqualified (a statement on the booking table itself). Used by
- * expireElapsedHolds (the engine releases these) and by the P5 slot loader
- * (src/lib/slots.ts: an RDV held only by these is a phantom, not busy).
+ * The hold-lapse rule lives in src/lib/db/hold-sql.ts (P6 A12, JS twin src/lib/hold-rule.ts): a pending booking holds
+ * its seat while hold_expires_at > now and has lapsed from hold_expires_at on. Re-exported here for the engine and the
+ * P5 slot loader (src/lib/slots.ts: an RDV held only by a lapsed hold is a phantom, not busy).
  */
-export function lapsedHold(now: Date, b?: SQL): SQL {
-  const col = (name: string): SQL => (b ? sql`${b}.${sql.identifier(name)}` : sql`${sql.identifier(name)}`);
-  return sql`(${col("status")} = 'pending' and ${col("hold_expires_at")} < ${ts(now)})`;
-}
+export { holdsSeat, lapsedHold, liveHold };
 
 /**
  * R over many occurrences: expires the elapsed holds of every booking whose

@@ -234,8 +234,10 @@ test("the séance page never promises a seat that is gone: seatGoneOf decides, i
   assert.equal(inCode(derivation, /\bliveHoldEnd\(/g).length, 2);
   assert.deepEqual(inCode(derivation, /\bnew Date\(/g), [], "the hold rule is written in visibility.ts only");
   assert.deepEqual(inCode(derivation, /\bbooking\.status === "cancelled"/g), [], "the cancelled seat is seatGoneOf's alone");
+  // P6 A12: visibility.ts asks the one hold rule of hold-rule.ts, once, and writes no clock comparison of its own.
   const hold = source("src/lib/public/visibility.ts");
-  assert.equal(inCode(hold, /\.getTime\(\) > now\.getTime\(\)/g).length, 1, "the hold rule, once");
+  assert.equal(inCode(hold, /\bholdEndedBy\(/g).length, 1, "the hold rule, once");
+  assert.deepEqual(inCode(hold, /\.getTime\(\) [<>]=? now\.getTime\(\)/g), [], "no copy of the rule");
 });
 
 test("/[slug] reads the visitor through currentPublicVisitor (fresh session), never the cached session, and is never cached", () => {

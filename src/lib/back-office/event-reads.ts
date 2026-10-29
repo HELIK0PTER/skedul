@@ -9,7 +9,7 @@ import { and, asc, eq, gt, gte, inArray, isNull, sql, type SQL } from "drizzle-o
 
 import { listActiveTypeOptions, readProWindow, type TypeOption } from "@/lib/back-office/catalog-reads";
 import { loadQuestions, type QuestionRow } from "@/lib/booking/answers";
-import { lapsedHold } from "@/lib/booking/holds";
+import { holdsSeat, lapsedHold } from "@/lib/booking/holds";
 import { ruleOf, type EventRow } from "@/lib/booking/occurrences";
 import type { BookingWindow } from "@/lib/booking-window";
 import type { DateKey } from "@/lib/civil-date";
@@ -90,7 +90,7 @@ export type EventEditorData = {
   /**
    * The next 10 séances (scheduled or cancelled) of this segment. `seatsTaken` still counts the pending holds that
    * have lapsed and that nobody has released yet; `elapsedHolds` is how many those are (the engine's
-   * expireElapsedHolds rule: pending and hold_expires_at < now), so that seatsShown() gives the truthful figure.
+   * lapsedHold rule of hold-sql.ts: pending and hold_expires_at <= now), so that seatsShown() gives the truthful figure.
    */
   upcoming: {
     id: string;
@@ -225,9 +225,9 @@ function ruleInputOf(e: EventRow): RecurrenceRuleInput {
   };
 }
 
-/** A booking a séance still counts on: confirmed, or pending with a hold that has not lapsed. */
+/** A booking a séance still counts on: confirmed, or pending with a hold that has not lapsed (holdsSeat, hold-sql.ts). */
 function liveRegistrant(now: Date): SQL {
-  return sql`(${booking.status} = 'confirmed' or (${booking.status} = 'pending' and ${booking.holdExpiresAt} > ${ts(now)}))`;
+  return holdsSeat(now, sql`${booking}`);
 }
 
 /* ───────────────────────────── The list ───────────────────────────── */
@@ -387,7 +387,7 @@ export async function getEventEditor(
         // Written "occurrence.id", not ${occurrence.id}: in a single-table select drizzle drops the table name of an
         // interpolated column, and a bare "id" would resolve to booking.id inside the subquery.
         elapsedHolds: sql<number>`(select count(*)::int from booking b where b.occurrence_id = occurrence.id
-          and b.status = 'pending' and b.hold_expires_at < ${ts(now)})`.mapWith(Number),
+          and ${lapsedHold(now, sql`b`)})`.mapWith(Number),
         capacity: occurrence.capacity,
       })
       .from(occurrence)
@@ -494,7 +494,7 @@ export async function countRdvConflicts(
         where o.block_start < r.e and o.block_end > r.s)
       and exists (
         select 1 from booking b
-        where b.occurrence_id = o.id and b.status in ('pending', 'confirmed') and not ${lapsedHold(now, sql`b`)})`);
+        where b.occurrence_id = o.id and ${holdsSeat(now, sql`b`)})`);
   return Number(res.rows[0]?.n ?? 0);
 }
 
@@ -527,7 +527,7 @@ async function segmentPreview(
         status: occurrence.status,
         hasHistory: sql<boolean>`exists (select 1 from booking b where b.occurrence_id = occurrence.id)`,
         registrants: sql<number>`(select count(*)::int from booking b where b.occurrence_id = occurrence.id
-          and (b.status = 'confirmed' or (b.status = 'pending' and b.hold_expires_at > ${ts(now)})))`.mapWith(Number),
+          and ${holdsSeat(now, sql`b`)})`.mapWith(Number),
         tickets: sql<number>`(select count(*)::int from booking b where b.occurrence_id = occurrence.id
           and b.status = 'confirmed' and b.coverage = 'ticket')`.mapWith(Number),
       })

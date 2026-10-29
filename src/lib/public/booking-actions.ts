@@ -5,14 +5,15 @@
  * the page slug (PublicPro), never with anything taken from the input. A core never reads a session or a
  * cookie: the wrapper (src/server/public-context.ts) builds the ActionVisitor. No server-only, no next/*.
  */
-import { and, eq, gt, inArray, or, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { attachCheckoutSession, bookWithHeldTicket, registerFree, startBuyAndBook } from "@/lib/booking/claims";
 import { releasePurchase } from "@/lib/booking/release";
 import { fail, type Effect } from "@/lib/booking/types";
 import { upsertCustomer } from "@/lib/booking/wallet";
-import { ts, type Db } from "@/lib/db/atomic";
+import type { Db } from "@/lib/db/atomic";
+import { holdsSeat, lapsedHold, liveHold } from "@/lib/db/hold-sql";
 import { booking, event, occurrence } from "@/lib/db/schema";
 import { logSafeMessage } from "@/lib/log-safe";
 import {
@@ -104,7 +105,7 @@ export function holdCeiling(capacity: number): number {
   return Math.max(3, Math.ceil(capacity / 3));
 }
 
-/** A read, not a guard (a race lets one extra hold through, never a stranger's seat): live holds (status 'pending' and hold_expires_at > now) and the capacity of THIS pro's occurrence; null when not this pro's or unknown (the engine then answers not_found). */
+/** A read, not a guard (a race lets one extra hold through, never a stranger's seat): live holds (liveHold, hold-sql.ts) and the capacity of THIS pro's occurrence; null when not this pro's or unknown (the engine then answers not_found). */
 export async function seatPressureOf(
   db: Db,
   professionalId: string,
@@ -115,7 +116,7 @@ export async function seatPressureOf(
     select o.capacity::int as capacity,
       (select count(*)::int from booking b
         where b.occurrence_id = o.id and b.professional_id = o.professional_id
-          and b.status = 'pending' and b.hold_expires_at > ${ts(now)}) as live_holds
+          and ${liveHold(now, sql`b`)}) as live_holds
     from occurrence o
     where o.id = ${occurrenceId} and o.professional_id = ${professionalId}`);
   const row = res.rows[0];
@@ -354,8 +355,7 @@ export async function activeBookingIdOf(
         eq(booking.professionalId, professionalId),
         eq(booking.occurrenceId, occurrenceId),
         eq(booking.customerId, customerId),
-        inArray(booking.status, ["pending", "confirmed"]),
-        or(eq(booking.status, "confirmed"), gt(booking.holdExpiresAt, now)),
+        holdsSeat(now, sql`${booking}`),
       ),
     )
     .limit(1);
@@ -372,7 +372,7 @@ async function seatsLeftOf(db: Db, professionalId: string, occurrenceId: string,
     select (o.capacity - o.seats_taken
       + (select count(*)::int from booking b
           where b.occurrence_id = o.id and b.professional_id = o.professional_id
-            and b.status = 'pending' and b.hold_expires_at < ${ts(now)}))::int as seats_left
+            and ${lapsedHold(now, sql`b`)}))::int as seats_left
     from occurrence o
     where o.id = ${occurrenceId} and o.professional_id = ${professionalId}`);
   const row = res.rows[0];

@@ -14,6 +14,7 @@ import { sql } from "drizzle-orm";
 import { formatWhen } from "@/lib/back-office/format";
 import { ELIGIBLE } from "@/lib/booking/eligibility";
 import { ts, type Db } from "@/lib/db/atomic";
+import { holdsSeat, lapsedHold } from "@/lib/db/hold-sql";
 
 /** The most séances « Utiliser vos tickets » lists. */
 export const SPENDABLE_MAX = 8;
@@ -94,10 +95,9 @@ export async function spendableSeances(
                       and toff.start_at < so.ends_at and toff.end_at > so.starts_at)
       and so.capacity - so.seats_taken
           + (select count(*)::int from booking h
-             where h.occurrence_id = so.id and h.status = 'pending' and h.hold_expires_at < ${ts(now)}) > 0
+             where h.occurrence_id = so.id and ${lapsedHold(now, sql`h`)}) > 0
       and not exists (select 1 from booking b
-                      where b.occurrence_id = so.id and b.customer_id = ${customerId}
-                        and (b.status = 'confirmed' or (b.status = 'pending' and b.hold_expires_at >= ${ts(now)})))
+                      where b.occurrence_id = so.id and b.customer_id = ${customerId} and ${holdsSeat(now, sql`b`)})
     order by so.starts_at, so.id
     limit ${cap}::int`);
   return res.rows.map((r) => {

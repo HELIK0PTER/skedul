@@ -366,10 +366,13 @@ test("the module is client-safe: runtime imports of the date formatter, the copy
   assert.deepEqual(runtime, ["./visibility", "@/lib/datetime", "@/lib/public/messages"]);
   assert.deepEqual(typeOnly, ["@/lib/public/release-actions"]);
   assert.doesNotMatch(withoutComments(source), FORBIDDEN);
-  // Its one local runtime import is read too: visibility.ts names the reads and the identity module as types only.
+  // Its one local runtime import is read too: visibility.ts names the reads and the identity module as types only, and
+  // its one runtime import is the hold rule (P6 A12), a module that imports nothing at all.
   const visibility = readFileSync("src/lib/public/visibility.ts", "utf8");
-  assert.deepEqual(importsOf(visibility).runtime, [], "visibility.ts has no runtime import");
+  assert.deepEqual(importsOf(visibility).runtime, ["@/lib/hold-rule"], "visibility.ts imports only the hold rule at run time");
   assert.doesNotMatch(withoutComments(visibility), FORBIDDEN);
+  const holdRule = readFileSync("src/lib/hold-rule.ts", "utf8");
+  assert.deepEqual([...importsOf(holdRule).runtime, ...importsOf(holdRule).typeOnly], [], "hold-rule.ts imports nothing");
 });
 
 test("the import reader can fail: a value import of the release core is a runtime import, a type binding is not", () => {

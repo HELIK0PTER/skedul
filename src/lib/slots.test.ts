@@ -36,14 +36,17 @@ test("slots.ts generates with computeSlots and checks with isGridStart, never wi
   assert.doesNotMatch(code, /fitsAvailability|onlineBookability/, "the hours and the window are the generator's");
 });
 
-test("the lapsed-hold rule lives in holds.ts only: slots.ts and expireElapsedHolds both use lapsedHold", () => {
+test("the lapsed-hold rule lives in hold-sql.ts only: slots.ts and expireElapsedHolds both use lapsedHold", () => {
   assert.match(slots, /import \{ lapsedHold \} from "@\/lib\/booking\/holds";/);
   assert.match(slots, /not \$\{lapsedHold\(now, sql`b`\)\}/);
   assert.doesNotMatch(withoutComments(slots), /hold_expires_at/, "no copy of the rule");
   const expire = bodyOf(holds, "expireElapsedHolds");
   assert.match(expire, /\$\{lapsedHold\(c\.now\)\}/);
   assert.doesNotMatch(withoutComments(expire), /hold_expires_at/);
-  assert.match(bodyOf(holds, "lapsedHold"), /= 'pending' and \$\{col\("hold_expires_at"\)\} < \$\{ts\(now\)\}/);
+  // P6 A12: holds.ts re-exports the one fragment; a hold has lapsed from hold_expires_at on.
+  assert.match(holds, /import \{ holdsSeat, lapsedHold, liveHold \} from "@\/lib\/db\/hold-sql";/);
+  const holdSql = readFileSync("src/lib/db/hold-sql.ts", "utf8");
+  assert.match(bodyOf(holdSql, "lapsedHold"), /= 'pending' and \$\{col\("hold_expires_at", b\)\} <= \$\{at\(now\)\}/);
 });
 
 test("slots.ts is a testable core", () => {

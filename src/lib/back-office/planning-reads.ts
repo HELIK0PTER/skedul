@@ -5,13 +5,14 @@
  * server-only, next/* nor the db index. Every query filters on professional_id
  * and every id that comes from the caller is checked against it.
  */
-import { and, asc, eq, exists, gt, gte, ilike, inArray, isNotNull, isNull, lt, min, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, exists, gt, ilike, inArray, isNotNull, isNull, lt, min, ne, or, sql, type SQL } from "drizzle-orm";
 
 import { activeBookingOf } from "@/lib/booking/claims";
 import { usableTickets } from "@/lib/booking/eligibility";
 import { seatsShown } from "@/lib/booking/holds";
 import type { DateKey } from "@/lib/civil-date";
 import type { Db } from "@/lib/db/atomic";
+import { holdsSeat, lapsedHold } from "@/lib/db/hold-sql";
 import {
   booking,
   bookingAnswer,
@@ -137,7 +138,7 @@ type OccurrenceData = Awaited<ReturnType<typeof selectOccurrences>>[number];
 
 /**
  * Pending bookings whose hold has elapsed, per occurrence (not yet released by R / the sweep): the engine's
- * expireElapsedHolds rule (status pending and hold_expires_at < now). A grouped query, not a correlated subquery:
+ * lapsedHold rule (hold-sql.ts: status pending and hold_expires_at <= now). A grouped query, not a correlated subquery:
  * in a one-table select drizzle renders an interpolated column unqualified, which would resolve to the inner table.
  */
 export async function elapsedHoldsOf(db: Db, professionalId: string, occurrenceIds: readonly string[], now: Date): Promise<Map<string, number>> {
@@ -149,8 +150,7 @@ export async function elapsedHoldsOf(db: Db, professionalId: string, occurrenceI
       and(
         eq(booking.professionalId, professionalId),
         inArray(booking.occurrenceId, [...occurrenceIds]),
-        eq(booking.status, "pending"),
-        lt(booking.holdExpiresAt, now),
+        lapsedHold(now, sql`${booking}`),
       ),
     )
     .groupBy(booking.occurrenceId);
@@ -566,8 +566,8 @@ async function loadTargetLinks(db: Db, professionalId: string, eventIds: readonl
 
 /**
  * The occurrences among `occurrenceIds` where the customer holds a live seat: what moveAttendee refuses as
- * « already_booked » (assertNotBooked, placed after R, which has just expired every hold with hold_expires_at < now),
- * so confirmed, or pending with a hold not elapsed. activeBookingOf only differs at the very instant of the expiry.
+ * « already_booked » (assertNotBooked, placed after R, which has just expired every lapsed hold), so confirmed, or
+ * pending with a live hold (holdsSeat, hold-sql.ts: the same rule as R and activeBookingOf).
  */
 async function liveSeatsOf(
   db: Db,
@@ -585,7 +585,7 @@ async function liveSeatsOf(
         eq(booking.professionalId, professionalId),
         eq(booking.customerId, customerId),
         inArray(booking.occurrenceId, [...occurrenceIds]),
-        or(eq(booking.status, "confirmed"), and(eq(booking.status, "pending"), gte(booking.holdExpiresAt, now))),
+        holdsSeat(now, sql`${booking}`),
       ),
     );
   return new Set(rows.map((r) => r.occurrenceId));

@@ -3,6 +3,7 @@ import { and, count, desc, eq, gte, inArray } from "drizzle-orm";
 import { revenueByCurrency } from "@/lib/booking/revenue";
 import type { Db } from "@/lib/db/atomic";
 import { booking, customer, event, occurrence, ticket, ticketPurchase, ticketType } from "@/lib/db/schema";
+import { isLapsedHold } from "@/lib/hold-rule";
 import { TICKET_CLOSE_REASONS, type BookingStatus, type TicketCloseReason } from "@/lib/tickets-vocab";
 
 export const PAYMENTS_PERIODS = ["tout", "30j"] as const;
@@ -40,11 +41,11 @@ function reasonRank(reason: TicketCloseReason): number {
 
 /**
  * The status a pro should read: a pending booking whose hold has ended is
- * « expired » even before the sweep ends it (the engine's expireElapsedHolds
- * rule: pending and hold_expires_at < now; its seat is already free).
+ * « expired » even before the sweep ends it (isLapsedHold, the one rule of
+ * hold-rule.ts that the engine applies too; its seat is already free).
  */
 function liveBookingStatus(status: BookingStatus, holdExpiresAt: Date | null, now: Date): BookingStatus {
-  return status === "pending" && holdExpiresAt !== null && holdExpiresAt.getTime() < now.getTime() ? "expired" : status;
+  return isLapsedHold({ status, holdExpiresAt }, now) ? "expired" : status;
 }
 
 /**

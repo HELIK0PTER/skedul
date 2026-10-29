@@ -4,6 +4,7 @@
  * rule that runs through all of them: a `?p=` reference shows THAT purchase and its own booking, never its customer,
  * because the customer of a purchase came from an e-mail somebody typed (SEC-C1). Nothing here imports the database.
  */
+import { holdEndedBy } from "@/lib/hold-rule";
 import type { BookingMode, BookingStatus, PurchaseStatus } from "@/lib/tickets-vocab";
 
 import type { PublicVisitor, WalletOwner } from "./identity";
@@ -120,7 +121,7 @@ export type PageBooking = { status: "pending" | "confirmed"; via: "owner" | "ref
 export function liveHoldEnd(holdExpiresAt: string | null, now: Date): Date | null {
   if (holdExpiresAt === null) return null;
   const end = new Date(holdExpiresAt);
-  return end.getTime() > now.getTime() ? end : null;
+  return holdEndedBy(end, now) ? null : end;
 }
 
 /**

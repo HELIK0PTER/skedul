@@ -19,7 +19,7 @@ import {
 import { booking, ticketPurchase } from "@/lib/db/schema";
 import { STALE_PURCHASE_GRACE_MINUTES } from "@/lib/tickets";
 
-import { expireElapsedHolds } from "./holds";
+import { expireElapsedHolds, lapsedHold } from "./holds";
 import { failOf, syncEffects, type EngineResult } from "./types";
 
 /**
@@ -80,12 +80,12 @@ export async function releasePurchase(
 export async function sweepHolds(db: Db, now: Date = new Date()): Promise<{ expiredBookings: number }> {
   const elapsed = sql`select o.id from occurrence o
     where exists (select 1 from booking b
-                  where b.occurrence_id = o.id and b.status = 'pending' and b.hold_expires_at < ${ts(now)})`;
+                  where b.occurrence_id = o.id and ${lapsedHold(now, sql`b`)})`;
   const done = await atomic(db, async () => {
     const [pending] = await db
       .select({ n: count() })
       .from(booking)
-      .where(and(eq(booking.status, "pending"), lt(booking.holdExpiresAt, now)));
+      .where(lapsedHold(now));
     if (!pending || pending.n === 0) return () => [];
     return (aid) => {
       const c: BatchCtx = { db, aid, now };

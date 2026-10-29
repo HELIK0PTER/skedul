@@ -25,6 +25,7 @@ import {
   type TicketTypeInput,
 } from "@/lib/tickets";
 
+import { holdsSeat } from "./holds";
 import { fail, failOf, type EngineFail, type EngineResult } from "./types";
 
 /** zod → data, or `invalid` with the first issue's message. */
@@ -77,7 +78,7 @@ export function freeBlockerCounts(
       join booking b on b.id = t.booking_id and b.professional_id = ${professionalId}
       join occurrence o on o.id = b.occurrence_id and o.professional_id = ${professionalId}
       where t.ticket_type_id = ${ticketTypeId} and t.professional_id = ${professionalId} and t.status = 'booked'
-        and (b.status = 'confirmed' or (b.status = 'pending' and b.hold_expires_at > ${ts(now)}))
+        and ${holdsSeat(now, sql`b`)}
         and o.status = 'scheduled' and o.starts_at > ${ts(now)})`,
   };
 }

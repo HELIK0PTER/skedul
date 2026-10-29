@@ -7,7 +7,7 @@
  * engine never calls Stripe: E1 and E4 « buy » return the pending purchase;
  * the P4/P5 action creates the Checkout session, then attachCheckoutSession.
  */
-import { and, eq, gt, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, isNull, or, sql, type SQL } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
 import { effectiveWindow, fitsAvailability, onlineBookability, type BookingWindow } from "@/lib/booking-window";
@@ -51,7 +51,7 @@ import {
 
 import { buildAnswers, insertAnswers, loadQuestions } from "./answers";
 import { assertSpent, spendTicket, usableTickets } from "./eligibility";
-import { assertHoldQuota, checkoutExpiry, expireElapsedHolds, holdExpiry } from "./holds";
+import { assertHoldQuota, checkoutExpiry, expireElapsedHolds, holdExpiry, holdsSeat } from "./holds";
 import { fail, failOf, syncEffects, type Effect, type EngineResult } from "./types";
 
 /* ───────────────────────── Shared types ───────────────────────── */
@@ -541,8 +541,7 @@ export async function activeBookingOf(
       and(
         eq(booking.occurrenceId, input.occurrenceId),
         eq(booking.customerId, input.customerId),
-        inArray(booking.status, ["pending", "confirmed"]),
-        or(eq(booking.status, "confirmed"), gt(booking.holdExpiresAt, now)),
+        holdsSeat(now, sql`${booking}`),
       ),
     );
   if (!row) return null;

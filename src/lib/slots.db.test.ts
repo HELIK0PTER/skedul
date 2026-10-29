@@ -212,7 +212,9 @@ dbTest("loadRdvWeek: another RDV type of the pro blocks by its stored block, aga
   assert.equal(codeOf(await bookFree(h.db, h.pro, typeId, at(NEXT_TUE, 600), NOW)), "slot_taken");
 });
 
-dbTest("loadRdvWeek: a live hold blocks; at hold_expires_at it still does (slot_taken); 1 ms later the RDV is a phantom and the slot books", async (h) => {
+// P6 A12: one hold rule for the reads and the engine. A hold runs strictly before hold_expires_at; from that instant on
+// it has lapsed: the page offers the slot and the engine books it (R expires the phantom first).
+dbTest("loadRdvWeek: a live hold blocks up to 1 ms before hold_expires_at (slot_taken); at hold_expires_at the RDV is a phantom and the slot books", async (h) => {
   const typeId = await setup(h, { rdvFree: false });
   const offerId = await makeOffer(h.db, h.pro, typeId);
   const at = atOf(h.pro);
@@ -234,17 +236,17 @@ dbTest("loadRdvWeek: a live hold blocks; at hold_expires_at it still does (slot_
   assert.equal(holdEnd.getTime(), addMinutes(NOW, 45).getTime());
 
   assert.equal(await offered(addMinutes(NOW, 10)), false, "a live hold");
-  assert.equal(await offered(holdEnd), false, "hold_expires_at == now: still live");
-  assert.deepEqual(await busyAt(holdEnd), [slot]);
-  assert.equal(codeOf(await buy(holdEnd)), "slot_taken", "the engine agrees at the boundary");
+  const before = new Date(holdEnd.getTime() - 1);
+  assert.equal(await offered(before), false, "1 ms before hold_expires_at: still live");
+  assert.deepEqual(await busyAt(before), [slot]);
+  assert.equal(codeOf(await buy(before)), "slot_taken", "the engine agrees before the boundary");
 
-  const after = new Date(holdEnd.getTime() + 1);
-  assert.equal(await offered(after), true, "1 ms later: only a lapsed hold, a phantom");
-  assert.deepEqual(await busyAt(after), []);
-  const second = await buy(after);
+  assert.equal(await offered(holdEnd), true, "hold_expires_at == now: only a lapsed hold, a phantom");
+  assert.deepEqual(await busyAt(holdEnd), []);
+  const second = await buy(holdEnd);
   assert.ok(second.ok, JSON.stringify(second));
-  assert.equal((await getOccurrence(h.db, first.occurrenceId)).status, "cancelled", "the engine released the phantom");
-  assert.equal(await offered(after), false, "the new hold blocks");
+  assert.equal((await getOccurrence(h.db, first.occurrenceId)).status, "cancelled", "the engine released the phantom at the boundary");
+  assert.equal(await offered(holdEnd), false, "the new hold blocks");
 });
 
 dbTest("loadRdvWeek: a released (cancelled) RDV is ignored, a confirmed one blocks", async (h) => {

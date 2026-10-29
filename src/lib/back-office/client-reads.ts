@@ -22,6 +22,7 @@ import { historyLines, type HistoryLine, type LedgerMovementRow } from "@/lib/ba
 import { groupWallet, type WalletGroup, type WalletTypeRow } from "@/lib/back-office/wallet-view";
 import { loadTypeFacts } from "@/lib/booking/wallet";
 import { textArray, ts, type Db } from "@/lib/db/atomic";
+import { isLapsedHold } from "@/lib/hold-rule";
 import {
   booking,
   customer,
@@ -315,12 +316,11 @@ type BookingQueryRow = {
 };
 
 /**
- * What the booking is right now: a pending one whose hold has ended (`hold_expires_at <= now`, the rule of the
- * planning) is not a live registration, the engine releases its seat on the next claim: it reads « expired ».
+ * What the booking is right now: a pending one whose hold has ended (isLapsedHold, the one rule of hold-rule.ts) is
+ * not a live registration, the engine releases its seat on the next claim: it reads « expired ».
  */
 function statusAt(r: Pick<BookingQueryRow, "status" | "holdExpiresAt">, now: Date): BookingStatus {
-  const lapsed = r.status === "pending" && (r.holdExpiresAt === null || r.holdExpiresAt.getTime() <= now.getTime());
-  return lapsed ? "expired" : r.status;
+  return isLapsedHold(r, now) ? "expired" : r.status;
 }
 
 function bookingRow(r: BookingQueryRow, now: Date, tz: string): ClientBookingRow {

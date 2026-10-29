@@ -12,6 +12,7 @@ import type { NeonHttpDatabase } from "drizzle-orm/neon-http";
 
 import type { Actor, EngineErrorCode } from "@/lib/tickets";
 import type * as schema from "./schema";
+import { lapsedHold } from "./hold-sql";
 import { mapDbError } from "./map-db-error";
 
 export type Db = NeonHttpDatabase<typeof schema>;
@@ -150,12 +151,12 @@ export function lockRows(db: Db, table: LockTable, ids: readonly string[]): Quer
   );
 }
 
-/** R(o): lazy release of elapsed holds on an occurrence this batch already locked. */
+/** R(o): lazy release of elapsed holds (the one rule, hold-sql.ts) on an occurrence this batch already locked. */
 export function R(c: BatchCtx, occurrenceId: string): Query {
   return c.db.execute(sql`
     update booking set status = 'expired', ended_at = ${ts(c.now)}, ended_by = 'system',
       ended_action_id = ${c.aid}, updated_at = ${ts(c.now)}
-    where occurrence_id = ${occurrenceId} and status = 'pending' and hold_expires_at < ${ts(c.now)}`);
+    where occurrence_id = ${occurrenceId} and ${lapsedHold(c.now)}`);
 }
 
 /** rel(o): bookings of o ended by this action, evaluated INSIDE the SEAT statement. */

@@ -12,6 +12,7 @@
 import { addDays, compareKeys, formatDayMonthYear, parseKey, type DateKey } from "@/lib/civil-date";
 import { dayKeyInTz, dayOrdinal, formatTime, frenchFirst, startOfDayKey, wallClockMinutes } from "@/lib/datetime";
 import { expiryLabel, formatWhen, plural } from "@/lib/back-office/format";
+import { isLapsedHold } from "@/lib/hold-rule";
 import type { PlanningAttendee, PlanningItem, PlanningQuestion, PlanningTimeOff } from "@/lib/back-office/planning-reads";
 import { layoutLanes, type LaneSlot } from "@/lib/lanes";
 import type { BookingCoverage, BookingMode, OccurrenceStatus } from "@/lib/tickets-vocab";
@@ -123,7 +124,7 @@ function attendeeVM(a: PlanningAttendee, tz: string, now: Date): PlanningAttende
     coverage: a.coverage,
     ticketLabel,
     holdUntil: a.status === "pending" && a.holdExpiresAt ? formatTime(a.holdExpiresAt, tz) : null,
-    holdLapsed: a.status === "pending" && a.holdExpiresAt !== null && a.holdExpiresAt.getTime() <= now.getTime(),
+    holdLapsed: isLapsedHold(a, now),
     answers: a.answers,
     notes: a.customerNotes,
     moved: a.movedAt !== null,
