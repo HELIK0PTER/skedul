@@ -22,14 +22,21 @@ function messageOf(err: unknown): string | null {
 
 /** The first « params: » of a message (any case, the word itself): where a Drizzle « Failed query » lists its values. */
 const PARAMS = /\bparams:/i;
-/** Anything around an « @ » (wide on purpose: a message is masked rather than trusted). */
-const AT_WORD = /[^\s@<>"'()]+@[^\s@<>"'()]+/g;
+/**
+ * Anything around an « @ », or its percent-encoded « %40 » (an address in a URL), wide on purpose: a message is
+ * masked rather than trusted. The part after it runs to the next space or quote, so every address of a list joined by
+ * commas or semicolons goes with the first one, domains included (P6 A7).
+ */
+const AT_WORD = /[^\s@<>"'()]+(?:@|%40)[^\s<>"'()]+/g;
 /** A personal link (`/api/c/<token>`). */
 const GUEST_LINK = /\/api\/c\/[A-Za-z0-9._-]+/g;
 /** A Stripe Checkout session id. */
 const CHECKOUT_SESSION = /\bcs_(?:test|live)_[A-Za-z0-9]+/g;
-/** An e-mail address in the strict sense: a dotted domain whose last label starts with a letter (`next@16.2.9` in a package path is not one). */
-const EMAIL_ADDRESS = /[^\s@<>"'()]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z][A-Za-z0-9-]*/;
+/**
+ * An e-mail address in the strict sense, with « @ » or « %40 »: a dotted domain whose last label starts with a letter
+ * (`next@16.2.9` in a package path is not one).
+ */
+const EMAIL_ADDRESS = /[^\s@<>"'()]+(?:@|%40)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z][A-Za-z0-9-]*/;
 
 /**
  * A text with what no log may hold taken out, and nothing else changed (lines, length and spacing kept): cut at its

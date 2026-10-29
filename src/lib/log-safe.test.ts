@@ -19,6 +19,26 @@ test("logSafeMessage hides e-mail addresses, personal-link tokens and Checkout s
   );
 });
 
+test("logSafeMessage masks a percent-encoded address and every address of a joined list, domains included (P6 A7)", () => {
+  // An address in a URL (a callback, a query string) is written with %40; the whole word goes, as with « @ ».
+  assert.equal(logSafeMessage(new Error("GET /api/x?email=marie.dupont%40example.com&step=2 failed")), "GET [email] failed");
+  assert.equal(logSafeMessage(new Error("to MARIE%40EXAMPLE.COM")), "to [email]");
+  // A list joined by commas or semicolons, the second domain too.
+  for (const list of ["a@b.com,c@d.org", "a@b.com;c@d.org", "a%40b.com,c%40d.org", "a@b.com,c%40d.org"]) {
+    const line = logSafeMessage(new Error(`Invalid \`to\` field: ${list}`));
+    assert.equal(line, "Invalid `to` field: [email]", list);
+    for (const part of ["b.com", "d.org", "%40"]) assert.ok(!line.includes(part), `${list}: ${part}`);
+  }
+  assert.equal(scrubLogText("to a@b.com, c@d.org\n"), "to [email] [email]\n", "spacing and lines kept");
+});
+
+test("holdsLogSecret names a percent-encoded address, and still not a package path (P6 A7)", () => {
+  assert.equal(holdsLogSecret("GET /callback?email=marie%40example.com"), true);
+  assert.equal(holdsLogSecret("to MARIE%40EXAMPLE.COM"), true);
+  assert.equal(holdsLogSecret("    at f (/var/task/node_modules/next%4016.2.9/dist/x.js:1:2)"), false, "a version is not a domain");
+  assert.equal(holdsLogSecret("progress 40%40 done"), false);
+});
+
 test("logSafeMessage drops the query parameters of a Drizzle failure: names and phones are not masked, so nothing after « params: » is logged", () => {
   const drizzle = new Error(
     'Failed query: insert into "customer" ("id", "professional_id", "email", "name", "phone") values ($1, $2, $3, $4, $5)\n' +
