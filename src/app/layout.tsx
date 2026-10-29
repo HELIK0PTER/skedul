@@ -21,11 +21,11 @@ const bricolage = Bricolage_Grotesque({
 
 export const metadata: Metadata = {
   title: {
-    default: "Skedul · Réservations & packs prépayés",
+    default: "Skedul · Séances, carnets de tickets et rendez-vous",
     template: "%s · Skedul",
   },
   description:
-    "Le SaaS de réservation pour les indépendants : créneaux à la Calendly + packs d'heures prépayés que vos clients posent quand ils veulent.",
+    "Vendez des tickets à l'unité ou en carnets. Vos clients réservent vos séances et vos rendez-vous en ligne, et retrouvent leurs tickets dans leur espace.",
 };
 
 export default function RootLayout({

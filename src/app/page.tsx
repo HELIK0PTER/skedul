@@ -20,7 +20,7 @@ import { toDayKey } from "@/lib/calendar-grid";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
-  title: { absolute: "Skedul · Réservations et carnets prépayés" },
+  title: { absolute: "Skedul · Séances, carnets de tickets et rendez-vous" },
 };
 
 /* French typography:   before « : »,   before « ; ? ». */
