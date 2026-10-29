@@ -238,12 +238,54 @@ dbTest("recordOrphanPayment counts the payment for the admin card and returns th
     // a payment without a session id (the mock checkout shape) is counted the same way
     await recordOrphanPayment(h.db, { sessionId: null, paymentIntentId: null, livemode: false }, new Date());
     assert.equal((await readHealth(h.db))[key]?.value, before + 2);
+    // no id at all, nothing to tell two calls apart: each one is counted
+    await recordOrphanPayment(h.db, { sessionId: null, paymentIntentId: null, livemode: false }, new Date());
+    assert.equal((await readHealth(h.db))[key]?.value, before + 3);
   } finally {
     if (saved) {
       await h.db.update(throttle).set({ hits: saved.hits, windowStart: saved.windowStart }).where(eq(throttle.key, key));
     } else {
       await h.db.delete(throttle).where(eq(throttle.key, key));
     }
+  }
+});
+
+// P6 A25: the admin card counts payments to refund, not Stripe deliveries. A redelivery, or the async_payment_succeeded of
+// a session already counted, carries the same payment intent and must not count it again.
+dbTest("recordOrphanPayment counts one payment once however often Stripe delivers it (P6 A25)", async (h) => {
+  const key = HEALTH_KEYS.orphanPayments;
+  const [saved] = await h.db.select().from(throttle).where(eq(throttle.key, key));
+  const ids = [`pi_test_${nanoid()}`, `pi_test_${nanoid()}`, `cs_test_${nanoid()}`, `cs_test_${nanoid()}`];
+  const [pi, otherPi, session, bareSession] = ids;
+  const count = async () => (await readHealth(h.db))[key]?.value ?? 0;
+  try {
+    const before = await count();
+    const paid: PaymentFacts = { sessionId: session, paymentIntentId: pi, livemode: false };
+    const first = await recordOrphanPayment(h.db, paid, new Date());
+    assert.equal(first.outcome, "orphan");
+    const again = await recordOrphanPayment(h.db, paid, addMinutes(new Date(), 5));
+    assert.equal(again.outcome, "orphan", "a redelivery is still answered as an orphan");
+    assert.equal(await count(), before + 1, "a redelivery of the same payment is the same orphan");
+
+    // Concurrent deliveries of one payment: exactly one of them counts it.
+    const settled = await inParallel([
+      () => recordOrphanPayment(h.db, { sessionId: session, paymentIntentId: otherPi, livemode: false }, new Date()),
+      () => recordOrphanPayment(h.db, { sessionId: session, paymentIntentId: otherPi, livemode: false }, new Date()),
+    ]);
+    assert.deepEqual(settled.map((s) => s.status), ["fulfilled", "fulfilled"]);
+    assert.equal(await count(), before + 2, "another payment intent is another payment, counted once");
+
+    // A session without a payment intent is told apart by its session id.
+    await recordOrphanPayment(h.db, { sessionId: bareSession, paymentIntentId: null, livemode: false }, new Date());
+    await recordOrphanPayment(h.db, { sessionId: bareSession, paymentIntentId: null, livemode: false }, new Date());
+    assert.equal(await count(), before + 3);
+  } finally {
+    if (saved) {
+      await h.db.update(throttle).set({ hits: saved.hits, windowStart: saved.windowStart }).where(eq(throttle.key, key));
+    } else {
+      await h.db.delete(throttle).where(eq(throttle.key, key));
+    }
+    for (const id of ids) await h.db.execute(sql`delete from throttle where key like ${`health:%:${id}`}`);
   }
 });
 

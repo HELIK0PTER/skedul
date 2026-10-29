@@ -20,7 +20,7 @@ import {
   type Query,
 } from "@/lib/db/atomic";
 import { booking, professional, ticketPurchase } from "@/lib/db/schema";
-import { bumpHealth, HEALTH_KEYS } from "@/lib/throttle";
+import { bumpHealthOnce, HEALTH_KEYS, orphanPaymentMarker } from "@/lib/throttle";
 import { ticketExpiry, validityOf } from "@/lib/ticket-expiry";
 
 import { assertCustomer, insertPurchase, offerUnchanged, readOffer } from "./claims";
@@ -96,10 +96,14 @@ function noop(outcome: "duplicate" | "orphan"): EngineOk<FulfillData> {
   return { ok: true, effects: [], outcome, ticketIds: [], bookingConfirmed: false };
 }
 
-/** Money for a purchase that does not exist (pro deleted, session from before the refonte): logged and counted for the admin; refunded by hand in Stripe. */
+/**
+ * Money for a purchase that does not exist (pro deleted, session from before the refonte): logged and counted for the
+ * admin; refunded by hand in Stripe. Every delivery logs its line, but the counter counts the payment once (P6 A25,
+ * orphanPaymentMarker): a Stripe redelivery never inflates the admin alert.
+ */
 export async function recordOrphanPayment(db: Db, payment: PaymentFacts, now: Date): Promise<EngineOk<FulfillData>> {
   console.warn(`[stripe] orphan payment ${payment.sessionId ?? "-"}/${payment.paymentIntentId ?? "-"}`);
-  await bumpHealth(db, HEALTH_KEYS.orphanPayments, 1, now);
+  await bumpHealthOnce(db, HEALTH_KEYS.orphanPayments, orphanPaymentMarker(payment), 1, now);
   return noop("orphan");
 }
 

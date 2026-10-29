@@ -181,6 +181,43 @@ export async function bumpHealth(db: ThrottleDb, key: HealthKey, by: number, now
     on conflict (key) do update set hits = throttle.hits + excluded.hits, window_start = excluded.window_start`);
 }
 
+/**
+ * What makes an orphan payment count once (P6 A25): `health:orphan_seen:pi:<id>` from the payment intent (one payment,
+ * the thing the owner refunds), else `health:orphan_seen:cs:<id>` from the Checkout session, else null (the mock checkout
+ * passes no id: nothing tells two calls apart). Under `health:` so the nightly purge keeps it, since Stripe redelivers an
+ * event for days; one row per orphan payment, which stays rare.
+ */
+export function orphanPaymentMarker(payment: { sessionId: string | null; paymentIntentId: string | null }): string | null {
+  if (payment.paymentIntentId) return `health:orphan_seen:pi:${payment.paymentIntentId}`;
+  if (payment.sessionId) return `health:orphan_seen:cs:${payment.sessionId}`;
+  return null;
+}
+
+/**
+ * bumpHealth once per marker, in ONE statement: the marker row is inserted with `on conflict do nothing` and the counter
+ * moves only when that insert happened, so a redelivery, or two concurrent deliveries of one payment, count it once. A
+ * null marker counts every call. Returns whether this call counted.
+ */
+export async function bumpHealthOnce(db: ThrottleDb, key: HealthKey, marker: string | null, by: number, now: Date): Promise<boolean> {
+  if (marker === null) {
+    await bumpHealth(db, key, by, now);
+    return true;
+  }
+  if ((Object.values(HEALTH_KEYS) as string[]).includes(marker)) throw new Error("bumpHealthOnce: a marker is never a counter key");
+  const at = sql`${now.toISOString()}::timestamptz`;
+  const result = await db.execute<{ hits: number }>(sql`
+    with marker as (
+      insert into throttle (key, window_start, hits) values (${marker}, ${at}, 1)
+      on conflict (key) do nothing
+      returning key
+    )
+    insert into throttle (key, window_start, hits)
+    select ${key}, ${at}, ${by}::int from marker
+    on conflict (key) do update set hits = throttle.hits + excluded.hits, window_start = excluded.window_start
+    returning hits`);
+  return result.rows.length > 0;
+}
+
 /** value = value; window_start = now. */
 export async function setHealth(db: ThrottleDb, key: HealthKey, value: number, now: Date): Promise<void> {
   await db.execute(sql`

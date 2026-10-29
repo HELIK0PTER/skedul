@@ -9,6 +9,7 @@ import {
   checkActionThrottle,
   checkTrackThrottle,
   nextWindow,
+  orphanPaymentMarker,
   otpThrottleKey,
   resetThrottleKey,
   throttleKey,
@@ -61,6 +62,15 @@ test("health keys live under the health: prefix", () => {
   });
 });
 
+// P6 A25: the orphan counter counts a payment once, keyed by its payment intent (else its session); never a counter key.
+test("orphanPaymentMarker keys a payment by its intent, else its session, else nothing", () => {
+  assert.equal(orphanPaymentMarker({ sessionId: "cs_1", paymentIntentId: "pi_1" }), "health:orphan_seen:pi:pi_1");
+  assert.equal(orphanPaymentMarker({ sessionId: "cs_1", paymentIntentId: null }), "health:orphan_seen:cs:cs_1");
+  assert.equal(orphanPaymentMarker({ sessionId: null, paymentIntentId: null }), null);
+  assert.equal(orphanPaymentMarker({ sessionId: "", paymentIntentId: "" }), null);
+  const markers = [orphanPaymentMarker({ sessionId: "x", paymentIntentId: "y" }), orphanPaymentMarker({ sessionId: "x", paymentIntentId: null })];
+  for (const m of markers) assert.ok(m !== null && !(Object.values(HEALTH_KEYS) as string[]).includes(m));
+});
 const IP = "0123456789abcdef0123456789abcdef";
 const WIDE = "fedcba9876543210fedcba9876543210";
 const PRO = "pro_1";
