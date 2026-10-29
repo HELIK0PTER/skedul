@@ -356,7 +356,7 @@ export function BrandingForm({
             </div>
             {!blobEnabled && (
               <p className="text-xs text-muted-foreground">
-                Upload indisponible (stockage non configuré). La galerie et le pack 3D
+                Upload indisponible (stockage non configuré). La galerie et les avatars 3D
                 restent disponibles.
               </p>
             )}

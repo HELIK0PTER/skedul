@@ -221,7 +221,7 @@ const brandingInputSchema = z.strictObject({
 });
 
 export const BRANDING_IMAGE_REFUSED = "Cette image n'a pas été envoyée depuis votre page de réglages. Ajoutez-la de nouveau.";
-export const AVATAR_REFUSED = "Cet avatar n'est pas proposé par Skedul. Choisissez-en un dans la galerie ou le pack 3D.";
+export const AVATAR_REFUSED = "Cet avatar n'est pas proposé par Skedul. Choisissez-en un dans la galerie ou parmi les avatars 3D.";
 
 /**
  * The branding of the public page in ONE statement (P6 A5). The images the public page renders can only be the pro's

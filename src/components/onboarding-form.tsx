@@ -68,7 +68,7 @@ export function OnboardingForm() {
           id="bio"
           name="bio"
           rows={3}
-          placeholder="Quelques lignes sur vous et vos prestations…"
+          placeholder="Quelques lignes sur vous et vos cours…"
         />
       </div>
       <div className="space-y-1.5">

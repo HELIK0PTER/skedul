@@ -78,7 +78,7 @@ export function FaqBrowser({
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Packs, mot de passe, Google Agenda"
+              placeholder="Tickets, mot de passe, Google Agenda"
               autoComplete="off"
               className="h-14 w-full rounded-full border border-border bg-card pl-12 pr-12 text-base shadow-(--shadow-card) outline-none transition-[border-color,box-shadow] placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-4 focus-visible:ring-primary/15 [&::-webkit-search-cancel-button]:hidden"
             />
