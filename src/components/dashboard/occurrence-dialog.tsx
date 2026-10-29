@@ -17,7 +17,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
-import { cancelOccurrenceCopy, restoreOccurrenceCopy, unenrollCopy, unenrollReasonHelp } from "@/lib/back-office/confirm-copy";
+import {
+  cancelOccurrenceCopy,
+  restoreOccurrenceCopy,
+  unenrollCopy,
+  unenrollLabel,
+  unenrollReasonHelp,
+} from "@/lib/back-office/confirm-copy";
 import { formatWhen, plural } from "@/lib/back-office/format";
 import { MODE_SHORT_LABELS } from "@/lib/back-office/labels";
 import { seatsSummary, unenrolledMessage, type PlanningAttendeeVM, type PlanningItemVM } from "@/lib/back-office/planning-view";
@@ -47,6 +53,8 @@ function AttendeeRow({
   onUnenroll: () => void;
   onMove?: () => void;
 }) {
+  // An RDV attendee is cancelled with « Annuler le rendez-vous », never « Désinscrire » (P5 D § 3.10).
+  const unenrollText = unenrollLabel(isRdv ? "rdv" : "seance");
   return (
     <li className="rounded-xl border border-border p-3 text-sm">
       <div className="flex items-start gap-3">
@@ -119,10 +127,10 @@ function AttendeeRow({
               size="sm"
               onClick={onUnenroll}
               disabled={disabled}
-              aria-label={`Désinscrire ${attendee.name}`}
+              aria-label={isRdv ? `${unenrollText} de ${attendee.name}` : `${unenrollText} ${attendee.name}`}
             >
               <UserMinus />
-              Désinscrire
+              {unenrollText}
             </Button>
           </div>
         </div>
@@ -266,6 +274,7 @@ function OccurrenceDialogBody({
     // Everyone chosen has left the page data meanwhile: there is nothing left to confirm.
     if (people.length === 0) return null;
     return unenrollCopy({
+      kind: item.kind,
       names: people.map((p) => p.name),
       ticketCount: people.filter((p) => p.coverage === "ticket" && p.status === "confirmed").length,
       pendingCount: people.filter((p) => p.status === "pending" && !p.holdLapsed).length,
@@ -344,6 +353,7 @@ function OccurrenceDialogBody({
             people.map((p) => p.name),
             res.cancelled,
             res.ticketsReturned,
+            item.kind,
           );
           setPicked([]);
           setReason("");

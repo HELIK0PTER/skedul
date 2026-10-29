@@ -23,7 +23,8 @@ import {
 const DASHES = new RegExp("[" + String.fromCharCode(0x2013, 0x2014) + "]");
 
 test("the fixed copy of the espace actions, exact, without a dash", () => {
-  assert.equal(UPCOMING_TITLE, "Vos prochaines inscriptions");
+  // The list mixes séances and rendez-vous (P5): « réservations », never « inscriptions » (D § 3.10).
+  assert.equal(UPCOMING_TITLE, "Vos prochaines réservations");
   assert.equal(SPEND_TITLE, "Utiliser vos tickets");
   assert.equal(SPEND_LABEL, "Réserver avec 1 ticket");
   assert.equal(SPEND_LINK_LABEL, "Réserver");

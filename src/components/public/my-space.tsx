@@ -11,11 +11,12 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { INLINE_LINK_CLASS } from "@/components/ui/link-class";
 import { COPY } from "@/lib/public/messages";
 import type { MySpaceCard } from "@/lib/public/my-space";
+import { UPCOMING_TITLE } from "@/lib/public/space-view";
 import { boutiqueHref } from "@/lib/public-anchors";
 import { cn } from "@/lib/utils";
 
 /**
- * « Mon espace »: one card per pro (its next inscriptions, its tickets, a link to the pro's own space), then the
+ * « Mon espace »: one card per pro (its next bookings, its tickets, a link to the pro's own space), then the
  * account section. A server component: the leaves below are the only client code, and only the name crosses to them.
  * Every text of a pro or of the client (business name, titles, places, names) can be long and unbroken, hence
  * `wrap-anywhere` and `min-w-0`. Cards stack.
@@ -57,7 +58,7 @@ export function MySpaceView({ name, email, cards }: { name: string; email: strin
   );
 }
 
-/** The card of one pro: next inscriptions, tickets, and the way into the pro's own space. */
+/** The card of one pro: next bookings, tickets, and the way into the pro's own space. */
 function ProCard({ card }: { card: MySpaceCard }) {
   const { slug, businessName, space } = card;
   const headingId = `my-space-${slug}`;
@@ -71,7 +72,7 @@ function ProCard({ card }: { card: MySpaceCard }) {
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-3">
-            <h3 className="text-sm font-semibold">Vos prochaines inscriptions</h3>
+            <h3 className="text-sm font-semibold">{UPCOMING_TITLE}</h3>
             {space.upcoming.length === 0 ? (
               <div className="space-y-1">
                 <p className="text-sm text-zinc-600">{COPY.NO_UPCOMING}</p>

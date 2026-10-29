@@ -20,6 +20,17 @@ test("an RDV shows no place row, and its lapsed hold freed a « créneau » (P5 
   assert.match(SOURCE, /aria-label=\{isSeance \? "Inscrits" : "Client"\}/);
 });
 
+test("an RDV attendee is cancelled with « Annuler le rendez-vous » and the RDV confirm and status lines; a séance keeps « Désinscrire » (D § 3.10)", () => {
+  assert.match(SOURCE, /const unenrollText = unenrollLabel\(isRdv \? "rdv" : "seance"\);/);
+  assert.match(SOURCE, /aria-label=\{isRdv \? `\$\{unenrollText\} de \$\{attendee\.name\}` : `\$\{unenrollText\} \$\{attendee\.name\}`\}/);
+  assert.match(SOURCE, /<UserMinus \/>\s*\{unenrollText\}\s*<\/Button>/);
+  assert.equal(SOURCE.split("Désinscrire ${attendee.name}").length - 1, 0, "the row's label is no literal any more");
+  assert.match(SOURCE, /return unenrollCopy\(\{\s*kind: item\.kind,/);
+  assert.match(SOURCE, /text = unenrolledMessage\(\s*people\.map\(\(p\) => p\.name\),\s*res\.cancelled,\s*res\.ticketsReturned,\s*item\.kind,\s*\);/);
+  // The bulk « Désinscrire la sélection » exists for a séance only: an RDV row has no checkbox.
+  assert.match(SOURCE, /selectable=\{isSeance\}/);
+});
+
 test("the unenrol « Motif » field says the reason is sent to the client (final review F11)", () => {
   const start = SOURCE.indexOf('confirm.kind === "unenroll" && (');
   assert.notEqual(start, -1, "the unenrol reason field is in the confirmation");

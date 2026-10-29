@@ -12,15 +12,16 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ClientBookingRow } from "@/lib/back-office/client-reads";
-import { unenrollCopy } from "@/lib/back-office/confirm-copy";
+import { unenrollCopy, unenrollLabel } from "@/lib/back-office/confirm-copy";
 import { pastCutNote, pastHeading } from "@/lib/back-office/format";
 import { unenrolledMessage } from "@/lib/back-office/planning-view";
 import { REQUEST_FAILED } from "@/lib/pro-messages";
 import { unenrollAction } from "@/server/pro-planning";
 
 /**
- * One list of registrations. « Déplacer » and « Désinscrire » come from the read (`canMove`, `canUnenroll`): a
- * cancelled or expired registration (a lapsed payment hold, already freed by the engine) offers neither.
+ * One list of registrations. « Déplacer » and « Désinscrire » (« Annuler le rendez-vous » on an RDV, D § 3.10) come
+ * from the read (`canMove`, `canUnenroll`): a cancelled or expired registration (a lapsed payment hold, already freed
+ * by the engine) offers neither.
  */
 function BookingList({
   rows,
@@ -69,10 +70,10 @@ function BookingList({
                 type="button"
                 size="sm"
                 variant="secondary"
-                aria-label={`Désinscrire ${row.title}, ${row.whenLabel}`}
+                aria-label={`${unenrollLabel(row.kind)} ${row.title}, ${row.whenLabel}`}
                 onClick={() => onUnenroll(row.bookingId)}
               >
-                Désinscrire
+                {unenrollLabel(row.kind)}
               </Button>
             )}
           </div>
@@ -152,7 +153,7 @@ export function ClientBookings({
 
   function confirmUnenroll() {
     if (unenrolling === null || pending) return;
-    const { occurrenceId, bookingId } = unenrolling;
+    const { occurrenceId, bookingId, kind } = unenrolling;
     setError(null);
     startAction(async () => {
       let res: Awaited<ReturnType<typeof unenrollAction>>;
@@ -169,7 +170,7 @@ export function ClientBookings({
         }
         rescueArmed.current = true;
         setUnenrollId(null);
-        setNotice(unenrolledMessage([customerName], res.cancelled, res.ticketsReturned));
+        setNotice(unenrolledMessage([customerName], res.cancelled, res.ticketsReturned, kind));
         setDoneCount((n) => n + 1);
       });
     });
@@ -242,6 +243,7 @@ export function ClientBookings({
       <ConfirmDialog
         open={unenrolling !== null}
         copy={unenrollCopy({
+          kind: unenrolling?.kind ?? "seance",
           names: [customerName],
           ticketCount: unenrolling?.hasTicket ? 1 : 0,
           pendingCount: unenrolling?.pending ? 1 : 0,

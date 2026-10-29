@@ -53,7 +53,7 @@ test("an RDV row's « Annuler » is told it is an RDV, so its dialog and its suc
   assert.match(SOURCE, /kind=\{b\.kind\}/);
 });
 
-test("the « Vos prochaines inscriptions » heading can take the focus after a success removes the control that held it (WCAG 2.4.3)", () => {
+test("the « Vos prochaines réservations » heading can take the focus after a success removes the control that held it (WCAG 2.4.3)", () => {
   assert.match(SOURCE, /<CardTitle[^>]*id=\{UPCOMING_HEADING_ID\}/);
   assert.match(SOURCE, /<CardTitle[^>]*tabIndex=\{-1\}/);
 });

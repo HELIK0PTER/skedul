@@ -210,31 +210,34 @@ test("pro-booking-cancelled: the client's name and address in the body, the tick
   assert.equal(proBookingCancelledEmail({ ...cancelled, ticketReturned: false }).html.includes("Son ticket lui a été rendu."), false);
 });
 
-/** The words of a séance that an RDV mail must never say (P5 § 3.10), outside the spec headline of the late payment. */
+/** The words of a séance that an RDV mail must never say (P5 § 3.10). */
 const SEANCE_WORDS = /[Ss][ée]ance|[Ii]nscri|(^|[^a-zà-ÿ])place([^a-zà-ÿ]|$)/;
 /** The text of a mail without its link targets: the planning deep link names its parameter `seance`, which is no copy. */
 const withoutLinks = (html: string): string => html.replace(/href="[^"]*"/g, "");
 
-test("late-payment: an RDV keeps the spec headline, and its second sentence names a rendez-vous and another créneau (P5 T10, D § 3.12)", () => {
+test("late-payment: an RDV says its créneau was no longer held, in the subject and the headline, and names a rendez-vous and another créneau (P5 T10, D3)", () => {
   const four = latePaymentEmail({ ...late, kind: "rdv", title: "Cours particulier" });
-  assert.equal(four.subject, "Paiement reçu : votre place n'était plus réservée", "the spec subject (L1136-1137)");
-  assert.ok(four.html.includes(h("Paiement reçu, votre place n'était plus réservée : vos 4 tickets sont dans votre portefeuille.")));
+  assert.equal(four.subject, "Paiement reçu : votre créneau n'était plus réservé", "the RDV twin of the spec subject (L1136-1137), merci's paid_late wording");
+  assert.ok(four.html.includes(h("Paiement reçu, votre créneau n'était plus réservé : vos 4 tickets sont dans votre portefeuille.")));
   assert.ok(
     four.html.includes(
       h("Le rendez-vous « Cours particulier » (lun. 26 octobre 2026 · 19:00 à 20:00) n'est pas réservé pour vous. Vous pouvez utiliser vos tickets sur un autre créneau."),
     ),
   );
   const one = latePaymentEmail({ ...late, kind: "rdv", title: "Cours particulier", count: 1 });
+  assert.ok(one.html.includes(h("Paiement reçu, votre créneau n'était plus réservé : votre ticket est dans votre portefeuille.")));
   assert.ok(
     one.html.includes(
       h("Le rendez-vous « Cours particulier » (lun. 26 octobre 2026 · 19:00 à 20:00) n'est pas réservé pour vous. Vous pouvez utiliser votre ticket sur un autre créneau."),
     ),
   );
   for (const mail of [four, one]) {
-    const body = mail.html.replace(h("Paiement reçu, votre place n'était plus réservée"), "");
-    assert.doesNotMatch(body, SEANCE_WORDS, "only the spec headline says « place »");
+    assert.doesNotMatch(mail.subject, SEANCE_WORDS, mail.subject);
+    assert.doesNotMatch(withoutLinks(mail.html), SEANCE_WORDS, "no « place » anywhere in an RDV mail");
     assert.equal(DASH.test(mail.subject + mail.html), false);
   }
+  // A séance keeps the spec's sentence word for word.
+  assert.equal(latePaymentEmail(late).subject, "Paiement reçu : votre place n'était plus réservée");
   const evil = latePaymentEmail({ ...late, kind: "rdv", title: EVIL });
   assert.equal(evil.html.includes("<script>"), false);
   assert.ok(evil.html.includes(`Le rendez-vous « ${EVIL_ESCAPED} »`));

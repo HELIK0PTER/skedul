@@ -18,6 +18,7 @@ import {
   timeOffConflictCopy,
   timeOffConflictLine,
   unenrollCopy,
+  unenrollLabel,
   unenrollReasonHelp,
   type ConfirmCopy,
 } from "./confirm-copy";
@@ -138,33 +139,56 @@ test("the single-line texts are exact", () => {
 });
 
 test("unenrollCopy: the title follows the names, the body follows tickets and pending payments", () => {
-  assert.deepEqual(unenrollCopy({ names: ["Léa Martin"], ticketCount: 1, pendingCount: 0 }), {
+  assert.deepEqual(unenrollCopy({ kind: "seance", names: ["Léa Martin"], ticketCount: 1, pendingCount: 0 }), {
     title: "Désinscrire Léa Martin ?",
     body: "Le ticket est rendu au client, qui est prévenu par email.",
     confirm: "Désinscrire",
   });
   assert.equal(
-    unenrollCopy({ names: ["Léa Martin"], ticketCount: 0, pendingCount: 0 }).body,
+    unenrollCopy({ kind: "seance", names: ["Léa Martin"], ticketCount: 0, pendingCount: 0 }).body,
     "Le client est prévenu par email.",
   );
-  const several = unenrollCopy({ names: ["Léa Martin", "Rafael Souza"], ticketCount: 2, pendingCount: 0 });
+  const several = unenrollCopy({ kind: "seance", names: ["Léa Martin", "Rafael Souza"], ticketCount: 2, pendingCount: 0 });
   assert.equal(several.title, "Désinscrire 2 inscrits ?");
   assert.equal(several.body, "Les tickets sont rendus aux clients, qui sont prévenus par email.");
   assert.equal(
-    unenrollCopy({ names: ["Léa Martin", "Rafael Souza"], ticketCount: 0, pendingCount: 0 }).body,
+    unenrollCopy({ kind: "seance", names: ["Léa Martin", "Rafael Souza"], ticketCount: 0, pendingCount: 0 }).body,
     "Les clients sont prévenus par email.",
   );
   assert.equal(
-    unenrollCopy({ names: ["Léa Martin"], ticketCount: 0, pendingCount: 1 }).body,
+    unenrollCopy({ kind: "seance", names: ["Léa Martin"], ticketCount: 0, pendingCount: 1 }).body,
     "Le client est prévenu par email. Le paiement en cours est annulé.",
     "the payment sentence only with a pending payment",
   );
-  assert.ok(!unenrollCopy({ names: ["Léa Martin"], ticketCount: 1, pendingCount: 0 }).body.includes("paiement"));
+  assert.ok(!unenrollCopy({ kind: "seance", names: ["Léa Martin"], ticketCount: 1, pendingCount: 0 }).body.includes("paiement"));
   // several pending payments: the sentence agrees with them (final review UI-8)
   assert.equal(
-    unenrollCopy({ names: ["Léa Martin", "Rafael Souza"], ticketCount: 0, pendingCount: 2 }).body,
+    unenrollCopy({ kind: "seance", names: ["Léa Martin", "Rafael Souza"], ticketCount: 0, pendingCount: 2 }).body,
     "Les clients sont prévenus par email. Les paiements en cours sont annulés.",
   );
+});
+
+test("unenrollCopy and unenrollLabel on a rendez-vous: « Annuler le rendez-vous », never « Désinscrire » (D § 3.10)", () => {
+  assert.deepEqual(unenrollCopy({ kind: "rdv", names: ["Léa Martin"], ticketCount: 1, pendingCount: 0 }), {
+    title: "Annuler le rendez-vous de Léa Martin ?",
+    body: "Le ticket est rendu au client, qui est prévenu par email.",
+    confirm: "Annuler le rendez-vous",
+  });
+  assert.equal(
+    unenrollCopy({ kind: "rdv", names: ["Léa Martin"], ticketCount: 0, pendingCount: 1 }).body,
+    "Le client est prévenu par email. Le paiement en cours est annulé.",
+  );
+  assert.equal(unenrollCopy({ kind: "rdv", names: ["A", "B"], ticketCount: 0, pendingCount: 0 }).title, "Annuler 2 rendez-vous ?");
+  assert.equal(unenrollLabel("rdv"), "Annuler le rendez-vous");
+  assert.equal(unenrollLabel("seance"), "Désinscrire", "a séance keeps « Désinscrire »");
+  const SEANCE_WORDS = /[Ss][ée]ance|[Ii]nscri|(^|[^a-zà-ÿ])place([^a-zà-ÿ]|$)/;
+  for (const names of [["Léa Martin"], ["A", "B"]]) {
+    for (const [ticketCount, pendingCount] of [[0, 0], [1, 0], [0, 1]]) {
+      const c = unenrollCopy({ kind: "rdv", names, ticketCount, pendingCount });
+      for (const text of [c.title, c.body, c.confirm]) assert.doesNotMatch(text, SEANCE_WORDS, text);
+    }
+  }
+  assert.doesNotMatch(unenrollLabel("rdv"), SEANCE_WORDS);
 });
 
 test("unenrollReasonHelp: the optional reason is told to go to the client (final review F11)", () => {
@@ -411,7 +435,8 @@ test("every text is non-empty for 0, 1 and 2 and carries no dash", () => {
       cancelOccurrenceCopy({ kind: "seance", registrants: n, tickets: 0, past: n === 2 }),
       cancelOccurrenceCopy({ kind: "rdv", registrants: n, tickets: n, past: false }),
       cancelOccurrenceCopy({ kind: "rdv", registrants: n, tickets: 0, past: false }),
-      unenrollCopy({ names, ticketCount: n, pendingCount: n }),
+      unenrollCopy({ kind: "seance", names, ticketCount: n, pendingCount: n }),
+      unenrollCopy({ kind: "rdv", names, ticketCount: n, pendingCount: n }),
       closeTicketsCopy({ count: n, reasonLabel: "Abandonné" }),
       retireTicketsCopy({ count: n }),
       deleteTypeCopy({ name: "Type", used: n === 1, acceptedBy: names }),

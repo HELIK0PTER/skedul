@@ -9,7 +9,7 @@ import { CoverageBadge } from "@/components/dashboard/coverage-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
-import { unenrollCopy } from "@/lib/back-office/confirm-copy";
+import { unenrollCopy, unenrollLabel } from "@/lib/back-office/confirm-copy";
 import type { BookingDetailVM } from "@/lib/back-office/dashboard-reads";
 import { unenrolledMessage } from "@/lib/back-office/planning-view";
 import { REQUEST_FAILED } from "@/lib/pro-messages";
@@ -32,8 +32,9 @@ function PaymentLine({ purchase }: { purchase: NonNullable<BookingDetailVM["purc
 }
 
 /**
- * The details of one upcoming booking, with « Voir dans le planning » and « Désinscrire ». « Désinscrire » is only
- * offered on a live booking (confirmed, or pending), and goes through the engine behind a ConfirmDialog; a failure
+ * The details of one upcoming booking, with « Voir dans le planning » and « Désinscrire » (« Annuler le rendez-vous »
+ * on an RDV, D § 3.10). It is only offered on a live booking (confirmed, or pending), and goes through the engine
+ * behind a ConfirmDialog; a failure
  * stays in that confirmation. The details dialog stays open under the confirmation, so « Retour » hands the focus
  * back to the button that opened it, and Escape or the backdrop close the confirmation first, never both.
  * `onClose(notice)` closes the dialog; after a success the notice is the status line for the page (the booking
@@ -79,7 +80,7 @@ export function BookingDetailDialog({
         return;
       }
       setConfirming(false);
-      onClose(unenrolledMessage([booking.customerName], res.cancelled, res.ticketsReturned));
+      onClose(unenrolledMessage([booking.customerName], res.cancelled, res.ticketsReturned, booking.kind));
     } catch {
       setError(REQUEST_FAILED);
     } finally {
@@ -159,7 +160,7 @@ export function BookingDetailDialog({
                 setConfirming(true);
               }}
             >
-              Désinscrire
+              {unenrollLabel(booking.kind)}
             </Button>
           )}
         </div>
@@ -167,6 +168,7 @@ export function BookingDetailDialog({
       <ConfirmDialog
         open={confirming}
         copy={unenrollCopy({
+          kind: booking.kind,
           names: [booking.customerName],
           ticketCount: booking.coverage === "ticket" ? 1 : 0,
           pendingCount: booking.status === "pending" ? 1 : 0,

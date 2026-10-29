@@ -44,7 +44,7 @@ export function useSpaceStatus(): (message: string | null) => void {
   return useContext(SpaceStatusContext).announce;
 }
 
-/** The « Vos prochaines inscriptions » heading, the focus target after a success; a stable function so Dialog may call it when it closes. */
+/** The « Vos prochaines réservations » heading, the focus target after a success; a stable function so Dialog may call it when it closes. */
 export function upcomingHeading(): HTMLElement | null {
   return document.getElementById(UPCOMING_HEADING_ID);
 }

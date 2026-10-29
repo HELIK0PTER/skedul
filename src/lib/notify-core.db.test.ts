@@ -1127,7 +1127,9 @@ dbTest("an RDV booking is a rendez-vous in every mail: confirmed, the pro's noti
   const latePaid = await pay(db, hold.purchaseId, now);
   assert.deepEqual(latePaid.effects.map((e) => e.type), ["email.purchase_receipt", "email.late_payment"]);
   const [lateMail] = emailsOf(await planEffect(db, effectOf(latePaid.effects, "email.late_payment"), depsAt(now)), pro.proId);
-  assert.equal(lateMail.subject, "Paiement reçu : votre place n'était plus réservée", "the spec headline (L1136-1137)");
+  assert.equal(lateMail.subject, "Paiement reçu : votre créneau n'était plus réservé", "the RDV twin of the spec headline (L1136-1137, D3)");
+  assert.ok(lateMail.html.includes(esc("Paiement reçu, votre créneau n'était plus réservé : ")), "the RDV headline");
+  assert.equal(lateMail.html.includes(esc("votre place")), false, "no « place » in an RDV mail");
   assert.ok(
     lateMail.html.includes(
       esc(`Le rendez-vous « Cours particulier » (${formatWhen(holdOcc.startsAt, holdOcc.endsAt, pro.tz)}) n'est pas réservé pour vous. Vous pouvez utiliser vos tickets sur un autre créneau.`),

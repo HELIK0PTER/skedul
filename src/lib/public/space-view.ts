@@ -10,9 +10,10 @@ import type { VisitorState } from "@/lib/public/identity";
 import { COPY } from "@/lib/public/messages";
 import type { BookingCoverage } from "@/lib/tickets-vocab";
 
-/** DOM id of the « Vos prochaines inscriptions » heading: the focus lands there when a success removes the control that held it (WCAG 2.4.3). */
+/** DOM id of the « Vos prochaines réservations » heading: the focus lands there when a success removes the control that held it (WCAG 2.4.3). */
 export const UPCOMING_HEADING_ID = "espace-upcoming";
-export const UPCOMING_TITLE = "Vos prochaines inscriptions";
+/** The list mixes séances and rendez-vous (P5): « réservations », never « inscriptions » (D § 3.10). */
+export const UPCOMING_TITLE = "Vos prochaines réservations";
 export const SPEND_TITLE = "Utiliser vos tickets";
 export const SPEND_LABEL = "Réserver avec 1 ticket";
 /** A séance with questions is booked on its own page, where they are asked. */

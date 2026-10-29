@@ -419,11 +419,11 @@ test("tintOf: a light mix of the event colour with white", () => {
 
 test("unenrolledMessage: one name or several, tickets returned or not, no dash", () => {
   const messages = [
-    unenrolledMessage(["Thomas Leroy"], 1, 1),
-    unenrolledMessage(["Thomas Leroy"], 1, 0),
-    unenrolledMessage(["Thomas Leroy", "Marina Costa"], 2, 2),
-    unenrolledMessage(["Thomas Leroy", "Marina Costa"], 2, 1),
-    unenrolledMessage(["Thomas Leroy", "Marina Costa"], 2, 0),
+    unenrolledMessage(["Thomas Leroy"], 1, 1, "seance"),
+    unenrolledMessage(["Thomas Leroy"], 1, 0, "seance"),
+    unenrolledMessage(["Thomas Leroy", "Marina Costa"], 2, 2, "seance"),
+    unenrolledMessage(["Thomas Leroy", "Marina Costa"], 2, 1, "seance"),
+    unenrolledMessage(["Thomas Leroy", "Marina Costa"], 2, 0, "seance"),
   ];
   assert.deepEqual(messages, [
     "Inscription de Thomas Leroy annulée. Le ticket est rendu au client, qui est prévenu par email.",
@@ -433,18 +433,18 @@ test("unenrolledMessage: one name or several, tickets returned or not, no dash",
     "2 inscriptions annulées. Les clients sont prévenus par email.",
   ]);
   // The count, not the number of names, decides the plural (a name list can lag the engine's count).
-  assert.equal(unenrolledMessage(["A", "B"], 1, 0), "1 inscription annulée. Le client est prévenu par email.");
-  assert.equal(unenrolledMessage([], 1, 1), "1 inscription annulée. Le ticket est rendu au client, qui est prévenu par email.");
+  assert.equal(unenrolledMessage(["A", "B"], 1, 0, "seance"), "1 inscription annulée. Le client est prévenu par email.");
+  assert.equal(unenrolledMessage([], 1, 1, "seance"), "1 inscription annulée. Le ticket est rendu au client, qui est prévenu par email.");
 });
 
 test("unenrolledMessage: the head and the tail always agree, whatever the number of names", () => {
   // One name against a count of 2 (or 0) used to read « Inscription de X annulée. Les clients ... ».
   const lagging = [
-    unenrolledMessage(["Thomas Leroy"], 2, 2),
-    unenrolledMessage(["Thomas Leroy"], 2, 0),
-    unenrolledMessage(["Thomas Leroy"], 0, 0),
-    unenrolledMessage(["Thomas Leroy"], 0, 1),
-    unenrolledMessage([], 0, 0),
+    unenrolledMessage(["Thomas Leroy"], 2, 2, "seance"),
+    unenrolledMessage(["Thomas Leroy"], 2, 0, "seance"),
+    unenrolledMessage(["Thomas Leroy"], 0, 0, "seance"),
+    unenrolledMessage(["Thomas Leroy"], 0, 1, "seance"),
+    unenrolledMessage([], 0, 0, "seance"),
   ];
   assert.deepEqual(lagging, [
     "2 inscriptions annulées. Les tickets sont rendus aux clients, qui sont prévenus par email.",
@@ -455,8 +455,33 @@ test("unenrolledMessage: the head and the tail always agree, whatever the number
   ]);
   for (const m of lagging) assert.doesNotMatch(m, NO_DASH);
   // A single cancellation is named only when exactly one name is known.
-  assert.match(unenrolledMessage(["Thomas Leroy"], 1, 0), /^Inscription de Thomas Leroy annulée\. Le client est/);
-  assert.match(unenrolledMessage(["Thomas Leroy", "Marina Costa"], 1, 0), /^1 inscription annulée\. Le client est/);
+  assert.match(unenrolledMessage(["Thomas Leroy"], 1, 0, "seance"), /^Inscription de Thomas Leroy annulée\. Le client est/);
+  assert.match(unenrolledMessage(["Thomas Leroy", "Marina Costa"], 1, 0, "seance"), /^1 inscription annulée\. Le client est/);
+});
+
+test("unenrolledMessage on a rendez-vous: « Rendez-vous de X annulé. », never « inscription » (D § 3.10)", () => {
+  assert.deepEqual(
+    [
+      unenrolledMessage(["Thomas Leroy"], 1, 1, "rdv"),
+      unenrolledMessage(["Thomas Leroy"], 1, 0, "rdv"),
+      unenrolledMessage([], 1, 0, "rdv"),
+      unenrolledMessage(["Thomas Leroy"], 2, 0, "rdv"),
+      unenrolledMessage(["Thomas Leroy"], 0, 0, "rdv"),
+    ],
+    [
+      "Rendez-vous de Thomas Leroy annulé. Le ticket est rendu au client, qui est prévenu par email.",
+      "Rendez-vous de Thomas Leroy annulé. Le client est prévenu par email.",
+      "1 rendez-vous annulé. Le client est prévenu par email.",
+      "2 rendez-vous annulés. Les clients sont prévenus par email.",
+      "Aucun rendez-vous annulé.",
+    ],
+  );
+  const SEANCE_WORDS = /[Ss][ée]ance|[Ii]nscri|(^|[^a-zà-ÿ])place([^a-zà-ÿ]|$)/;
+  for (const [cancelled, returned] of [[0, 0], [1, 0], [1, 1], [2, 2]]) {
+    const m = unenrolledMessage(["Thomas Leroy"], cancelled, returned, "rdv");
+    assert.doesNotMatch(m, SEANCE_WORDS, m);
+    assert.doesNotMatch(m, NO_DASH, m);
+  }
 });
 
 const blockOf = (over: Partial<Parameters<typeof blockLabel>[0]> = {}): Parameters<typeof blockLabel>[0] => ({

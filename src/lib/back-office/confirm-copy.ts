@@ -59,9 +59,27 @@ export function restoreOccurrenceCopy(): ConfirmCopy {
   };
 }
 
-export function unenrollCopy(a: { names: readonly string[]; ticketCount: number; pendingCount: number }): ConfirmCopy {
+/** The unenrol control of one booking: « Désinscrire » on a séance, « Annuler le rendez-vous » on an RDV (P5 D § 3.10). */
+export function unenrollLabel(kind: "seance" | "rdv"): string {
+  return kind === "rdv" ? "Annuler le rendez-vous" : "Désinscrire";
+}
+
+/** The confirmation of an unenrol (E6a): on an RDV it reads « Annuler le rendez-vous », never « Désinscrire » (D § 3.10). */
+export function unenrollCopy(a: {
+  kind: "seance" | "rdv";
+  names: readonly string[];
+  ticketCount: number;
+  pendingCount: number;
+}): ConfirmCopy {
   const one = a.names.length === 1;
-  const title = one ? `Désinscrire ${a.names[0]} ?` : `Désinscrire ${a.names.length} inscrits ?`;
+  const title =
+    a.kind === "rdv"
+      ? one
+        ? `Annuler le rendez-vous de ${a.names[0]} ?`
+        : `Annuler ${a.names.length} rendez-vous ?`
+      : one
+        ? `Désinscrire ${a.names[0]} ?`
+        : `Désinscrire ${a.names.length} inscrits ?`;
   const lead =
     a.ticketCount > 0
       ? one
@@ -74,7 +92,7 @@ export function unenrollCopy(a: { names: readonly string[]; ticketCount: number;
   return {
     title,
     body: a.pendingCount > 0 ? `${lead} ${payments}` : lead,
-    confirm: "Désinscrire",
+    confirm: unenrollLabel(a.kind),
   };
 }
 

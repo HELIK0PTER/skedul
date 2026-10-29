@@ -397,15 +397,26 @@ export function previewTitle(view: "day" | "week", shownDay: DateKey, todayKey: 
  * the whole sentence, `cancelled` (a name list can lag the engine): the head
  * and the tail are both singular only when it is exactly 1 (the name is used
  * when exactly one is known), both plural above, and nothing is said about the
- * clients when it is 0.
+ * clients when it is 0. On an RDV (`kind` "rdv") the head names the rendez-vous:
+ * « Rendez-vous de Thomas Leroy annulé. », never « inscription » (P5 D § 3.10).
  */
-export function unenrolledMessage(names: readonly string[], cancelled: number, ticketsReturned: number): string {
-  if (cancelled <= 0) return "Aucune inscription annulée.";
+export function unenrolledMessage(
+  names: readonly string[],
+  cancelled: number,
+  ticketsReturned: number,
+  kind: "seance" | "rdv",
+): string {
+  const rdv = kind === "rdv";
+  if (cancelled <= 0) return rdv ? "Aucun rendez-vous annulé." : "Aucune inscription annulée.";
   const one = cancelled === 1;
   const who =
     one && names.length === 1
-      ? `Inscription de ${names[0]} annulée.`
-      : `${plural(cancelled, "inscription annulée", "inscriptions annulées")}.`;
+      ? rdv
+        ? `Rendez-vous de ${names[0]} annulé.`
+        : `Inscription de ${names[0]} annulée.`
+      : rdv
+        ? `${plural(cancelled, "rendez-vous annulé", "rendez-vous annulés")}.`
+        : `${plural(cancelled, "inscription annulée", "inscriptions annulées")}.`;
   const tail =
     ticketsReturned > 0
       ? one
